@@ -4,6 +4,7 @@ mod debug;
 mod physics;
 mod sim;
 mod terrain;
+mod ui;
 mod visuals;
 
 use bevy::light::CascadeShadowConfigBuilder;
@@ -34,6 +35,7 @@ fn main() {
             visuals::VisualsPlugin,
             camera::CameraPlugin,
             debug::DebugPlugin,
+            ui::UiPlugin,
         ))
         .add_systems(Startup, setup)
         .run();
