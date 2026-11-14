@@ -250,7 +250,7 @@ fn reset_car(
     }
 }
 
-fn sync_transforms(mut cars: Query<(&Car, &mut Transform)>) {
+pub fn sync_transforms(mut cars: Query<(&Car, &mut Transform)>) {
     for (car, mut transform) in &mut cars {
         transform.translation = car.body.position;
         transform.rotation = car.body.rotation;

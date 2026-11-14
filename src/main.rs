@@ -2,6 +2,7 @@ mod car;
 mod physics;
 mod sim;
 mod terrain;
+mod visuals;
 
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
@@ -21,10 +22,15 @@ fn main() {
         }))
         .insert_resource(ClearColor(SKY))
         .insert_resource(GlobalAmbientLight {
-            brightness: 600.0,
+            brightness: 250.0,
             ..default()
         })
-        .add_plugins((terrain::TerrainPlugin, sim::SimPlugin, car::CarPlugin))
+        .add_plugins((
+            terrain::TerrainPlugin,
+            sim::SimPlugin,
+            car::CarPlugin,
+            visuals::VisualsPlugin,
+        ))
         .add_systems(Startup, setup)
         .run();
 }
@@ -32,7 +38,7 @@ fn main() {
 fn setup(mut commands: Commands) {
     commands.spawn((
         DirectionalLight {
-            illuminance: 9_000.0,
+            illuminance: 5_000.0,
             shadow_maps_enabled: true,
             ..default()
         },
@@ -45,12 +51,12 @@ fn setup(mut commands: Commands) {
     ));
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(0.0, 30.0, 60.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_xyz(4.0, 3.0, 9.0).looking_at(Vec3::new(0.0, 0.5, 0.0), Vec3::Y),
         DistanceFog {
             color: SKY,
             falloff: FogFalloff::Linear {
-                start: 150.0,
-                end: 400.0,
+                start: 180.0,
+                end: 480.0,
             },
             ..default()
         },
