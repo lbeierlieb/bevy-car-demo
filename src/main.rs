@@ -1,3 +1,6 @@
+mod car;
+mod physics;
+mod sim;
 mod terrain;
 
 use bevy::light::CascadeShadowConfigBuilder;
@@ -21,7 +24,7 @@ fn main() {
             brightness: 600.0,
             ..default()
         })
-        .add_plugins(terrain::TerrainPlugin)
+        .add_plugins((terrain::TerrainPlugin, sim::SimPlugin, car::CarPlugin))
         .add_systems(Startup, setup)
         .run();
 }

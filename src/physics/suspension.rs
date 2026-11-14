@@ -1,0 +1,402 @@
+//! Double A-arm (double wishbone) suspension as a 1-DOF kinematic linkage.
+//!
+//! Seen from the front, chassis, lower arm, upright and upper arm form a four-bar linkage:
+//! the lower arm angle θ fixes everything else. Each corner integrates θ (and the wheel's
+//! spin) at a high rate against a frozen chassis, and reports the force it exerts on the
+//! chassis back to the caller.
+
+use bevy::prelude::*;
+
+use super::tire::{TireForce, TireParams};
+use crate::terrain::Terrain;
+
+const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
+/// Lower arm travel allowed either side of the design angle before the bump stops engage.
+const TRAVEL_LIMIT: f32 = 0.25;
+/// Bump stop stiffness, in N·m per radian of arm rotation past the limit.
+const BUMP_STOP: f32 = 60_000.0;
+
+/// Linkage points in the front-view plane of a right-hand corner (x outward from the car's
+/// centreline, y up from the centre of mass), at the design ride height.
+/// Left corners are mirrored.
+#[derive(Clone, Copy, Debug)]
+pub struct ArmGeometry {
+    pub lower_pivot: Vec2,
+    pub lower_ball: Vec2,
+    pub upper_pivot: Vec2,
+    pub upper_ball: Vec2,
+    pub wheel_center: Vec2,
+    /// Coilover top mount on the chassis.
+    pub spring_top: Vec2,
+    /// Where the coilover attaches to the lower arm, as a fraction from pivot to ball joint.
+    pub spring_arm_fraction: f32,
+    /// Camber at design ride height, in radians (negative: top of the wheel leans inward).
+    pub static_camber: f32,
+}
+
+impl Default for ArmGeometry {
+    fn default() -> Self {
+        Self {
+            lower_pivot: Vec2::new(0.30, -0.22),
+            lower_ball: Vec2::new(0.78, -0.22),
+            // A shorter upper arm, angled so the arms converge inboard: negative camber gain
+            // in bump and a roll centre a little above the ground.
+            upper_pivot: Vec2::new(0.42, 0.03),
+            upper_ball: Vec2::new(0.72, 0.08),
+            wheel_center: Vec2::new(0.84, -0.09),
+            spring_top: Vec2::new(0.55, 0.20),
+            spring_arm_fraction: 0.7,
+            static_camber: -0.02,
+        }
+    }
+}
+
+/// Solved linkage in the 2D front-view plane.
+struct Linkage {
+    lower_ball: Vec2,
+    upper_ball: Vec2,
+    wheel_center: Vec2,
+    spring_bottom: Vec2,
+    /// Upright rotation relative to the design pose (counter-clockwise from the front).
+    upright_angle: f32,
+}
+
+impl ArmGeometry {
+    /// Lower arm angle at design ride height.
+    pub fn design_angle(&self) -> f32 {
+        (self.lower_ball - self.lower_pivot).to_angle()
+    }
+
+    fn solve(&self, theta: f32) -> Linkage {
+        let lower_len = self.lower_pivot.distance(self.lower_ball);
+        let upper_len = self.upper_pivot.distance(self.upper_ball);
+        let upright_len = self.lower_ball.distance(self.upper_ball);
+
+        let lower_ball = self.lower_pivot + Vec2::from_angle(theta) * lower_len;
+        let upper_ball = circle_intersection(lower_ball, upright_len, self.upper_pivot, upper_len);
+        let upright_angle = (self.upper_ball - self.lower_ball).angle_to(upper_ball - lower_ball);
+        Linkage {
+            lower_ball,
+            upper_ball,
+            wheel_center: lower_ball
+                + Vec2::from_angle(upright_angle).rotate(self.wheel_center - self.lower_ball),
+            spring_bottom: self.lower_pivot.lerp(lower_ball, self.spring_arm_fraction),
+            upright_angle,
+        }
+    }
+}
+
+/// Of the two intersections of circles (a, ra) and (b, rb), the one that lies outboard
+/// of the line a→b (which is how the upper ball joint sits relative to the lower one).
+fn circle_intersection(a: Vec2, ra: f32, b: Vec2, rb: f32) -> Vec2 {
+    let d = a.distance(b);
+    let dir = (b - a) / d;
+    let along = (ra * ra - rb * rb + d * d) / (2.0 * d);
+    let across = (ra * ra - along * along).max(0.0).sqrt();
+    a + dir * along - dir.perp() * across
+}
+
+/// The linkage placed in the chassis frame for one corner.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CornerPose {
+    pub lower_pivot: Vec3,
+    pub upper_pivot: Vec3,
+    pub lower_ball: Vec3,
+    pub upper_ball: Vec3,
+    pub wheel_center: Vec3,
+    pub spring_top: Vec3,
+    pub spring_bottom: Vec3,
+    /// Orientation of the upright and wheel relative to the chassis (camber, then steer).
+    pub upright: Quat,
+    /// Camber relative to the chassis, in radians.
+    pub camber: f32,
+}
+
+impl CornerPose {
+    /// The point on the upright that sits at the bottom of the tire.
+    fn contact_point(&self, radius: f32) -> Vec3 {
+        self.wheel_center + self.upright * Vec3::new(0.0, -radius, 0.0)
+    }
+
+    pub fn spring_length(&self) -> f32 {
+        self.spring_top.distance(self.spring_bottom)
+    }
+}
+
+/// Suspension and wheel parameters shared by the corners of one axle.
+#[derive(Clone, Copy, Debug)]
+pub struct AxleSetup {
+    pub geometry: ArmGeometry,
+    /// Coilover spring rate (N/m) and damping (N·s/m), measured along the coilover.
+    pub spring_rate: f32,
+    pub damping: f32,
+    pub unsprung_mass: f32,
+    pub wheel_inertia: f32,
+    pub tire: TireParams,
+}
+
+impl AxleSetup {
+    fn pose(&self, theta: f32, steer: f32, side: f32, axle_z: f32) -> CornerPose {
+        let g = &self.geometry;
+        let l = g.solve(theta);
+        let to_3d = |p: Vec2| Vec3::new(side * p.x, p.y, axle_z);
+        let camber = g.static_camber - l.upright_angle;
+        let (lower_ball, upper_ball) = (to_3d(l.lower_ball), to_3d(l.upper_ball));
+        // Steering turns the upright about the kingpin axis through both ball joints.
+        let steer = Quat::from_axis_angle((upper_ball - lower_ball).normalize(), steer);
+        CornerPose {
+            lower_pivot: to_3d(g.lower_pivot),
+            upper_pivot: to_3d(g.upper_pivot),
+            lower_ball,
+            upper_ball,
+            wheel_center: lower_ball + steer * (to_3d(l.wheel_center) - lower_ball),
+            spring_top: to_3d(g.spring_top),
+            spring_bottom: to_3d(l.spring_bottom),
+            upright: steer * Quat::from_rotation_z(-side * camber),
+            camber,
+        }
+    }
+
+    /// Coilover free length that holds the design ride height under `corner_mass` of sprung
+    /// mass: the spring's generalised force balances the tire load at the design angle.
+    pub fn spring_rest_length(&self, corner_mass: f32) -> f32 {
+        let theta = self.geometry.design_angle();
+        let d = Derivatives::at(self, theta, 0.0, 1.0, 0.0);
+        let load = (corner_mass + self.unsprung_mass) * -GRAVITY.y;
+        let q_tire = load * d.contact.y + self.unsprung_mass * GRAVITY.y * d.center.y;
+        let preload = -q_tire / d.length;
+        d.pose.spring_length() + preload / self.spring_rate
+    }
+}
+
+/// The pose plus derivatives of the key points with respect to θ (by central differences).
+struct Derivatives {
+    pose: CornerPose,
+    center: Vec3,
+    contact: Vec3,
+    length: f32,
+}
+
+impl Derivatives {
+    fn at(axle: &AxleSetup, theta: f32, steer: f32, side: f32, axle_z: f32) -> Self {
+        const EPS: f32 = 1e-4;
+        let r = axle.tire.radius;
+        let pose = axle.pose(theta, steer, side, axle_z);
+        let plus = axle.pose(theta + EPS, steer, side, axle_z);
+        let minus = axle.pose(theta - EPS, steer, side, axle_z);
+        Self {
+            center: (plus.wheel_center - minus.wheel_center) / (2.0 * EPS),
+            contact: (plus.contact_point(r) - minus.contact_point(r)) / (2.0 * EPS),
+            length: (plus.spring_length() - minus.spring_length()) / (2.0 * EPS),
+            pose,
+        }
+    }
+}
+
+/// The chassis state a corner integrates against during its substeps.
+pub struct ChassisFrame {
+    pub position: Vec3,
+    pub rotation: Quat,
+    pub velocity: Vec3,
+    pub angular_velocity: Vec3,
+}
+
+impl ChassisFrame {
+    fn point_velocity(&self, point: Vec3) -> Vec3 {
+        self.velocity + self.angular_velocity.cross(point - self.position)
+    }
+}
+
+/// Where and how the tire touches the ground, for telemetry and debug drawing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Contact {
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub load: f32,
+    pub tire: TireForce,
+    /// Total tire force in world space.
+    pub force: Vec3,
+}
+
+#[derive(Clone, Debug)]
+pub struct Corner {
+    /// +1 for right-hand corners, -1 for left.
+    pub side: f32,
+    /// Longitudinal position of the axle in the chassis frame.
+    pub axle_z: f32,
+    pub front: bool,
+    /// Lower arm angle and its rate.
+    pub theta: f32,
+    pub theta_dot: f32,
+    /// Wheel spin rate (rad/s, positive rolls forward) and accumulated angle for rendering.
+    pub omega: f32,
+    pub spin: f32,
+    // Inputs, set by the car before each step.
+    pub steer: f32,
+    pub drive_torque: f32,
+    pub brake_torque: f32,
+    // Outputs of the last substep.
+    pub pose: CornerPose,
+    pub contact: Option<Contact>,
+    pub travel: f32,
+}
+
+impl Corner {
+    pub fn new(axle: &AxleSetup, side: f32, axle_z: f32, front: bool) -> Self {
+        let theta = axle.geometry.design_angle();
+        Self {
+            side,
+            axle_z,
+            front,
+            theta,
+            theta_dot: 0.0,
+            omega: 0.0,
+            spin: 0.0,
+            steer: 0.0,
+            drive_torque: 0.0,
+            brake_torque: 0.0,
+            pose: axle.pose(theta, 0.0, side, axle_z),
+            contact: None,
+            travel: 0.0,
+        }
+    }
+
+    /// Advances the corner by `dt` against a frozen chassis, adding the force it exerts on the
+    /// chassis (and the torque of that force about `chassis.position`) to `force`/`torque`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn step(
+        &mut self,
+        dt: f32,
+        axle: &AxleSetup,
+        spring_rest_length: f32,
+        chassis: &ChassisFrame,
+        terrain: &Terrain,
+        force: &mut Vec3,
+        torque: &mut Vec3,
+    ) {
+        let tire = &axle.tire;
+        let d = Derivatives::at(axle, self.theta, self.steer, self.side, self.axle_z);
+        let pose = d.pose;
+        let to_world = |p: Vec3| chassis.position + chassis.rotation * p;
+
+        let center = to_world(pose.wheel_center);
+        let axle_dir = chassis.rotation * (pose.upright * Vec3::X);
+        let hub_velocity =
+            chassis.point_velocity(center) + chassis.rotation * (d.center * self.theta_dot);
+
+        // Raycast from the hub, perpendicular to the axle, as far as the tire radius.
+        let up = chassis.rotation * Vec3::Y;
+        let down = -(up - axle_dir * axle_dir.dot(up)).normalize();
+        let hit = terrain.raycast(center, down, tire.radius);
+
+        // Without ground contact the wheel just spins up under drive torque.
+        let mut omega = self.omega + self.drive_torque / axle.wheel_inertia * dt;
+        let patch = hit.map(|hit| {
+            let n = hit.normal;
+            let penetration = tire.radius - hit.distance;
+            let load = (tire.stiffness * penetration - tire.damping * hub_velocity.dot(n)).max(0.0);
+            let forward = n.cross(axle_dir).normalize();
+            let right = forward.cross(n);
+            let (vx, vy) = (hub_velocity.dot(forward), hub_velocity.dot(right));
+
+            // Wheel spin is the stiffest part of the system: update it implicitly by
+            // linearising the longitudinal force around the current spin rate.
+            let f0 = tire.force(vx, vy, self.omega, load);
+            let df_domega = (tire.force(vx, vy, self.omega + 0.01, load).fx - f0.fx) / 0.01;
+            omega = self.omega
+                + dt * (self.drive_torque - tire.radius * f0.fx)
+                    / (axle.wheel_inertia + dt * tire.radius * df_domega.max(0.0));
+            (hit.point, n, load, forward, right, vx, vy)
+        });
+        self.omega = apply_brake(omega, self.brake_torque, axle, dt);
+        self.spin += self.omega * dt;
+
+        self.contact = patch.map(|(point, normal, load, forward, right, vx, vy)| {
+            let tire = tire.force(vx, vy, self.omega, load);
+            let force = normal * load + forward * tire.fx + right * tire.fy;
+            Contact {
+                point,
+                normal,
+                load,
+                tire,
+                force,
+            }
+        });
+        let tire_force = self.contact.map_or(Vec3::ZERO, |c| c.force);
+
+        // Generalised force on θ by virtual work: each force times the θ-derivative of the
+        // point it acts on. The spring/damper act along the coilover.
+        let to_local = chassis.rotation.inverse();
+        let spring = axle.spring_rate * (spring_rest_length - pose.spring_length());
+        let limit = self.theta - axle.geometry.design_angle();
+        let bump_stop = -BUMP_STOP * (limit - limit.clamp(-TRAVEL_LIMIT, TRAVEL_LIMIT));
+        let q = (to_local * tire_force).dot(d.contact)
+            + (to_local * GRAVITY * axle.unsprung_mass).dot(d.center)
+            + spring * d.length
+            - axle.damping * d.length * d.length * self.theta_dot
+            + bump_stop;
+        let inertia = axle.unsprung_mass * d.center.length_squared();
+        let theta_ddot = q / inertia;
+        self.theta_dot += theta_ddot * dt;
+        self.theta += self.theta_dot * dt;
+
+        // Everything acting on the unsprung mass that doesn't accelerate it goes into the
+        // chassis: the tire force at the contact patch, plus gravity minus inertia at the hub.
+        let hub_force = GRAVITY * axle.unsprung_mass
+            - chassis.rotation * (d.center * theta_ddot) * axle.unsprung_mass;
+        let contact_point = self.contact.map_or(center, |c| c.point);
+        *force += tire_force + hub_force;
+        *torque += (contact_point - chassis.position).cross(tire_force)
+            + (center - chassis.position).cross(hub_force);
+
+        self.pose = pose;
+        self.travel = pose.wheel_center.y - axle.geometry.wheel_center.y;
+    }
+}
+
+/// Brakes act as friction: they slow the wheel down but never reverse it.
+fn apply_brake(omega: f32, brake_torque: f32, axle: &AxleSetup, dt: f32) -> f32 {
+    let dw = brake_torque / axle.wheel_inertia * dt;
+    omega.signum() * (omega.abs() - dw).max(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn axle() -> AxleSetup {
+        AxleSetup {
+            geometry: ArmGeometry::default(),
+            spring_rate: 80_000.0,
+            damping: 5_000.0,
+            unsprung_mass: 40.0,
+            wheel_inertia: 1.2,
+            tire: TireParams::default(),
+        }
+    }
+
+    #[test]
+    fn solve_reproduces_design_pose() {
+        let g = ArmGeometry::default();
+        let l = g.solve(g.design_angle());
+        assert!(l.upper_ball.distance(g.upper_ball) < 1e-5);
+        assert!(l.wheel_center.distance(g.wheel_center) < 1e-5);
+        assert!(l.upright_angle.abs() < 1e-5);
+    }
+
+    #[test]
+    fn short_upper_arm_gains_negative_camber_in_bump() {
+        let a = axle();
+        let theta = a.geometry.design_angle();
+        let bump = a.pose(theta + 0.1, 0.0, 1.0, 0.0);
+        assert!(bump.camber < a.geometry.static_camber);
+        assert!(bump.wheel_center.y > a.geometry.wheel_center.y);
+    }
+
+    #[test]
+    fn preload_compresses_spring() {
+        let a = axle();
+        let pose = a.pose(a.geometry.design_angle(), 0.0, 1.0, 0.0);
+        assert!(a.spring_rest_length(300.0) > pose.spring_length());
+    }
+}

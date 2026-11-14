@@ -33,7 +33,7 @@ pub struct RayHit {
 }
 
 impl Terrain {
-    fn generate(seed: u32) -> Self {
+    pub fn generate(seed: u32) -> Self {
         let n = CELLS + 1;
         let mut heights = Vec::with_capacity(n * n);
         for iz in 0..n {
