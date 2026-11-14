@@ -1,0 +1,12 @@
+[package]
+name = "bake"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Bakes real-world terrain and roads (Terrain Tiles + OpenStreetMap) for car-sim"
+publish = false
+
+[dependencies]
+png = "0.18"
+quick-xml = "0.42"
+ureq = "3"
