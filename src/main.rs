@@ -1,5 +1,6 @@
 mod camera;
 mod car;
+mod debug;
 mod physics;
 mod sim;
 mod terrain;
@@ -32,6 +33,7 @@ fn main() {
             car::CarPlugin,
             visuals::VisualsPlugin,
             camera::CameraPlugin,
+            debug::DebugPlugin,
         ))
         .add_systems(Startup, setup)
         .run();
