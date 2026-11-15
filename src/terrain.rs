@@ -263,23 +263,8 @@ impl Terrain {
     /// road to the spawn point, facing in the road direction closest to the spawn heading;
     /// the others line up behind it.
     pub fn road_spawns(&self, count: usize, spacing: f32) -> Vec<(Vec2, f32)> {
-        // Closest point on any segment: (road, segment start index, point).
         let (road, i, start) = self
-            .roads
-            .iter()
-            .filter(|r| r.kind == RoadKind::Paved && r.width >= 5.0)
-            .flat_map(|r| {
-                r.points.windows(2).enumerate().map(move |(i, pair)| {
-                    let (a, b) = (pair[0], pair[1]);
-                    let t = ((self.spawn - a).dot(b - a) / (b - a).length_squared().max(1e-6))
-                        .clamp(0.0, 1.0);
-                    (r, i, a.lerp(b, t))
-                })
-            })
-            .min_by(|a, b| {
-                a.2.distance(self.spawn)
-                    .total_cmp(&b.2.distance(self.spawn))
-            })
+            .closest_on_road(self.spawn, |r| r.kind == RoadKind::Paved && r.width >= 5.0)
             .expect("map has no paved roads");
         // Face along the spawn heading; without one, so there's more road behind.
         let n = road.points.len();
@@ -311,6 +296,41 @@ impl Terrain {
             travelled += length;
         }
         spawns
+    }
+
+    /// The drivable road point closest to `p` (inside the map), as (position in xz, yaw
+    /// facing along the road in the direction closest to `heading`).
+    pub fn drive_spot(&self, p: Vec2, heading: Vec2) -> Option<(Vec2, f32)> {
+        let (road, i, point) = self.closest_on_road(p, |r| r.kind != RoadKind::Water)?;
+        let along = (road.points[i + 1] - road.points[i]).normalize_or(Vec2::NEG_Y);
+        let facing = if along.dot(heading) >= 0.0 {
+            along
+        } else {
+            -along
+        };
+        Some((point, (-facing.x).atan2(-facing.y)))
+    }
+
+    /// The point closest to `p` on the roads that pass `keep`, away from the rim: (road,
+    /// segment start index, point).
+    fn closest_on_road(
+        &self,
+        p: Vec2,
+        keep: impl Fn(&Road) -> bool,
+    ) -> Option<(&Road, usize, Vec2)> {
+        self.roads
+            .iter()
+            .filter(|r| keep(r))
+            .flat_map(|r| {
+                r.points.windows(2).enumerate().map(move |(i, pair)| {
+                    let (a, b) = (pair[0], pair[1]);
+                    let t =
+                        ((p - a).dot(b - a) / (b - a).length_squared().max(1e-6)).clamp(0.0, 1.0);
+                    (r, i, a.lerp(b, t))
+                })
+            })
+            .filter(|(_, _, point)| self.inside(point.x, point.y))
+            .min_by(|a, b| a.2.distance(p).total_cmp(&b.2.distance(p)))
     }
 
     /// Number of chunks; chunks are numbered row-major in z.
@@ -586,6 +606,33 @@ mod tests {
                 facing.dot(terrain.spawn_heading) > 0.5,
                 "facing {facing} at {p}"
             );
+        }
+    }
+
+    #[test]
+    fn drive_spots_lie_on_a_road_facing_the_heading() {
+        let terrain = Terrain::baked();
+        let on_road = |p: Vec2| {
+            terrain.roads.iter().any(|road| {
+                road.kind != RoadKind::Water
+                    && road.points.windows(2).any(|pair| {
+                        let (a, b) = (pair[0], pair[1]);
+                        let t = ((p - a).dot(b - a) / (b - a).length_squared()).clamp(0.0, 1.0);
+                        a.lerp(b, t).distance(p) < 0.01
+                    })
+            })
+        };
+        for &(x, z) in &[(0.0, 0.0), (1500.0, -2000.0), (-3000.0, 2500.0)] {
+            for heading in [Vec2::X, Vec2::NEG_Y] {
+                let (spot, yaw) = terrain.drive_spot(Vec2::new(x, z), heading).unwrap();
+                assert!(on_road(spot), "{spot} isn't on a road");
+                assert!(terrain.inside(spot.x, spot.y));
+                let facing = Vec2::new(-yaw.sin(), -yaw.cos());
+                assert!(
+                    facing.dot(heading) >= 0.0,
+                    "facing {facing}, heading {heading}"
+                );
+            }
         }
     }
 

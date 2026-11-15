@@ -164,9 +164,14 @@ impl Car {
     /// Places the car upright, at rest, just above the ground at its current spot.
     fn reset(&mut self, terrain: &Terrain) {
         let p = self.body.position;
-        let yaw = heading(self.body.rotation);
+        self.place(terrain, p.xz(), heading(self.body.rotation));
+    }
+
+    /// Puts the car at rest at (x, z) in the xz plane, facing along `yaw`, keeping its
+    /// setup and gearbox mode.
+    pub fn place(&mut self, terrain: &Terrain, p: Vec2, yaw: f32) {
         let automatic = self.drivetrain.automatic;
-        *self = Self::spawn_at(self.index, self.setup.clone(), terrain, p.x, p.z, yaw);
+        *self = Self::spawn_at(self.index, self.setup.clone(), terrain, p.x, p.y, yaw);
         self.drivetrain.automatic = automatic;
     }
 

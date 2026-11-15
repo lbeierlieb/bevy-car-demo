@@ -48,7 +48,8 @@ A small Bevy demo of car simulation techniques:
   right shows speed and gear inside a rev counter.
 - A map of the whole area (K): the ground in its land use colours, drawn once into
   a single image, so it needs no terrain chunks. Roads, houses and the cars are drawn
-  on top; drag to move it and scroll to zoom.
+  on top; drag to move it, scroll to zoom, and click to put the car on the nearest
+  road there.
 - A driver's view (C) from inside a low-poly cockpit, with a steering wheel that
   turns and a working rev counter and speedometer on the dashboard.
 
@@ -80,7 +81,7 @@ pull request, and every push to `main` deploys the web build to GitHub Pages.
 | F1 / F2 | Toggle gizmos / telemetry panel |
 | M | Mute engine sound |
 | C | Switch between chase and driver's view |
-| K | Map of the whole area (drag to move, scroll to zoom; K or Esc closes) |
+| K | Map of the whole area (drag to move, scroll to zoom, click to put the car on the nearest road there; K or Esc closes) |
 | Left-drag, scroll | Orbit and zoom the camera (driver's view: look around) |
 
 ### Steering wheel and pedals

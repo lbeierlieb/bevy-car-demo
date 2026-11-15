@@ -1,6 +1,7 @@
 //! Map of the whole area (K, or a wheel button bound to "Map"): the ground in its land use
 //! colours as one image, with roads, houses and the cars drawn on top. Drag to move,
-//! scroll to zoom. Driving goes on underneath.
+//! scroll to zoom, click to put the car on the nearest road there. Driving goes on
+//! underneath.
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Rect, Shape, Stroke, pos2, vec2};
@@ -18,6 +19,8 @@ const PIXEL: f32 = 5.0;
 const HOUSES_BELOW: f32 = 3.0;
 /// Closest zoom (metres per screen point).
 const MIN_SCALE: f32 = 0.2;
+/// A click puts the car on the nearest road within this distance (m) of where it was.
+const PLACE_WITHIN: f32 = 250.0;
 /// Narrowest a road is drawn, in screen points, however far out the map is zoomed.
 const MIN_ROAD_WIDTH: f32 = 1.5;
 
@@ -133,7 +136,7 @@ fn draw(
     mut contexts: EguiContexts,
     terrain: Res<Terrain>,
     active: Res<ActiveCar>,
-    cars: Query<&Car>,
+    mut cars: Query<&mut Car>,
     mut view: ResMut<MapView>,
 ) -> Result {
     let view = &mut *view;
@@ -147,7 +150,7 @@ fn draw(
     if view.layers.is_none() {
         view.layers = Some(Layers::new(ctx, &terrain));
     }
-    egui::Area::new(egui::Id::new("map"))
+    let clicked = egui::Area::new(egui::Id::new("map"))
         .order(egui::Order::Foreground)
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
@@ -171,6 +174,13 @@ fn draw(
             view.center = view.center.clamp(-half, half);
 
             let (center, scale) = (view.center, view.scale);
+            let clicked = response
+                .clicked()
+                .then(|| response.interact_pointer_pos())
+                .flatten()
+                .map(|p| {
+                    center + Vec2::new(p.x - screen.center().x, p.y - screen.center().y) * scale
+                });
             let to_screen =
                 |p: Vec2| screen.center() + vec2(p.x - center.x, p.y - center.y) / scale;
             let visible = |lo: Vec2, hi: Vec2| {
@@ -241,7 +251,7 @@ fn draw(
             }
 
             scale_bar(&painter, screen, scale);
-            let help = "Drag: move    Scroll: zoom    K / Esc: close";
+            let help = "Drag: move    Scroll: zoom    Click: drive from there    K / Esc: close";
             label(
                 &painter,
                 screen.left_bottom() + vec2(12.0, -12.0),
@@ -254,7 +264,22 @@ fn draw(
                 Align2::RIGHT_TOP,
                 "Map data © OpenStreetMap contributors",
             );
-        });
+            clicked
+        })
+        .inner;
+    // A click puts the car being driven on the nearest road, facing as close to its
+    // current heading as the road allows, and closes the map.
+    if let Some(target) = clicked
+        && let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0)
+    {
+        let heading = (car.body.rotation * Vec3::NEG_Z).xz();
+        if let Some((spot, yaw)) = terrain.drive_spot(target, heading)
+            && spot.distance(target) < PLACE_WITHIN
+        {
+            car.place(&terrain, spot, yaw);
+            view.open = false;
+        }
+    }
     Ok(())
 }
 
