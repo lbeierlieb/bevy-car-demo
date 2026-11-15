@@ -26,7 +26,10 @@ A small Bevy demo of car simulation techniques:
   (with widths and surfaces from their OSM tags), streams, land use (fields,
   forest, meadows, gardens, water, parking areas) and buildings come from
   OpenStreetMap. Houses are boxes with gable roofs fitted to each footprint;
-  they're visual only, with no collisions. The height and raycast queries use the
+  they're visual only, with no collisions. Forests are filled with low-poly
+  spruces and broadleaf trees (and scrub with bushes), scattered on a jittered
+  7 m grid and kept clear of roads and streams. They're also visual only, and
+  merged into one mesh per terrain chunk. The height and raycast queries use the
   exact rendered triangles.
 - Three setups (baseline, soft, track), debug gizmos for the linkage and forces,
   and a telemetry panel with live-tunable springs, dampers, camber, arm geometry
@@ -72,6 +75,7 @@ tire grip force, cyan for roll centres.
 | `src/car.rs` | Setups, spawning, keyboard input |
 | `src/terrain.rs` | Baked map loading, terrain and road meshes, raycast, spawns |
 | `src/buildings.rs` | Low-poly houses from the OSM building outlines (visual only) |
+| `src/trees.rs` | Trees in forest areas and bushes on scrub (visual only) |
 | `tools/bake` | Separate crate that bakes `assets/*.terrain` from online data |
 | `src/visuals.rs` | Procedural meshes posed from the simulation |
 | `src/debug.rs`, `src/ui.rs`, `src/camera.rs` | Gizmos, telemetry panel, chase camera |

@@ -6,6 +6,7 @@ mod debug;
 mod physics;
 mod sim;
 mod terrain;
+mod trees;
 mod ui;
 mod visuals;
 
@@ -33,6 +34,7 @@ fn main() {
         .add_plugins((
             terrain::TerrainPlugin,
             buildings::BuildingsPlugin,
+            trees::TreesPlugin,
             sim::SimPlugin,
             car::CarPlugin,
             visuals::VisualsPlugin,

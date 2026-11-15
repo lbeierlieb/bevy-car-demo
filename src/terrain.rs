@@ -141,7 +141,7 @@ impl Terrain {
         }
     }
 
-    fn half_size(&self) -> f32 {
+    pub fn half_size(&self) -> f32 {
         self.cells as f32 * self.cell / 2.0
     }
 
@@ -176,6 +176,24 @@ impl Terrain {
         // Plane through `a`: normal · (p - a) = 0, solved for y.
         let y = a.y - (normal.x * (x - a.x) + normal.z * (z - a.z)) / normal.y;
         (y, normal)
+    }
+
+    /// Land use class at (x, z) (classes as in `tools/bake`).
+    pub fn land_class(&self, x: f32, z: f32) -> u8 {
+        let max = self.cells - 1;
+        let grid = |v: f32| (((v + self.half_size()) / self.cell).max(0.0) as usize).min(max);
+        let (ix, iz) = (grid(x), grid(z));
+        let per_side = self.cells / self.chunk_cells;
+        let chunk = &self.chunks[iz / self.chunk_cells * per_side + ix / self.chunk_cells];
+        let m = self.chunk_cells / chunk.step;
+        let local = |i: usize| i % self.chunk_cells / chunk.step;
+        chunk.classes[local(iz) * m + local(ix)]
+    }
+
+    /// Whether (x, z) is inside the map, away from the rim that slopes down at its edge.
+    pub fn inside(&self, x: f32, z: f32) -> bool {
+        let inner = self.half_size() - RIM;
+        x.abs() < inner && z.abs() < inner
     }
 
     /// Marches along the ray and refines the surface crossing by bisection.
@@ -287,7 +305,6 @@ impl Terrain {
     /// Ribbons along the road centrelines, draped onto the terrain.
     fn road_mesh(&self) -> ChunkedMesh {
         let mut chunks = ChunkedMesh::new(self);
-        let inner = self.half_size() - RIM;
         let lift = |p: Vec2| Vec3::new(p.x, self.sample(p.x, p.y).0 + ROAD_LIFT, p.y);
         for road in &self.roads {
             let color = match road.kind {
@@ -296,7 +313,7 @@ impl Terrain {
                 RoadKind::Water => [0.22, 0.42, 0.58, 1.0],
             };
             // Skip where the road climbs the rim at the map edge.
-            let inside = |p: &Vec2| p.x.abs() < inner && p.y.abs() < inner;
+            let inside = |p: &Vec2| self.inside(p.x, p.y);
             for run in road
                 .points
                 .split(|p| !inside(p))
@@ -532,7 +549,7 @@ fn spawn_terrain(
 }
 
 /// Integer hash to [0, 1).
-fn hash(n: u32) -> f32 {
+pub fn hash(n: u32) -> f32 {
     let mut h = n.wrapping_mul(0x27d4_eb2d) ^ 0x1656_67b1;
     h ^= h >> 15;
     h = h.wrapping_mul(0x85eb_ca6b);
