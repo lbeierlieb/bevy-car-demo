@@ -73,7 +73,8 @@ pull request, and every push to `main` deploys the web build to GitHub Pages.
 | R | Reset car |
 | F1 / F2 | Toggle gizmos / telemetry panel |
 | M | Mute engine sound |
-| Left-drag, scroll | Orbit and zoom the camera |
+| C | Switch between chase and driver's view |
+| Left-drag, scroll | Orbit and zoom the camera (driver's view: look around) |
 
 Gizmo colours: yellow for A-arm links, white for uprights, red for coilovers,
 green for the raycast and contact point, blue for tire normal force, magenta for
@@ -95,7 +96,7 @@ tire grip force, cyan for roll centres.
 | `src/scenery.rs` | Loads and unloads chunk meshes around the camera |
 | `tools/bake` | Separate crate that bakes `assets/*.terrain` from online data |
 | `src/visuals.rs` | Procedural meshes posed from the simulation |
-| `src/debug.rs`, `src/ui.rs`, `src/camera.rs` | Gizmos, telemetry panel, chase camera |
+| `src/debug.rs`, `src/ui.rs`, `src/camera.rs` | Gizmos, telemetry panel, chase and driver cameras |
 | `src/hud.rs` | Speed, gear and rev counter HUD |
 
 ## Baking another location

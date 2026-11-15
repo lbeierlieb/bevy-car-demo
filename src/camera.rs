@@ -1,5 +1,5 @@
-//! Chase camera that follows the active car; drag with the left mouse button to orbit,
-//! scroll to zoom.
+//! Camera on the active car: a chase view (drag with the left mouse button to orbit, scroll
+//! to zoom) and a driver's view from the seat (drag to look around). C switches views.
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
@@ -13,28 +13,53 @@ impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OrbitInput>().add_systems(
             Update,
-            (orbit, follow).chain().after(crate::car::sync_transforms),
+            (switch_view, orbit, follow)
+                .chain()
+                .after(crate::car::sync_transforms),
         );
     }
 }
 
+/// The driver's eyes in the chassis frame: left-hand drive, under the roof.
+pub const EYE: Vec3 = Vec3::new(-0.17, 0.33, 0.38);
+
+/// Vertical field of view in the chase and driver's views.
+const CHASE_FOV: f32 = std::f32::consts::FRAC_PI_4;
+const DRIVER_FOV: f32 = 0.95;
+/// The driver looks slightly down by default, so the gauges are in view.
+const DRIVER_PITCH: f32 = -0.08;
+
 #[derive(Component)]
 pub struct ChaseCamera {
+    driver: bool,
     /// Smoothed car heading the camera trails behind.
     yaw: f32,
     orbit_yaw: f32,
     pitch: f32,
     distance: f32,
+    /// Head turn in the driver's view.
+    look_yaw: f32,
+    look_pitch: f32,
 }
 
 impl Default for ChaseCamera {
     fn default() -> Self {
         Self {
+            driver: false,
             yaw: 0.0,
             orbit_yaw: 0.0,
             pitch: 0.3,
             distance: 9.0,
+            look_yaw: 0.0,
+            look_pitch: DRIVER_PITCH,
         }
+    }
+}
+
+impl ChaseCamera {
+    /// Whether the camera is in the driver's seat.
+    pub fn driver(&self) -> bool {
+        self.driver
     }
 }
 
@@ -45,6 +70,28 @@ pub struct OrbitInput(pub bool);
 impl Default for OrbitInput {
     fn default() -> Self {
         Self(true)
+    }
+}
+
+fn switch_view(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut cameras: Query<(&mut ChaseCamera, &mut Projection)>,
+) {
+    if !keys.just_pressed(KeyCode::KeyC) {
+        return;
+    }
+    for (mut camera, mut projection) in &mut cameras {
+        camera.driver = !camera.driver;
+        camera.look_yaw = 0.0;
+        camera.look_pitch = DRIVER_PITCH;
+        if let Projection::Perspective(perspective) = &mut *projection {
+            // The roof lining is only a few centimetres above the driver's eyes.
+            (perspective.fov, perspective.near) = if camera.driver {
+                (DRIVER_FOV, 0.02)
+            } else {
+                (CHASE_FOV, 0.1)
+            };
+        }
     }
 }
 
@@ -59,6 +106,13 @@ fn orbit(
         return;
     }
     for mut camera in &mut cameras {
+        if camera.driver {
+            if buttons.pressed(MouseButton::Left) {
+                camera.look_yaw = (camera.look_yaw - motion.delta.x * 0.005).clamp(-2.2, 2.2);
+                camera.look_pitch = (camera.look_pitch - motion.delta.y * 0.005).clamp(-0.8, 0.6);
+            }
+            continue;
+        }
         if buttons.pressed(MouseButton::Left) {
             camera.orbit_yaw -= motion.delta.x * 0.005;
             camera.pitch = (camera.pitch + motion.delta.y * 0.005).clamp(-0.1, 1.4);
@@ -85,6 +139,17 @@ fn follow(
             - std::f32::consts::PI;
         camera.yaw += delta * (1.0 - (-3.0 * time.delta_secs()).exp());
 
+        if camera.driver {
+            // Fixed to the seat: the view moves with every bump and roll of the body.
+            let rotation = car.body.rotation;
+            *transform = Transform::from_translation(car.body.position + rotation * EYE)
+                .with_rotation(
+                    rotation
+                        * Quat::from_rotation_y(camera.look_yaw)
+                        * Quat::from_rotation_x(camera.look_pitch),
+                );
+            continue;
+        }
         let rotation = Quat::from_rotation_y(camera.yaw + camera.orbit_yaw)
             * Quat::from_rotation_x(-camera.pitch);
         let mut position = target + rotation * Vec3::new(0.0, 0.0, camera.distance);

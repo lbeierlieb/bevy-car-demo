@@ -66,7 +66,8 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, mut cars: Query<&mu
                 ui.label("A/D: steer    Space: handbrake");
                 ui.label("Tab: next car    R: reset car");
                 ui.label("F1: gizmos    F2: this panel    M: mute");
-                ui.label("Left-drag: orbit    Scroll: zoom");
+                ui.label("C: chase/driver view");
+                ui.label("Left-drag: orbit or look around    Scroll: zoom");
             });
             ui.collapsing("Map: Gerach to Rattelsdorf and Baunach, Bavaria", |ui| {
                 ui.label("Map data © OpenStreetMap contributors (ODbL)");

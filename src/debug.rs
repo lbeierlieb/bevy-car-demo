@@ -3,7 +3,8 @@
 use bevy::color::palettes::css;
 use bevy::prelude::*;
 
-use crate::car::Car;
+use crate::camera::ChaseCamera;
+use crate::car::{ActiveCar, Car};
 use crate::physics::suspension::Corner;
 
 /// Metres of arrow per newton of tire force.
@@ -50,8 +51,15 @@ fn toggle(keys: Res<ButtonInput<KeyCode>>, mut view: ResMut<DebugView>) {
     }
 }
 
-fn draw(cars: Query<&Car>, mut gizmos: Gizmos) {
-    for car in &cars {
+fn draw(
+    cars: Query<&Car>,
+    active: Res<ActiveCar>,
+    cameras: Query<&ChaseCamera>,
+    mut gizmos: Gizmos,
+) {
+    // Gizmos draw on top, so they'd cover the dashboard of the car the camera sits in.
+    let seated = cameras.iter().any(|camera| camera.driver());
+    for car in cars.iter().filter(|car| !(seated && car.index == active.0)) {
         let to_world = |p: Vec3| car.body.position + car.body.rotation * p;
         for corner in &car.corners {
             let p = &corner.pose;
