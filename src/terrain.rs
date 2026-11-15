@@ -39,10 +39,11 @@ pub struct Road {
 
 #[derive(Resource)]
 pub struct Terrain {
-    /// Grid cells per side; each cell is two triangles.
-    cells: usize,
+    /// Grid cells along x and z; each cell is two triangles.
+    cells_x: usize,
+    cells_z: usize,
     cell: f32,
-    /// Heights at the full-detail grid vertices, `(cells + 1)²`, row-major in z.
+    /// Heights at the full-detail grid vertices, `(cells_x + 1)(cells_z + 1)`, row-major in z.
     heights: Vec<f32>,
     /// Chunk side in cells, and the chunks, row-major in z.
     chunk_cells: usize,
@@ -81,16 +82,16 @@ impl Terrain {
     pub fn baked() -> Self {
         let mut r = Bytes(BAKED);
         assert_eq!(r.take(4), b"CSTR", "not a baked terrain file");
-        assert_eq!(r.u32(), 4, "unsupported terrain version");
-        let cells = r.u32() as usize;
+        assert_eq!(r.u32(), 5, "unsupported terrain version");
+        let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
         let cell = r.f32();
         let chunk_cells = r.u32() as usize;
         let spawn = Vec2::new(r.f32(), r.f32());
-        let n = cells + 1;
-        let mut heights = vec![0.0; n * n];
+        let n = cells_x + 1;
+        let mut heights = vec![0.0; n * (cells_z + 1)];
         let mut chunks = Vec::new();
-        for cz in 0..cells / chunk_cells {
-            for cx in 0..cells / chunk_cells {
+        for cz in 0..cells_z / chunk_cells {
+            for cx in 0..cells_x / chunk_cells {
                 let step = r.take(1)[0] as usize;
                 let m = chunk_cells / step;
                 let coarse: Vec<f32> = (0..(m + 1) * (m + 1)).map(|_| r.f32()).collect();
@@ -125,7 +126,8 @@ impl Terrain {
             })
             .collect();
         Self {
-            cells,
+            cells_x,
+            cells_z,
             cell,
             heights,
             chunk_cells,
@@ -136,23 +138,28 @@ impl Terrain {
         }
     }
 
-    pub fn half_size(&self) -> f32 {
-        self.cells as f32 * self.cell / 2.0
+    /// Half the map's extent along x and z; the map is centred on the origin.
+    pub fn half_size(&self) -> Vec2 {
+        Vec2::new(self.cells_x as f32, self.cells_z as f32) * self.cell / 2.0
+    }
+
+    fn chunks_x(&self) -> usize {
+        self.cells_x / self.chunk_cells
     }
 
     fn vertex(&self, ix: usize, iz: usize) -> Vec3 {
         Vec3::new(
-            ix as f32 * self.cell - self.half_size(),
-            self.heights[iz * (self.cells + 1) + ix],
-            iz as f32 * self.cell - self.half_size(),
+            ix as f32 * self.cell - self.half_size().x,
+            self.heights[iz * (self.cells_x + 1) + ix],
+            iz as f32 * self.cell - self.half_size().y,
         )
     }
 
     /// The triangle of the rendered mesh that contains (x, z), wound counter-clockwise from above.
     fn triangle(&self, x: f32, z: f32) -> [Vec3; 3] {
-        let max = self.cells as f32 - 1e-3;
-        let gx = ((x + self.half_size()) / self.cell).clamp(0.0, max);
-        let gz = ((z + self.half_size()) / self.cell).clamp(0.0, max);
+        let half = self.half_size();
+        let gx = ((x + half.x) / self.cell).clamp(0.0, self.cells_x as f32 - 1e-3);
+        let gz = ((z + half.y) / self.cell).clamp(0.0, self.cells_z as f32 - 1e-3);
         let (ix, iz) = (gx as usize, gz as usize);
         let (a, b) = (self.vertex(ix, iz), self.vertex(ix + 1, iz));
         let (c, d) = (self.vertex(ix, iz + 1), self.vertex(ix + 1, iz + 1));
@@ -175,11 +182,13 @@ impl Terrain {
 
     /// Land use class at (x, z) (classes as in `tools/bake`).
     pub fn land_class(&self, x: f32, z: f32) -> u8 {
-        let max = self.cells - 1;
-        let grid = |v: f32| (((v + self.half_size()) / self.cell).max(0.0) as usize).min(max);
-        let (ix, iz) = (grid(x), grid(z));
-        let per_side = self.cells / self.chunk_cells;
-        let chunk = &self.chunks[iz / self.chunk_cells * per_side + ix / self.chunk_cells];
+        let half = self.half_size();
+        let grid = |v: f32, max: usize| ((v / self.cell).max(0.0) as usize).min(max - 1);
+        let (ix, iz) = (
+            grid(x + half.x, self.cells_x),
+            grid(z + half.y, self.cells_z),
+        );
+        let chunk = &self.chunks[iz / self.chunk_cells * self.chunks_x() + ix / self.chunk_cells];
         let m = self.chunk_cells / chunk.step;
         let local = |i: usize| i % self.chunk_cells / chunk.step;
         chunk.classes[local(iz) * m + local(ix)]
@@ -188,7 +197,7 @@ impl Terrain {
     /// Whether (x, z) is inside the map, away from the rim that slopes down at its edge.
     pub fn inside(&self, x: f32, z: f32) -> bool {
         let inner = self.half_size() - RIM;
-        x.abs() < inner && z.abs() < inner
+        x.abs() < inner.x && z.abs() < inner.y
     }
 
     /// Marches along the ray and refines the surface crossing by bisection.
@@ -270,23 +279,23 @@ impl Terrain {
 
     /// Number of chunks; chunks are numbered row-major in z.
     pub fn chunk_count(&self) -> usize {
-        let per_side = self.cells / self.chunk_cells;
-        per_side * per_side
+        self.chunks.len()
     }
 
     /// The chunk containing (x, z), clamped to the map.
     pub fn chunk_at(&self, p: Vec2) -> usize {
-        let per_side = self.cells / self.chunk_cells;
         let size = self.chunk_cells as f32 * self.cell;
-        let index = |v: f32| (((v + self.half_size()) / size).max(0.0) as usize).min(per_side - 1);
-        index(p.y) * per_side + index(p.x)
+        let (chunks_x, chunks_z) = (self.chunks_x(), self.chunks.len() / self.chunks_x());
+        let index = |v: f32, count: usize| ((v / size).max(0.0) as usize).min(count - 1);
+        let half = self.half_size();
+        index(p.y + half.y, chunks_z) * chunks_x + index(p.x + half.x, chunks_x)
     }
 
     /// Lower and upper corners of a chunk in the xz plane.
     pub fn chunk_bounds(&self, index: usize) -> (Vec2, Vec2) {
-        let per_side = self.cells / self.chunk_cells;
+        let chunks_x = self.chunks_x();
         let size = self.chunk_cells as f32 * self.cell;
-        let lo = Vec2::new((index % per_side) as f32, (index / per_side) as f32) * size
+        let lo = Vec2::new((index % chunks_x) as f32, (index / chunks_x) as f32) * size
             - self.half_size();
         (lo, lo + size)
     }
@@ -294,7 +303,7 @@ impl Terrain {
     /// Flat-shaded ground of one chunk, at the chunk's resolution: every triangle gets its
     /// own vertices, coloured by land use and slope.
     pub fn ground_mesh(&self, index: usize, mesh: &mut FlatMesh) {
-        let per_side = self.cells / self.chunk_cells;
+        let per_side = self.chunks_x();
         let chunk = &self.chunks[index];
         let s = chunk.step;
         let m = self.chunk_cells / s;
@@ -544,7 +553,7 @@ mod tests {
     #[test]
     fn physics_matches_coarse_render_triangles() {
         let terrain = Terrain::baked();
-        let per_side = terrain.cells / terrain.chunk_cells;
+        let per_side = terrain.chunks_x();
         let mut coarse_chunks = 0;
         for (index, chunk) in terrain
             .chunks

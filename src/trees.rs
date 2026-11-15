@@ -91,19 +91,19 @@ impl Forest {
 
     /// Positions and seeds of the trees and bushes whose grid cell lies in a chunk.
     fn positions(&self, terrain: &Terrain, index: usize) -> Vec<(Vec2, u32)> {
-        let half_size = self.mask.half_size;
-        let n = (2.0 * half_size / SPACING) as usize;
+        let half_size = terrain.half_size();
+        let n = (2.0 * half_size / SPACING).as_uvec2();
         let (lo, hi) = terrain.chunk_bounds(index);
         // Grid cells whose corner lies in [lo, hi).
-        let range = |lo: f32, hi: f32| {
-            let first = ((lo + half_size) / SPACING).ceil() as usize;
-            let end = (((hi + half_size) / SPACING).ceil() as usize).min(n);
+        let range = |lo: f32, hi: f32, half: f32, n: u32| {
+            let first = ((lo + half) / SPACING).ceil() as u32;
+            let end = (((hi + half) / SPACING).ceil() as u32).min(n);
             first..end
         };
         let mut out = Vec::new();
-        for gz in range(lo.y, hi.y) {
-            for gx in range(lo.x, hi.x) {
-                let i = (gz * n + gx) as u32;
+        for gz in range(lo.y, hi.y, half_size.y, n.y) {
+            for gx in range(lo.x, hi.x, half_size.x, n.x) {
+                let i = gz * n.x + gx;
                 let jitter = Vec2::new(hash(i ^ 0x3a7c), hash(i ^ 0x6d2e));
                 let p = (Vec2::new(gx as f32, gz as f32) + jitter) * SPACING - half_size;
                 if !terrain.inside(p.x, p.y) || self.mask.blocked(p) {
@@ -126,46 +126,51 @@ impl Forest {
 
 /// Cells within `CLEARANCE` of a road or stream.
 struct RoadMask {
-    half_size: f32,
-    side: usize,
+    half_size: Vec2,
+    size: UVec2,
     blocked: Vec<bool>,
 }
 
 impl RoadMask {
     fn new(terrain: &Terrain) -> Self {
         let half_size = terrain.half_size();
-        let side = (2.0 * half_size / MASK_CELL).ceil() as usize;
-        let mut blocked = vec![false; side * side];
-        let cell = |v: f32| ((v + half_size) / MASK_CELL).clamp(0.0, (side - 1) as f32) as usize;
+        let size = (2.0 * half_size / MASK_CELL).ceil().as_uvec2();
+        let mut mask = Self {
+            half_size,
+            size,
+            blocked: vec![false; (size.x * size.y) as usize],
+        };
         for road in &terrain.roads {
             let reach = road.width / 2.0 + CLEARANCE;
             for pair in road.points.windows(2) {
                 let (a, b) = (pair[0], pair[1]);
-                let (lo, hi) = (a.min(b) - reach, a.max(b) + reach);
-                for z in cell(lo.y)..=cell(hi.y) {
-                    for x in cell(lo.x)..=cell(hi.x) {
-                        let p = (Vec2::new(x as f32, z as f32) + 0.5) * MASK_CELL - half_size;
+                let (lo, hi) = (mask.cell(a.min(b) - reach), mask.cell(a.max(b) + reach));
+                for z in lo.y..=hi.y {
+                    for x in lo.x..=hi.x {
+                        let p = (UVec2::new(x, z).as_vec2() + 0.5) * MASK_CELL - half_size;
                         let t = ((p - a).dot(b - a) / (b - a).length_squared().max(1e-6))
                             .clamp(0.0, 1.0);
                         // Cell centre test, widened by half a cell diagonal.
                         if p.distance(a + (b - a) * t) < reach + MASK_CELL * 0.71 {
-                            blocked[z * side + x] = true;
+                            mask.blocked[(z * size.x + x) as usize] = true;
                         }
                     }
                 }
             }
         }
-        Self {
-            half_size,
-            side,
-            blocked,
-        }
+        mask
+    }
+
+    fn cell(&self, p: Vec2) -> UVec2 {
+        ((p + self.half_size) / MASK_CELL)
+            .max(Vec2::ZERO)
+            .as_uvec2()
+            .min(self.size - 1)
     }
 
     fn blocked(&self, p: Vec2) -> bool {
-        let cell =
-            |v: f32| ((v + self.half_size) / MASK_CELL).clamp(0.0, (self.side - 1) as f32) as usize;
-        self.blocked[cell(p.y) * self.side + cell(p.x)]
+        let c = self.cell(p);
+        self.blocked[(c.y * self.size.x + c.x) as usize]
     }
 }
 

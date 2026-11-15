@@ -1,7 +1,7 @@
-//! Bakes a square of real-world terrain, land use, roads and buildings into the binary
+//! Bakes a rectangle of real-world terrain, land use, roads and buildings into the binary
 //! format that car-sim embeds (see `src/terrain.rs` in the game for the reader).
 //!
-//! Usage: `cargo run --release -- <lat> <lon> <size_m> <out_file>`
+//! Usage: `bake <lat> <lon> <width_m>[x<height_m>] <out_file> [<spawn_lat> <spawn_lon>]`
 //!
 //! Elevation is the 1 m lidar terrain model (DGM1) of the Bavarian surveying
 //! administration, so this only works inside Bavaria. Everything else comes from
@@ -17,7 +17,7 @@ use quick_xml::events::Event;
 /// Terrain grid spacing in metres, at full detail.
 const CELL: f64 = 2.0;
 /// Chunk side in cells (96 m). Each chunk is stored at one of the steps below, which all
-/// divide it. The map is a whole number of chunks.
+/// divide it. The map is a whole number of chunks along each axis.
 const CHUNK_CELLS: usize = 48;
 /// Chunk resolutions as steps in cells: 2 m, 4 m and 8 m.
 const STEP_DETAIL: usize = 1;
@@ -381,9 +381,12 @@ impl Osm {
 /// ways with tags that roads, buildings or land use read, the multipolygon relations, and
 /// (recursively) all their member ways and nodes, also those outside the box. Everything
 /// is clipped to the map in local metres later.
-fn fetch_osm(frame: &Frame, center: Point, half_size: f64) -> Result<Osm, Error> {
-    let dlat = (half_size * 1.1 / 6_371_000.0).to_degrees();
-    let dlon = dlat / center.0.to_radians().cos();
+fn fetch_osm(frame: &Frame, center: Point, (half_x, half_z): Point) -> Result<Osm, Error> {
+    let degrees = |m: f64| (m * 1.1 / 6_371_000.0).to_degrees();
+    let (dlat, dlon) = (
+        degrees(half_z),
+        degrees(half_x) / center.0.to_radians().cos(),
+    );
     let (lat, lon) = center;
     let bbox = format!(
         "{:.6},{:.6},{:.6},{:.6}",
@@ -477,9 +480,9 @@ fn main() -> Result<(), Error> {
             Some((spawn_lat.parse::<f64>()?, spawn_lon.parse::<f64>()?)),
         ),
         _ => {
-            return Err(
-                "usage: bake <lat> <lon> <size_m> <out_file> [<spawn_lat> <spawn_lon>]".into(),
-            );
+            return Err("usage: bake <lat> <lon> <width_m>[x<height_m>] <out_file> \
+                        [<spawn_lat> <spawn_lon>]"
+                .into());
         }
     };
     let center = (lat.parse::<f64>()?, lon.parse::<f64>()?);
@@ -489,26 +492,27 @@ fn main() -> Result<(), Error> {
         east: east.round(),
         north: north.round(),
     };
-    let chunks = (size.parse::<f64>()? / (CELL * CHUNK_CELLS as f64))
-        .round()
-        .max(1.0) as usize;
-    let cells = chunks * CHUNK_CELLS;
-    let half_size = cells as f64 * CELL / 2.0;
-    let n = cells + 1;
-    let grid = |i: usize| i as f64 * CELL - half_size;
-    let to_index = |v: f64| ((v + half_size) / CELL).clamp(0.0, cells as f64) as usize;
+    // Whole chunks along each axis.
+    let (width, height) = match size.split_once('x') {
+        Some((w, h)) => (w.parse::<f64>()?, h.parse::<f64>()?),
+        None => (size.parse()?, size.parse()?),
+    };
+    let chunk_count = |m: f64| (m / (CELL * CHUNK_CELLS as f64)).round().max(1.0) as usize;
+    let (chunks_x, chunks_z) = (chunk_count(width), chunk_count(height));
+    let (cells_x, cells_z) = (chunks_x * CHUNK_CELLS, chunks_z * CHUNK_CELLS);
+    let (half_x, half_z) = (cells_x as f64 * CELL / 2.0, cells_z as f64 * CELL / 2.0);
+    // Grid vertices per row, and conversions between vertex indices and local metres.
+    let n = cells_x + 1;
+    let grid_x = |i: usize| i as f64 * CELL - half_x;
+    let grid_z = |i: usize| i as f64 * CELL - half_z;
+    let index_x = |v: f64| ((v + half_x) / CELL).clamp(0.0, cells_x as f64) as usize;
+    let index_z = |v: f64| ((v + half_z) / CELL).clamp(0.0, cells_z as f64) as usize;
 
     // Terrain: lidar heights, box-filtered over 3×3 metres to smooth out tiny bumps.
     let margin = 3.0;
     let dgm = Dgm1::fetch(
-        (
-            frame.east - half_size - margin,
-            frame.east + half_size + margin,
-        ),
-        (
-            frame.north - half_size - margin,
-            frame.north + half_size + margin,
-        ),
+        (frame.east - half_x - margin, frame.east + half_x + margin),
+        (frame.north - half_z - margin, frame.north + half_z + margin),
     )?;
     let height_at = |x: f64, z: f64| {
         let (e, n) = (frame.east + x, frame.north - z);
@@ -520,12 +524,12 @@ fn main() -> Result<(), Error> {
         }
         sum / 9.0
     };
-    let mut heights: Vec<f64> = (0..n * n)
-        .map(|i| height_at(grid(i % n), grid(i / n)))
+    let mut heights: Vec<f64> = (0..n * (cells_z + 1))
+        .map(|i| height_at(grid_x(i % n), grid_z(i / n)))
         .collect();
 
-    let osm = fetch_osm(&frame, center, half_size)?;
-    let on_map = |&(x, z): &Point| x.abs() < half_size && z.abs() < half_size;
+    let osm = fetch_osm(&frame, center, (half_x, half_z))?;
+    let on_map = |&(x, z): &Point| x.abs() < half_x && z.abs() < half_z;
 
     // Roads, waterways, buildings and land use areas.
     let mut roads = Vec::new();
@@ -572,7 +576,7 @@ fn main() -> Result<(), Error> {
     }
 
     // Rasterise land use per grid cell (tested at the cell centre).
-    let mut classes = vec![0u8; cells * cells];
+    let mut classes = vec![0u8; cells_x * cells_z];
     for (i, area) in areas.iter().enumerate() {
         // Alternate field colours so neighbouring fields read as a patchwork.
         let class = if area.class == class::FARMLAND {
@@ -587,10 +591,10 @@ fn main() -> Result<(), Error> {
         let (z0, z1) = all.fold((f64::MAX, f64::MIN), |(lo, hi), p| {
             (lo.min(p.1), hi.max(p.1))
         });
-        for gz in to_index(z0)..to_index(z1).min(cells) {
-            for gx in to_index(x0)..to_index(x1).min(cells) {
-                let slot = &mut classes[gz * cells + gx];
-                let centre = (grid(gx) + CELL / 2.0, grid(gz) + CELL / 2.0);
+        for gz in index_z(z0)..index_z(z1).min(cells_z) {
+            for gx in index_x(x0)..index_x(x1).min(cells_x) {
+                let slot = &mut classes[gz * cells_x + gx];
+                let centre = (grid_x(gx) + CELL / 2.0, grid_z(gz) + CELL / 2.0);
                 if class::priority(class) > class::priority(*slot)
                     && inside_rings(&area.rings, centre)
                 {
@@ -601,8 +605,8 @@ fn main() -> Result<(), Error> {
     }
 
     // Bridges: straight decks between the end heights, terrain raised up to them.
-    let mut nearest = vec![(f64::INFINITY, 0.0); n * n];
-    let grid_height = |x: f64, z: f64| heights[to_index(z) * n + to_index(x)];
+    let mut nearest = vec![(f64::INFINITY, 0.0); heights.len()];
+    let grid_height = |x: f64, z: f64| heights[index_z(z) * n + index_x(x)];
     for road in roads.iter_mut().filter(|r| r.bridge) {
         road.points = resample(&road.points);
         let (start, end) = (road.points[0], *road.points.last().unwrap());
@@ -616,9 +620,9 @@ fn main() -> Result<(), Error> {
             let ((x0, z0), (x1, z1)) = (pair[0], pair[1]);
             let (dx, dz) = (x1 - x0, z1 - z0);
             let len2 = (dx * dx + dz * dz).max(1e-9);
-            for gz in to_index(z0.min(z1) - reach)..=to_index(z0.max(z1) + reach) {
-                for gx in to_index(x0.min(x1) - reach)..=to_index(x0.max(x1) + reach) {
-                    let (px, pz) = (grid(gx), grid(gz));
+            for gz in index_z(z0.min(z1) - reach)..=index_z(z0.max(z1) + reach) {
+                for gx in index_x(x0.min(x1) - reach)..=index_x(x0.max(x1) + reach) {
+                    let (px, pz) = (grid_x(gx), grid_z(gz));
                     let t = (((px - x0) * dx + (pz - z0) * dz) / len2).clamp(0.0, 1.0);
                     let edge = (px - x0 - dx * t).hypot(pz - z0 - dz * t) - road.width / 2.0;
                     let slot = &mut nearest[gz * n + gx];
@@ -637,22 +641,24 @@ fn main() -> Result<(), Error> {
 
     // Raised rim so cars stay on the map.
     for (i, h) in heights.iter_mut().enumerate() {
-        let edge = (grid(i % n).abs().max(grid(i / n).abs()) - (half_size - RIM)).max(0.0);
+        let edge = (grid_x(i % n).abs() - (half_x - RIM))
+            .max(grid_z(i / n).abs() - (half_z - RIM))
+            .max(0.0);
         *h += edge * edge * 0.05;
     }
 
     // Resolution per chunk, as a step in grid cells: full detail around buildings, paved
     // roads and paved areas, medium around tracks, coarse everywhere else.
-    let mut steps = vec![STEP_EMPTY; chunks * chunks];
+    let mut steps = vec![STEP_EMPTY; chunks_x * chunks_z];
     let chunk_size = CHUNK_CELLS as f64 * CELL;
     let mut refine = |(x, z): Point, margin: f64, step: usize| {
-        let range = |v: f64| {
-            let index = |v: f64| (((v + half_size) / chunk_size).max(0.0) as usize).min(chunks - 1);
+        let range = |v: f64, half: f64, count: usize| {
+            let index = |v: f64| (((v + half) / chunk_size).max(0.0) as usize).min(count - 1);
             index(v - margin)..=index(v + margin)
         };
-        for cz in range(z) {
-            for cx in range(x) {
-                let slot = &mut steps[cz * chunks + cx];
+        for cz in range(z, half_z, chunks_z) {
+            for cx in range(x, half_x, chunks_x) {
+                let slot = &mut steps[cz * chunks_x + cx];
                 *slot = (*slot).min(step);
             }
         }
@@ -676,7 +682,10 @@ fn main() -> Result<(), Error> {
         .filter(|(_, c)| **c == class::PAVED)
     {
         refine(
-            (grid(i % cells) + CELL / 2.0, grid(i / cells) + CELL / 2.0),
+            (
+                grid_x(i % cells_x) + CELL / 2.0,
+                grid_z(i / cells_x) + CELL / 2.0,
+            ),
             10.0,
             STEP_DETAIL,
         );
@@ -685,32 +694,32 @@ fn main() -> Result<(), Error> {
     // Vertices of coarse chunks average the terrain around them (instead of point-sampling
     // it). A vertex shared by several chunks uses the coarsest of their steps.
     let vertex_step = |i: usize, j: usize| {
-        let touching = |v: usize| {
-            let c = (v / CHUNK_CELLS).min(chunks - 1);
+        let touching = |v: usize, count: usize| {
+            let c = (v / CHUNK_CELLS).min(count - 1);
             if v.is_multiple_of(CHUNK_CELLS) && v > 0 {
                 [c - 1, c]
             } else {
                 [c, c]
             }
         };
-        let (xs, zs) = (touching(i), touching(j));
+        let (xs, zs) = (touching(i, chunks_x), touching(j, chunks_z));
         let mut step = 0;
         for cz in zs {
             for cx in xs {
-                step = step.max(steps[cz * chunks + cx]);
+                step = step.max(steps[cz * chunks_x + cx]);
             }
         }
         step
     };
     let raw = heights.clone();
-    for j in 0..n {
-        for i in 0..n {
+    for j in 0..=cells_z {
+        for i in 0..=cells_x {
             let s = vertex_step(i, j);
             if s > 1 && i.is_multiple_of(s) && j.is_multiple_of(s) {
-                let window = |v: usize| v.saturating_sub(s / 2)..=(v + s / 2).min(cells);
+                let window = |v: usize, max: usize| v.saturating_sub(s / 2)..=(v + s / 2).min(max);
                 let (mut sum, mut count) = (0.0, 0.0);
-                for wj in window(j) {
-                    for wi in window(i) {
+                for wj in window(j, cells_z) {
+                    for wi in window(i, cells_x) {
                         sum += raw[wj * n + wi];
                         count += 1.0;
                     }
@@ -721,33 +730,35 @@ fn main() -> Result<(), Error> {
     }
     // Seams: along an edge between chunks of different steps, put the finer side's edge
     // vertices on the coarser side's straight edges, so the surface has no cracks.
-    for a in 1..chunks {
-        for b in 0..chunks {
-            for (along_x, chunk_a, chunk_b) in [
-                (false, b * chunks + a - 1, b * chunks + a),
-                (true, (a - 1) * chunks + b, a * chunks + b),
-            ] {
-                let s = steps[chunk_a].max(steps[chunk_b]);
-                let index = |k: usize| {
-                    if along_x {
-                        (a * CHUNK_CELLS) * n + k
-                    } else {
-                        k * n + a * CHUNK_CELLS
-                    }
-                };
-                for k in b * CHUNK_CELLS..=(b + 1) * CHUNK_CELLS {
-                    let k0 = k - k % s;
-                    if !k.is_multiple_of(s) {
-                        let t = (k - k0) as f64 / s as f64;
-                        heights[index(k)] =
-                            heights[index(k0)] * (1.0 - t) + heights[index(k0 + s)] * t;
-                    }
-                }
+    // `a` is the chunk index across the seam (the seam is on its low side), `b` the chunk
+    // index along it.
+    let seams = (1..chunks_x)
+        .flat_map(|a| (0..chunks_z).map(move |b| (false, a, b)))
+        .chain((1..chunks_z).flat_map(|a| (0..chunks_x).map(move |b| (true, a, b))));
+    for (along_x, a, b) in seams {
+        let (chunk_a, chunk_b) = if along_x {
+            ((a - 1) * chunks_x + b, a * chunks_x + b)
+        } else {
+            (b * chunks_x + a - 1, b * chunks_x + a)
+        };
+        let s = steps[chunk_a].max(steps[chunk_b]);
+        let index = |k: usize| {
+            if along_x {
+                (a * CHUNK_CELLS) * n + k
+            } else {
+                k * n + a * CHUNK_CELLS
+            }
+        };
+        for k in b * CHUNK_CELLS..=(b + 1) * CHUNK_CELLS {
+            let k0 = k - k % s;
+            if !k.is_multiple_of(s) {
+                let t = (k - k0) as f64 / s as f64;
+                heights[index(k)] = heights[index(k0)] * (1.0 - t) + heights[index(k0 + s)] * t;
             }
         }
     }
 
-    // Write (all little-endian): b"CSTR", version u32, cells u32, cell size f32,
+    // Write (all little-endian): b"CSTR", version u32, cells along x and z u32, cell size f32,
     // chunk cells u32, spawn point (x, z) f32,
     // then per chunk (row-major, rows along z): step u8 (in cells), the chunk's
     // (chunk cells / step + 1)² vertex heights f32 relative to the lowest point and
@@ -761,15 +772,16 @@ fn main() -> Result<(), Error> {
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&4u32.to_le_bytes());
-    put(&(cells as u32).to_le_bytes());
+    put(&5u32.to_le_bytes());
+    put(&(cells_x as u32).to_le_bytes());
+    put(&(cells_z as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
     put(&(CHUNK_CELLS as u32).to_le_bytes());
     put(&(spawn.0 as f32).to_le_bytes());
     put(&(spawn.1 as f32).to_le_bytes());
-    for cz in 0..chunks {
-        for cx in 0..chunks {
-            let s = steps[cz * chunks + cx];
+    for cz in 0..chunks_z {
+        for cx in 0..chunks_x {
+            let s = steps[cz * chunks_x + cx];
             let m = CHUNK_CELLS / s;
             let (i0, j0) = (cx * CHUNK_CELLS, cz * CHUNK_CELLS);
             put(&[s as u8]);
@@ -780,7 +792,7 @@ fn main() -> Result<(), Error> {
             }
             for j in 0..m {
                 for i in 0..m {
-                    put(&[classes[(j0 + j * s + s / 2) * cells + i0 + i * s + s / 2]]);
+                    put(&[classes[(j0 + j * s + s / 2) * cells_x + i0 + i * s + s / 2]]);
                 }
             }
         }
@@ -814,7 +826,7 @@ fn main() -> Result<(), Error> {
         CELL * STEP_EMPTY as f64
     );
     eprintln!(
-        "wrote {out}: {cells}x{cells} cells of {CELL} m, {} roads, {} buildings, {} areas, relief {:.1} m, {} KiB",
+        "wrote {out}: {cells_x}x{cells_z} cells of {CELL} m, {} roads, {} buildings, {} areas, relief {:.1} m, {} KiB",
         roads.len(),
         buildings.len(),
         areas.len(),

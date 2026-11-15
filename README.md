@@ -102,14 +102,16 @@ edge, so there are no cracks. Chunks are stored at their own resolution. The gam
 rebuilds the full 2 m height grid from them, with coarse areas lying exactly on
 their coarse triangles, so physics still matches what's drawn.
 
-The output is written to a file that the game embeds at compile time. DGM1 only
+The map is a rectangle centred on the given point, with both sides rounded to whole
+chunks; give one size for a square. The output is written to a file that the game
+embeds at compile time. DGM1 only
 covers Bavaria, so locations elsewhere would need another elevation source.
 
 ```sh
 nix develop
 cd tools/bake
 cargo build --release
-./target/release/bake <lat> <lon> <size_m> ../../assets/<name>.terrain [<spawn_lat> <spawn_lon>]
+./target/release/bake <lat> <lon> <width_m>[x<height_m>] ../../assets/<name>.terrain [<spawn_lat> <spawn_lon>]
 ```
 
 The map was baked with `50.03674 10.80097 3072 ../../assets/gerach.terrain
