@@ -154,7 +154,8 @@ mod tests {
         };
         run(&mut car, &terrain, 3.0);
         let speed = car.forward_speed();
-        assert!(speed > 12.0, "speed {speed}");
+        // About 13 m/s on the flat; the start road in Gerach climbs at around 7 %.
+        assert!(speed > 9.0, "speed {speed}");
 
         car.controls = Controls {
             throttle: 0.3,

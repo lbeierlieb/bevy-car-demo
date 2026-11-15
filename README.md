@@ -18,8 +18,11 @@ A small Bevy demo of car simulation techniques:
   terrain triangles. Tire load comes from carcass stiffness and damping. Forces come
   from a simplified Pacejka Magic Formula, with combined slip normalised by peak
   slip. Wheel spin is updated implicitly, which keeps it stable.
-- **Real-world low-poly terrain**: a 1.6 km square around the village of Gerach
-  (96161, Bavaria), meshed at 2 m from the Bavarian 1 m lidar terrain model. Roads
+- **Real-world low-poly terrain**: a 3 km square around the villages of Gerach
+  (96161, Bavaria), Mauschendorf and Sendelbach, from the Bavarian 1 m lidar
+  terrain model. The map is split into 96 m chunks, each meshed at its own
+  resolution: 2 m near buildings and paved roads, 4 m around farm tracks, 8 m
+  elsewhere, with seams kept crack-free. Roads
   (with widths and surfaces from their OSM tags), streams, land use (fields,
   forest, meadows, gardens, water, parking areas) and buildings come from
   OpenStreetMap. Houses are boxes with gable roofs fitted to each footprint;
@@ -45,7 +48,7 @@ targets and runs clippy, rustfmt, nixfmt and deadnix.
 
 | Key | Action |
 | --- | --- |
-| W / S, arrows | Throttle; brake, then reverse |
+| W / S, arrows | Throttle; brake, then reverse (a stopped car holds on hills) |
 | A / D | Steer |
 | Space | Handbrake |
 | Tab | Switch car |
@@ -80,21 +83,32 @@ Bavarian surveying administration's open data server, and roads, land use and
 buildings from the OpenStreetMap API. The map frame is aligned with UTM zone 32,
 like the lidar tiles. Elevation is box-filtered onto a 2 m grid and land use is
 rasterised per cell. Bridges are rebuilt as straight decks, because lidar shows
-the ground under them. The output is written to a file that the game embeds at
-compile time. DGM1 only covers Bavaria, so locations elsewhere would need another
-elevation source.
+the ground under them.
+
+Each 96 m chunk is then given a resolution. It gets 2 m within 20 m of a building
+or 10 m of a paved road or parking area, and 4 m within 6 m of a track. Everything
+else gets 8 m, with each coarse vertex averaging the terrain around it. Along seams
+between resolutions, the finer side's edge is bent onto the coarser side's straight
+edge, so there are no cracks. Chunks are stored at their own resolution. The game
+rebuilds the full 2 m height grid from them, with coarse areas lying exactly on
+their coarse triangles, so physics still matches what's drawn.
+
+The output is written to a file that the game embeds at compile time. DGM1 only
+covers Bavaria, so locations elsewhere would need another elevation source.
 
 ```sh
 nix develop
 cd tools/bake
 cargo build --release
-./target/release/bake <lat> <lon> <size_m> ../../assets/<name>.terrain
+./target/release/bake <lat> <lon> <size_m> ../../assets/<name>.terrain [<spawn_lat> <spawn_lon>]
 ```
 
-Gerach was baked with `50.02955 10.80867 1600`. To use a different file, change
-`BAKED` in `src/terrain.rs`. The OSM API refuses requests with more than 50 000 nodes;
-the tool then splits the area into quarters (recursively) and merges the results.
-Map size is limited more by GPU memory: about 65 MB per km² of terrain mesh.
+The map was baked with `50.03674 10.80097 3072 ../../assets/gerach.terrain
+50.0304493 10.8065719`, which spawns the cars in Gerach. To use a different file,
+change `BAKED` in `src/terrain.rs`. The OSM API refuses requests with more than
+50 000 nodes; the tool then splits the area into quarters (recursively) and merges
+the results. Map size is mainly limited by GPU memory. That's about 65 MB per km²
+at full detail; empty fields and forest cost a sixteenth of that.
 
 ## Deliberate simplifications
 
@@ -102,7 +116,7 @@ Massless arms with a point unsprung mass. No anti-roll bars, aerodynamics, gearb
 or tire relaxation length. No render interpolation between chassis steps. At very
 low speed, slips are computed against a 3 m/s floor, so a parked car can creep
 slowly down steep slopes. Bridges become plain embankments. Land use is coloured
-per 2 m cell, so area edges are slightly stepped.
+per cell (2–8 m), so area edges are stepped, most visibly in coarse chunks.
 
 ## Data attribution
 

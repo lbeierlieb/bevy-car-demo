@@ -13,8 +13,17 @@ use std::io::Cursor;
 
 use quick_xml::events::Event;
 
-/// Terrain grid spacing in metres.
+/// Terrain grid spacing in metres, at full detail.
 const CELL: f64 = 2.0;
+/// Chunk side in cells (96 m). Each chunk is stored at one of the steps below, which all
+/// divide it. The map is a whole number of chunks.
+const CHUNK_CELLS: usize = 48;
+/// Chunk resolutions as steps in cells: 2 m, 4 m and 8 m.
+const STEP_DETAIL: usize = 1;
+const STEP_TRACKS: usize = 2;
+const STEP_EMPTY: usize = 4;
+/// Width of the raised rim at the map edge.
+const RIM: f64 = 30.0;
 const USER_AGENT: &str = "car-sim-bake/0.2 (Bevy car simulation demo)";
 /// Bridges: lidar shows the ground under them, so their decks are rebuilt as straight
 /// ramps between the ends, with the terrain raised beside them over `BLEND` metres.
@@ -446,8 +455,20 @@ fn inside_rings(rings: &[Vec<Point>], (px, pz): Point) -> bool {
 
 fn main() -> Result<(), Error> {
     let args: Vec<String> = std::env::args().collect();
-    let [_, lat, lon, size, out] = args.as_slice() else {
-        return Err("usage: bake <lat> <lon> <size_m> <out_file>".into());
+    let (lat, lon, size, out, spawn) = match args.as_slice() {
+        [_, lat, lon, size, out] => (lat, lon, size, out, None),
+        [_, lat, lon, size, out, spawn_lat, spawn_lon] => (
+            lat,
+            lon,
+            size,
+            out,
+            Some((spawn_lat.parse::<f64>()?, spawn_lon.parse::<f64>()?)),
+        ),
+        _ => {
+            return Err(
+                "usage: bake <lat> <lon> <size_m> <out_file> [<spawn_lat> <spawn_lon>]".into(),
+            );
+        }
     };
     let center = (lat.parse::<f64>()?, lon.parse::<f64>()?);
     let (east, north) = utm32(center.0, center.1);
@@ -456,7 +477,10 @@ fn main() -> Result<(), Error> {
         east: east.round(),
         north: north.round(),
     };
-    let cells = (size.parse::<f64>()? / CELL).round() as usize;
+    let chunks = (size.parse::<f64>()? / (CELL * CHUNK_CELLS as f64))
+        .round()
+        .max(1.0) as usize;
+    let cells = chunks * CHUNK_CELLS;
     let half_size = cells as f64 * CELL / 2.0;
     let n = cells + 1;
     let grid = |i: usize| i as f64 * CELL - half_size;
@@ -599,24 +623,156 @@ fn main() -> Result<(), Error> {
         *h += (deck - *h).max(0.0) * w;
     }
 
+    // Raised rim so cars stay on the map.
+    for (i, h) in heights.iter_mut().enumerate() {
+        let edge = (grid(i % n).abs().max(grid(i / n).abs()) - (half_size - RIM)).max(0.0);
+        *h += edge * edge * 0.05;
+    }
+
+    // Resolution per chunk, as a step in grid cells: full detail around buildings, paved
+    // roads and paved areas, medium around tracks, coarse everywhere else.
+    let mut steps = vec![STEP_EMPTY; chunks * chunks];
+    let chunk_size = CHUNK_CELLS as f64 * CELL;
+    let mut refine = |(x, z): Point, margin: f64, step: usize| {
+        let range = |v: f64| {
+            let index = |v: f64| (((v + half_size) / chunk_size).max(0.0) as usize).min(chunks - 1);
+            index(v - margin)..=index(v + margin)
+        };
+        for cz in range(z) {
+            for cx in range(x) {
+                let slot = &mut steps[cz * chunks + cx];
+                *slot = (*slot).min(step);
+            }
+        }
+    };
+    for point in buildings.iter().flat_map(|b| &b.points) {
+        refine(*point, 20.0, STEP_DETAIL);
+    }
+    for road in &roads {
+        let (margin, step) = match road.kind {
+            RoadKind::Paved => (10.0, STEP_DETAIL),
+            RoadKind::Unpaved => (6.0, STEP_TRACKS),
+            RoadKind::Water => continue,
+        };
+        for point in resample(&road.points) {
+            refine(point, margin, step);
+        }
+    }
+    for (i, _) in classes
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| **c == class::PAVED)
+    {
+        refine(
+            (grid(i % cells) + CELL / 2.0, grid(i / cells) + CELL / 2.0),
+            10.0,
+            STEP_DETAIL,
+        );
+    }
+
+    // Vertices of coarse chunks average the terrain around them (instead of point-sampling
+    // it). A vertex shared by several chunks uses the coarsest of their steps.
+    let vertex_step = |i: usize, j: usize| {
+        let touching = |v: usize| {
+            let c = (v / CHUNK_CELLS).min(chunks - 1);
+            if v.is_multiple_of(CHUNK_CELLS) && v > 0 {
+                [c - 1, c]
+            } else {
+                [c, c]
+            }
+        };
+        let (xs, zs) = (touching(i), touching(j));
+        let mut step = 0;
+        for cz in zs {
+            for cx in xs {
+                step = step.max(steps[cz * chunks + cx]);
+            }
+        }
+        step
+    };
+    let raw = heights.clone();
+    for j in 0..n {
+        for i in 0..n {
+            let s = vertex_step(i, j);
+            if s > 1 && i.is_multiple_of(s) && j.is_multiple_of(s) {
+                let window = |v: usize| v.saturating_sub(s / 2)..=(v + s / 2).min(cells);
+                let (mut sum, mut count) = (0.0, 0.0);
+                for wj in window(j) {
+                    for wi in window(i) {
+                        sum += raw[wj * n + wi];
+                        count += 1.0;
+                    }
+                }
+                heights[j * n + i] = sum / count;
+            }
+        }
+    }
+    // Seams: along an edge between chunks of different steps, put the finer side's edge
+    // vertices on the coarser side's straight edges, so the surface has no cracks.
+    for a in 1..chunks {
+        for b in 0..chunks {
+            for (along_x, chunk_a, chunk_b) in [
+                (false, b * chunks + a - 1, b * chunks + a),
+                (true, (a - 1) * chunks + b, a * chunks + b),
+            ] {
+                let s = steps[chunk_a].max(steps[chunk_b]);
+                let index = |k: usize| {
+                    if along_x {
+                        (a * CHUNK_CELLS) * n + k
+                    } else {
+                        k * n + a * CHUNK_CELLS
+                    }
+                };
+                for k in b * CHUNK_CELLS..=(b + 1) * CHUNK_CELLS {
+                    let k0 = k - k % s;
+                    if !k.is_multiple_of(s) {
+                        let t = (k - k0) as f64 / s as f64;
+                        heights[index(k)] =
+                            heights[index(k0)] * (1.0 - t) + heights[index(k0 + s)] * t;
+                    }
+                }
+            }
+        }
+    }
+
     // Write (all little-endian): b"CSTR", version u32, cells u32, cell size f32,
-    // (cells + 1)² heights f32 relative to the lowest point (row-major, rows along z),
-    // cells² land use classes u8 (row-major),
+    // chunk cells u32, spawn point (x, z) f32,
+    // then per chunk (row-major, rows along z): step u8 (in cells), the chunk's
+    // (chunk cells / step + 1)² vertex heights f32 relative to the lowest point and
+    // (chunk cells / step)² land use classes u8 (row-major),
     // road count u32, then per road: kind u8 (0 paved, 1 unpaved, 2 water), width f32,
     // point count u32, points (x, z) f32,
     // building count u32, then per building: levels f32 (0: unknown), point count u32,
     // outline points (x, z) f32.
     let base = heights.iter().copied().fold(f64::INFINITY, f64::min);
+    let spawn = spawn.map_or((0.0, 0.0), |(lat, lon)| frame.to_local(lat, lon));
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&3u32.to_le_bytes());
+    put(&4u32.to_le_bytes());
     put(&(cells as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
-    for h in &heights {
-        put(&((h - base) as f32).to_le_bytes());
+    put(&(CHUNK_CELLS as u32).to_le_bytes());
+    put(&(spawn.0 as f32).to_le_bytes());
+    put(&(spawn.1 as f32).to_le_bytes());
+    for cz in 0..chunks {
+        for cx in 0..chunks {
+            let s = steps[cz * chunks + cx];
+            let m = CHUNK_CELLS / s;
+            let (i0, j0) = (cx * CHUNK_CELLS, cz * CHUNK_CELLS);
+            put(&[s as u8]);
+            for j in 0..=m {
+                for i in 0..=m {
+                    put(&((heights[(j0 + j * s) * n + i0 + i * s] - base) as f32).to_le_bytes());
+                }
+            }
+            for j in 0..m {
+                for i in 0..m {
+                    put(&[classes[(j0 + j * s + s / 2) * cells + i0 + i * s + s / 2]]);
+                }
+            }
+        }
     }
-    put(&classes);
     let polyline = |put: &mut dyn FnMut(&[u8]), points: &[Point]| {
         put(&(points.len() as u32).to_le_bytes());
         for &(x, z) in points {
@@ -636,6 +792,15 @@ fn main() -> Result<(), Error> {
         polyline(&mut put, &building.points);
     }
     std::fs::write(out, &bytes)?;
+    let count = |s: usize| steps.iter().filter(|&&step| step == s).count();
+    eprintln!(
+        "chunks: {} at {CELL} m, {} at {} m, {} at {} m",
+        count(STEP_DETAIL),
+        count(STEP_TRACKS),
+        CELL * STEP_TRACKS as f64,
+        count(STEP_EMPTY),
+        CELL * STEP_EMPTY as f64
+    );
     eprintln!(
         "wrote {out}: {cells}x{cells} cells of {CELL} m, {} roads, {} buildings, {} areas, relief {:.1} m, {} KiB",
         roads.len(),

@@ -7,16 +7,14 @@ use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
-/// Gerach (96161, Bavaria): 1.6 km square around the village.
+/// Gerach (96161, Bavaria) with Mauschendorf and Sendelbach: a 3 km square.
 const BAKED: &[u8] = include_bytes!("../assets/gerach.terrain");
-/// Width of the raised rim that keeps cars on the map.
+/// Width of the raised rim at the map edge (baked into the heights; roads stop before it).
 const RIM: f32 = 30.0;
 /// How far road ribbons float above the terrain, to avoid z-fighting.
 const ROAD_LIFT: f32 = 0.05;
 /// Maximum spacing of road ribbon vertices, along and across the road.
 const DRAPE_STEP: f32 = 1.0;
-/// Side length of the square chunks the map meshes are split into, for culling.
-const CHUNK: f32 = 100.0;
 /// Chunks whose centre is further from the camera are hidden: just past the fog (which
 /// ends at 480 m) plus half a chunk diagonal.
 const DRAW_DISTANCE: f32 = 560.0;
@@ -49,12 +47,22 @@ pub struct Terrain {
     /// Grid cells per side; each cell is two triangles.
     cells: usize,
     cell: f32,
-    /// Heights at the grid vertices, `(cells + 1)²`, row-major in z.
+    /// Heights at the full-detail grid vertices, `(cells + 1)²`, row-major in z.
     heights: Vec<f32>,
-    /// Land use class per cell, `cells²`, row-major in z (classes as in `tools/bake`).
-    classes: Vec<u8>,
+    /// Chunk side in cells, and the chunks, row-major in z.
+    chunk_cells: usize,
+    chunks: Vec<Chunk>,
+    /// Where the cars start (they're placed on the nearest paved road).
+    spawn: Vec2,
     pub roads: Vec<Road>,
     pub buildings: Vec<Building>,
+}
+
+struct Chunk {
+    /// Resolution as a step in grid cells (1 is full detail).
+    step: usize,
+    /// Land use class per cell at that resolution, row-major in z (classes as in `tools/bake`).
+    classes: Vec<u8>,
 }
 
 pub struct Building {
@@ -71,15 +79,36 @@ pub struct RayHit {
 }
 
 impl Terrain {
-    /// Parses the embedded map (format described in `tools/bake`) and raises the rim.
+    /// Parses the embedded map (format described in `tools/bake`). Chunks are stored at
+    /// different resolutions; the full-detail height grid is rebuilt from them, with the
+    /// vertices of coarse chunks lying on their coarse triangles, so physics queries match
+    /// the rendered surface exactly.
     pub fn baked() -> Self {
         let mut r = Bytes(BAKED);
         assert_eq!(r.take(4), b"CSTR", "not a baked terrain file");
-        assert_eq!(r.u32(), 3, "unsupported terrain version");
+        assert_eq!(r.u32(), 4, "unsupported terrain version");
         let cells = r.u32() as usize;
         let cell = r.f32();
-        let mut heights: Vec<f32> = (0..(cells + 1) * (cells + 1)).map(|_| r.f32()).collect();
-        let classes = r.take(cells * cells).to_vec();
+        let chunk_cells = r.u32() as usize;
+        let spawn = Vec2::new(r.f32(), r.f32());
+        let n = cells + 1;
+        let mut heights = vec![0.0; n * n];
+        let mut chunks = Vec::new();
+        for cz in 0..cells / chunk_cells {
+            for cx in 0..cells / chunk_cells {
+                let step = r.take(1)[0] as usize;
+                let m = chunk_cells / step;
+                let coarse: Vec<f32> = (0..(m + 1) * (m + 1)).map(|_| r.f32()).collect();
+                for lz in 0..=chunk_cells {
+                    for lx in 0..=chunk_cells {
+                        let i = (cz * chunk_cells + lz) * n + cx * chunk_cells + lx;
+                        heights[i] = on_coarse_grid(&coarse, m, step, lx, lz);
+                    }
+                }
+                let classes = r.take(m * m).to_vec();
+                chunks.push(Chunk { step, classes });
+            }
+        }
         let roads = (0..r.u32())
             .map(|_| {
                 let kind =
@@ -100,21 +129,13 @@ impl Terrain {
                 Building { levels, outline }
             })
             .collect();
-
-        let half = cells as f32 * cell / 2.0;
-        for (i, h) in heights.iter_mut().enumerate() {
-            let (x, z) = (
-                (i % (cells + 1)) as f32 * cell - half,
-                (i / (cells + 1)) as f32 * cell - half,
-            );
-            let edge = (x.abs().max(z.abs()) - (half - RIM)).max(0.0);
-            *h += edge * edge * 0.05;
-        }
         Self {
             cells,
             cell,
             heights,
-            classes,
+            chunk_cells,
+            chunks,
+            spawn,
             roads,
             buildings,
         }
@@ -194,7 +215,7 @@ impl Terrain {
         })
     }
 
-    /// `count` spots along the paved road nearest the map centre, `spacing` metres apart,
+    /// `count` spots along the paved road nearest the spawn point, `spacing` metres apart,
     /// as (position in xz, yaw facing along the road).
     pub fn road_spawns(&self, count: usize, spacing: f32) -> Vec<(Vec2, f32)> {
         let (road, start) = self
@@ -205,7 +226,7 @@ impl Terrain {
                 r.points
                     .iter()
                     .enumerate()
-                    .map(move |(i, p)| (r, i, p.length()))
+                    .map(move |(i, p)| (r, i, p.distance(self.spawn)))
             })
             .min_by(|a, b| a.2.total_cmp(&b.2))
             .map(|(r, i, _)| (r, i))
@@ -236,20 +257,31 @@ impl Terrain {
 
     /// Flat-shaded mesh: every triangle gets its own vertices, coloured by land use and slope.
     fn mesh(&self) -> ChunkedMesh {
-        let mut chunks = ChunkedMesh::new(self);
-        for iz in 0..self.cells {
-            for ix in 0..self.cells {
-                let (a, b) = (self.vertex(ix, iz), self.vertex(ix + 1, iz));
-                let (c, d) = (self.vertex(ix, iz + 1), self.vertex(ix + 1, iz + 1));
-                let mesh = chunks.at(a);
-                for tri in [[a, d, b], [a, c, d]] {
-                    let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
-                    let class = self.classes[iz * self.cells + ix];
-                    mesh.triangle(tri, ground_color(class, normal.y, ix * 31 + iz * 17));
+        let mut meshes = ChunkedMesh::new(self);
+        let per_side = self.cells / self.chunk_cells;
+        for (index, chunk) in self.chunks.iter().enumerate() {
+            // Each chunk is meshed at its own resolution.
+            let s = chunk.step;
+            let m = self.chunk_cells / s;
+            let (cx, cz) = (index % per_side, index / per_side);
+            for jz in 0..m {
+                for jx in 0..m {
+                    let (ix, iz) = (
+                        cx * self.chunk_cells + jx * s,
+                        cz * self.chunk_cells + jz * s,
+                    );
+                    let (a, b) = (self.vertex(ix, iz), self.vertex(ix + s, iz));
+                    let (c, d) = (self.vertex(ix, iz + s), self.vertex(ix + s, iz + s));
+                    let mesh = meshes.at(a);
+                    for tri in [[a, d, b], [a, c, d]] {
+                        let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
+                        let class = chunk.classes[jz * m + jx];
+                        mesh.triangle(tri, ground_color(class, normal.y, ix * 31 + iz * 17));
+                    }
                 }
             }
         }
-        chunks
+        meshes
     }
 
     /// Ribbons along the road centrelines, draped onto the terrain.
@@ -304,18 +336,21 @@ impl Terrain {
 /// behind it or beyond the fog instead of drawing the whole map every frame.
 pub struct ChunkedMesh {
     half_size: f32,
+    chunk_size: f32,
     per_side: usize,
     chunks: Vec<FlatMesh>,
 }
 
 impl ChunkedMesh {
+    /// Empty meshes, one per terrain chunk.
     pub fn new(terrain: &Terrain) -> Self {
-        let per_side = (terrain.half_size() * 2.0 / CHUNK).ceil() as usize;
+        let per_side = terrain.cells / terrain.chunk_cells;
         let chunks = (0..per_side * per_side)
             .map(|_| FlatMesh::default())
             .collect();
         Self {
             half_size: terrain.half_size(),
+            chunk_size: terrain.chunk_cells as f32 * terrain.cell,
             per_side,
             chunks,
         }
@@ -323,7 +358,9 @@ impl ChunkedMesh {
 
     /// The chunk containing `p` (by its x and z).
     pub fn at(&mut self, p: Vec3) -> &mut FlatMesh {
-        let index = |v: f32| (((v + self.half_size) / CHUNK) as usize).min(self.per_side - 1);
+        let index = |v: f32| {
+            (((v + self.half_size) / self.chunk_size).max(0.0) as usize).min(self.per_side - 1)
+        };
         &mut self.chunks[index(p.z) * self.per_side + index(p.x)]
     }
 
@@ -365,6 +402,22 @@ fn resample(points: &[Vec2], step: f32) -> Vec<Vec2> {
         out.extend((1..=steps).map(|i| pair[0].lerp(pair[1], i as f32 / steps as f32)));
     }
     out
+}
+
+/// Height at full-detail vertex (`lx`, `lz`) of a chunk stored at `step`, from its
+/// `(m + 1)²` coarse vertices: on the coarse triangles, split along the same diagonal as
+/// `Terrain::triangle`, so every full-detail triangle lies flat within a coarse one.
+fn on_coarse_grid(coarse: &[f32], m: usize, step: usize, lx: usize, lz: usize) -> f32 {
+    let (ix, iz) = ((lx / step).min(m - 1), (lz / step).min(m - 1));
+    let u = (lx - ix * step) as f32 / step as f32;
+    let v = (lz - iz * step) as f32 / step as f32;
+    let h = |i: usize, j: usize| coarse[(iz + j) * (m + 1) + ix + i];
+    let (a, b, c, d) = (h(0, 0), h(1, 0), h(0, 1), h(1, 1));
+    if u > v {
+        a + (b - a) * (u - v) + (d - a) * v
+    } else {
+        a + (c - a) * (v - u) + (d - a) * u
+    }
 }
 
 /// Little-endian reader over the baked file.
@@ -509,5 +562,38 @@ mod tests {
         let spawns = terrain.road_spawns(3, 9.0);
         assert_eq!(spawns.len(), 3);
         assert!(spawns[0].0.distance(spawns[2].0) > 10.0);
+        // Near the baked spawn point (Gerach), not somewhere else on the map.
+        assert!(spawns[0].0.distance(terrain.spawn) < 200.0);
+    }
+
+    #[test]
+    fn physics_matches_coarse_render_triangles() {
+        let terrain = Terrain::baked();
+        let per_side = terrain.cells / terrain.chunk_cells;
+        let mut coarse_chunks = 0;
+        for (index, chunk) in terrain
+            .chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.step > 1)
+        {
+            coarse_chunks += 1;
+            let s = chunk.step;
+            let (ix, iz) = (
+                (index % per_side) * terrain.chunk_cells,
+                (index / per_side) * terrain.chunk_cells,
+            );
+            let (a, b) = (terrain.vertex(ix, iz), terrain.vertex(ix + s, iz));
+            let (c, d) = (terrain.vertex(ix, iz + s), terrain.vertex(ix + s, iz + s));
+            // Points inside each rendered coarse triangle lie on its plane.
+            for tri in [[a, d, b], [a, c, d]] {
+                let p = (tri[0] + tri[1] * 2.0 + tri[2] * 3.0) / 6.0;
+                let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]);
+                let plane_y = tri[0].y
+                    - (normal.x * (p.x - tri[0].x) + normal.z * (p.z - tri[0].z)) / normal.y;
+                assert!((terrain.sample(p.x, p.z).0 - plane_y).abs() < 1e-3);
+            }
+        }
+        assert!(coarse_chunks > 0);
     }
 }
