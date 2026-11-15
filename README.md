@@ -19,10 +19,12 @@ A small Bevy demo of car simulation techniques:
   from a simplified Pacejka Magic Formula, with combined slip normalised by peak
   slip. Wheel spin is updated implicitly, which keeps it stable.
 - **Real-world low-poly terrain**: a 1.6 km square around the village of Gerach
-  (96161, Bavaria), with its drivable roads and buildings from OpenStreetMap. The
-  terrain is flattened under the roads so they're smooth to drive on. Houses are
-  boxes with gable roofs fitted to each footprint; they're visual only, with no
-  collisions. The height and raycast queries use the exact rendered triangles.
+  (96161, Bavaria), meshed at 2 m from the Bavarian 1 m lidar terrain model. Roads
+  (with widths and surfaces from their OSM tags), streams, land use (fields,
+  forest, meadows, gardens, water, parking areas) and buildings come from
+  OpenStreetMap. Houses are boxes with gable roofs fitted to each footprint;
+  they're visual only, with no collisions. The height and raycast queries use the
+  exact rendered triangles.
 - Three setups (baseline, soft, track), debug gizmos for the linkage and forces,
   and a telemetry panel with live-tunable springs, dampers, camber, arm geometry
   and tire parameters.
@@ -73,10 +75,14 @@ tire grip force, cyan for roll centres.
 
 ## Baking another location
 
-`tools/bake` downloads elevation from the AWS Terrain Tiles and roads from the
-OpenStreetMap API. It samples the elevation onto a 4 m grid, smooths each road's
-height profile, and flattens the terrain beside the roads. The output is written
-to a file that the game embeds at compile time:
+`tools/bake` downloads the lidar terrain model (DGM1, 1 km tiles) from the
+Bavarian surveying administration's open data server, and roads, land use and
+buildings from the OpenStreetMap API. The map frame is aligned with UTM zone 32,
+like the lidar tiles. Elevation is box-filtered onto a 2 m grid and land use is
+rasterised per cell. Bridges are rebuilt as straight decks, because lidar shows
+the ground under them. The output is written to a file that the game embeds at
+compile time. DGM1 only covers Bavaria, so locations elsewhere would need another
+elevation source.
 
 ```sh
 nix develop
@@ -94,14 +100,13 @@ to a few kilometres.
 Massless arms with a point unsprung mass. No anti-roll bars, aerodynamics, gearbox
 or tire relaxation length. No render interpolation between chassis steps. At very
 low speed, slips are computed against a 3 m/s floor, so a parked car can creep
-slowly down steep slopes. Elevation data is only about 30 m resolution, so
-off-road terrain is smooth. Bridges become plain embankments.
+slowly down steep slopes. Bridges become plain embankments. Land use is coloured
+per 2 m cell, so area edges are slightly stepped.
 
 ## Data attribution
 
 - Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright)
   contributors, available under the Open Database License (ODbL).
-- Elevation via [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/):
-  Europe terrain data produced using Copernicus data and information funded by
-  the European Union (EU-DEM layers); SRTM terrain data courtesy of the U.S.
-  Geological Survey.
+- Elevation: Digitales Geländemodell 1 m (DGM1) © Bayerische
+  Vermessungsverwaltung, [geodaten.bayern.de](https://geodaten.bayern.de/opengeodata/),
+  licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

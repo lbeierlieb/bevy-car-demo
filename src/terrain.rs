@@ -21,8 +21,15 @@ impl Plugin for TerrainPlugin {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RoadKind {
+    Paved,
+    Unpaved,
+    Water,
+}
+
 pub struct Road {
-    pub paved: bool,
+    pub kind: RoadKind,
     pub width: f32,
     /// Centreline in the xz plane (x east, z south).
     pub points: Vec<Vec2>,
@@ -35,6 +42,8 @@ pub struct Terrain {
     cell: f32,
     /// Heights at the grid vertices, `(cells + 1)²`, row-major in z.
     heights: Vec<f32>,
+    /// Land use class per cell, `cells²`, row-major in z (classes as in `tools/bake`).
+    classes: Vec<u8>,
     pub roads: Vec<Road>,
     pub buildings: Vec<Building>,
 }
@@ -57,17 +66,19 @@ impl Terrain {
     pub fn baked() -> Self {
         let mut r = Bytes(BAKED);
         assert_eq!(r.take(4), b"CSTR", "not a baked terrain file");
-        assert_eq!(r.u32(), 2, "unsupported terrain version");
+        assert_eq!(r.u32(), 3, "unsupported terrain version");
         let cells = r.u32() as usize;
         let cell = r.f32();
         let mut heights: Vec<f32> = (0..(cells + 1) * (cells + 1)).map(|_| r.f32()).collect();
+        let classes = r.take(cells * cells).to_vec();
         let roads = (0..r.u32())
             .map(|_| {
-                let paved = r.take(1)[0] != 0;
+                let kind =
+                    [RoadKind::Paved, RoadKind::Unpaved, RoadKind::Water][r.take(1)[0] as usize];
                 let width = r.f32();
                 let points = (0..r.u32()).map(|_| Vec2::new(r.f32(), r.f32())).collect();
                 Road {
-                    paved,
+                    kind,
                     width,
                     points,
                 }
@@ -94,6 +105,7 @@ impl Terrain {
             cells,
             cell,
             heights,
+            classes,
             roads,
             buildings,
         }
@@ -179,7 +191,7 @@ impl Terrain {
         let (road, start) = self
             .roads
             .iter()
-            .filter(|r| r.paved && r.width >= 5.0)
+            .filter(|r| r.kind == RoadKind::Paved && r.width >= 5.0)
             .flat_map(|r| {
                 r.points
                     .iter()
@@ -213,18 +225,17 @@ impl Terrain {
         spawns
     }
 
-    /// Flat-shaded mesh: every triangle gets its own vertices, coloured by height and slope.
+    /// Flat-shaded mesh: every triangle gets its own vertices, coloured by land use and slope.
     fn mesh(&self) -> Mesh {
         let mut mesh = FlatMesh::default();
-        let relief = self.heights.iter().copied().fold(0.0, f32::max).max(1.0);
         for iz in 0..self.cells {
             for ix in 0..self.cells {
                 let (a, b) = (self.vertex(ix, iz), self.vertex(ix + 1, iz));
                 let (c, d) = (self.vertex(ix, iz + 1), self.vertex(ix + 1, iz + 1));
                 for tri in [[a, d, b], [a, c, d]] {
                     let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
-                    let height = (tri[0].y + tri[1].y + tri[2].y) / 3.0 / relief;
-                    mesh.triangle(tri, ground_color(height, normal.y, ix * 31 + iz * 17));
+                    let class = self.classes[iz * self.cells + ix];
+                    mesh.triangle(tri, ground_color(class, normal.y, ix * 31 + iz * 17));
                 }
             }
         }
@@ -237,10 +248,10 @@ impl Terrain {
         let inner = self.half_size() - RIM;
         let lift = |p: Vec2| Vec3::new(p.x, self.sample(p.x, p.y).0 + ROAD_LIFT, p.y);
         for road in &self.roads {
-            let color = if road.paved {
-                [0.24, 0.24, 0.26, 1.0]
-            } else {
-                [0.56, 0.49, 0.38, 1.0]
+            let color = match road.kind {
+                RoadKind::Paved => [0.24, 0.24, 0.26, 1.0],
+                RoadKind::Unpaved => [0.56, 0.49, 0.38, 1.0],
+                RoadKind::Water => [0.22, 0.42, 0.58, 1.0],
             };
             // Skip where the road climbs the rim at the map edge.
             let inside = |p: &Vec2| p.x.abs() < inner && p.y.abs() < inner;
@@ -328,14 +339,28 @@ impl FlatMesh {
     }
 }
 
-/// `height` is relative: 0 at the lowest point of the map, 1 at the highest.
-fn ground_color(height: f32, up: f32, variation: usize) -> [f32; 4] {
-    let jitter = (hash(variation as u32) - 0.5) * 0.06;
-    let base = if up < 0.85 {
-        Vec3::new(0.45, 0.40, 0.36) // steep: rock
+/// Ground colour for a land use class (see `tools/bake`), with steep natural slopes
+/// showing bare earth.
+fn ground_color(class: u8, up: f32, variation: usize) -> [f32; 4] {
+    let jitter = (hash(variation as u32) - 0.5) * 0.04;
+    let base = match class {
+        1 => Vec3::new(0.42, 0.56, 0.33),  // residential: gardens
+        2 => Vec3::new(0.78, 0.68, 0.42),  // field: ripe grain
+        3 => Vec3::new(0.70, 0.62, 0.42),  // field: stubble
+        4 => Vec3::new(0.52, 0.41, 0.30),  // field: ploughed
+        5 => Vec3::new(0.46, 0.60, 0.26),  // field: green crop
+        6 => Vec3::new(0.36, 0.58, 0.28),  // meadow
+        7 => Vec3::new(0.32, 0.44, 0.24),  // scrub
+        8 => Vec3::new(0.17, 0.32, 0.15),  // forest
+        9 => Vec3::new(0.22, 0.42, 0.58),  // water
+        10 => Vec3::new(0.30, 0.30, 0.32), // paved area
+        _ => Vec3::new(0.34, 0.53, 0.27),  // unmapped: grass
+    };
+    let natural = !matches!(class, 8..=10);
+    let base = if natural && up < 0.85 {
+        Vec3::new(0.47, 0.40, 0.33)
     } else {
-        // Lush valley floor to drier fields on the hilltops.
-        Vec3::new(0.30, 0.50, 0.26).lerp(Vec3::new(0.55, 0.60, 0.38), height.min(1.0))
+        base
     };
     (base + Vec3::splat(jitter)).extend(1.0).to_array()
 }

@@ -55,7 +55,7 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, mut cars: Query<&mu
             });
             ui.collapsing("Map: Gerach, Bavaria", |ui| {
                 ui.label("Map data © OpenStreetMap contributors (ODbL)");
-                ui.label("Elevation: EU-DEM (Copernicus, funded by the EU) and SRTM (USGS), via Terrain Tiles");
+                ui.label("Elevation: DGM1 © Bayerische Vermessungsverwaltung (CC BY 4.0)");
             });
         });
     Ok(())
