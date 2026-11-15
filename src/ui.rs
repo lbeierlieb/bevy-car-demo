@@ -102,6 +102,9 @@ fn setup(ui: &mut egui::Ui, car: &mut Car) {
     ui.add(egui::Slider::new(&mut tire.b_lat, 5.0..=25.0).text("B lateral"));
     setup.front.tire = tire;
     setup.rear.tire = tire;
+    ui.strong("Brakes");
+    ui.add(egui::Slider::new(&mut setup.brake_torque, 1_000.0..=6_000.0).text("Torque N·m"));
+    ui.add(egui::Slider::new(&mut setup.brake_bias, 0.4..=0.9).text("Front share"));
 }
 
 fn axle_sliders(ui: &mut egui::Ui, axle: &mut AxleSetup) {

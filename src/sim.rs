@@ -68,7 +68,7 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     body.integrate(dt);
 }
 
-/// Minimal drivetrain: power-limited torque split evenly over the rear wheels, 60/40 brakes,
+/// Minimal drivetrain: power-limited torque split evenly over the rear wheels, biased brakes,
 /// rear handbrake, and speed-sensitive steering.
 fn apply_controls(car: &mut Car) {
     let speed = car.forward_speed().abs();
@@ -89,11 +89,11 @@ fn apply_controls(car: &mut Car) {
         if corner.front {
             corner.steer = steer;
             corner.drive_torque = 0.0;
-            corner.brake_torque = c.brake * setup.brake_torque * 0.3;
+            corner.brake_torque = c.brake * setup.brake_torque * setup.brake_bias / 2.0;
         } else {
             corner.steer = 0.0;
             corner.drive_torque = torque / 2.0;
-            corner.brake_torque = c.brake * setup.brake_torque * 0.2
+            corner.brake_torque = c.brake * setup.brake_torque * (1.0 - setup.brake_bias) / 2.0
                 + if c.handbrake {
                     setup.handbrake_torque
                 } else {
@@ -171,5 +171,45 @@ mod tests {
         assert!(turned > 0.3, "turned {turned}");
         let up = car.body.rotation * Vec3::Y;
         assert!(up.y > 0.9, "rolled over");
+    }
+
+    #[test]
+    fn brakes_without_locking_or_spinning() {
+        let terrain = Terrain::baked();
+        let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
+        for setup in [CarSetup::baseline(), CarSetup::soft(), CarSetup::track()] {
+            let name = setup.name;
+            let mut car = Car::spawn_at(0, setup, &terrain, p.x, p.y, yaw);
+            run(&mut car, &terrain, 1.0);
+            // Full brakes from 90 km/h, with a touch of steering to upset the car.
+            car.body.velocity = car.body.rotation * Vec3::NEG_Z * 25.0;
+            let radius = car.setup.front.tire.radius;
+            for corner in car.corners.iter_mut() {
+                corner.omega = 25.0 / radius;
+            }
+            car.controls = Controls {
+                brake: 1.0,
+                steer: 0.05,
+                ..default()
+            };
+            let dt = 1.0 / CHASSIS_HZ as f32;
+            let mut time = 0.0;
+            while car.body.velocity.length() > 3.0 {
+                step_car(&mut car, &terrain, dt);
+                time += dt;
+                assert!(time < 4.0, "{name}: not stopping");
+                for corner in &car.corners {
+                    assert!(
+                        corner.omega.abs() > 1.0,
+                        "{name}: wheel locked at {time:.2} s"
+                    );
+                }
+                let yaw_rate = car.body.angular_velocity.y.abs();
+                assert!(
+                    yaw_rate < 0.3,
+                    "{name}: yaw rate {yaw_rate:.2} at {time:.2} s"
+                );
+            }
+        }
     }
 }

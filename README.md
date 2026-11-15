@@ -35,8 +35,8 @@ A small Bevy demo of car simulation techniques:
   when the chunk comes within 560 m of the camera, and freed again when it's left
   behind. GPU memory therefore doesn't grow with the map size.
 - Three setups (baseline, soft, track), debug gizmos for the linkage and forces,
-  and a telemetry panel with live-tunable springs, dampers, camber, arm geometry
-  and tire parameters.
+  and a telemetry panel with live-tunable springs, dampers, camber, arm geometry,
+  tire parameters and brakes (torque and front/rear split).
 
 ## Running
 

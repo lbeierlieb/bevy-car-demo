@@ -23,8 +23,9 @@ pub struct CarSetup {
     /// Peak total drive torque at the (rear) wheels, capped by engine power.
     pub drive_torque: f32,
     pub drive_power: f32,
-    /// Total brake torque, split 60/40 front/rear; handbrake torque per rear wheel.
+    /// Total brake torque, the front axle's share of it, and handbrake torque per rear wheel.
     pub brake_torque: f32,
+    pub brake_bias: f32,
     pub handbrake_torque: f32,
 }
 
@@ -53,13 +54,14 @@ impl CarSetup {
             max_steer: 0.5,
             drive_torque: 1_800.0,
             drive_power: 120_000.0,
-            brake_torque: 4_500.0,
+            brake_torque: 3_500.0,
+            brake_bias: 0.7,
             handbrake_torque: 2_500.0,
         }
     }
 
     /// Soft springs and a short upper arm: lots of roll, lots of camber gain.
-    fn soft() -> Self {
+    pub(crate) fn soft() -> Self {
         let mut setup = Self::baseline();
         setup.name = "Soft";
         setup.color = Color::srgb(0.20, 0.45, 0.85);
@@ -71,8 +73,9 @@ impl CarSetup {
         setup
     }
 
-    /// Stiff springs, more static camber and a long upper arm (little camber gain).
-    fn track() -> Self {
+    /// Stiff springs, more static camber and a long upper arm (little camber gain). The
+    /// stiff rear unloads quickly under braking, so the brakes are biased further forward.
+    pub(crate) fn track() -> Self {
         let mut setup = Self::baseline();
         setup.name = "Track";
         setup.color = Color::srgb(0.95, 0.75, 0.10);
@@ -83,6 +86,7 @@ impl CarSetup {
             axle.geometry.static_camber = -0.045;
             axle.tire.mu = 1.25;
         }
+        setup.brake_bias = 0.8;
         setup
     }
 
