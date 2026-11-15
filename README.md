@@ -44,7 +44,8 @@ A small Bevy demo of car simulation techniques:
   behind. GPU memory therefore doesn't grow with the map size.
 - Three setups (baseline, soft, track), debug gizmos for the linkage and forces,
   and a telemetry panel with live-tunable springs, dampers, camber, arm geometry,
-  tire parameters and brakes (torque and front/rear split).
+  tire parameters and brakes (torque and front/rear split). A HUD in the bottom
+  right shows speed and gear inside a rev counter.
 
 ## Running
 
@@ -95,6 +96,7 @@ tire grip force, cyan for roll centres.
 | `tools/bake` | Separate crate that bakes `assets/*.terrain` from online data |
 | `src/visuals.rs` | Procedural meshes posed from the simulation |
 | `src/debug.rs`, `src/ui.rs`, `src/camera.rs` | Gizmos, telemetry panel, chase camera |
+| `src/hud.rs` | Speed, gear and rev counter HUD |
 
 ## Baking another location
 

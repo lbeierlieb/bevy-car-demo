@@ -3,6 +3,7 @@ mod buildings;
 mod camera;
 mod car;
 mod debug;
+mod hud;
 mod physics;
 mod scenery;
 mod sim;
@@ -41,6 +42,7 @@ fn main() {
             camera::CameraPlugin,
             debug::DebugPlugin,
             ui::UiPlugin,
+            hud::HudPlugin,
             audio::AudioPlugin,
         ))
         .add_systems(Startup, setup)
