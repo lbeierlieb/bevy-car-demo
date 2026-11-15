@@ -191,6 +191,31 @@ mod tests {
     }
 
     #[test]
+    fn automatic_shifts_up_without_hunting() {
+        let terrain = Terrain::baked();
+        let mut car = test_car(&terrain);
+        car.drivetrain.automatic = true;
+        run(&mut car, &terrain, 1.0);
+        car.controls = Controls {
+            throttle: 1.0,
+            ..default()
+        };
+        // Flat out from a standstill: the gears only ever go up (the clutch closing after
+        // a shift spins the wheels up for a moment, which mustn't trigger another shift).
+        let dt = 1.0 / CHASSIS_HZ as f32;
+        let mut gears = vec![car.drivetrain.selected_gear()];
+        for _ in 0..(12.0 / dt) as usize {
+            step_car(&mut car, &terrain, dt);
+            let gear = car.drivetrain.selected_gear();
+            if gear != *gears.last().unwrap() {
+                gears.push(gear);
+            }
+        }
+        assert!(gears.windows(2).all(|w| w[1] > w[0]), "gears {gears:?}");
+        assert!(gears.len() >= 3, "gears {gears:?}");
+    }
+
+    #[test]
     fn brakes_without_rear_lock_or_spinning() {
         let terrain = Terrain::baked();
         let (p, yaw) = terrain.road_spawns(1, 0.0)[0];

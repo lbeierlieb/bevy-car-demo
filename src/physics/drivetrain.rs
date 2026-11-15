@@ -20,6 +20,9 @@ const RPM: f32 = 60.0 / (2.0 * PI);
 const STALL_RPM: f32 = 400.0;
 /// Clutch pedal travel beyond which a gear change needs no help from the automatic clutch.
 const CLUTCH_IN: f32 = 0.6;
+/// Time the automatic stays in a gear before it shifts again (s): just after a shift, the
+/// clutch closing can spin the wheels up for a moment, and that isn't speed to shift on.
+const AUTO_DWELL: f32 = 1.0;
 
 #[derive(Clone, Debug)]
 pub struct EngineSetup {
@@ -130,6 +133,8 @@ pub struct Drivetrain {
     pub automatic: bool,
     /// Gear being shifted into, and the time left until the clutch closes again.
     shift: Option<(i8, f32)>,
+    /// Time since the last gear change went in.
+    in_gear: f32,
     /// How far the clutch has closed again after a shift (0..1).
     engaged: f32,
     locked: bool,
@@ -159,6 +164,7 @@ impl Drivetrain {
             gear: 1,
             automatic: false,
             shift: None,
+            in_gear: AUTO_DWELL,
             engaged: 1.0,
             locked: false,
             limiter: 0.0,
@@ -223,6 +229,7 @@ impl Drivetrain {
         if self.clutch_pedal.is_some_and(|travel| travel > CLUTCH_IN) {
             self.gear = gear;
             self.shift = None;
+            self.in_gear = 0.0;
             self.engaged = 1.0;
         } else {
             self.shift = Some((gear, engine.shift_time));
@@ -251,6 +258,7 @@ impl Drivetrain {
         if clutch.is_none() {
             self.running = true;
         }
+        self.in_gear += dt;
         if self.automatic && grounded {
             self.auto_shift(engine, throttle, wheel_omega);
         }
@@ -259,6 +267,7 @@ impl Drivetrain {
             if *left <= 0.0 {
                 self.gear = *gear;
                 self.shift = None;
+                self.in_gear = 0.0;
             }
         }
         // While shifting, the clutch is open and the throttle is cut (like the ignition cut
@@ -380,7 +389,7 @@ impl Drivetrain {
 
     /// Up when the engine passes a throttle-dependent rpm, down when it drops low.
     fn auto_shift(&mut self, engine: &EngineSetup, throttle: f32, wheel_omega: f32) {
-        if self.shift.is_some() || self.gear < 1 {
+        if self.shift.is_some() || self.gear < 1 || self.in_gear < AUTO_DWELL {
             return;
         }
         let rpm_in = |gear: i8| engine.rpm_in(gear, wheel_omega);
