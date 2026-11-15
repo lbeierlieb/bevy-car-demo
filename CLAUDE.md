@@ -124,3 +124,10 @@ both named "Fanatec FANATEC Wheel" (padded with spaces). NixOS config uses
   and `id`. If the group owns it but can't write, the mode needs `g+w` too.
 - The panel shows "Wheel base set to 540°" once the range was written, and names the
   force feedback device or what's wrong with each candidate.
+
+## Audio
+
+The engine sound goes through bevy_audio, which can't set the output buffer size. An
+attempt to open the output with rodio/cpal directly (fixed 4096-frame buffer against
+underruns) gave no sound at all in the wasm build and was dropped. If it's tried
+again, keep the bevy_audio path on wasm.
