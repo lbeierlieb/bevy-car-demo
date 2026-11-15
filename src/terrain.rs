@@ -2,6 +2,8 @@
 //! analytically (the physics sees exactly the triangles that are drawn), plus road ribbons.
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::VisibilityRange;
+use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
@@ -13,6 +15,11 @@ const RIM: f32 = 30.0;
 const ROAD_LIFT: f32 = 0.05;
 /// Maximum spacing of road ribbon vertices, along and across the road.
 const DRAPE_STEP: f32 = 1.0;
+/// Side length of the square chunks the map meshes are split into, for culling.
+const CHUNK: f32 = 100.0;
+/// Chunks whose centre is further from the camera are hidden: just past the fog (which
+/// ends at 480 m) plus half a chunk diagonal.
+const DRAW_DISTANCE: f32 = 560.0;
 
 pub struct TerrainPlugin;
 
@@ -228,12 +235,13 @@ impl Terrain {
     }
 
     /// Flat-shaded mesh: every triangle gets its own vertices, coloured by land use and slope.
-    fn mesh(&self) -> Mesh {
-        let mut mesh = FlatMesh::default();
+    fn mesh(&self) -> ChunkedMesh {
+        let mut chunks = ChunkedMesh::new(self);
         for iz in 0..self.cells {
             for ix in 0..self.cells {
                 let (a, b) = (self.vertex(ix, iz), self.vertex(ix + 1, iz));
                 let (c, d) = (self.vertex(ix, iz + 1), self.vertex(ix + 1, iz + 1));
+                let mesh = chunks.at(a);
                 for tri in [[a, d, b], [a, c, d]] {
                     let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
                     let class = self.classes[iz * self.cells + ix];
@@ -241,12 +249,12 @@ impl Terrain {
                 }
             }
         }
-        mesh.build()
+        chunks
     }
 
     /// Ribbons along the road centrelines, draped onto the terrain.
-    fn road_mesh(&self) -> Mesh {
-        let mut mesh = FlatMesh::default();
+    fn road_mesh(&self) -> ChunkedMesh {
+        let mut chunks = ChunkedMesh::new(self);
         let inner = self.half_size() - RIM;
         let lift = |p: Vec2| Vec3::new(p.x, self.sample(p.x, p.y).0 + ROAD_LIFT, p.y);
         for road in &self.roads {
@@ -281,13 +289,70 @@ impl Terrain {
                     for j in 0..across {
                         let (a, b) = (pair[0][j], pair[0][j + 1]);
                         let (c, d) = (pair[1][j], pair[1][j + 1]);
+                        let mesh = chunks.at(a);
                         mesh.triangle([a, b, c], color);
                         mesh.triangle([b, d, c], color);
                     }
                 }
             }
         }
-        mesh.build()
+        chunks
+    }
+}
+
+/// Flat meshes split into square chunks by position, so the camera can cull what's
+/// behind it or beyond the fog instead of drawing the whole map every frame.
+pub struct ChunkedMesh {
+    half_size: f32,
+    per_side: usize,
+    chunks: Vec<FlatMesh>,
+}
+
+impl ChunkedMesh {
+    pub fn new(terrain: &Terrain) -> Self {
+        let per_side = (terrain.half_size() * 2.0 / CHUNK).ceil() as usize;
+        let chunks = (0..per_side * per_side)
+            .map(|_| FlatMesh::default())
+            .collect();
+        Self {
+            half_size: terrain.half_size(),
+            per_side,
+            chunks,
+        }
+    }
+
+    /// The chunk containing `p` (by its x and z).
+    pub fn at(&mut self, p: Vec3) -> &mut FlatMesh {
+        let index = |v: f32| (((v + self.half_size) / CHUNK) as usize).min(self.per_side - 1);
+        &mut self.chunks[index(p.z) * self.per_side + index(p.x)]
+    }
+
+    /// One entity per non-empty chunk, hidden beyond `DRAW_DISTANCE`.
+    pub fn spawn(
+        self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        material: Handle<StandardMaterial>,
+        casts_shadows: bool,
+    ) {
+        for chunk in self
+            .chunks
+            .into_iter()
+            .filter(|chunk| !chunk.positions.is_empty())
+        {
+            let mut entity = commands.spawn((
+                Mesh3d(meshes.add(chunk.build())),
+                MeshMaterial3d(material.clone()),
+                // Measured from each chunk's bounding box centre, as vertices are in world space.
+                VisibilityRange {
+                    use_aabb: true,
+                    ..VisibilityRange::abrupt(0.0, DRAW_DISTANCE)
+                },
+            ));
+            if !casts_shadows {
+                entity.insert(NotShadowCaster);
+            }
+        }
     }
 }
 
@@ -393,21 +458,24 @@ fn spawn_terrain(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    commands.spawn((
-        Mesh3d(meshes.add(terrain.mesh())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            perceptual_roughness: 0.95,
-            ..default()
-        })),
-    ));
-    commands.spawn((
-        Mesh3d(meshes.add(terrain.road_mesh())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            perceptual_roughness: 0.9,
-            depth_bias: 1.0,
-            ..default()
-        })),
-    ));
+    // Neither casts shadows: on gentle real terrain self-shadowing is barely visible, and
+    // skipping it keeps the big meshes out of every shadow cascade. They still receive
+    // shadows from houses and cars.
+    let ground = materials.add(StandardMaterial {
+        perceptual_roughness: 0.95,
+        ..default()
+    });
+    terrain
+        .mesh()
+        .spawn(&mut commands, &mut meshes, ground, false);
+    let roads = materials.add(StandardMaterial {
+        perceptual_roughness: 0.9,
+        depth_bias: 1.0,
+        ..default()
+    });
+    terrain
+        .road_mesh()
+        .spawn(&mut commands, &mut meshes, roads, false);
 }
 
 /// Integer hash to [0, 1).

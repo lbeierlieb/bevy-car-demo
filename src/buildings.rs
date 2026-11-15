@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 
-use crate::terrain::{FlatMesh, Terrain};
+use crate::terrain::{ChunkedMesh, Terrain};
 
 const STOREY: f32 = 2.8;
 /// Roof rise per metre of half-width (about 39°).
@@ -40,20 +40,18 @@ fn spawn_buildings(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let mut mesh = FlatMesh::default();
+    let mut chunks = ChunkedMesh::new(&terrain);
     for (i, building) in terrain.buildings.iter().enumerate() {
-        house(&mut mesh, &terrain, building.levels, &building.outline, i);
+        house(&mut chunks, &terrain, building.levels, &building.outline, i);
     }
-    commands.spawn((
-        Mesh3d(meshes.add(mesh.build())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            perceptual_roughness: 0.85,
-            ..default()
-        })),
-    ));
+    let material = materials.add(StandardMaterial {
+        perceptual_roughness: 0.85,
+        ..default()
+    });
+    chunks.spawn(&mut commands, &mut meshes, material, true);
 }
 
-fn house(mesh: &mut FlatMesh, terrain: &Terrain, levels: f32, outline: &[Vec2], index: usize) {
+fn house(chunks: &mut ChunkedMesh, terrain: &Terrain, levels: f32, outline: &[Vec2], index: usize) {
     // Rectangle aligned with the outline's longest edge, with `axis` along its length.
     let longest = (0..outline.len())
         .map(|i| outline[(i + 1) % outline.len()] - outline[i])
@@ -93,6 +91,7 @@ fn house(mesh: &mut FlatMesh, terrain: &Terrain, levels: f32, outline: &[Vec2], 
 
     let wall = WALLS[index % WALLS.len()];
     let middle = at(center, (bottom + top) / 2.0);
+    let mesh = chunks.at(middle);
     let mut quad = |q: [Vec3; 4], color: [f32; 4]| {
         let outward = (q[0] + q[1] + q[2] + q[3]) / 4.0 - middle;
         mesh.facing([q[0], q[1], q[2]], color, outward);
