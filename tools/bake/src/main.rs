@@ -531,11 +531,19 @@ fn main() -> Result<(), Error> {
     let osm = fetch_osm(&frame, center, (half_x, half_z))?;
     let on_map = |&(x, z): &Point| x.abs() < half_x && z.abs() < half_z;
 
-    // Roads, waterways, buildings and land use areas.
+    // Roads, waterways, buildings and land use areas. Elements are visited in ID order
+    // (not hash map order), so the same data always bakes to the same file.
+    let by_id = |map: &HashMap<u64, (Vec<u64>, Tags)>| {
+        let mut ids: Vec<u64> = map.keys().copied().collect();
+        ids.sort_unstable();
+        ids.into_iter()
+            .map(|id| map[&id].clone())
+            .collect::<Vec<_>>()
+    };
     let mut roads = Vec::new();
     let mut buildings = Vec::new();
     let mut areas = Vec::new();
-    for (refs, tags) in osm.ways.values() {
+    for (refs, tags) in &by_id(&osm.ways) {
         let mut points = osm.points(refs);
         if tags.contains_key("building") {
             points.pop();
@@ -564,7 +572,7 @@ fn main() -> Result<(), Error> {
             }
         }
     }
-    for (members, tags) in osm.relations.values() {
+    for (members, tags) in &by_id(&osm.relations) {
         if tags.get("type").is_some_and(|t| t == "multipolygon")
             && let Some(class) = land_class(tags)
         {
