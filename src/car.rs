@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 
+use crate::input::WheelInput;
 use crate::physics::drivetrain::{Drivetrain, EngineSetup};
 use crate::physics::rigid_body::RigidBody;
 use crate::physics::suspension::{ArmGeometry, AxleSetup, Corner};
@@ -99,9 +100,10 @@ pub struct Controls {
     /// 0 to 1 (full throttle).
     pub throttle: f32,
     pub brake: f32,
-    /// -1 (right) to 1 (left).
+    /// -1 (right) to 1 (left), as a fraction of full lock.
     pub steer: f32,
-    pub handbrake: bool,
+    /// 0 to 1.
+    pub handbrake: f32,
 }
 
 #[derive(Component)]
@@ -205,10 +207,11 @@ fn switch_car(keys: Res<ButtonInput<KeyCode>>, mut active: ResMut<ActiveCar>, ca
     }
 }
 
-/// Keyboard to controls for the active car; parked cars hold all brakes. G switches all
-/// cars between manual and automatic gearboxes.
+/// Keyboard and wheel to controls for the active car; parked cars hold all brakes. G
+/// switches all cars between manual and automatic gearboxes.
 fn drive(
     keys: Res<ButtonInput<KeyCode>>,
+    wheel: Res<WheelInput>,
     time: Res<Time>,
     active: Res<ActiveCar>,
     mut cars: Query<&mut Car>,
@@ -220,7 +223,7 @@ fn drive(
         if car.index != active.0 {
             car.controls = Controls {
                 brake: 1.0,
-                handbrake: true,
+                handbrake: 1.0,
                 ..default()
             };
             continue;
@@ -239,6 +242,9 @@ fn drive(
             ..
         } = &mut *car;
         let gear = drivetrain.selected_gear();
+        let shift = keys.just_pressed(KeyCode::KeyE) as i8 - keys.just_pressed(KeyCode::KeyQ) as i8
+            + wheel.shift_up as i8
+            - wheel.shift_down as i8;
         let (go, stop) = if drivetrain.automatic {
             // W drives forward and S backward: each brakes while rolling the other way
             // and selects first or reverse once (nearly) stopped.
@@ -252,28 +258,43 @@ fn drive(
             if stop && !go && along < 1.0 {
                 drivetrain.shift_to(&setup.engine, if reverse { 1 } else { -1 });
             }
+            // Shifting down or up at a stop selects reverse or drive.
+            if speed.abs() < 1.0 && shift != 0 {
+                drivetrain.shift_to(&setup.engine, if shift < 0 { -1 } else { 1 });
+            }
             (go, stop)
         } else {
-            // Q/E shift down/up.
-            let steps =
-                keys.just_pressed(KeyCode::KeyE) as i8 - keys.just_pressed(KeyCode::KeyQ) as i8;
-            if steps != 0 {
+            // Q/E or the paddles shift down/up.
+            if shift != 0 {
                 let wheel_omega = (corners[2].omega + corners[3].omega) / 2.0;
-                drivetrain.shift_by(&setup.engine, steps, wheel_omega, speed);
+                drivetrain.shift_by(&setup.engine, shift, wheel_omega, speed);
             }
             (forward, back)
         };
-        (c.throttle, c.brake) = match (go, stop) {
-            (true, _) => (1.0, stop as u8 as f32),
-            (false, true) => (0.0, 1.0),
+        // The pedals add to the keys; they work the same in both gearbox modes.
+        let go = (go as u8 as f32).max(wheel.throttle.unwrap_or(0.0));
+        let stop = (stop as u8 as f32).max(wheel.brake.unwrap_or(0.0));
+        (c.throttle, c.brake) = if go > 0.0 {
+            (go, stop)
+        } else if stop > 0.0 {
+            (0.0, stop)
+        } else if speed.abs() < 2.0 {
             // Hill hold: without input, keep a (nearly) stopped car from rolling away.
-            _ if speed.abs() < 2.0 => (0.0, 1.0),
-            _ => (0.0, 0.0),
+            (0.0, 1.0)
+        } else {
+            (0.0, 0.0)
         };
-        c.handbrake = keys.pressed(KeyCode::Space);
-        // Steering is rate-limited, like turning a real wheel.
-        let max_delta = 3.0 * time.delta_secs();
-        c.steer += (steer_target - c.steer).clamp(-max_delta, max_delta);
+        c.handbrake =
+            (keys.pressed(KeyCode::Space) as u8 as f32).max(wheel.handbrake.unwrap_or(0.0));
+        if let Some(steer) = wheel.steer {
+            // A steering wheel turns the front wheels directly, at a fixed ratio.
+            c.steer = steer;
+        } else {
+            // Keys steer less at speed, and are rate-limited like turning a real wheel.
+            let target = steer_target / (1.0 + speed.abs() * 0.04);
+            let max_delta = 3.0 * time.delta_secs();
+            c.steer += (target - c.steer).clamp(-max_delta, max_delta);
+        }
     }
 }
 

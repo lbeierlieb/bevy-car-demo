@@ -5,6 +5,7 @@ use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 
 use crate::car::{ActiveCar, Car, heading};
+use crate::input::WheelInput;
 use crate::terrain::Terrain;
 
 pub struct CameraPlugin;
@@ -75,9 +76,10 @@ impl Default for OrbitInput {
 
 fn switch_view(
     keys: Res<ButtonInput<KeyCode>>,
+    wheel: Res<WheelInput>,
     mut cameras: Query<(&mut ChaseCamera, &mut Projection)>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyC) {
+    if !keys.just_pressed(KeyCode::KeyC) && !wheel.view {
         return;
     }
     for (mut camera, mut projection) in &mut cameras {

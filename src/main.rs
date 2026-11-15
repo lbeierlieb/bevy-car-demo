@@ -5,6 +5,7 @@ mod car;
 mod cockpit;
 mod debug;
 mod hud;
+mod input;
 mod physics;
 mod scenery;
 mod sim;
@@ -38,6 +39,7 @@ fn main() {
             terrain::TerrainPlugin,
             scenery::SceneryPlugin,
             sim::SimPlugin,
+            input::InputPlugin,
             car::CarPlugin,
             visuals::VisualsPlugin,
             cockpit::CockpitPlugin,

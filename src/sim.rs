@@ -69,9 +69,8 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
 }
 
 /// Engine torque to the rear wheels (split evenly, like an open differential), biased
-/// brakes, rear handbrake, and speed-sensitive steering.
+/// brakes, rear handbrake, and steering.
 fn apply_controls(car: &mut Car, dt: f32) {
-    let speed = car.forward_speed().abs();
     let Car {
         setup,
         corners,
@@ -83,7 +82,7 @@ fn apply_controls(car: &mut Car, dt: f32) {
     let rear_omega = (corners[2].omega + corners[3].omega) / 2.0;
     let grounded = corners[2].contact.is_some() && corners[3].contact.is_some();
     let drive = drivetrain.step(&setup.engine, c.throttle, rear_omega, grounded, dt);
-    let steer = c.steer * setup.max_steer / (1.0 + speed * 0.04);
+    let steer = c.steer * setup.max_steer;
     for corner in corners.iter_mut() {
         if corner.front {
             corner.steer = steer;
@@ -92,11 +91,7 @@ fn apply_controls(car: &mut Car, dt: f32) {
             corner.drive_torque = drive.torque / 2.0;
             corner.drive_inertia = drive.inertia / 2.0;
             corner.brake_torque = c.brake * setup.brake_torque * (1.0 - setup.brake_bias) / 2.0
-                + if c.handbrake {
-                    setup.handbrake_torque
-                } else {
-                    0.0
-                };
+                + c.handbrake * setup.handbrake_torque;
         }
     }
 }
@@ -126,7 +121,7 @@ mod tests {
         // Brakes on: the road isn't level.
         car.controls = Controls {
             brake: 1.0,
-            handbrake: true,
+            handbrake: 1.0,
             ..default()
         };
         run(&mut car, &terrain, 4.0);
@@ -157,7 +152,7 @@ mod tests {
 
         car.controls = Controls {
             throttle: 0.3,
-            steer: 1.0,
+            steer: 0.7,
             ..default()
         };
         let before = heading(car.body.rotation);

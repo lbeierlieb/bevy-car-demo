@@ -9,14 +9,13 @@ use bevy::prelude::*;
 
 use crate::camera::EYE;
 use crate::car::Car;
+use crate::input::WheelConfig;
 use crate::visuals::bar;
 
 /// Gauge faces lean back towards the driver; the speedometer reads up to 260 km/h.
 const GAUGE_TILT: f32 = 0.35;
 const GAUGE_RADIUS: f32 = 0.045;
 const SPEEDO_TOP: f32 = 260.0;
-/// Steering wheel turn per unit of steering input (lock to lock: 290°).
-const WHEEL_TURN: f32 = 2.5;
 
 pub struct CockpitPlugin;
 
@@ -218,7 +217,11 @@ fn add_interior(
     }
 }
 
-fn move_dials(cars: Query<&Car>, mut parts: Query<(&DialPart, &ChildOf, &mut Transform)>) {
+fn move_dials(
+    config: Res<WheelConfig>,
+    cars: Query<&Car>,
+    mut parts: Query<(&DialPart, &ChildOf, &mut Transform)>,
+) {
     for (part, child_of, mut transform) in &mut parts {
         let Ok(car) = cars.get(child_of.parent()) else {
             continue;
@@ -232,7 +235,10 @@ fn move_dials(cars: Query<&Car>, mut parts: Query<(&DialPart, &ChildOf, &mut Tra
                 let kmh = car.forward_speed().abs() * 3.6;
                 Quat::from_rotation_z(needle_angle(kmh / SPEEDO_TOP))
             }
-            Dial::Steering => Quat::from_rotation_y(car.controls.steer * WHEEL_TURN),
+            // Like a real wheel set to the configured rotation range.
+            Dial::Steering => {
+                Quat::from_rotation_y(car.controls.steer * config.steering_wheel_lock())
+            }
         };
         *transform = part.mount * Transform::from_rotation(turn) * part.local;
     }

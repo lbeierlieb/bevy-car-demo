@@ -7,6 +7,7 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use crate::camera::OrbitInput;
 use crate::car::{ActiveCar, Car};
 use crate::debug::DebugView;
+use crate::input::{Action, Capture, Capturing, WheelConfig, action_value, input_name};
 use crate::physics::suspension::AxleSetup;
 use crate::sim::{CHASSIS_HZ, SUBSTEPS};
 
@@ -30,7 +31,14 @@ fn block_orbit(wants: Res<EguiWantsInput>, mut orbit: ResMut<OrbitInput>) {
     orbit.0 = !(wants.wants_pointer_input() || wants.is_pointer_over_area());
 }
 
-fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, mut cars: Query<&mut Car>) -> Result {
+fn panel(
+    mut contexts: EguiContexts,
+    active: Res<ActiveCar>,
+    mut cars: Query<&mut Car>,
+    mut config: ResMut<WheelConfig>,
+    mut capture: ResMut<Capture>,
+    gamepads: Query<(&Name, &Gamepad)>,
+) -> Result {
     let mut automatic = None;
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
         return Ok(());
@@ -59,6 +67,9 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, mut cars: Query<&mu
             ui.separator();
             telemetry(ui, &car);
             ui.collapsing("Setup", |ui| setup(ui, &mut car));
+            ui.collapsing("Wheel and pedals", |ui| {
+                wheel(ui, &mut config, &mut capture, &gamepads);
+            });
             ui.collapsing("Controls", |ui| {
                 ui.label("W/S or arrows: throttle, brake");
                 ui.label("Q/E: shift down/up    G: automatic gearbox");
@@ -67,6 +78,7 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, mut cars: Query<&mu
                 ui.label("Tab: next car    R: reset car");
                 ui.label("F1: gizmos    F2: this panel    M: mute");
                 ui.label("C: chase/driver view");
+                ui.label("Wheel and pedals: bind them under \"Wheel and pedals\"");
                 ui.label("Left-drag: orbit or look around    Scroll: zoom");
             });
             ui.collapsing("Map: Gerach to Rattelsdorf and Baunach, Bavaria", |ui| {
@@ -81,6 +93,75 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, mut cars: Query<&mu
         }
     }
     Ok(())
+}
+
+/// Bindings with live values, and the wheel settings.
+fn wheel(
+    ui: &mut egui::Ui,
+    config: &mut WheelConfig,
+    capture: &mut Capture,
+    gamepads: &Query<(&Name, &Gamepad)>,
+) {
+    let mut names: Vec<&str> = gamepads.iter().map(|(name, _)| name.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    if names.is_empty() {
+        ui.label("No wheel or gamepad connected.");
+    } else {
+        ui.label(format!("Connected: {}", names.join(", ")));
+    }
+    let listening = capture.0.as_ref().map(|c| c.action);
+    egui::Grid::new("bindings").striped(true).show(ui, |ui| {
+        for action in Action::ALL {
+            ui.label(action.label());
+            let value = action_value(config, gamepads, action);
+            if listening == Some(action) {
+                ui.label(match action {
+                    Action::Steer => "Turn the wheel left…",
+                    Action::Gate(_) => "Move the lever into the gate…",
+                    _ if action.analog() => "Press fully, then release…",
+                    _ => "Press the button…",
+                });
+                if ui.button("Cancel").clicked() {
+                    capture.0 = None;
+                }
+            } else {
+                match config.binding(action) {
+                    Some(binding) => {
+                        let bar = match value {
+                            Some(v) if action == Action::Steer => (v + 1.0) / 2.0,
+                            Some(v) => v,
+                            None => 0.0,
+                        };
+                        ui.add(
+                            egui::ProgressBar::new(bar)
+                                .desired_width(110.0)
+                                .text(input_name(binding.input)),
+                        )
+                        .on_hover_text(&binding.device);
+                    }
+                    None => {
+                        ui.label("—");
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Bind").clicked() {
+                        capture.0 = Some(Capturing::new(action));
+                    }
+                    if config.binding(action).is_some() && ui.button("Clear").clicked() {
+                        config.unbind(action);
+                    }
+                });
+            }
+            ui.end_row();
+        }
+    });
+    ui.add(
+        egui::Slider::new(&mut config.range, 180.0..=1080.0)
+            .step_by(10.0)
+            .text("Rotation range °"),
+    );
+    ui.add(egui::Slider::new(&mut config.deadzone, 0.0..=0.15).text("Pedal dead zone"));
 }
 
 fn telemetry(ui: &mut egui::Ui, car: &Car) {

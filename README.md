@@ -78,6 +78,20 @@ pull request, and every push to `main` deploys the web build to GitHub Pages.
 | C | Switch between chase and driver's view |
 | Left-drag, scroll | Orbit and zoom the camera (driver's view: look around) |
 
+### Steering wheel and pedals
+
+Wheels, pedals and shifters work through the system's gamepad support; the keyboard
+keeps working alongside. Open the panel (F2), expand "Wheel and pedals", and click
+**Bind** next to each control, then move it: turn the wheel left, press a pedal fully
+and release it, press a button. Pedals can rest at either end of their axis. The
+bindings and settings are saved to `~/.config/car-sim/wheel.cfg` (on the web, in the
+browser's local storage).
+
+The wheel steers the front wheels directly at a fixed ratio: either end of the
+rotation range is full lock. Set the wheel base to the same rotation range as the
+slider (540° by default), and the steering wheel in the cockpit turns with yours. The
+paddles shift like Q/E (in automatic mode they select reverse or drive at a stop).
+
 Gizmo colours: yellow for A-arm links, white for uprights, red for coilovers,
 green for the raycast and contact point, blue for tire normal force, magenta for
 tire grip force, cyan for roll centres.
@@ -91,7 +105,8 @@ tire grip force, cyan for roll centres.
 | `src/physics/tire.rs` | Magic Formula tire |
 | `src/physics/drivetrain.rs` | Engine, clutch and gearbox |
 | `src/sim.rs` | Multi-rate loop, controls to wheel torques, driving tests |
-| `src/car.rs` | Setups, spawning, keyboard input |
+| `src/car.rs` | Setups, spawning, keyboard and wheel to controls |
+| `src/input.rs` | Wheel, pedal and shifter bindings, config file |
 | `src/terrain.rs` | Baked map loading, terrain and road meshes, raycast, spawns |
 | `src/buildings.rs` | Low-poly houses from the OSM building outlines (visual only) |
 | `src/trees.rs` | Trees in forest areas and bushes on scrub (visual only) |
