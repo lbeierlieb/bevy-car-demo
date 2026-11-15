@@ -1,5 +1,5 @@
 //! Engine sound for the active car, synthesised sample by sample: pitch follows engine
-//! speed, volume follows the throttle. The game only publishes targets; the synth
+//! speed, volume follows the throttle the engine gets (so rev limiter cuts are heard). The game only publishes targets; the synth
 //! glides towards them every sample, so pitch and volume change smoothly.
 
 use std::f32::consts::TAU;
@@ -147,7 +147,7 @@ fn update_engine(
     let volume = if engine.muted {
         0.0
     } else {
-        0.25 + 0.75 * car.controls.throttle
+        0.25 + 0.75 * car.drivetrain.fuel
     };
     engine
         .targets

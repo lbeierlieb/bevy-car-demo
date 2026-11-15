@@ -33,6 +33,10 @@ pub struct EngineSetup {
     /// Time the clutch stays open for a gear change, and then takes to close again (s).
     pub shift_time: f32,
     pub engage_time: f32,
+    /// Rev limiter: at the redline the fuel is cut for `limiter_cut`, then back on for at
+    /// least `limiter_fuel` (s), so the engine audibly bounces off the limiter.
+    pub limiter_cut: f32,
+    pub limiter_fuel: f32,
 }
 
 impl Default for EngineSetup {
@@ -51,6 +55,8 @@ impl Default for EngineSetup {
             final_drive: 3.7,
             shift_time: 0.25,
             engage_time: 0.15,
+            limiter_cut: 0.08,
+            limiter_fuel: 0.04,
         }
     }
 }
@@ -65,8 +71,8 @@ const TORQUE_CURVE: [(f32, f32); 5] = [
 ];
 
 impl EngineSetup {
-    /// Engine torque at a throttle (0..1) and rpm: the curve, minus friction, with a soft
-    /// rev limiter that fades the throttle out over the last 300 rpm.
+    /// Engine torque at a throttle (0..1) and rpm: the curve, minus friction. The rev
+    /// limiter is in `Drivetrain`, as it needs state.
     pub fn torque(&self, throttle: f32, rpm: f32) -> f32 {
         let shape = TORQUE_CURVE
             .windows(2)
@@ -75,10 +81,9 @@ impl EngineSetup {
                 let t = ((rpm - w[0].0) / (w[1].0 - w[0].0)).clamp(0.0, 1.0);
                 w[0].1 + (w[1].1 - w[0].1) * t
             });
-        let limiter = ((self.redline_rpm + 100.0 - rpm) / 300.0).clamp(0.0, 1.0);
         // Below idle, an idle controller opens the throttle to keep the engine running.
         let idle = ((self.idle_rpm - rpm) / 300.0 + 0.08).clamp(0.0, 1.0);
-        let throttle = throttle.max(idle) * limiter;
+        let throttle = throttle.max(idle);
         throttle * shape * self.peak_torque - self.friction - self.friction_per_rpm * rpm.max(0.0)
     }
 
@@ -113,6 +118,11 @@ pub struct Drivetrain {
     /// How far the clutch has closed again after a shift (0..1).
     engaged: f32,
     locked: bool,
+    /// Time left in the rev limiter's cycle: fuel cut, then fuel back on.
+    limiter: f32,
+    /// Throttle the engine actually got in the last step (0..1), after the rev limiter
+    /// and the cut during shifts.
+    pub fuel: f32,
 }
 
 /// What the drivetrain does to the driven wheels this step (shared by both).
@@ -131,6 +141,8 @@ impl Drivetrain {
             shift: None,
             engaged: 1.0,
             locked: false,
+            limiter: 0.0,
+            fuel: 0.0,
         }
     }
 
@@ -190,6 +202,16 @@ impl Drivetrain {
             self.engaged = (self.engaged + dt / engine.engage_time).min(1.0);
             (engine.ratio(self.gear), throttle)
         };
+        // Rev limiter: a cut starts at the redline; after it the fuel comes back for a
+        // moment even if the revs haven't dropped (in gear they barely do), unless the
+        // engine is well over the redline.
+        self.limiter = (self.limiter - dt).max(0.0);
+        if self.limiter == 0.0 && self.rpm >= engine.redline_rpm {
+            self.limiter = engine.limiter_cut + engine.limiter_fuel;
+        }
+        let cut = self.limiter > engine.limiter_fuel || self.rpm > engine.redline_rpm + 200.0;
+        let throttle = if cut { 0.0 } else { throttle };
+        self.fuel = throttle;
         let wheel_rpm = wheel_omega * ratio * RPM;
 
         // Lock once the wheels have caught up with the engine; slip again below idle.
@@ -302,6 +324,30 @@ mod tests {
             drivetrain.shift_by(&engine, -1, 0.0, 0.0);
         }
         assert_eq!(drivetrain.selected_gear(), -1);
+    }
+
+    #[test]
+    fn rev_limiter_bounces() {
+        let engine = EngineSetup::default();
+        let mut drivetrain = Drivetrain::new(&engine);
+        drivetrain.shift_to(&engine, 0);
+        // Free revving in neutral: settle, then watch the rpm and fuel for a second.
+        for _ in 0..240 {
+            drivetrain.step(&engine, 1.0, 0.0, true, 1.0 / 120.0);
+        }
+        let (mut low, mut high, mut cuts, mut was_fuelled) = (f32::MAX, 0.0f32, 0, true);
+        for _ in 0..120 {
+            drivetrain.step(&engine, 1.0, 0.0, true, 1.0 / 120.0);
+            (low, high) = (low.min(drivetrain.rpm), high.max(drivetrain.rpm));
+            let fuelled = drivetrain.fuel > 0.0;
+            cuts += (was_fuelled && !fuelled) as u32;
+            was_fuelled = fuelled;
+        }
+        // Roughly ten cuts a second (free revving overshoots, which can cut early), each
+        // dropping the revs noticeably.
+        assert!((6..=14).contains(&cuts), "{cuts} cuts");
+        assert!(high - low > 150.0, "rpm {low}..{high}");
+        assert!(high < engine.redline_rpm + 300.0, "rpm {high}");
     }
 
     #[test]
