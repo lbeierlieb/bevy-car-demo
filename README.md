@@ -25,7 +25,11 @@ A small Bevy demo of car simulation techniques:
   and its inertia is added to theirs, so the wheel-spin update stays implicit. The
   clutch slips when pulling away and closes gradually after each 0.25 s shift, during
   which the throttle is cut. Gears are shifted by hand by default; the automatic
-  shifts by rpm and throttle. The engine sound follows engine rpm, its volume the fuel the engine gets.
+  shifts by rpm and throttle.
+- **Synthesised engine sound** (a cross-plane V8, whatever the engine): each
+  firing sends a pulse through its bank's exhaust resonances. Each bank fires at
+  uneven intervals, which gives the burble; the banks are panned apart, and the
+  fuel the engine gets makes the pulses louder and harsher.
 - **Real-world low-poly terrain**: a 9.6 × 8.4 km area of Upper Franconia,
   from Gerach (96161, Bavaria), Mauschendorf and Sendelbach in the north-west to
   Rattelsdorf and Ebing in the east and Baunach in the south, with Reckendorf,
