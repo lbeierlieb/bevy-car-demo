@@ -49,28 +49,67 @@ impl Buildings {
     }
 }
 
+/// The rectangle a house is built on: aligned with the outline's longest edge, with `axis`
+/// along its length.
+pub struct Footprint {
+    pub center: Vec2,
+    pub axis: Vec2,
+    pub length: f32,
+    pub width: f32,
+}
+
+impl Footprint {
+    /// The fitted rectangle, or `None` for outlines too small to become a house.
+    pub fn fit(outline: &[Vec2]) -> Option<Self> {
+        let longest = (0..outline.len())
+            .map(|i| outline[(i + 1) % outline.len()] - outline[i])
+            .max_by(|a, b| a.length_squared().total_cmp(&b.length_squared()))
+            .unwrap_or(Vec2::X);
+        let mut axis = longest.normalize_or(Vec2::X);
+        let extent = |dir: Vec2| {
+            let dots = outline.iter().map(|p| p.dot(dir));
+            let (lo, hi) = dots.fold((f32::MAX, f32::MIN), |(lo, hi), d| (lo.min(d), hi.max(d)));
+            (lo, hi)
+        };
+        let ((a0, a1), (p0, p1)) = (extent(axis), extent(axis.perp()));
+        let (mut length, mut width) = (a1 - a0, p1 - p0);
+        let center = axis * (a0 + a1) / 2.0 + axis.perp() * (p0 + p1) / 2.0;
+        if width > length {
+            (length, width, axis) = (width, length, axis.perp());
+        }
+        (length * width >= 6.0).then_some(Self {
+            center,
+            axis,
+            length,
+            width,
+        })
+    }
+
+    pub fn area(&self) -> f32 {
+        self.length * self.width
+    }
+
+    /// The four corners, going round.
+    pub fn corners(&self) -> [Vec2; 4] {
+        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(a, p)| {
+            self.center
+                + self.axis * a * self.length / 2.0
+                + self.axis.perp() * p * self.width / 2.0
+        })
+    }
+}
+
 fn house(mesh: &mut FlatMesh, terrain: &Terrain, levels: f32, outline: &[Vec2], index: usize) {
-    // Rectangle aligned with the outline's longest edge, with `axis` along its length.
-    let longest = (0..outline.len())
-        .map(|i| outline[(i + 1) % outline.len()] - outline[i])
-        .max_by(|a, b| a.length_squared().total_cmp(&b.length_squared()))
-        .unwrap_or(Vec2::X);
-    let mut axis = longest.normalize_or(Vec2::X);
-    let extent = |dir: Vec2| {
-        let dots = outline.iter().map(|p| p.dot(dir));
-        let (lo, hi) = dots.fold((f32::MAX, f32::MIN), |(lo, hi), d| (lo.min(d), hi.max(d)));
-        (lo, hi)
-    };
-    let ((a0, a1), (p0, p1)) = (extent(axis), extent(axis.perp()));
-    let (mut length, mut width) = (a1 - a0, p1 - p0);
-    let center = axis * (a0 + a1) / 2.0 + axis.perp() * (p0 + p1) / 2.0;
-    if width > length {
-        (length, width, axis) = (width, length, axis.perp());
-    }
-    let area = length * width;
-    if area < 6.0 {
+    let Some(footprint) = Footprint::fit(outline) else {
         return;
-    }
+    };
+    let Footprint {
+        center,
+        axis,
+        length,
+        width,
+    } = footprint;
+    let area = footprint.area();
 
     let storeys = if levels > 0.0 {
         levels
@@ -79,8 +118,7 @@ fn house(mesh: &mut FlatMesh, terrain: &Terrain, levels: f32, outline: &[Vec2], 
     } else {
         1.0
     };
-    let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
-        .map(|(a, p)| center + axis * a * length / 2.0 + axis.perp() * p * width / 2.0);
+    let corners = footprint.corners();
     let grounds = corners.map(|c| terrain.sample(c.x, c.y).0);
     // Sink into the lowest corner; full wall height above the highest one.
     let bottom = grounds.iter().copied().fold(f32::MAX, f32::min) - 0.3;
