@@ -109,6 +109,8 @@ pub struct ForceFeedback {
     output: Option<linux::Output>,
     /// Name of the device the force goes to, if one was found.
     pub device: Option<String>,
+    /// Why there's no force feedback device, if there isn't.
+    pub problem: Option<String>,
     /// Force last sent, -1 to 1 of the base's maximum (positive pushes the wheel left).
     pub level: f32,
     /// Time left in a test push from the panel.
@@ -146,11 +148,27 @@ fn force_feedback(
         ffb.retry -= dt;
         if ffb.retry <= 0.0 {
             ffb.retry = 2.0;
-            #[cfg(target_os = "linux")]
-            {
-                ffb.output = device.as_deref().and_then(linux::Output::open);
-                ffb.device = ffb.output.as_ref().and(device);
+            let problem = match device.as_deref() {
+                None => None,
+                #[cfg(target_os = "linux")]
+                Some(name) => match linux::Output::open(name) {
+                    Ok(output) => {
+                        ffb.output = Some(output);
+                        ffb.device = device;
+                        None
+                    }
+                    Err(problem) => Some(problem),
+                },
+                #[cfg(not(target_os = "linux"))]
+                Some(_) => Some("force feedback is only supported on Linux".into()),
+            };
+            if problem.is_some() && problem != ffb.problem {
+                warn!(
+                    "No force feedback: {}",
+                    problem.as_deref().unwrap_or_default()
+                );
             }
+            ffb.problem = problem;
             ffb.fade = 0.0;
         }
     }
@@ -193,6 +211,8 @@ fn force_feedback(
 
 #[cfg(target_os = "linux")]
 mod linux {
+    use std::path::Path;
+
     use evdev::{
         FFEffect, FFEffectCode, FFEffectData, FFEffectKind, FFEnvelope, FFReplay, FFTrigger,
     };
@@ -205,27 +225,61 @@ mod linux {
     }
 
     impl Output {
-        /// The first input device with this name that can play a constant force.
-        pub fn open(name: &str) -> Option<Self> {
-            let (path, mut device) = evdev::enumerate().find(|(_, device)| {
-                device.name().map(str::trim) == Some(name.trim())
-                    && device
-                        .supported_ff()
-                        .is_some_and(|ff| ff.contains(FFEffectCode::FF_CONSTANT))
-            })?;
-            let mut effect = match device.upload_ff_effect(effect(0)) {
-                Ok(effect) => effect,
-                Err(err) => {
-                    bevy::log::warn!("No force feedback on {}: {err}", path.display());
-                    return None;
+        /// The first input device with this name that can play a constant force (some wheel
+        /// bases register several under one name). Otherwise, what's wrong with each.
+        pub fn open(name: &str) -> Result<Self, String> {
+            let mut nodes: Vec<String> = std::fs::read_dir("/sys/class/input")
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|entry| {
+                    std::fs::read_to_string(entry.path().join("device/name"))
+                        .is_ok_and(|device| device.trim() == name.trim())
+                })
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|node| node.starts_with("event"))
+                .collect();
+            nodes.sort();
+            let mut problems = Vec::new();
+            for node in nodes {
+                let path = Path::new("/dev/input").join(&node);
+                if let Err(err) = std::fs::OpenOptions::new().write(true).open(&path) {
+                    problems.push(format!("{node}: no write access ({err})"));
+                    continue;
                 }
-            };
-            effect.play(1).ok()?;
-            Some(Self {
-                _device: device,
-                effect,
-                sent: 0,
-            })
+                let mut device = match evdev::Device::open(&path) {
+                    Ok(device) => device,
+                    Err(err) => {
+                        problems.push(format!("{node}: can't open ({err})"));
+                        continue;
+                    }
+                };
+                let constant = device
+                    .supported_ff()
+                    .is_some_and(|ff| ff.contains(FFEffectCode::FF_CONSTANT));
+                if !constant {
+                    problems.push(format!("{node}: no constant-force support"));
+                    continue;
+                }
+                let started = device
+                    .upload_ff_effect(effect(0))
+                    .and_then(|mut effect| effect.play(1).map(|()| effect));
+                match started {
+                    Ok(effect) => {
+                        return Ok(Self {
+                            _device: device,
+                            effect,
+                            sent: 0,
+                        });
+                    }
+                    Err(err) => problems.push(format!("{node}: can't start a force ({err})")),
+                }
+            }
+            if problems.is_empty() {
+                Err(format!("no input device named \"{}\"", name.trim()))
+            } else {
+                Err(problems.join("; "))
+            }
         }
 
         /// Sets the force, -1 to 1.

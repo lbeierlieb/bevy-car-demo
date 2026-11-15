@@ -194,7 +194,10 @@ fn force_feedback(ui: &mut egui::Ui, config: &mut WheelConfig, ffb: &mut ForceFe
         ui.checkbox(&mut config.ffb_enabled, "On");
     });
     let Some(device) = &ffb.device else {
-        ui.label("No force feedback device: bind the steering to a wheel (Linux only).");
+        ui.label(match &ffb.problem {
+            Some(problem) => format!("No force feedback: {problem}"),
+            None => "No force feedback device: bind the steering to a wheel.".into(),
+        });
         return;
     };
     ui.label(format!("On {device}"));
