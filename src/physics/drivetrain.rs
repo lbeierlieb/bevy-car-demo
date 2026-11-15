@@ -278,13 +278,15 @@ impl Drivetrain {
         let throttle = if cut { 0.0 } else { throttle };
         self.fuel = if self.running { throttle } else { 0.0 };
         let wheel_rpm = wheel_omega * ratio * RPM;
-        // A stalled engine only drags.
+        // A stalled engine only drags, against the way it's turned (fading out over the
+        // last few rpm, so it holds still rather than chattering at rest).
         let running = self.running;
         let engine_torque = move |rpm: f32| {
             if running {
                 engine.torque(throttle, rpm)
             } else {
-                -engine.friction - engine.friction_per_rpm * rpm.max(0.0)
+                let against = -(rpm / 30.0).clamp(-1.0, 1.0);
+                (engine.friction + engine.friction_per_rpm * rpm.abs()) * against
             }
         };
         if let Some(travel) = clutch {
@@ -495,6 +497,23 @@ mod tests {
             "rpm {}",
             drivetrain.rpm
         );
+    }
+
+    #[test]
+    fn stalled_engine_drags_against_the_motion() {
+        let engine = EngineSetup::default();
+        let mut drivetrain = Drivetrain::new(&engine);
+        drive_with_clutch(&mut drivetrain, &engine, 0.0, |_| 0.0, 1.0);
+        assert!(!drivetrain.running);
+        // Stalled in gear with the clutch out (and the throttle pressed, as when trying to
+        // pull away): the car stays put rather than creeping backwards.
+        let speed = drive_with_clutch(&mut drivetrain, &engine, 1.0, |_| 0.0, 5.0);
+        assert!(speed.abs() < 0.05, "speed {speed}");
+        // Rolling either way, the engine slows the wheels.
+        for omega in [10.0, -10.0] {
+            let out = drivetrain.step(&engine, 0.0, Some(0.0), omega, true, 1.0 / 120.0);
+            assert!(out.torque * omega < 0.0, "torque {} at {omega}", out.torque);
+        }
     }
 
     #[test]
