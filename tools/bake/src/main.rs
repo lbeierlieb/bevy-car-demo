@@ -4,8 +4,9 @@
 //! Usage: `cargo run --release -- <lat> <lon> <size_m> <out_file>`
 //!
 //! Elevation is the 1 m lidar terrain model (DGM1) of the Bavarian surveying
-//! administration, so this only works inside Bavaria. Everything else comes from the
-//! OpenStreetMap API. The map frame is aligned with UTM zone 32 (x east, z south), the
+//! administration, so this only works inside Bavaria. Everything else comes from
+//! OpenStreetMap, via the Overpass API. Downloads are cached in `tools/bake/cache`;
+//! delete it to fetch fresh data. The map frame is aligned with UTM zone 32 (x east, z south), the
 //! grid the DGM1 tiles use.
 
 use std::collections::HashMap;
@@ -24,7 +25,9 @@ const STEP_TRACKS: usize = 2;
 const STEP_EMPTY: usize = 4;
 /// Width of the raised rim at the map edge.
 const RIM: f64 = 30.0;
-const USER_AGENT: &str = "car-sim-bake/0.2 (Bevy car simulation demo)";
+const USER_AGENT: &str = "car-sim-bake/0.3 (Bevy car simulation demo)";
+const CACHE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/cache");
+const OVERPASS: &str = "https://overpass-api.de/api/interpreter";
 /// Bridges: lidar shows the ground under them, so their decks are rebuilt as straight
 /// ramps between the ends, with the terrain raised beside them over `BLEND` metres.
 const ROAD_STEP: f64 = 2.0;
@@ -122,14 +125,30 @@ impl Frame {
     }
 }
 
-fn get(url: &str) -> Result<Vec<u8>, Error> {
-    eprintln!("GET {url}");
-    let mut response = ureq::get(url).header("User-Agent", USER_AGENT).call()?;
+/// The cached file `name`, or else the result of `fetch`, which is then cached.
+fn cached(name: &str, fetch: impl FnOnce() -> Result<Vec<u8>, Error>) -> Result<Vec<u8>, Error> {
+    let path = std::path::Path::new(CACHE).join(name);
+    if let Ok(bytes) = std::fs::read(&path) {
+        eprintln!("cached {name}");
+        return Ok(bytes);
+    }
+    let bytes = fetch()?;
+    std::fs::create_dir_all(CACHE)?;
+    std::fs::write(&path, &bytes)?;
+    Ok(bytes)
+}
+
+fn read_body(mut response: ureq::http::Response<ureq::Body>) -> Result<Vec<u8>, Error> {
     Ok(response
         .body_mut()
         .with_config()
-        .limit(100 << 20)
+        .limit(1 << 30)
         .read_to_vec()?)
+}
+
+fn get(url: &str) -> Result<Vec<u8>, Error> {
+    eprintln!("GET {url}");
+    read_body(ureq::get(url).header("User-Agent", USER_AGENT).call()?)
 }
 
 /// DGM1 lidar terrain: 1 km tiles of 1000×1000 one-metre pixels, named by their
@@ -145,7 +164,8 @@ impl Dgm1 {
         for e in km(east.0)..=km(east.1) {
             for n in km(north.0)..=km(north.1) {
                 let url = format!("https://download1.bayernwolke.de/a/dgm/dgm1/{e}_{n}.tif");
-                let mut decoder = tiff::decoder::Decoder::new(Cursor::new(get(&url)?))?;
+                let tile = cached(&format!("dgm1_{e}_{n}.tif"), || get(&url))?;
+                let mut decoder = tiff::decoder::Decoder::new(Cursor::new(tile))?;
                 let tiff::decoder::DecodingResult::F32(heights) = decoder.read_image()? else {
                     return Err(format!("{url}: expected float32 heights").into());
                 };
@@ -357,67 +377,59 @@ impl Osm {
     }
 }
 
+/// Everything the map uses in a lat/lon box around the map, with one Overpass query: the
+/// ways with tags that roads, buildings or land use read, the multipolygon relations, and
+/// (recursively) all their member ways and nodes, also those outside the box. Everything
+/// is clipped to the map in local metres later.
 fn fetch_osm(frame: &Frame, center: Point, half_size: f64) -> Result<Osm, Error> {
-    // Lat/lon box with a margin; everything is clipped to the map in local metres later.
     let dlat = (half_size * 1.1 / 6_371_000.0).to_degrees();
     let dlon = dlat / center.0.to_radians().cos();
     let (lat, lon) = center;
-    let mut osm = Osm::default();
-    fetch_box(
-        &mut osm,
-        frame,
-        [lon - dlon, lat - dlat, lon + dlon, lat + dlat],
-    )?;
-    // The map call omits multipolygon member ways outside the box: fetch those in full.
-    let multipolygons: Vec<u64> = osm
-        .relations
-        .iter()
-        .filter(|(_, (_, tags))| {
-            tags.get("type").is_some_and(|t| t == "multipolygon") && land_class(tags).is_some()
-        })
-        .map(|(id, _)| *id)
-        .collect();
-    for id in multipolygons {
-        let url = format!("https://api.openstreetmap.org/api/0.6/relation/{id}/full");
-        let mut full = Osm::default();
-        full.parse(&String::from_utf8(get(&url)?)?, frame)?;
-        osm.nodes.extend(full.nodes);
-        for (id, way) in full.ways {
-            osm.ways.entry(id).or_insert(way);
-        }
-    }
-    Ok(osm)
-}
-
-/// Downloads everything in a `[min lon, min lat, max lon, max lat]` box into `osm`. The
-/// OSM API refuses boxes with more than 50 000 nodes (HTTP 400): those are split into
-/// quarters and fetched recursively. Elements crossing tile borders arrive more than
-/// once; merging by ID removes the duplicates.
-fn fetch_box(
-    osm: &mut Osm,
-    frame: &Frame,
-    [west, south, east, north]: [f64; 4],
-) -> Result<(), Error> {
-    let url = format!(
-        "https://api.openstreetmap.org/api/0.6/map?bbox={west:.6},{south:.6},{east:.6},{north:.6}"
+    let bbox = format!(
+        "{:.6},{:.6},{:.6},{:.6}",
+        lat - dlat,
+        lon - dlon,
+        lat + dlat,
+        lon + dlon
     );
-    match get(&url) {
-        Ok(xml) => osm.parse(&String::from_utf8(xml)?, frame),
-        Err(e) if matches!(e.downcast_ref(), Some(ureq::Error::StatusCode(400))) => {
-            eprintln!("  too much data, splitting into quarters");
-            let (mid_lon, mid_lat) = ((west + east) / 2.0, (south + north) / 2.0);
-            for quarter in [
-                [west, south, mid_lon, mid_lat],
-                [mid_lon, south, east, mid_lat],
-                [west, mid_lat, mid_lon, north],
-                [mid_lon, mid_lat, east, north],
-            ] {
-                fetch_box(osm, frame, quarter)?;
+    let ways: String = [
+        "highway",
+        "building",
+        "waterway",
+        "landuse",
+        "natural",
+        "leisure",
+        "amenity",
+        "area:highway",
+    ]
+    .iter()
+    .map(|key| format!("way[\"{key}\"]({bbox});"))
+    .collect();
+    let query = format!(
+        "[out:xml][timeout:600];\
+         ({ways}relation[\"type\"=\"multipolygon\"]({bbox}););(._;>;);out body;"
+    );
+    let xml = cached(&format!("osm_{bbox}.xml"), || {
+        // The public server answers 429, 502 or 504 when it's busy: wait and retry.
+        for attempt in 1.. {
+            eprintln!("POST {OVERPASS} ({bbox})");
+            match ureq::post(OVERPASS)
+                .header("User-Agent", USER_AGENT)
+                .send_form([("data", query.as_str())])
+            {
+                Ok(response) => return read_body(response),
+                Err(ureq::Error::StatusCode(code @ (429 | 502 | 504))) if attempt < 5 => {
+                    eprintln!("  busy ({code}), retrying in a minute");
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                }
+                Err(e) => return Err(e.into()),
             }
-            Ok(())
         }
-        Err(e) => Err(e),
-    }
+        unreachable!()
+    })?;
+    let mut osm = Osm::default();
+    osm.parse(&String::from_utf8(xml)?, frame)?;
+    Ok(osm)
 }
 
 /// Resamples a polyline at roughly `ROAD_STEP` spacing, keeping the original vertices.

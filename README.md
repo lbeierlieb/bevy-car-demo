@@ -87,7 +87,9 @@ tire grip force, cyan for roll centres.
 
 `tools/bake` downloads the lidar terrain model (DGM1, 1 km tiles) from the
 Bavarian surveying administration's open data server, and roads, land use and
-buildings from the OpenStreetMap API. The map frame is aligned with UTM zone 32,
+buildings from OpenStreetMap with a single Overpass API query. Downloads are cached
+in `tools/bake/cache` (delete it to fetch fresh data), so re-baking is quick and
+doesn't load the servers again. The map frame is aligned with UTM zone 32,
 like the lidar tiles. Elevation is box-filtered onto a 2 m grid and land use is
 rasterised per cell. Bridges are rebuilt as straight decks, because lidar shows
 the ground under them.
@@ -112,9 +114,8 @@ cargo build --release
 
 The map was baked with `50.03674 10.80097 3072 ../../assets/gerach.terrain
 50.0304493 10.8065719`, which spawns the cars in Gerach. To use a different file,
-change `BAKED` in `src/terrain.rs`. The OSM API refuses requests with more than
-50 000 nodes; the tool then splits the area into quarters (recursively) and merges
-the results. Only chunks near the camera are on the GPU, so map size is limited by
+change `BAKED` in `src/terrain.rs`. The public Overpass server sometimes answers
+that it's busy; the tool then retries every minute, up to five times. Only chunks near the camera are on the GPU, so map size is limited by
 the size of the baked file, which is embedded in the program (about 0.65 MB per km²
 with the current mix of resolutions).
 
