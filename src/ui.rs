@@ -53,6 +53,10 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, mut cars: Query<&mu
                 ui.label("F1: gizmos    F2: this panel");
                 ui.label("Left-drag: orbit    Scroll: zoom");
             });
+            ui.collapsing("Map: Gerach, Bavaria", |ui| {
+                ui.label("Map data © OpenStreetMap contributors (ODbL)");
+                ui.label("Elevation: EU-DEM (Copernicus, funded by the EU) and SRTM (USGS), via Terrain Tiles");
+            });
         });
     Ok(())
 }

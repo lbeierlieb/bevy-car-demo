@@ -183,11 +183,11 @@ impl Plugin for CarPlugin {
 }
 
 fn spawn_cars(mut commands: Commands, terrain: Res<Terrain>) {
-    for (index, setup) in [CarSetup::baseline(), CarSetup::soft(), CarSetup::track()]
-        .into_iter()
-        .enumerate()
-    {
-        let car = Car::spawn_at(index, setup, &terrain, (index as f32 - 1.0) * 5.0, 0.0, 0.0);
+    // One behind the other along the road nearest the village centre, the first car in front.
+    let setups = [CarSetup::baseline(), CarSetup::soft(), CarSetup::track()];
+    let spawns = terrain.road_spawns(setups.len(), 9.0);
+    for (index, (setup, (p, yaw))) in setups.into_iter().zip(spawns.into_iter().rev()).enumerate() {
+        let car = Car::spawn_at(index, setup, &terrain, p.x, p.y, yaw);
         commands.spawn((Transform::from_translation(car.body.position), car));
     }
 }

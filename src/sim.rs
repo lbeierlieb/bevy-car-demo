@@ -106,7 +106,7 @@ fn apply_controls(car: &mut Car) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::car::{CarSetup, Controls};
+    use crate::car::{CarSetup, Controls, heading};
 
     fn run(car: &mut Car, terrain: &Terrain, seconds: f32) {
         let dt = 1.0 / CHASSIS_HZ as f32;
@@ -115,14 +115,22 @@ mod tests {
         }
     }
 
+    /// A car on the road at the first spawn point, pointing along the road.
     fn test_car(terrain: &Terrain) -> Car {
-        Car::spawn_at(0, CarSetup::baseline(), terrain, 0.0, 0.0, 0.0)
+        let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
+        Car::spawn_at(0, CarSetup::baseline(), terrain, p.x, p.y, yaw)
     }
 
     #[test]
     fn settles_at_design_ride_height() {
-        let terrain = Terrain::generate(7);
+        let terrain = Terrain::baked();
         let mut car = test_car(&terrain);
+        // Brakes on: the road isn't level.
+        car.controls = Controls {
+            brake: 1.0,
+            handbrake: true,
+            ..default()
+        };
         run(&mut car, &terrain, 4.0);
         assert!(
             car.body.velocity.length() < 0.05,
@@ -130,14 +138,14 @@ mod tests {
             car.body.velocity
         );
         for corner in &car.corners {
-            // Within a couple of cm of design height (the tire itself compresses a little).
-            assert!(corner.travel.abs() < 0.03, "travel {}", corner.travel);
+            // Within a few cm of design height (tire compression, slope weight transfer).
+            assert!(corner.travel.abs() < 0.04, "travel {}", corner.travel);
         }
     }
 
     #[test]
     fn accelerates_and_turns() {
-        let terrain = Terrain::generate(7);
+        let terrain = Terrain::baked();
         let mut car = test_car(&terrain);
         run(&mut car, &terrain, 1.0);
         car.controls = Controls {
@@ -153,10 +161,13 @@ mod tests {
             steer: 1.0,
             ..default()
         };
-        let heading = crate::car::heading(car.body.rotation);
+        let before = heading(car.body.rotation);
         run(&mut car, &terrain, 1.0);
-        // Positive steer turns left, i.e. increases the heading angle.
-        assert!(crate::car::heading(car.body.rotation) > heading + 0.3);
+        // Positive steer turns left, i.e. increases the heading angle (wrapped to ±π).
+        let turned = (heading(car.body.rotation) - before + std::f32::consts::PI)
+            .rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        assert!(turned > 0.3, "turned {turned}");
         let up = car.body.rotation * Vec3::Y;
         assert!(up.y > 0.9, "rolled over");
     }
