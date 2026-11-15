@@ -107,7 +107,9 @@ lever, and the gearbox is in neutral whenever the lever is between gates; revers
 only goes in near a stop. With a clutch pedal bound, a gear only goes in with the
 clutch pressed: move the lever without it and the gearbox stays in neutral until you
 press the clutch. Without a clutch pedal, the automatic clutch changes gear. While
-an H-shifter is bound, the paddles and Q/E don't shift.
+an H-shifter is bound, the paddles and Q/E don't shift. The game only knows where a
+control is once it has moved: if the lever is already in a gear when the game starts,
+it notices at the first move (until then, the gearbox is in neutral).
 
 Gizmo colours: yellow for A-arm links, white for uprights, red for coilovers,
 green for the raycast and contact point, blue for tire normal force, magenta for

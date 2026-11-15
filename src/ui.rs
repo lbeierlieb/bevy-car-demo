@@ -7,7 +7,7 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use crate::camera::OrbitInput;
 use crate::car::{ActiveCar, Car};
 use crate::debug::DebugView;
-use crate::input::{Action, Capture, Capturing, WheelConfig, action_value, input_name};
+use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_value, input_name};
 use crate::physics::suspension::AxleSetup;
 use crate::sim::{CHASSIS_HZ, SUBSTEPS};
 use crate::wheel_base::WheelBase;
@@ -38,7 +38,7 @@ fn panel(
     mut cars: Query<&mut Car>,
     mut config: ResMut<WheelConfig>,
     mut capture: ResMut<Capture>,
-    gamepads: Query<(&Name, &Gamepad)>,
+    gamepads: Gamepads,
     base: Res<WheelBase>,
 ) -> Result {
     let mut automatic = None;
@@ -103,12 +103,10 @@ fn wheel(
     ui: &mut egui::Ui,
     config: &mut WheelConfig,
     capture: &mut Capture,
-    gamepads: &Query<(&Name, &Gamepad)>,
+    gamepads: &Gamepads,
     base: &WheelBase,
 ) {
-    let mut names: Vec<&str> = gamepads.iter().map(|(name, _)| name.as_str()).collect();
-    names.sort_unstable();
-    names.dedup();
+    let names = gamepads.names();
     if names.is_empty() {
         ui.label("No wheel or gamepad connected.");
     } else {

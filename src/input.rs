@@ -2,7 +2,12 @@
 //! to one input on one device (by name); the bindings and wheel settings are saved to a
 //! small text file, so they only have to be set up once.
 
-use bevy::input::gamepad::{AxisSettings, ButtonAxisSettings, GamepadInput, GamepadSettings};
+use bevy::ecs::system::SystemParam;
+use bevy::input::gamepad::{
+    AxisSettings, ButtonAxisSettings, GamepadInput, GamepadSettings, RawGamepadAxisChangedEvent,
+    RawGamepadButtonChangedEvent,
+};
+use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 
 pub struct InputPlugin;
@@ -12,9 +17,10 @@ impl Plugin for InputPlugin {
         app.insert_resource(WheelConfig::load())
             .init_resource::<WheelInput>()
             .init_resource::<Capture>()
+            .init_resource::<Reported>()
             .add_systems(
                 PreUpdate,
-                (unfilter_gamepads, capture, read_wheel)
+                (unfilter_gamepads, track_reported, capture, read_wheel)
                     .chain()
                     .after(bevy::input::InputSystems),
             )
@@ -394,28 +400,78 @@ fn unfilter_gamepads(mut gamepads: Query<&mut GamepadSettings, Added<GamepadSett
     }
 }
 
-/// Raw value of a bound input: from the first device with that name that has reported it
-/// (some wheel bases register a second, silent device under the same name).
-pub fn raw_value(gamepads: &Query<(&Name, &Gamepad)>, binding: &Binding) -> Option<f32> {
-    gamepads
-        .iter()
-        .filter(|(name, _)| name.as_str() == binding.device)
-        .find_map(|(_, gamepad)| match binding.input {
-            GamepadInput::Button(button) => gamepad
-                .get(button)
-                .or_else(|| gamepad.pressed(button).then_some(1.0)),
-            axis => gamepad.get_unclamped(axis),
-        })
+/// Inputs each gamepad has sent a value for since it connected. Bevy starts every axis at 0,
+/// which for a pedal resting at -1 reads as half pressed, so an input only counts once it
+/// has reported a value of its own.
+#[derive(Resource, Default)]
+pub struct Reported(HashSet<(Entity, GamepadInput)>);
+
+fn track_reported(
+    mut reported: ResMut<Reported>,
+    mut axes: MessageReader<RawGamepadAxisChangedEvent>,
+    mut buttons: MessageReader<RawGamepadButtonChangedEvent>,
+) {
+    for event in axes.read() {
+        reported
+            .0
+            .insert((event.gamepad, GamepadInput::Axis(event.axis)));
+    }
+    for event in buttons.read() {
+        reported
+            .0
+            .insert((event.gamepad, GamepadInput::Button(event.button)));
+    }
+}
+
+/// The connected gamepads, with the inputs that have reported a value.
+#[derive(SystemParam)]
+pub struct Gamepads<'w, 's> {
+    gamepads: Query<'w, 's, (Entity, &'static Name, &'static Gamepad)>,
+    reported: Res<'w, Reported>,
+}
+
+impl Gamepads<'_, '_> {
+    pub fn names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .gamepads
+            .iter()
+            .map(|(_, name, _)| name.as_str())
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
+    /// Each gamepad's reported inputs and their values.
+    fn values(&self) -> impl Iterator<Item = (Entity, &Name, GamepadInput, f32)> {
+        self.gamepads
+            .iter()
+            .flat_map(move |(entity, name, gamepad)| {
+                gamepad
+                    .analog()
+                    .all_axes_and_values()
+                    .filter(move |(input, _)| self.reported.0.contains(&(entity, **input)))
+                    .map(move |(input, value)| (entity, name, *input, value))
+            })
+    }
+
+    /// Raw value of a bound input: from the first device with that name that has reported
+    /// it (some wheel bases register a second, silent device under the same name).
+    fn raw(&self, binding: &Binding) -> Option<f32> {
+        self.gamepads
+            .iter()
+            .filter(|(entity, name, _)| {
+                name.as_str() == binding.device
+                    && self.reported.0.contains(&(*entity, binding.input))
+            })
+            .find_map(|(_, _, gamepad)| gamepad.get_unclamped(binding.input))
+    }
 }
 
 /// An action's value: steering from -1 to 1, pedals 0 to 1, buttons 0 or 1.
-pub fn action_value(
-    config: &WheelConfig,
-    gamepads: &Query<(&Name, &Gamepad)>,
-    action: Action,
-) -> Option<f32> {
+pub fn action_value(config: &WheelConfig, gamepads: &Gamepads, action: Action) -> Option<f32> {
     let binding = config.binding(action)?;
-    let raw = raw_value(gamepads, binding)?;
+    let raw = gamepads.raw(binding)?;
     Some(match action {
         Action::Steer => binding.steer(raw),
         _ if action.analog() => binding.travel(raw, config.deadzone),
@@ -423,11 +479,7 @@ pub fn action_value(
     })
 }
 
-fn read_wheel(
-    config: Res<WheelConfig>,
-    gamepads: Query<(&Name, &Gamepad)>,
-    mut wheel: ResMut<WheelInput>,
-) {
+fn read_wheel(config: Res<WheelConfig>, gamepads: Gamepads, mut wheel: ResMut<WheelInput>) {
     let value = |action| action_value(&config, &gamepads, action);
     let held: Vec<Action> = Action::ALL
         .into_iter()
@@ -466,7 +518,7 @@ pub struct Capture(pub Option<Capturing>);
 
 pub struct Capturing {
     pub action: Action,
-    /// Each input's value when it was first seen during the capture: where it rests.
+    /// Each input's value when it was first reported during the capture: where it rests.
     start: Vec<(Entity, GamepadInput, f32)>,
     /// The pedal found so far, and its value farthest from rest.
     pedal: Option<(Entity, GamepadInput, f32, f32)>,
@@ -485,35 +537,29 @@ impl Capturing {
 /// Steering binds to the first axis turned well away from its starting value, buttons and
 /// shifter gates to the first button pressed, and pedals to the first axis pushed through
 /// most of its travel, once it's released again.
-fn capture(
-    mut capture: ResMut<Capture>,
-    mut config: ResMut<WheelConfig>,
-    gamepads: Query<(Entity, &Name, &Gamepad)>,
-) {
+fn capture(mut capture: ResMut<Capture>, mut config: ResMut<WheelConfig>, gamepads: Gamepads) {
     let Some(capturing) = &mut capture.0 else {
         return;
     };
     let action = capturing.action;
+    let binding = |name: &Name, input, rest, full| Binding {
+        device: name.to_string(),
+        input,
+        rest,
+        full,
+    };
     let mut found = None;
-    for (entity, name, gamepad) in &gamepads {
-        let binding = |input, rest, full| Binding {
-            device: name.to_string(),
-            input,
-            rest,
-            full,
-        };
-        // A handbrake can be a lever (an axis) or a button.
-        if !action.analog() || action == Action::Handbrake {
-            let button = gamepad.digital().get_just_pressed().next();
-            if let Some(&button) = button {
-                found = Some(binding(GamepadInput::Button(button), 0.0, 1.0));
-                continue;
-            }
-            if !action.analog() {
-                continue;
+    // A handbrake can be a lever (an axis) or a button.
+    if !action.analog() || action == Action::Handbrake {
+        for (_, name, gamepad) in &gamepads.gamepads {
+            if let Some(&button) = gamepad.digital().get_just_pressed().next() {
+                found = Some(binding(name, GamepadInput::Button(button), 0.0, 1.0));
             }
         }
-        for (&input, value) in gamepad.analog().all_axes_and_values() {
+    }
+    if action.analog() && found.is_none() {
+        for (entity, name, input, value) in gamepads.values() {
+            let binding = |input, rest, full| binding(name, input, rest, full);
             let start = match capturing
                 .start
                 .iter()
