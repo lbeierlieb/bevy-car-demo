@@ -118,6 +118,9 @@ pub struct Car {
     pub corners: [Corner; 4],
     pub drivetrain: Drivetrain,
     pub controls: Controls,
+    /// Torque of the front tires about the steering axes (N·m, positive turns the wheels
+    /// left), for force feedback.
+    pub steering_torque: f32,
 }
 
 impl Car {
@@ -154,6 +157,7 @@ impl Car {
             body,
             corners,
             controls: Controls::default(),
+            steering_torque: 0.0,
         }
     }
 

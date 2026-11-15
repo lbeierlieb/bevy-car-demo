@@ -2,22 +2,44 @@
 //! to the game's through sysfs, so the wheel's axis covers exactly that range, and set back
 //! when the game exits (on the newer bases it's a setting of the active tuning slot). On
 //! other systems there's nothing to find, and the range is set on the base by hand.
+//!
+//! Force feedback (Linux) is one constant-force effect on the wheel's evdev device, updated
+//! every chassis step with the front tires' self-aligning torque. Damping and friction are
+//! left to the base's own tuning menu, which filters at a far higher rate.
 
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 
-use crate::input::WheelConfig;
+use crate::car::{ActiveCar, Car};
+use crate::input::{Action, WheelConfig};
 
 /// Where hid-fanatecff lists its devices; each has a `range` file in degrees.
 const DRIVER_DIR: &str = "/sys/module/hid_fanatec/drivers/hid:fanatec";
+/// Steering torque (N·m about the steering axes) that drives the wheel at full force with
+/// the strength at 1. Near the limit the tires reach about 260 N·m.
+const FULL_SCALE: f32 = 300.0;
+/// Seconds for the force to ramp up after the wheel connects, the window gets focus or
+/// the car changes, so the wheel never jerks.
+const FADE_IN: f32 = 1.0;
+/// Fastest the force may change (full scale per second): kerbs, landings and crashes spike
+/// the tire forces, and a direct-drive base would pass that on as a hard jolt.
+const MAX_SLEW: f32 = 5.0;
+/// Speed (m/s) above which the tires' torque comes through in full: at a standstill their
+/// slips are just noise.
+const ROLLING: f32 = 3.0;
+/// Force of the panel's test push, and how long it lasts.
+const TEST_LEVEL: f32 = 0.25;
+const TEST_TIME: f32 = 0.5;
 
 pub struct WheelBasePlugin;
 
 impl Plugin for WheelBasePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WheelBase>()
-            .add_systems(Update, apply_range);
+            .init_resource::<ForceFeedback>()
+            .add_systems(Update, apply_range)
+            .add_systems(FixedUpdate, force_feedback.after(crate::sim::simulate));
     }
 }
 
@@ -81,6 +103,165 @@ fn apply_range(
     }
 }
 
+#[derive(Resource, Default)]
+pub struct ForceFeedback {
+    #[cfg(target_os = "linux")]
+    output: Option<linux::Output>,
+    /// Name of the device the force goes to, if one was found.
+    pub device: Option<String>,
+    /// Force last sent, -1 to 1 of the base's maximum (positive pushes the wheel left).
+    pub level: f32,
+    /// Time left in a test push from the panel.
+    pub test: f32,
+    fade: f32,
+    /// Time until looking for a device again.
+    retry: f32,
+    car: usize,
+}
+
+impl ForceFeedback {
+    /// Pushes the wheel left for a moment, to check the direction.
+    pub fn test_push(&mut self) {
+        self.test = TEST_TIME;
+    }
+}
+
+/// Force for a steering torque: positive (turning the front wheels left) pushes the wheel
+/// left; `fade` ramps it in.
+fn level(config: &WheelConfig, steering_torque: f32, fade: f32) -> f32 {
+    (config.ffb_gain * steering_torque / FULL_SCALE * fade).clamp(-1.0, 1.0)
+}
+
+fn force_feedback(
+    config: Res<WheelConfig>,
+    active: Res<ActiveCar>,
+    cars: Query<&Car>,
+    windows: Query<&Window>,
+    time: Res<Time>,
+    mut ffb: ResMut<ForceFeedback>,
+) {
+    let dt = time.delta_secs();
+    let device = config.binding(Action::Steer).map(|b| b.device.clone());
+    if ffb.device != device {
+        ffb.retry -= dt;
+        if ffb.retry <= 0.0 {
+            ffb.retry = 2.0;
+            #[cfg(target_os = "linux")]
+            {
+                ffb.output = device.as_deref().and_then(linux::Output::open);
+                ffb.device = ffb.output.as_ref().and(device);
+            }
+            ffb.fade = 0.0;
+        }
+    }
+    let focused = windows.iter().any(|window| window.focused);
+    let car = cars.iter().find(|car| car.index == active.0);
+    if !focused || !config.ffb_enabled || car.is_none_or(|car| car.index != ffb.car) {
+        ffb.fade = 0.0;
+        ffb.car = active.0;
+    } else {
+        ffb.fade = (ffb.fade + dt / FADE_IN).min(1.0);
+    }
+    let target = if ffb.test > 0.0 {
+        ffb.test -= dt;
+        TEST_LEVEL
+    } else {
+        car.map_or(0.0, |car| {
+            let rolling = (car.body.velocity.length() / ROLLING).min(1.0);
+            level(&config, car.steering_torque * rolling, ffb.fade)
+        })
+    };
+    // Smoothed a little, so the 120 Hz steps don't buzz, and rate-limited.
+    let max_step = MAX_SLEW * dt;
+    ffb.level += ((target - ffb.level) * 0.5).clamp(-max_step, max_step);
+    #[cfg(target_os = "linux")]
+    {
+        let sent = if config.ffb_invert {
+            -ffb.level
+        } else {
+            ffb.level
+        };
+        if let Some(output) = &mut ffb.output
+            && let Err(err) = output.set(sent)
+        {
+            warn!("Force feedback stopped: {err}");
+            ffb.output = None;
+            ffb.device = None;
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use evdev::{
+        FFEffect, FFEffectCode, FFEffectData, FFEffectKind, FFEnvelope, FFReplay, FFTrigger,
+    };
+
+    pub struct Output {
+        /// Kept open: the effect lives as long as the device.
+        _device: evdev::Device,
+        effect: FFEffect,
+        sent: i16,
+    }
+
+    impl Output {
+        /// The first input device with this name that can play a constant force.
+        pub fn open(name: &str) -> Option<Self> {
+            let (path, mut device) = evdev::enumerate().find(|(_, device)| {
+                device.name() == Some(name)
+                    && device
+                        .supported_ff()
+                        .is_some_and(|ff| ff.contains(FFEffectCode::FF_CONSTANT))
+            })?;
+            let mut effect = match device.upload_ff_effect(effect(0)) {
+                Ok(effect) => effect,
+                Err(err) => {
+                    bevy::log::warn!("No force feedback on {}: {err}", path.display());
+                    return None;
+                }
+            };
+            effect.play(1).ok()?;
+            Some(Self {
+                _device: device,
+                effect,
+                sent: 0,
+            })
+        }
+
+        /// Sets the force, -1 to 1.
+        pub fn set(&mut self, level: f32) -> std::io::Result<()> {
+            let level = (level * i16::MAX as f32) as i16;
+            if level != self.sent {
+                self.effect.update(effect(level))?;
+                self.sent = level;
+            }
+            Ok(())
+        }
+    }
+
+    /// A constant force that plays until it's removed (length 0).
+    fn effect(level: i16) -> FFEffectData {
+        FFEffectData {
+            direction: 0x4000,
+            trigger: FFTrigger::default(),
+            replay: FFReplay {
+                length: 0,
+                delay: 0,
+            },
+            kind: FFEffectKind::Constant {
+                level,
+                // No attack or fade: the level applies as it is.
+                envelope: FFEnvelope {
+                    attack_length: 0,
+                    attack_level: 0,
+                    fade_length: 0,
+                    fade_level: 0,
+                },
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,5 +283,19 @@ mod tests {
         drop(base);
         assert_eq!(read(), "900");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn force_follows_the_tires_and_fades_in() {
+        let config = WheelConfig {
+            ffb_gain: 0.5,
+            ..default()
+        };
+        // Turning left, the tires pull the wheels back to the right: the wheel is pushed
+        // right, and harder the more they pull, up to the base's maximum.
+        assert!(level(&config, -100.0, 1.0) < 0.0);
+        assert!(level(&config, -200.0, 1.0) < level(&config, -100.0, 1.0));
+        assert_eq!(level(&config, -10_000.0, 1.0), -1.0);
+        assert_eq!(level(&config, -100.0, 0.0), 0.0);
     }
 }

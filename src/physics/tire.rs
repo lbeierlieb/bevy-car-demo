@@ -18,6 +18,8 @@ pub struct TireParams {
     /// Magic Formula stiffness `B` and shape `C`, lateral (per radian of slip angle).
     pub b_lat: f32,
     pub c_lat: f32,
+    /// How far behind the contact centre the lateral force acts at small slip angles (m).
+    pub pneumatic_trail: f32,
 }
 
 impl Default for TireParams {
@@ -31,6 +33,7 @@ impl Default for TireParams {
             c_long: 1.6,
             b_lat: 12.0,
             c_lat: 1.4,
+            pneumatic_trail: 0.04,
         }
     }
 }
@@ -56,6 +59,14 @@ fn peak_slip(b: f32, c: f32) -> f32 {
 }
 
 impl TireParams {
+    /// Pneumatic trail at a slip: it shrinks as more of the contact patch slides and is
+    /// gone at the peak slip angle, so the self-aligning torque (lateral force times trail)
+    /// fades before the grip does. That's what makes the steering go light near the limit.
+    pub fn trail(&self, force: &TireForce) -> f32 {
+        let slip = (force.slip_angle / peak_slip(self.b_lat, self.c_lat)).abs();
+        self.pneumatic_trail * (1.0 - slip).max(0.0)
+    }
+
     /// Tire forces for a contact patch moving at (`vx` forward, `vy` right) with the wheel
     /// spinning at `omega` (rad/s, positive rolls forward) under normal load `fz`.
     pub fn force(&self, vx: f32, vy: f32, omega: f32, fz: f32) -> TireForce {

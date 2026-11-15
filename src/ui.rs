@@ -1,5 +1,6 @@
 //! Telemetry and live setup tuning for the active car.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::input::EguiWantsInput;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
@@ -10,7 +11,7 @@ use crate::debug::DebugView;
 use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_value, input_name};
 use crate::physics::suspension::AxleSetup;
 use crate::sim::{CHASSIS_HZ, SUBSTEPS};
-use crate::wheel_base::WheelBase;
+use crate::wheel_base::{ForceFeedback, WheelBase};
 
 const CORNER_NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
 
@@ -32,14 +33,21 @@ fn block_orbit(wants: Res<EguiWantsInput>, mut orbit: ResMut<OrbitInput>) {
     orbit.0 = !(wants.wants_pointer_input() || wants.is_pointer_over_area());
 }
 
+/// Everything the wheel section of the panel shows and changes.
+#[derive(SystemParam)]
+struct WheelPanel<'w, 's> {
+    config: ResMut<'w, WheelConfig>,
+    capture: ResMut<'w, Capture>,
+    gamepads: Gamepads<'w, 's>,
+    base: Res<'w, WheelBase>,
+    ffb: ResMut<'w, ForceFeedback>,
+}
+
 fn panel(
     mut contexts: EguiContexts,
     active: Res<ActiveCar>,
     mut cars: Query<&mut Car>,
-    mut config: ResMut<WheelConfig>,
-    mut capture: ResMut<Capture>,
-    gamepads: Gamepads,
-    base: Res<WheelBase>,
+    mut wheel_panel: WheelPanel,
 ) -> Result {
     let mut automatic = None;
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
@@ -48,6 +56,7 @@ fn panel(
     egui::Window::new(car.setup.name)
         .default_pos([10.0, 10.0])
         .default_width(340.0)
+        .vscroll(true)
         .show(contexts.ctx_mut()?, |ui| {
             ui.label(format!("{:.0} km/h", car.forward_speed() * 3.6));
             let gear = match car.drivetrain.selected_gear() {
@@ -70,7 +79,15 @@ fn panel(
             telemetry(ui, &car);
             ui.collapsing("Setup", |ui| setup(ui, &mut car));
             ui.collapsing("Wheel and pedals", |ui| {
-                wheel(ui, &mut config, &mut capture, &gamepads, &base);
+                let WheelPanel {
+                    config,
+                    capture,
+                    gamepads,
+                    base,
+                    ffb,
+                } = &mut wheel_panel;
+                wheel(ui, config, capture, gamepads, base);
+                force_feedback(ui, config, ffb);
             });
             ui.collapsing("Controls", |ui| {
                 ui.label("W/S or arrows: throttle, brake");
@@ -168,6 +185,40 @@ fn wheel(
         None => "Set the wheel base to this range (hid-fanatecff on Linux sets it itself)".into(),
     });
     ui.add(egui::Slider::new(&mut config.deadzone, 0.0..=0.15).text("Pedal dead zone"));
+}
+
+fn force_feedback(ui: &mut egui::Ui, config: &mut WheelConfig, ffb: &mut ForceFeedback) {
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.strong("Force feedback");
+        ui.checkbox(&mut config.ffb_enabled, "On");
+    });
+    let Some(device) = &ffb.device else {
+        ui.label("No force feedback device: bind the steering to a wheel (Linux only).");
+        return;
+    };
+    ui.label(format!("On {device}"));
+    ui.add(egui::Slider::new(&mut config.ffb_gain, 0.0..=1.0).text("Strength"));
+    let side = if ffb.level >= 0.0 { "left" } else { "right" };
+    let clipping = ffb.level.abs() > 0.99;
+    ui.add(
+        egui::ProgressBar::new(ffb.level.abs())
+            .desired_width(200.0)
+            .fill(if clipping {
+                egui::Color32::from_rgb(200, 50, 40)
+            } else {
+                egui::Color32::from_rgb(60, 110, 170)
+            })
+            .text(format!("{:.0} % {side}", ffb.level.abs() * 100.0)),
+    )
+    .on_hover_text("Red when the force is clipped at the base's maximum: lower the strength");
+    ui.horizontal(|ui| {
+        if ui.button("Test: push left").clicked() {
+            ffb.test_push();
+        }
+        ui.checkbox(&mut config.ffb_invert, "Reverse direction")
+            .on_hover_text("Tick if the test pushes the wheel to the right");
+    });
 }
 
 fn telemetry(ui: &mut egui::Ui, car: &Car) {

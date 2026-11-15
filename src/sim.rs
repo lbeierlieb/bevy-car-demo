@@ -13,6 +13,8 @@ use crate::terrain::Terrain;
 pub const CHASSIS_HZ: f64 = 120.0;
 pub const SUBSTEPS: usize = 10;
 const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
+/// Distance the front tires' contact points trail the steering axes (from caster, m).
+const MECHANICAL_TRAIL: f32 = 0.015;
 
 pub struct SimPlugin;
 
@@ -23,7 +25,7 @@ impl Plugin for SimPlugin {
     }
 }
 
-fn simulate(time: Res<Time>, terrain: Res<Terrain>, mut cars: Query<&mut Car>) {
+pub fn simulate(time: Res<Time>, terrain: Res<Terrain>, mut cars: Query<&mut Car>) {
     for mut car in &mut cars {
         step_car(&mut car, &terrain, time.delta_secs());
     }
@@ -36,6 +38,7 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
         setup,
         body,
         corners,
+        steering_torque,
         ..
     } = car;
     let corner_mass = setup.sprung_mass / 4.0;
@@ -63,6 +66,14 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
             );
         }
     }
+    // The front tires' lateral forces act behind the steering axes, turning the wheels
+    // towards where they're rolling: self-aligning torque.
+    *steering_torque = corners
+        .iter()
+        .filter(|corner| corner.front)
+        .filter_map(|corner| corner.contact)
+        .map(|contact| (setup.front.tire.trail(&contact.tire) + MECHANICAL_TRAIL) * contact.tire.fy)
+        .sum();
     body.add_force(force / SUBSTEPS as f32 + GRAVITY * body.mass);
     body.add_torque(torque / SUBSTEPS as f32);
     body.integrate(dt);
@@ -164,6 +175,12 @@ mod tests {
         };
         let before = heading(car.body.rotation);
         run(&mut car, &terrain, 1.0);
+        // The tires pull the steering back towards straight ahead.
+        assert!(
+            car.steering_torque < -10.0,
+            "steering torque {}",
+            car.steering_torque
+        );
         // Positive steer turns left, i.e. increases the heading angle (wrapped to ±π).
         let turned = (heading(car.body.rotation) - before + std::f32::consts::PI)
             .rem_euclid(std::f32::consts::TAU)

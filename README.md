@@ -111,6 +111,17 @@ an H-shifter is bound, the paddles and Q/E don't shift. The game only knows wher
 control is once it has moved: if the lever is already in a gear when the game starts,
 it notices at the first move (until then, the gearbox is in neutral).
 
+**Force feedback** (Linux, through the kernel's evdev interface, e.g. with
+hid-fanatecff) comes from the front tires: their side force acts a few centimetres
+behind the steering axes, pulling the wheel back towards where the car is going.
+That trail shrinks as the tires start to slide, so the wheel goes light before the
+front lets go. The force starts at half strength, ramps in over a second, and drops
+to zero while the window is in the background. It's rate-limited (full force takes
+a fifth of a second), so kerbs and crashes don't jolt a direct-drive wheel. Click
+**Test: push left** once: if the wheel turns right, tick **Reverse direction**.
+Damping and friction come from the wheel base's own tuning menu (on Fanatec bases:
+NDP, NFR, INT).
+
 Gizmo colours: yellow for A-arm links, white for uprights, red for coilovers,
 green for the raycast and contact point, blue for tire normal force, magenta for
 tire grip force, cyan for roll centres.
@@ -126,7 +137,7 @@ tire grip force, cyan for roll centres.
 | `src/sim.rs` | Multi-rate loop, controls to wheel torques, driving tests |
 | `src/car.rs` | Setups, spawning, keyboard and wheel to controls |
 | `src/input.rs` | Wheel, pedal and shifter bindings, config file |
-| `src/wheel_base.rs` | Sets the wheel base's rotation range (Linux, hid-fanatecff) |
+| `src/wheel_base.rs` | Wheel base rotation range and force feedback (Linux) |
 | `src/terrain.rs` | Baked map loading, terrain and road meshes, raycast, spawns |
 | `src/buildings.rs` | Low-poly houses from the OSM building outlines (visual only) |
 | `src/trees.rs` | Trees in forest areas and bushes on scrub (visual only) |
