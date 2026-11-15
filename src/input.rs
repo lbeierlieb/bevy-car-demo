@@ -479,6 +479,11 @@ impl Gamepads<'_, '_> {
             })
     }
 
+    /// Whether a device with the binding's name is connected.
+    fn connected(&self, binding: &Binding) -> bool {
+        self.gamepads.iter().any(|(_, name, _)| binding.is_on(name))
+    }
+
     /// Raw value of a bound input: from the first device with that name that has reported
     /// it (some wheel bases register a second, silent device under the same name).
     fn raw(&self, binding: &Binding) -> Option<f32> {
@@ -514,10 +519,13 @@ fn read_wheel(config: Res<WheelConfig>, gamepads: Gamepads, mut wheel: ResMut<Wh
         .collect();
     let pressed = |action| held.contains(&action) && !wheel.held.contains(&action);
     // Each gate is a button held while the lever is in it: the gear is whichever is held.
+    // A shifter that isn't connected doesn't count, so Q/E and the paddles shift instead.
     let gates = (1..=6).chain([-1]);
-    let shifter_bound = gates
-        .clone()
-        .any(|gear| config.binding(Action::Gate(gear)).is_some());
+    let shifter_bound = gates.clone().any(|gear| {
+        config
+            .binding(Action::Gate(gear))
+            .is_some_and(|binding| gamepads.connected(binding))
+    });
     let shifter = shifter_bound.then(|| {
         gates
             .clone()
@@ -691,6 +699,27 @@ mod tests {
         assert_eq!(pedal(-1.0, 1.0).travel(0.97, 0.02), 1.0);
         // Steering uses the whole axis; `full` only gives the direction.
         assert_eq!(pedal(0.0, -0.3).steer(-0.5), 0.5);
+    }
+
+    #[test]
+    fn disconnected_shifter_leaves_shifting_to_the_keys() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut config = WheelConfig::default();
+        config.bind(
+            Action::Gate(1),
+            Binding {
+                device: "Fanatec FANATEC Wheel".into(),
+                input: GamepadInput::Button(GamepadButton::Other(300)),
+                rest: 0.0,
+                full: 1.0,
+            },
+        );
+        let mut world = World::new();
+        world.insert_resource(config);
+        world.init_resource::<Reported>();
+        world.init_resource::<WheelInput>();
+        world.run_system_once(read_wheel).unwrap();
+        assert_eq!(world.resource::<WheelInput>().shifter, None);
     }
 
     #[test]
