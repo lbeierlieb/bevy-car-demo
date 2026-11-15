@@ -139,6 +139,18 @@ impl Drivetrain {
         self.shift.map_or(self.gear, |(gear, _)| gear)
     }
 
+    /// A manual shift `steps` gears up (or down if negative), within R..=top gear.
+    /// Reverse only engages when the car is (nearly) stopped (`speed` in m/s), and
+    /// downshifts that would over-rev the engine are refused.
+    pub fn shift_by(&mut self, engine: &EngineSetup, steps: i8, wheel_omega: f32, speed: f32) {
+        let gear = self.selected_gear();
+        let target = (gear + steps).clamp(-1, engine.top_gear());
+        let over_rev = target > 0 && engine.rpm_in(target, wheel_omega) > engine.redline_rpm;
+        if target != gear && !over_rev && (target >= 0 || speed.abs() < 2.0) {
+            self.shift_to(engine, target);
+        }
+    }
+
     /// Starts a gear change; the clutch opens for `shift_time`.
     pub fn shift_to(&mut self, engine: &EngineSetup, gear: i8) {
         let gear = gear.clamp(-1, engine.top_gear());
@@ -264,6 +276,32 @@ mod tests {
         let speed = drive(&mut drivetrain, &engine, 1.0, 3.0);
         assert!(speed > 8.0, "speed {speed}");
         assert!(drivetrain.locked);
+    }
+
+    #[test]
+    fn manual_shifts_stay_within_the_gears() {
+        let engine = EngineSetup::default();
+        let mut drivetrain = Drivetrain::new(&engine);
+        // Up past top gear (at a speed where top gear is fine) stays in top gear.
+        let omega = 80.0;
+        for _ in 0..8 {
+            drivetrain.shift_by(&engine, 1, omega, 26.0);
+        }
+        assert_eq!(drivetrain.selected_gear(), engine.top_gear());
+        // Down into first at that speed would over-rev: refused at a gear that doesn't.
+        for _ in 0..8 {
+            drivetrain.shift_by(&engine, -1, omega, 26.0);
+        }
+        let gear = drivetrain.selected_gear();
+        assert!(
+            gear >= 2 && engine.rpm_in(gear, omega) <= engine.redline_rpm,
+            "gear {gear}"
+        );
+        // Stopped: down through first and neutral to reverse, and no further.
+        for _ in 0..10 {
+            drivetrain.shift_by(&engine, -1, 0.0, 0.0);
+        }
+        assert_eq!(drivetrain.selected_gear(), -1);
     }
 
     #[test]

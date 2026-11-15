@@ -254,15 +254,12 @@ fn drive(
             }
             (go, stop)
         } else {
-            // Q/E shift down/up. Reverse only engages (nearly) stopped, and downshifts
-            // that would over-rev the engine are refused.
-            let target = gear + keys.just_pressed(KeyCode::KeyE) as i8
-                - keys.just_pressed(KeyCode::KeyQ) as i8;
-            let wheel_omega = (corners[2].omega + corners[3].omega) / 2.0;
-            let over_rev =
-                target > 0 && setup.engine.rpm_in(target, wheel_omega) > setup.engine.redline_rpm;
-            if target != gear && !over_rev && (target >= 0 || speed.abs() < 2.0) {
-                drivetrain.shift_to(&setup.engine, target);
+            // Q/E shift down/up.
+            let steps =
+                keys.just_pressed(KeyCode::KeyE) as i8 - keys.just_pressed(KeyCode::KeyQ) as i8;
+            if steps != 0 {
+                let wheel_omega = (corners[2].omega + corners[3].omega) / 2.0;
+                drivetrain.shift_by(&setup.engine, steps, wheel_omega, speed);
             }
             (forward, back)
         };
