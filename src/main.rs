@@ -2,6 +2,7 @@ mod audio;
 mod buildings;
 mod camera;
 mod car;
+mod cockpit;
 mod debug;
 mod hud;
 mod physics;
@@ -39,6 +40,7 @@ fn main() {
             sim::SimPlugin,
             car::CarPlugin,
             visuals::VisualsPlugin,
+            cockpit::CockpitPlugin,
             camera::CameraPlugin,
             debug::DebugPlugin,
             ui::UiPlugin,

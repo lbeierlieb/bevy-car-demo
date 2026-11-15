@@ -35,8 +35,7 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
     };
     let engine = &car.setup.engine;
     let rpm = car.drivetrain.rpm;
-    // The scale ends a whole thousand above the redline.
-    let top = (engine.redline_rpm / 1000.0).ceil() * 1000.0 + 1000.0;
+    let top = engine.rev_scale();
     let gear = match car.drivetrain.selected_gear() {
         -1 => "R".to_string(),
         0 => "N".to_string(),

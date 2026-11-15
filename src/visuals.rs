@@ -139,7 +139,7 @@ fn pose_parts(cars: Query<&Car>, mut parts: Query<(&Part, &ChildOf, &mut Transfo
 }
 
 /// A unit cube stretched into a bar from `a` to `b`.
-fn bar(a: Vec3, b: Vec3, thickness: f32) -> Transform {
+pub(crate) fn bar(a: Vec3, b: Vec3, thickness: f32) -> Transform {
     let d = b - a;
     Transform {
         translation: (a + b) / 2.0,

@@ -104,6 +104,11 @@ impl EngineSetup {
     pub fn top_gear(&self) -> i8 {
         self.gears.len() as i8
     }
+
+    /// End of a rev counter's scale: a whole thousand above the redline.
+    pub fn rev_scale(&self) -> f32 {
+        (self.redline_rpm / 1000.0).ceil() * 1000.0 + 1000.0
+    }
 }
 
 #[derive(Clone, Debug)]

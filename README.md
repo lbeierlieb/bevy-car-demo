@@ -46,6 +46,8 @@ A small Bevy demo of car simulation techniques:
   and a telemetry panel with live-tunable springs, dampers, camber, arm geometry,
   tire parameters and brakes (torque and front/rear split). A HUD in the bottom
   right shows speed and gear inside a rev counter.
+- A driver's view (C) from inside a low-poly cockpit, with a steering wheel that
+  turns and a working rev counter and speedometer on the dashboard.
 
 ## Running
 
@@ -98,6 +100,7 @@ tire grip force, cyan for roll centres.
 | `src/visuals.rs` | Procedural meshes posed from the simulation |
 | `src/debug.rs`, `src/ui.rs`, `src/camera.rs` | Gizmos, telemetry panel, chase and driver cameras |
 | `src/hud.rs` | Speed, gear and rev counter HUD |
+| `src/cockpit.rs` | Interior for the driver's view: dashboard, steering wheel, gauges |
 
 ## Baking another location
 
