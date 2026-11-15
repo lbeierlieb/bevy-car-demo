@@ -90,8 +90,11 @@ fn apply_range(
     time: Res<Time>,
     mut base: ResMut<WheelBase>,
     mut pending: Local<Option<f32>>,
+    mut wanted: Local<Option<f32>>,
 ) {
-    if config.is_changed() && base.applied != Some(config.range) || !connected.is_empty() {
+    // Compared by value: the open settings panel marks the config changed every frame.
+    if *wanted != Some(config.range) || !connected.is_empty() {
+        *wanted = Some(config.range);
         *pending = Some(0.3);
     }
     if let Some(left) = &mut *pending {
