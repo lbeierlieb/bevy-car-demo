@@ -6,7 +6,7 @@ pub struct ShotPlugin;
 impl Plugin for ShotPlugin {
     fn build(&self, app: &mut App) {
         if std::env::var("SHOT").is_ok() {
-            app.add_systems(Update, shot);
+            app.add_systems(PreUpdate, shot.after(bevy::input::InputSystems));
             app.add_systems(PostUpdate, forest_cam.before(bevy::transform::TransformSystems::Propagate));
         }
     }
@@ -27,7 +27,7 @@ fn shot(mut commands: Commands, mut frame: Local<u32>, mut exit: MessageWriter<A
 }
 
 fn key(c: char) -> KeyCode {
-    match c { 'w' => KeyCode::KeyW, 'a' => KeyCode::KeyA, 'd' => KeyCode::KeyD, 's' => KeyCode::KeyS, 't' => KeyCode::Tab, 'f' => KeyCode::F1, 'c' => KeyCode::KeyC, _ => KeyCode::Space }
+    match c { 'w' => KeyCode::KeyW, 'a' => KeyCode::KeyA, 'd' => KeyCode::KeyD, 's' => KeyCode::KeyS, 't' => KeyCode::Tab, 'f' => KeyCode::F1, 'c' => KeyCode::KeyC, 'k' => KeyCode::KeyK, _ => KeyCode::Space }
 }
 
 /// CAM="distance,height": look at the forest edge nearest the spawn from that offset.
