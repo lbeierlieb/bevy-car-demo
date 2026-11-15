@@ -49,6 +49,7 @@ targets and runs clippy, rustfmt, nixfmt and deadnix.
 | Tab | Switch car |
 | R | Reset car |
 | F1 / F2 | Toggle gizmos / telemetry panel |
+| M | Mute engine sound |
 | Left-drag, scroll | Orbit and zoom the camera |
 
 Gizmo colours: yellow for A-arm links, white for uprights, red for coilovers,

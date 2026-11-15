@@ -1,3 +1,4 @@
+mod audio;
 mod buildings;
 mod camera;
 mod car;
@@ -38,6 +39,7 @@ fn main() {
             camera::CameraPlugin,
             debug::DebugPlugin,
             ui::UiPlugin,
+            audio::AudioPlugin,
         ))
         .add_systems(Startup, setup)
         .run();
