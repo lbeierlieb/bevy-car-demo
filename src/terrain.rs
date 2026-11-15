@@ -36,6 +36,14 @@ pub struct Terrain {
     /// Heights at the grid vertices, `(cells + 1)²`, row-major in z.
     heights: Vec<f32>,
     pub roads: Vec<Road>,
+    pub buildings: Vec<Building>,
+}
+
+pub struct Building {
+    /// Storeys tagged in OSM, or 0 if unknown.
+    pub levels: f32,
+    /// Footprint outline in the xz plane.
+    pub outline: Vec<Vec2>,
 }
 
 pub struct RayHit {
@@ -49,7 +57,7 @@ impl Terrain {
     pub fn baked() -> Self {
         let mut r = Bytes(BAKED);
         assert_eq!(r.take(4), b"CSTR", "not a baked terrain file");
-        assert_eq!(r.u32(), 1, "unsupported terrain version");
+        assert_eq!(r.u32(), 2, "unsupported terrain version");
         let cells = r.u32() as usize;
         let cell = r.f32();
         let mut heights: Vec<f32> = (0..(cells + 1) * (cells + 1)).map(|_| r.f32()).collect();
@@ -63,6 +71,13 @@ impl Terrain {
                     width,
                     points,
                 }
+            })
+            .collect();
+        let buildings = (0..r.u32())
+            .map(|_| {
+                let levels = r.f32();
+                let outline = (0..r.u32()).map(|_| Vec2::new(r.f32(), r.f32())).collect();
+                Building { levels, outline }
             })
             .collect();
 
@@ -80,6 +95,7 @@ impl Terrain {
             cell,
             heights,
             roads,
+            buildings,
         }
     }
 
@@ -272,18 +288,24 @@ impl Bytes {
     }
 }
 
-/// Accumulates flat-shaded, vertex-coloured triangles, wound to face upward.
+/// Accumulates flat-shaded, vertex-coloured triangles.
 #[derive(Default)]
-struct FlatMesh {
+pub struct FlatMesh {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
 }
 
 impl FlatMesh {
-    fn triangle(&mut self, [a, mut b, mut c]: [Vec3; 3], color: [f32; 4]) {
+    /// A triangle wound to face upward.
+    pub fn triangle(&mut self, tri: [Vec3; 3], color: [f32; 4]) {
+        self.facing(tri, color, Vec3::Y);
+    }
+
+    /// A triangle wound so that its normal points to the same side as `outward`.
+    pub fn facing(&mut self, [a, mut b, mut c]: [Vec3; 3], color: [f32; 4], outward: Vec3) {
         let mut normal = (b - a).cross(c - a).normalize_or_zero();
-        if normal.y < 0.0 {
+        if normal.dot(outward) < 0.0 {
             (b, c, normal) = (c, b, -normal);
         }
         for v in [a, b, c] {
@@ -293,7 +315,7 @@ impl FlatMesh {
         }
     }
 
-    fn build(self) -> Mesh {
+    pub fn build(self) -> Mesh {
         let indices = (0..self.positions.len() as u32).collect();
         Mesh::new(
             PrimitiveTopology::TriangleList,

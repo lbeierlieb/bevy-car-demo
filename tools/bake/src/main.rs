@@ -140,7 +140,15 @@ fn road_width(highway: &str) -> Option<f64> {
     })
 }
 
-fn fetch_roads(projection: &Projection, half_size: f64) -> Result<Vec<Road>, Error> {
+struct Building {
+    /// `building:levels` from OSM, or 0 if not tagged.
+    levels: f64,
+    /// Outline in local metres, not closed.
+    points: Vec<(f64, f64)>,
+}
+
+/// Drivable roads (split where they leave the map) and building outlines.
+fn fetch_osm(projection: &Projection, half_size: f64) -> Result<(Vec<Road>, Vec<Building>), Error> {
     let (lat_min, lon_min) = projection.to_geo(-half_size, half_size);
     let (lat_max, lon_max) = projection.to_geo(half_size, -half_size);
     let url = format!(
@@ -191,12 +199,25 @@ fn fetch_roads(projection: &Projection, half_size: f64) -> Result<Vec<Road>, Err
 
     let inside = |&(x, z): &(f64, f64)| x.abs() < half_size && z.abs() < half_size;
     let mut roads = Vec::new();
+    let mut buildings = Vec::new();
     for (refs, tags) in ways {
+        let mut points: Vec<_> = refs.iter().filter_map(|r| nodes.get(r).copied()).collect();
+        if tags.contains_key("building") {
+            // Closed outline: drop the repeated first point; keep only buildings fully on the map.
+            points.pop();
+            if points.len() >= 3 && points.iter().all(inside) {
+                let levels = tags
+                    .get("building:levels")
+                    .and_then(|l| l.parse().ok())
+                    .unwrap_or(0.0);
+                buildings.push(Building { levels, points });
+            }
+            continue;
+        }
         let Some(width) = tags.get("highway").and_then(|h| road_width(h)) else {
             continue;
         };
         let paved = tags["highway"] != "track";
-        let points: Vec<_> = refs.iter().filter_map(|r| nodes.get(r).copied()).collect();
         // Split the way wherever it leaves the map.
         for run in points.split(|p| !inside(p)).filter(|run| run.len() >= 2) {
             roads.push(Road {
@@ -206,7 +227,7 @@ fn fetch_roads(projection: &Projection, half_size: f64) -> Result<Vec<Road>, Err
             });
         }
     }
-    Ok(roads)
+    Ok((roads, buildings))
 }
 
 /// Resamples a polyline at roughly `ROAD_STEP` spacing, keeping the original vertices.
@@ -255,7 +276,7 @@ fn main() -> Result<(), Error> {
         .collect();
 
     // Roads: resample, then smooth each road's height profile along its length.
-    let mut roads = fetch_roads(&projection, half_size)?;
+    let (mut roads, buildings) = fetch_osm(&projection, half_size)?;
     let mut profiles = Vec::new();
     for road in &mut roads {
         road.points = resample(&road.points);
@@ -301,12 +322,14 @@ fn main() -> Result<(), Error> {
 
     // Write (all little-endian): b"CSTR", version u32, cells u32, cell size f32,
     // (cells + 1)² heights f32 relative to the lowest point (row-major, rows along z),
-    // road count u32, then per road: paved u8, width f32, point count u32, points (x, z) f32.
+    // road count u32, then per road: paved u8, width f32, point count u32, points (x, z) f32,
+    // building count u32, then per building: levels f32 (0: unknown), point count u32,
+    // outline points (x, z) f32.
     let base = heights.iter().copied().fold(f64::INFINITY, f64::min);
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&1u32.to_le_bytes());
+    put(&2u32.to_le_bytes());
     put(&(cells as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
     for h in &heights {
@@ -322,10 +345,20 @@ fn main() -> Result<(), Error> {
             put(&(z as f32).to_le_bytes());
         }
     }
+    put(&(buildings.len() as u32).to_le_bytes());
+    for building in &buildings {
+        put(&(building.levels as f32).to_le_bytes());
+        put(&(building.points.len() as u32).to_le_bytes());
+        for &(x, z) in &building.points {
+            put(&(x as f32).to_le_bytes());
+            put(&(z as f32).to_le_bytes());
+        }
+    }
     std::fs::write(out, &bytes)?;
     eprintln!(
-        "wrote {out}: {cells}x{cells} cells of {CELL} m, {} roads, relief {:.1} m, {} KiB",
+        "wrote {out}: {cells}x{cells} cells of {CELL} m, {} roads, {} buildings, relief {:.1} m, {} KiB",
         roads.len(),
+        buildings.len(),
         heights.iter().copied().fold(f64::NEG_INFINITY, f64::max) - base,
         bytes.len() / 1024
     );

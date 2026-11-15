@@ -19,9 +19,10 @@ A small Bevy demo of car simulation techniques:
   from a simplified Pacejka Magic Formula, with combined slip normalised by peak
   slip. Wheel spin is updated implicitly, which keeps it stable.
 - **Real-world low-poly terrain**: a 1.6 km square around the village of Gerach
-  (96161, Bavaria), with its drivable roads from OpenStreetMap. The terrain is
-  flattened under the roads so they're smooth to drive on. The height and raycast
-  queries use the exact rendered triangles.
+  (96161, Bavaria), with its drivable roads and buildings from OpenStreetMap. The
+  terrain is flattened under the roads so they're smooth to drive on. Houses are
+  boxes with gable roofs fitted to each footprint; they're visual only, with no
+  collisions. The height and raycast queries use the exact rendered triangles.
 - Three setups (baseline, soft, track), debug gizmos for the linkage and forces,
   and a telemetry panel with live-tunable springs, dampers, camber, arm geometry
   and tire parameters.
@@ -64,6 +65,7 @@ tire grip force, cyan for roll centres.
 | `src/sim.rs` | Multi-rate loop, drivetrain, driving tests |
 | `src/car.rs` | Setups, spawning, keyboard input |
 | `src/terrain.rs` | Baked map loading, terrain and road meshes, raycast, spawns |
+| `src/buildings.rs` | Low-poly houses from the OSM building outlines (visual only) |
 | `tools/bake` | Separate crate that bakes `assets/*.terrain` from online data |
 | `src/visuals.rs` | Procedural meshes posed from the simulation |
 | `src/debug.rs`, `src/ui.rs`, `src/camera.rs` | Gizmos, telemetry panel, chase camera |

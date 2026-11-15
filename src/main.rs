@@ -1,3 +1,4 @@
+mod buildings;
 mod camera;
 mod car;
 mod debug;
@@ -30,6 +31,7 @@ fn main() {
         })
         .add_plugins((
             terrain::TerrainPlugin,
+            buildings::BuildingsPlugin,
             sim::SimPlugin,
             car::CarPlugin,
             visuals::VisualsPlugin,
