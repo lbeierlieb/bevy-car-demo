@@ -228,6 +228,8 @@ fn drive(
             (true, false) => (1.0, 0.0),
             (false, true) if speed > 1.0 => (0.0, 1.0),
             (false, true) => (-0.5, 0.0),
+            // Hill hold: without input, keep a (nearly) stopped car from rolling away.
+            _ if speed.abs() < 2.0 => (0.0, 1.0),
             _ => (0.0, 0.0),
         };
         c.handbrake = keys.pressed(KeyCode::Space);
