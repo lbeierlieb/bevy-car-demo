@@ -123,6 +123,8 @@ fn wheel(
     gamepads: &Gamepads,
     base: &WheelBase,
 ) {
+    ui.checkbox(&mut config.enabled, "Use wheel and pedals")
+        .on_hover_text("Untick to drive with the keyboard only; the bindings are kept");
     let names = gamepads.names();
     if names.is_empty() {
         ui.label("No wheel or gamepad connected.");

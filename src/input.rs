@@ -151,6 +151,8 @@ const STORAGE_KEY: &str = "car-sim-wheel";
 /// Wheel bindings and settings.
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct WheelConfig {
+    /// Whether the bound controls are read at all (off: keyboard only).
+    pub enabled: bool,
     pub bindings: Vec<(Action, Binding)>,
     /// Steering wheel rotation lock to lock (degrees). Full steering lock of the car's front
     /// wheels is at either end, and the wheel base is set to this range.
@@ -166,6 +168,7 @@ pub struct WheelConfig {
 impl Default for WheelConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             bindings: Vec::new(),
             range: 540.0,
             deadzone: 0.02,
@@ -204,8 +207,13 @@ impl WheelConfig {
 
     fn to_text(&self) -> String {
         let mut text = format!(
-            "# car-sim wheel settings\nrange {}\ndeadzone {}\nffb_gain {}\nffb_enabled {}\nffb_invert {}\n",
-            self.range, self.deadzone, self.ffb_gain, self.ffb_enabled, self.ffb_invert
+            "# car-sim wheel settings\nenabled {}\nrange {}\ndeadzone {}\nffb_gain {}\nffb_enabled {}\nffb_invert {}\n",
+            self.enabled,
+            self.range,
+            self.deadzone,
+            self.ffb_gain,
+            self.ffb_enabled,
+            self.ffb_invert
         );
         // Bindings: action, input, rest and full values, and the device name (may contain
         // spaces, so it's last).
@@ -231,6 +239,7 @@ impl WheelConfig {
                 continue;
             };
             match key {
+                "enabled" => config.enabled = value.parse().unwrap_or(config.enabled),
                 "range" => config.range = value.parse().unwrap_or(config.range),
                 "deadzone" => config.deadzone = value.parse().unwrap_or(config.deadzone),
                 "ffb_gain" => config.ffb_gain = value.parse().unwrap_or(config.ffb_gain),
@@ -489,6 +498,10 @@ pub fn action_value(config: &WheelConfig, gamepads: &Gamepads, action: Action) -
 }
 
 fn read_wheel(config: Res<WheelConfig>, gamepads: Gamepads, mut wheel: ResMut<WheelInput>) {
+    if !config.enabled {
+        *wheel = WheelInput::default();
+        return;
+    }
     let value = |action| action_value(&config, &gamepads, action);
     let held: Vec<Action> = Action::ALL
         .into_iter()
@@ -629,6 +642,7 @@ mod tests {
     #[test]
     fn config_round_trips_through_text() {
         let mut config = WheelConfig {
+            enabled: false,
             range: 720.0,
             ffb_gain: 0.35,
             ffb_invert: true,

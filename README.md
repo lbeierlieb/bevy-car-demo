@@ -91,7 +91,8 @@ keeps working alongside. Open the panel (F2), expand "Wheel and pedals", and cli
 **Bind** next to each control, then move it: turn the wheel left, press a pedal fully
 and release it, press a button. Pedals can rest at either end of their axis. The
 bindings and settings are saved to `~/.config/car-sim/wheel.cfg` (on the web, in the
-browser's local storage).
+browser's local storage). Untick **Use wheel and pedals** at the top of the section to drive
+with the keyboard only (the bindings are kept, and force feedback stops).
 
 The wheel steers the front wheels directly at a fixed ratio: either end of the
 rotation range is full lock, and the steering wheel in the cockpit turns with yours.
