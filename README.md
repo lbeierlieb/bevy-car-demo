@@ -101,7 +101,8 @@ the game sets Fanatec wheel bases to the range on the slider (540° by default) 
 restores their own range on exit; otherwise set the base to the same range by hand.
 Writing the range needs the driver's udev rules (your user in the `games` group). The
 paddles shift like Q/E (in automatic mode they select reverse or drive at a stop).
-Buttons can also be bound to the camera view (like C) and the map (like K).
+Buttons can also be bound to resetting the car (like R), the camera view (like C) and
+the map (like K).
 
 With a clutch pedal bound, you work the clutch: let it out to pull away, and press
 it to change gear at once (without pressing it, the paddles still shift with the

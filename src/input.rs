@@ -41,12 +41,13 @@ pub enum Action {
     /// An H-shifter gate: -1 for reverse, 1..=6 forward. Held while the lever is in it.
     Gate(i8),
     Ignition,
+    Reset,
     View,
     Map,
 }
 
 impl Action {
-    pub const ALL: [Action; 17] = [
+    pub const ALL: [Action; 18] = [
         Action::Steer,
         Action::Throttle,
         Action::Brake,
@@ -62,6 +63,7 @@ impl Action {
         Action::Gate(5),
         Action::Gate(6),
         Action::Ignition,
+        Action::Reset,
         Action::View,
         Action::Map,
     ];
@@ -79,6 +81,7 @@ impl Action {
             Action::Gate(-1) => "gate_r".into(),
             Action::Gate(gear) => format!("gate_{gear}"),
             Action::Ignition => "ignition".into(),
+            Action::Reset => "reset".into(),
             Action::View => "view".into(),
             Action::Map => "map".into(),
         }
@@ -96,6 +99,7 @@ impl Action {
             Action::Gate(-1) => "Shifter R".into(),
             Action::Gate(gear) => format!("Shifter {gear}"),
             Action::Ignition => "Ignition".into(),
+            Action::Reset => "Reset car".into(),
             Action::View => "Camera view".into(),
             Action::Map => "Map".into(),
         }
@@ -397,6 +401,7 @@ pub struct WheelInput {
     pub shift_up: bool,
     pub shift_down: bool,
     pub ignition: bool,
+    pub reset: bool,
     pub view: bool,
     pub map: bool,
     /// With an H-shifter bound: the gate the lever is in, or neutral (0) between gates.
@@ -528,6 +533,7 @@ fn read_wheel(config: Res<WheelConfig>, gamepads: Gamepads, mut wheel: ResMut<Wh
         shift_up: pressed(Action::ShiftUp),
         shift_down: pressed(Action::ShiftDown),
         ignition: pressed(Action::Ignition),
+        reset: pressed(Action::Reset),
         view: pressed(Action::View),
         map: pressed(Action::Map),
         shifter,

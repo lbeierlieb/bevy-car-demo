@@ -319,11 +319,12 @@ fn drive(
 
 fn reset_car(
     keys: Res<ButtonInput<KeyCode>>,
+    wheel: Res<WheelInput>,
     active: Res<ActiveCar>,
     terrain: Res<Terrain>,
     mut cars: Query<&mut Car>,
 ) {
-    if keys.just_pressed(KeyCode::KeyR) {
+    if keys.just_pressed(KeyCode::KeyR) || wheel.reset {
         for mut car in cars.iter_mut().filter(|car| car.index == active.0) {
             car.reset(&terrain);
         }
