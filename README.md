@@ -18,6 +18,13 @@ A small Bevy demo of car simulation techniques:
   terrain triangles. Tire load comes from carcass stiffness and damping. Forces come
   from a simplified Pacejka Magic Formula, with combined slip normalised by peak
   slip. Wheel spin is updated implicitly, which keeps it stable.
+- **Engine and gearbox**: an engine with a torque curve, idle control, engine
+  braking and a soft rev limiter drives the rear wheels through a six-speed gearbox
+  and an open differential. Once the clutch locks, the engine turns with the wheels
+  and its inertia is added to theirs, so the wheel-spin update stays implicit. The
+  clutch slips when pulling away and closes gradually after each 0.25 s shift, during
+  which the throttle is cut. Gears are shifted by hand by default; the automatic
+  shifts by rpm and throttle. The engine sound follows engine rpm.
 - **Real-world low-poly terrain**: a 9.1 × 5.2 km area of Upper Franconia,
   from Gerach (96161, Bavaria), Mauschendorf and Sendelbach in the west to
   Rattelsdorf in the east, with Reckendorf, Laimbach, Höfen and Freudeneck in
@@ -54,7 +61,9 @@ targets and runs clippy, rustfmt, nixfmt and deadnix.
 
 | Key | Action |
 | --- | --- |
-| W / S, arrows | Throttle; brake, then reverse (a stopped car holds on hills) |
+| W / S, arrows | Throttle; brake (a stopped car holds on hills) |
+| Q / E | Shift down / up (R, N, 1–6) |
+| G | Toggle automatic gearbox (S at a stop then selects reverse) |
 | A / D | Steer |
 | Space | Handbrake |
 | Tab | Switch car |
@@ -74,7 +83,8 @@ tire grip force, cyan for roll centres.
 | `src/physics/rigid_body.rs` | Chassis rigid body |
 | `src/physics/suspension.rs` | A-arm linkage, corner dynamics, wheel spin |
 | `src/physics/tire.rs` | Magic Formula tire |
-| `src/sim.rs` | Multi-rate loop, drivetrain, driving tests |
+| `src/physics/drivetrain.rs` | Engine, clutch and gearbox |
+| `src/sim.rs` | Multi-rate loop, controls to wheel torques, driving tests |
 | `src/car.rs` | Setups, spawning, keyboard input |
 | `src/terrain.rs` | Baked map loading, terrain and road meshes, raycast, spawns |
 | `src/buildings.rs` | Low-poly houses from the OSM building outlines (visual only) |
@@ -124,8 +134,9 @@ with the current mix of resolutions).
 
 ## Deliberate simplifications
 
-Massless arms with a point unsprung mass. No anti-roll bars, aerodynamics, gearbox
-or tire relaxation length. No render interpolation between chassis steps. At very
+Massless arms with a point unsprung mass. No anti-roll bars, aerodynamics or tire
+relaxation length (so in top gear the car runs to the rev limiter). The clutch is
+automatic, and the engine stays coupled to both rear wheels' average speed. No render interpolation between chassis steps. At very
 low speed, slips are computed against a 3 m/s floor, so a parked car can creep
 slowly down steep slopes. Bridges become plain embankments. Land use is coloured
 per cell (2–8 m), so area edges are stepped, most visibly in coarse chunks.

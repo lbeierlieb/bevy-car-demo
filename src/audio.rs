@@ -1,5 +1,5 @@
-//! Engine sound for the active car, synthesised sample by sample: pitch follows the rear
-//! wheels' spin, volume follows the throttle. The game only publishes targets; the synth
+//! Engine sound for the active car, synthesised sample by sample: pitch follows engine
+//! speed, volume follows the throttle. The game only publishes targets; the synth
 //! glides towards them every sample, so pitch and volume change smoothly.
 
 use std::f32::consts::TAU;
@@ -14,10 +14,10 @@ use bevy::prelude::*;
 use crate::car::{ActiveCar, Car};
 
 const SAMPLE_RATE: u32 = 44_100;
-/// Firing frequency at standstill, and how much it rises per rad/s of rear wheel spin
-/// (about 230 Hz, a four-cylinder at 7000 rpm, at 40 m/s).
-const IDLE_HZ: f32 = 35.0;
-const HZ_PER_WHEEL_RAD: f32 = 1.8;
+/// Firing frequency at idle; a four-stroke four-cylinder fires twice per revolution
+/// (about 230 Hz at 6800 rpm).
+const IDLE_HZ: f32 = 28.0;
+const FIRINGS_PER_REV: f32 = 2.0;
 /// Time constant of the glide towards new targets.
 const GLIDE: f32 = 0.05;
 
@@ -144,15 +144,14 @@ fn update_engine(
     let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return;
     };
-    let wheel = (car.corners[2].omega.abs() + car.corners[3].omega.abs()) / 2.0;
     let volume = if engine.muted {
         0.0
     } else {
-        0.25 + 0.75 * car.controls.throttle.abs()
+        0.25 + 0.75 * car.controls.throttle
     };
     engine
         .targets
-        .set(IDLE_HZ + wheel * HZ_PER_WHEEL_RAD, volume);
+        .set(car.drivetrain.rpm / 60.0 * FIRINGS_PER_REV, volume);
 }
 
 #[cfg(test)]

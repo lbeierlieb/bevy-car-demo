@@ -31,6 +31,7 @@ fn block_orbit(wants: Res<EguiWantsInput>, mut orbit: ResMut<OrbitInput>) {
 }
 
 fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, mut cars: Query<&mut Car>) -> Result {
+    let mut automatic = None;
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
         return Ok(());
     };
@@ -39,6 +40,18 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, mut cars: Query<&mu
         .default_width(340.0)
         .show(contexts.ctx_mut()?, |ui| {
             ui.label(format!("{:.0} km/h", car.forward_speed() * 3.6));
+            let gear = match car.drivetrain.selected_gear() {
+                -1 => "R".to_string(),
+                0 => "N".to_string(),
+                g => g.to_string(),
+            };
+            ui.horizontal(|ui| {
+                ui.label(format!("Gear {gear}    {:.0} rpm", car.drivetrain.rpm));
+                let mut on = car.drivetrain.automatic;
+                if ui.checkbox(&mut on, "Automatic (G)").changed() {
+                    automatic = Some(on);
+                }
+            });
             ui.label(format!(
                 "Chassis {CHASSIS_HZ:.0} Hz, corners {:.0} Hz ({SUBSTEPS} substeps)",
                 CHASSIS_HZ * SUBSTEPS as f64
@@ -47,7 +60,9 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, mut cars: Query<&mu
             telemetry(ui, &car);
             ui.collapsing("Setup", |ui| setup(ui, &mut car));
             ui.collapsing("Controls", |ui| {
-                ui.label("W/S or arrows: throttle, brake, reverse");
+                ui.label("W/S or arrows: throttle, brake");
+                ui.label("Q/E: shift down/up    G: automatic gearbox");
+                ui.label("(automatic: S at a stop selects reverse)");
                 ui.label("A/D: steer    Space: handbrake");
                 ui.label("Tab: next car    R: reset car");
                 ui.label("F1: gizmos    F2: this panel    M: mute");
@@ -58,6 +73,12 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, mut cars: Query<&mu
                 ui.label("Elevation: DGM1 © Bayerische Vermessungsverwaltung (CC BY 4.0)");
             });
         });
+    // The gearbox mode applies to every car, so switching cars keeps it.
+    if let Some(on) = automatic {
+        for mut car in &mut cars {
+            car.drivetrain.automatic = on;
+        }
+    }
     Ok(())
 }
 

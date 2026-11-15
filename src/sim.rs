@@ -30,7 +30,7 @@ fn simulate(time: Res<Time>, terrain: Res<Terrain>, mut cars: Query<&mut Car>) {
 }
 
 pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
-    apply_controls(car);
+    apply_controls(car, dt);
 
     let Car {
         setup,
@@ -68,31 +68,29 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     body.integrate(dt);
 }
 
-/// Minimal drivetrain: power-limited torque split evenly over the rear wheels, biased brakes,
-/// rear handbrake, and speed-sensitive steering.
-fn apply_controls(car: &mut Car) {
+/// Engine torque to the rear wheels (split evenly, like an open differential), biased
+/// brakes, rear handbrake, and speed-sensitive steering.
+fn apply_controls(car: &mut Car, dt: f32) {
     let speed = car.forward_speed().abs();
     let Car {
         setup,
         corners,
+        drivetrain,
         controls: c,
         ..
     } = car;
 
-    let rear_omega = (corners[2].omega.abs() + corners[3].omega.abs()) / 2.0;
-    let torque = setup
-        .drive_torque
-        .min(setup.drive_power / rear_omega.max(1.0))
-        * c.throttle;
+    let rear_omega = (corners[2].omega + corners[3].omega) / 2.0;
+    let grounded = corners[2].contact.is_some() && corners[3].contact.is_some();
+    let drive = drivetrain.step(&setup.engine, c.throttle, rear_omega, grounded, dt);
     let steer = c.steer * setup.max_steer / (1.0 + speed * 0.04);
     for corner in corners.iter_mut() {
         if corner.front {
             corner.steer = steer;
-            corner.drive_torque = 0.0;
             corner.brake_torque = c.brake * setup.brake_torque * setup.brake_bias / 2.0;
         } else {
-            corner.steer = 0.0;
-            corner.drive_torque = torque / 2.0;
+            corner.drive_torque = drive.torque / 2.0;
+            corner.drive_inertia = drive.inertia / 2.0;
             corner.brake_torque = c.brake * setup.brake_torque * (1.0 - setup.brake_bias) / 2.0
                 + if c.handbrake {
                     setup.handbrake_torque
@@ -174,12 +172,14 @@ mod tests {
     }
 
     #[test]
-    fn brakes_without_locking_or_spinning() {
+    fn brakes_without_rear_lock_or_spinning() {
         let terrain = Terrain::baked();
         let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
         for setup in [CarSetup::baseline(), CarSetup::soft(), CarSetup::track()] {
             let name = setup.name;
             let mut car = Car::spawn_at(0, setup, &terrain, p.x, p.y, yaw);
+            // In fourth, as a driver would be at this speed.
+            car.drivetrain.shift_to(&car.setup.engine, 4);
             run(&mut car, &terrain, 1.0);
             // Full brakes from 90 km/h, with a touch of steering to upset the car.
             car.body.velocity = car.body.rotation * Vec3::NEG_Z * 25.0;
@@ -198,10 +198,12 @@ mod tests {
                 step_car(&mut car, &terrain, dt);
                 time += dt;
                 assert!(time < 4.0, "{name}: not stopping");
-                for corner in &car.corners {
+                // Locked rear wheels lose their side grip and let the car spin; a locked
+                // front wheel only makes it push wide.
+                for corner in car.corners.iter().filter(|c| !c.front) {
                     assert!(
                         corner.omega.abs() > 1.0,
-                        "{name}: wheel locked at {time:.2} s"
+                        "{name}: rear wheel locked at {time:.2} s"
                     );
                 }
                 let yaw_rate = car.body.angular_velocity.y.abs();

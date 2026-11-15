@@ -234,6 +234,8 @@ pub struct Corner {
     // Inputs, set by the car before each step.
     pub steer: f32,
     pub drive_torque: f32,
+    /// Extra inertia coupled to the wheel by the drivetrain (the engine, through the gears).
+    pub drive_inertia: f32,
     pub brake_torque: f32,
     // Outputs of the last substep.
     pub pose: CornerPose,
@@ -254,6 +256,7 @@ impl Corner {
             spin: 0.0,
             steer: 0.0,
             drive_torque: 0.0,
+            drive_inertia: 0.0,
             brake_torque: 0.0,
             pose: axle.pose(theta, 0.0, side, axle_z),
             contact: None,
@@ -290,7 +293,8 @@ impl Corner {
         let hit = terrain.raycast(center, down, tire.radius);
 
         // Without ground contact the wheel just spins up under drive torque.
-        let mut omega = self.omega + self.drive_torque / axle.wheel_inertia * dt;
+        let inertia = axle.wheel_inertia + self.drive_inertia;
+        let mut omega = self.omega + self.drive_torque / inertia * dt;
         let patch = hit.map(|hit| {
             let n = hit.normal;
             let penetration = tire.radius - hit.distance;
@@ -305,10 +309,10 @@ impl Corner {
             let df_domega = (tire.force(vx, vy, self.omega + 0.01, load).fx - f0.fx) / 0.01;
             omega = self.omega
                 + dt * (self.drive_torque - tire.radius * f0.fx)
-                    / (axle.wheel_inertia + dt * tire.radius * df_domega.max(0.0));
+                    / (inertia + dt * tire.radius * df_domega.max(0.0));
             (hit.point, n, load, forward, right, vx, vy)
         });
-        self.omega = apply_brake(omega, self.brake_torque, axle, dt);
+        self.omega = apply_brake(omega, self.brake_torque, inertia, dt);
         self.spin += self.omega * dt;
 
         self.contact = patch.map(|(point, normal, load, forward, right, vx, vy)| {
@@ -355,8 +359,8 @@ impl Corner {
 }
 
 /// Brakes act as friction: they slow the wheel down but never reverse it.
-fn apply_brake(omega: f32, brake_torque: f32, axle: &AxleSetup, dt: f32) -> f32 {
-    let dw = brake_torque / axle.wheel_inertia * dt;
+fn apply_brake(omega: f32, brake_torque: f32, inertia: f32, dt: f32) -> f32 {
+    let dw = brake_torque / inertia * dt;
     omega.signum() * (omega.abs() - dw).max(0.0)
 }
 

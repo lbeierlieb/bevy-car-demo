@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 
+use crate::physics::drivetrain::{Drivetrain, EngineSetup};
 use crate::physics::rigid_body::RigidBody;
 use crate::physics::suspension::{ArmGeometry, AxleSetup, Corner};
 use crate::physics::tire::TireParams;
@@ -20,9 +21,8 @@ pub struct CarSetup {
     pub front: AxleSetup,
     pub rear: AxleSetup,
     pub max_steer: f32,
-    /// Peak total drive torque at the (rear) wheels, capped by engine power.
-    pub drive_torque: f32,
-    pub drive_power: f32,
+    /// Engine, clutch and gearbox, driving the rear wheels.
+    pub engine: EngineSetup,
     /// Total brake torque, the front axle's share of it, and handbrake torque per rear wheel.
     pub brake_torque: f32,
     pub brake_bias: f32,
@@ -52,8 +52,7 @@ impl CarSetup {
                 ..axle
             },
             max_steer: 0.5,
-            drive_torque: 1_800.0,
-            drive_power: 120_000.0,
+            engine: EngineSetup::default(),
             brake_torque: 3_500.0,
             brake_bias: 0.7,
             handbrake_torque: 2_500.0,
@@ -97,7 +96,7 @@ impl CarSetup {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Controls {
-    /// -1 (full reverse) to 1 (full throttle).
+    /// 0 to 1 (full throttle).
     pub throttle: f32,
     pub brake: f32,
     /// -1 (right) to 1 (left).
@@ -112,6 +111,7 @@ pub struct Car {
     pub setup: CarSetup,
     pub body: RigidBody,
     pub corners: [Corner; 4],
+    pub drivetrain: Drivetrain,
     pub controls: Controls,
 }
 
@@ -144,6 +144,7 @@ impl Car {
             });
         Self {
             index,
+            drivetrain: Drivetrain::new(&setup.engine),
             setup,
             body,
             corners,
@@ -155,7 +156,9 @@ impl Car {
     fn reset(&mut self, terrain: &Terrain) {
         let p = self.body.position;
         let yaw = heading(self.body.rotation);
+        let automatic = self.drivetrain.automatic;
         *self = Self::spawn_at(self.index, self.setup.clone(), terrain, p.x, p.z, yaw);
+        self.drivetrain.automatic = automatic;
     }
 
     pub fn forward_speed(&self) -> f32 {
@@ -202,7 +205,8 @@ fn switch_car(keys: Res<ButtonInput<KeyCode>>, mut active: ResMut<ActiveCar>, ca
     }
 }
 
-/// Keyboard to controls for the active car; parked cars hold all brakes.
+/// Keyboard to controls for the active car; parked cars hold all brakes. G switches all
+/// cars between manual and automatic gearboxes.
 fn drive(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -210,7 +214,9 @@ fn drive(
     mut cars: Query<&mut Car>,
 ) {
     let pressed = |a, b| keys.pressed(a) || keys.pressed(b);
+    let toggle_automatic = keys.just_pressed(KeyCode::KeyG);
     for mut car in &mut cars {
+        car.drivetrain.automatic ^= toggle_automatic;
         if car.index != active.0 {
             car.controls = Controls {
                 brake: 1.0,
@@ -225,13 +231,44 @@ fn drive(
         let steer_target = pressed(KeyCode::KeyA, KeyCode::ArrowLeft) as i32 as f32
             - pressed(KeyCode::KeyD, KeyCode::ArrowRight) as i32 as f32;
 
-        let c = &mut car.controls;
-        // S brakes while rolling forward and reverses once (nearly) stopped; W likewise.
-        (c.throttle, c.brake) = match (forward, back) {
-            (true, false) if speed < -1.0 => (0.0, 1.0),
-            (true, false) => (1.0, 0.0),
-            (false, true) if speed > 1.0 => (0.0, 1.0),
-            (false, true) => (-0.5, 0.0),
+        let Car {
+            setup,
+            corners,
+            drivetrain,
+            controls: c,
+            ..
+        } = &mut *car;
+        let gear = drivetrain.selected_gear();
+        let (go, stop) = if drivetrain.automatic {
+            // W drives forward and S backward: each brakes while rolling the other way
+            // and selects first or reverse once (nearly) stopped.
+            let reverse = gear < 0;
+            let (go, stop) = if reverse {
+                (back, forward)
+            } else {
+                (forward, back)
+            };
+            let along = if reverse { -speed } else { speed };
+            if stop && !go && along < 1.0 {
+                drivetrain.shift_to(&setup.engine, if reverse { 1 } else { -1 });
+            }
+            (go, stop)
+        } else {
+            // Q/E shift down/up. Reverse only engages (nearly) stopped, and downshifts
+            // that would over-rev the engine are refused.
+            let target = gear + keys.just_pressed(KeyCode::KeyE) as i8
+                - keys.just_pressed(KeyCode::KeyQ) as i8;
+            let wheel_omega = (corners[2].omega + corners[3].omega) / 2.0;
+            let over_rev =
+                target > 0 && setup.engine.rpm_in(target, wheel_omega) > setup.engine.redline_rpm;
+            if target != gear && !over_rev && (target >= 0 || speed.abs() < 2.0) {
+                drivetrain.shift_to(&setup.engine, target);
+            }
+            (forward, back)
+        };
+        (c.throttle, c.brake) = match (go, stop) {
+            (true, _) => (1.0, stop as u8 as f32),
+            (false, true) => (0.0, 1.0),
             // Hill hold: without input, keep a (nearly) stopped car from rolling away.
             _ if speed.abs() < 2.0 => (0.0, 1.0),
             _ => (0.0, 0.0),
