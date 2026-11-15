@@ -69,6 +69,7 @@ pull request, and every push to `main` deploys the web build to GitHub Pages.
 | W / S, arrows | Throttle; brake (a stopped car holds on hills) |
 | Q / E | Shift down / up (R, N, 1–6) |
 | G | Toggle automatic gearbox (S at a stop then selects reverse) |
+| I | Start the engine after a stall (only with a clutch pedal) |
 | A / D | Steer |
 | Space | Handbrake |
 | Tab | Switch car |
@@ -94,6 +95,12 @@ the game sets Fanatec wheel bases to the range on the slider (540° by default) 
 restores their own range on exit; otherwise set the base to the same range by hand.
 Writing the range needs the driver's udev rules (your user in the `games` group). The
 paddles shift like Q/E (in automatic mode they select reverse or drive at a stop).
+
+With a clutch pedal bound, you work the clutch: let it out to pull away, and press
+it to change gear at once (without pressing it, the paddles still shift with the
+automatic clutch). Drop it at low revs or stop in gear and the engine stalls; start
+it again with the ignition button or I. Without a clutch pedal, the clutch works by
+itself and the engine never stalls.
 
 Gizmo colours: yellow for A-arm links, white for uprights, red for coilovers,
 green for the raycast and contact point, blue for tire normal force, magenta for

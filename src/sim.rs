@@ -81,7 +81,14 @@ fn apply_controls(car: &mut Car, dt: f32) {
 
     let rear_omega = (corners[2].omega + corners[3].omega) / 2.0;
     let grounded = corners[2].contact.is_some() && corners[3].contact.is_some();
-    let drive = drivetrain.step(&setup.engine, c.throttle, rear_omega, grounded, dt);
+    let drive = drivetrain.step(
+        &setup.engine,
+        c.throttle,
+        c.clutch,
+        rear_omega,
+        grounded,
+        dt,
+    );
     let steer = c.steer * setup.max_steer;
     for corner in corners.iter_mut() {
         if corner.front {

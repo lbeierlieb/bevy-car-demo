@@ -75,6 +75,7 @@ fn panel(
             ui.collapsing("Controls", |ui| {
                 ui.label("W/S or arrows: throttle, brake");
                 ui.label("Q/E: shift down/up    G: automatic gearbox");
+                ui.label("I: start the engine (after stalling with a clutch pedal)");
                 ui.label("(automatic: S at a stop selects reverse)");
                 ui.label("A/D: steer    Space: handbrake");
                 ui.label("Tab: next car    R: reset car");

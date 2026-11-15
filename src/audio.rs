@@ -144,7 +144,7 @@ fn update_engine(
     let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return;
     };
-    let volume = if engine.muted {
+    let volume = if engine.muted || !car.drivetrain.running {
         0.0
     } else {
         0.25 + 0.75 * car.drivetrain.fuel

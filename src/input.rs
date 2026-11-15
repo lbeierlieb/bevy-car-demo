@@ -366,10 +366,13 @@ pub struct WheelInput {
     pub steer: Option<f32>,
     pub throttle: Option<f32>,
     pub brake: Option<f32>,
+    /// Clutch pedal travel: 0 released, 1 pressed.
+    pub clutch: Option<f32>,
     pub handbrake: Option<f32>,
     /// Buttons pressed this frame.
     pub shift_up: bool,
     pub shift_down: bool,
+    pub ignition: bool,
     pub view: bool,
     /// Buttons held last frame, to find presses.
     held: Vec<Action>,
@@ -433,9 +436,11 @@ fn read_wheel(
         steer: value(Action::Steer),
         throttle: value(Action::Throttle),
         brake: value(Action::Brake),
+        clutch: value(Action::Clutch),
         handbrake: value(Action::Handbrake),
         shift_up: pressed(Action::ShiftUp),
         shift_down: pressed(Action::ShiftDown),
+        ignition: pressed(Action::Ignition),
         view: pressed(Action::View),
         held,
     };

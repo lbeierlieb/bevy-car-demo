@@ -100,6 +100,9 @@ pub struct Controls {
     /// 0 to 1 (full throttle).
     pub throttle: f32,
     pub brake: f32,
+    /// Clutch pedal travel (0 released, 1 pressed), if there's a pedal; without one the
+    /// clutch works by itself.
+    pub clutch: Option<f32>,
     /// -1 (right) to 1 (left), as a fraction of full lock.
     pub steer: f32,
     /// 0 to 1.
@@ -208,7 +211,7 @@ fn switch_car(keys: Res<ButtonInput<KeyCode>>, mut active: ResMut<ActiveCar>, ca
 }
 
 /// Keyboard and wheel to controls for the active car; parked cars hold all brakes. G
-/// switches all cars between manual and automatic gearboxes.
+/// switches all cars between manual and automatic gearboxes, I starts a stalled engine.
 fn drive(
     keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<WheelInput>,
@@ -241,6 +244,10 @@ fn drive(
             controls: c,
             ..
         } = &mut *car;
+        c.clutch = wheel.clutch;
+        if keys.just_pressed(KeyCode::KeyI) || wheel.ignition {
+            drivetrain.start(&setup.engine);
+        }
         let gear = drivetrain.selected_gear();
         let shift = keys.just_pressed(KeyCode::KeyE) as i8 - keys.just_pressed(KeyCode::KeyQ) as i8
             + wheel.shift_up as i8
