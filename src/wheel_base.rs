@@ -1,7 +1,9 @@
 //! The wheel base itself, on Linux with the hid-fanatecff driver: its rotation range is set
 //! to the game's through sysfs, so the wheel's axis covers exactly that range, and set back
-//! when the game exits (on the newer bases it's a setting of the active tuning slot). On
-//! other systems there's nothing to find, and the range is set on the base by hand.
+//! when the game exits (on the newer bases it's a setting of the active tuning slot). If
+//! that isn't allowed, the base's range is still read from there; on other systems it's
+//! given in the settings. A base turning farther than the game's range gets a soft lock:
+//! force feedback holds the wheel at either end, like in BeamNG.
 //!
 //! Force feedback (Linux) is one constant-force effect on the wheel's evdev device, updated
 //! every chassis step with the front tires' self-aligning torque. Damping and friction are
@@ -12,7 +14,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 
 use crate::car::{ActiveCar, Car};
-use crate::input::{Action, WheelConfig};
+use crate::input::{Action, WheelConfig, WheelInput};
 
 /// Where hid-fanatecff lists its devices; each has a `range` file in degrees.
 const DRIVER_DIR: &str = "/sys/module/hid_fanatec/drivers/hid:fanatec";
@@ -31,6 +33,9 @@ const ROLLING: f32 = 3.0;
 /// Force of the panel's test push, and how long it lasts.
 const TEST_LEVEL: f32 = 0.25;
 const TEST_TIME: f32 = 0.5;
+/// Degrees past the end of the range over which the soft lock builds up to the base's full
+/// force.
+const SOFT_LOCK_SPAN: f32 = 10.0;
 
 pub struct WheelBasePlugin;
 
@@ -49,6 +54,8 @@ pub struct WheelBase {
     ranges: Vec<(PathBuf, String)>,
     /// The range last set on a base (degrees).
     pub applied: Option<f32>,
+    /// The range a base is at after trying to set it (degrees), if one was found.
+    pub actual: Option<f32>,
 }
 
 impl WheelBase {
@@ -58,6 +65,7 @@ impl WheelBase {
             return;
         };
         self.applied = None;
+        self.actual = None;
         for entry in entries.flatten() {
             let path = entry.path().join("range");
             let Ok(old) = std::fs::read_to_string(&path) else {
@@ -67,10 +75,25 @@ impl WheelBase {
                 self.ranges.push((path.clone(), old.trim().to_string()));
             }
             match std::fs::write(&path, format!("{}", range.round() as u32)) {
-                Ok(()) => self.applied = Some(range),
-                Err(err) => warn!("Couldn't set the wheel range in {}: {err}", path.display()),
+                Ok(()) => {
+                    self.applied = Some(range);
+                    self.actual = Some(range);
+                }
+                Err(err) => {
+                    self.actual = old.trim().parse().ok().or(self.actual);
+                    warn!(
+                        "Couldn't set the wheel range in {} ({err}), soft lock at {range:.0}° instead",
+                        path.display()
+                    );
+                }
             }
         }
+    }
+
+    /// The rotation range the wheel's axis covers (degrees): as found on the base, or else
+    /// as given in the settings.
+    pub fn range(&self, config: &WheelConfig) -> f32 {
+        self.actual.or(config.base_range).unwrap_or(config.range)
     }
 }
 
@@ -116,6 +139,8 @@ pub struct ForceFeedback {
     pub problem: Option<String>,
     /// Force last sent, -1 to 1 of the base's maximum (positive pushes the wheel left).
     pub level: f32,
+    /// Soft lock force last added to `level`.
+    pub soft_lock: f32,
     /// Time left in a test push from the panel.
     pub test: f32,
     fade: f32,
@@ -137,8 +162,18 @@ fn level(config: &WheelConfig, steering_torque: f32, fade: f32) -> f32 {
     (config.ffb_gain * steering_torque / FULL_SCALE * fade).clamp(-1.0, 1.0)
 }
 
+/// Force holding the wheel within the rotation range, for a steering wheel `angle` from the
+/// centre (degrees, positive left): none inside, then pushing back, up to the base's full
+/// force `SOFT_LOCK_SPAN` past either end.
+fn soft_lock(angle: f32, range: f32) -> f32 {
+    let lock = range / 2.0;
+    let past = angle - angle.clamp(-lock, lock);
+    -(past / SOFT_LOCK_SPAN).clamp(-1.0, 1.0)
+}
+
 fn force_feedback(
     config: Res<WheelConfig>,
+    wheel: Res<WheelInput>,
     active: Res<ActiveCar>,
     cars: Query<&Car>,
     windows: Query<&Window>,
@@ -177,11 +212,7 @@ fn force_feedback(
     }
     let focused = windows.iter().any(|window| window.focused);
     let car = cars.iter().find(|car| car.index == active.0);
-    if !focused
-        || !config.enabled
-        || !config.ffb_enabled
-        || car.is_none_or(|car| car.index != ffb.car)
-    {
+    if !focused || !config.enabled || car.is_none_or(|car| car.index != ffb.car) {
         ffb.fade = 0.0;
         ffb.car = active.0;
     } else {
@@ -190,22 +221,25 @@ fn force_feedback(
     let target = if ffb.test > 0.0 {
         ffb.test -= dt;
         TEST_LEVEL
-    } else {
+    } else if config.ffb_enabled {
         car.map_or(0.0, |car| {
             let rolling = (car.body.velocity.length() / ROLLING).min(1.0);
             level(&config, car.steering_torque * rolling, ffb.fade)
         })
+    } else {
+        0.0
     };
     // Smoothed a little, so the 120 Hz steps don't buzz, and rate-limited.
     let max_step = MAX_SLEW * dt;
     ffb.level += ((target - ffb.level) * 0.5).clamp(-max_step, max_step);
+    // The soft lock isn't part of the feedback: it stays on with the tire forces off.
+    ffb.soft_lock = wheel
+        .angle
+        .map_or(0.0, |angle| soft_lock(angle, config.range) * ffb.fade);
     #[cfg(target_os = "linux")]
     {
-        let sent = if config.ffb_invert {
-            -ffb.level
-        } else {
-            ffb.level
-        };
+        let level = (ffb.level + ffb.soft_lock).clamp(-1.0, 1.0);
+        let sent = if config.ffb_invert { -level } else { level };
         if let Some(output) = &mut ffb.output
             && let Err(err) = output.set(sent)
         {
@@ -347,6 +381,26 @@ mod tests {
     }
 
     #[test]
+    fn reads_the_range_it_cant_set() {
+        let dir = std::env::temp_dir().join(format!("car-sim-wheel-ro-{}", std::process::id()));
+        let device = dir.join("0003:0EB7:0020.0001");
+        std::fs::create_dir_all(&device).unwrap();
+        let file = device.join("range");
+        std::fs::write(&file, "2520\n").unwrap();
+        let mut permissions = std::fs::metadata(&file).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&file, permissions).unwrap();
+        // Root may write anyway; there's nothing to check then.
+        if std::fs::OpenOptions::new().write(true).open(&file).is_err() {
+            let mut base = WheelBase::default();
+            base.set_range(&dir, 540.0);
+            assert_eq!(base.applied, None);
+            assert_eq!(base.actual, Some(2520.0));
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn force_follows_the_tires_and_fades_in() {
         let config = WheelConfig {
             ffb_gain: 0.5,
@@ -358,5 +412,26 @@ mod tests {
         assert!(level(&config, -200.0, 1.0) < level(&config, -100.0, 1.0));
         assert_eq!(level(&config, -10_000.0, 1.0), -1.0);
         assert_eq!(level(&config, -100.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn soft_lock_holds_the_wheel_in_the_range() {
+        assert_eq!(soft_lock(269.0, 540.0), 0.0);
+        assert_eq!(soft_lock(-269.0, 540.0), 0.0);
+        // Past the left end it pushes right, and the other way round.
+        assert!((soft_lock(275.0, 540.0) + 0.5).abs() < 1e-6);
+        assert!((soft_lock(-275.0, 540.0) - 0.5).abs() < 1e-6);
+        assert_eq!(soft_lock(900.0, 540.0), -1.0);
+    }
+
+    #[test]
+    fn falls_back_to_the_base_range_from_the_settings() {
+        let mut config = WheelConfig::default();
+        let mut base = WheelBase::default();
+        assert_eq!(base.range(&config), 540.0);
+        config.base_range = Some(1080.0);
+        assert_eq!(base.range(&config), 1080.0);
+        base.actual = Some(2520.0);
+        assert_eq!(base.range(&config), 2520.0);
     }
 }

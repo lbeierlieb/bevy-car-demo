@@ -10,6 +10,8 @@ use bevy::input::gamepad::{
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 
+use crate::wheel_base::WheelBase;
+
 pub struct InputPlugin;
 
 impl Plugin for InputPlugin {
@@ -121,7 +123,7 @@ pub struct Binding {
     pub input: GamepadInput,
     /// Raw value at rest and fully applied. Pedals map linearly from one to the other,
     /// whichever way round they are; for steering, `full` is the value turned left (only its
-    /// direction counts: the whole axis is the wheel's rotation range).
+    /// direction counts: the whole axis is the base's rotation range).
     pub rest: f32,
     pub full: f32,
 }
@@ -159,8 +161,12 @@ pub struct WheelConfig {
     pub enabled: bool,
     pub bindings: Vec<(Action, Binding)>,
     /// Steering wheel rotation lock to lock (degrees). Full steering lock of the car's front
-    /// wheels is at either end, and the wheel base is set to this range.
+    /// wheels is at either end. The wheel base is set to this range where the game can;
+    /// otherwise force feedback holds the wheel at either end (soft lock).
     pub range: f32,
+    /// What the wheel base is set to (degrees), if not `range` and the game can't find out
+    /// itself.
+    pub base_range: Option<f32>,
     /// Dead zone at either end of pedal travel (0..0.5).
     pub deadzone: f32,
     /// Force feedback strength and on/off, and whether its direction is flipped.
@@ -175,6 +181,7 @@ impl Default for WheelConfig {
             enabled: true,
             bindings: Vec::new(),
             range: 540.0,
+            base_range: None,
             deadzone: 0.02,
             ffb_gain: 0.5,
             ffb_enabled: true,
@@ -219,6 +226,9 @@ impl WheelConfig {
             self.ffb_enabled,
             self.ffb_invert
         );
+        if let Some(base_range) = self.base_range {
+            text += &format!("base_range {base_range}\n");
+        }
         // Bindings: action, input, rest and full values, and the device name (may contain
         // spaces, so it's last).
         for (action, b) in &self.bindings {
@@ -245,6 +255,7 @@ impl WheelConfig {
             match key {
                 "enabled" => config.enabled = value.parse().unwrap_or(config.enabled),
                 "range" => config.range = value.parse().unwrap_or(config.range),
+                "base_range" => config.base_range = value.parse().ok().or(config.base_range),
                 "deadzone" => config.deadzone = value.parse().unwrap_or(config.deadzone),
                 "ffb_gain" => config.ffb_gain = value.parse().unwrap_or(config.ffb_gain),
                 "ffb_enabled" => config.ffb_enabled = value.parse().unwrap_or(config.ffb_enabled),
@@ -391,7 +402,11 @@ fn parse_input(name: &str) -> Option<GamepadInput> {
 /// are `None`, so the keyboard stays in charge of them.
 #[derive(Resource, Default, Debug)]
 pub struct WheelInput {
+    /// Steering from -1 (right) to 1 (left) over the rotation range.
     pub steer: Option<f32>,
+    /// Steering wheel angle from the centre (degrees, positive left). Past half the
+    /// rotation range when the base turns farther than that.
+    pub angle: Option<f32>,
     pub throttle: Option<f32>,
     pub brake: Option<f32>,
     /// Clutch pedal travel: 0 released, 1 pressed.
@@ -507,12 +522,19 @@ pub fn action_value(config: &WheelConfig, gamepads: &Gamepads, action: Action) -
     })
 }
 
-fn read_wheel(config: Res<WheelConfig>, gamepads: Gamepads, mut wheel: ResMut<WheelInput>) {
+fn read_wheel(
+    config: Res<WheelConfig>,
+    base: Res<WheelBase>,
+    gamepads: Gamepads,
+    mut wheel: ResMut<WheelInput>,
+) {
     if !config.enabled {
         *wheel = WheelInput::default();
         return;
     }
     let value = |action| action_value(&config, &gamepads, action);
+    // The axis covers the base's range, which may be wider than the game's.
+    let angle = value(Action::Steer).map(|axis| axis * base.range(&config) / 2.0);
     let held: Vec<Action> = Action::ALL
         .into_iter()
         .filter(|a| !a.analog() && value(*a).is_some_and(|v| v > 0.5))
@@ -533,7 +555,8 @@ fn read_wheel(config: Res<WheelConfig>, gamepads: Gamepads, mut wheel: ResMut<Wh
             .unwrap_or(0)
     });
     *wheel = WheelInput {
-        steer: value(Action::Steer),
+        steer: angle.map(|angle| (angle / (config.range / 2.0)).clamp(-1.0, 1.0)),
+        angle,
         throttle: value(Action::Throttle),
         brake: value(Action::Brake),
         clutch: value(Action::Clutch),
@@ -658,6 +681,7 @@ mod tests {
         let mut config = WheelConfig {
             enabled: false,
             range: 720.0,
+            base_range: Some(2520.0),
             ffb_gain: 0.35,
             ffb_invert: true,
             ..default()
@@ -716,6 +740,7 @@ mod tests {
         );
         let mut world = World::new();
         world.insert_resource(config);
+        world.init_resource::<WheelBase>();
         world.init_resource::<Reported>();
         world.init_resource::<WheelInput>();
         world.run_system_once(read_wheel).unwrap();

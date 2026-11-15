@@ -98,8 +98,12 @@ The wheel steers the front wheels directly at a fixed ratio: either end of the
 rotation range is full lock, and the steering wheel in the cockpit turns with yours.
 On Linux with the [hid-fanatecff](https://github.com/gotzl/hid-fanatecff) driver,
 the game sets Fanatec wheel bases to the range on the slider (540° by default) and
-restores their own range on exit; otherwise set the base to the same range by hand.
-Writing the range needs the driver's udev rules (your user in the `games` group). The
+restores their own range on exit. Writing the range needs the driver's udev rules
+(your user in the `games` group). If it can't, or on other systems, a base turning
+farther than the slider gets a soft lock, like in BeamNG: the steering covers the
+slider's range and force feedback holds the wheel at either end. The game reads the
+base's range from hid-fanatecff; elsewhere, enter it in the panel (or set the base to
+the slider's range by hand). The
 paddles shift like Q/E (in automatic mode they select reverse or drive at a stop).
 Buttons can also be bound to resetting the car (like R), the camera view (like C) and
 the map (like K).

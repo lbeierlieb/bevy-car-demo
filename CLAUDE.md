@@ -86,7 +86,10 @@ and plays force feedback, both through hid-fanatecff on Linux.
 - Force feedback: self-aligning torque only. Damping/friction from the base's tuning
   menu (evdev 0.13 can't send damper parameters). Rate-limited, fades in with speed.
 - The game sets the base's rotation range (default 540°) and restores it on exit;
-  either end is full lock.
+  either end is full lock. If it can't, soft lock like BeamNG: the base's range is read
+  from sysfs (readable even when not writable) or given in the panel, the axis is
+  scaled to the game's range, and force feedback pushes back past either end (full
+  force 10° past; stays on with the tire forces switched off).
 - Clutch pedal: engine can stall, ignition restarts it. Without a bound pedal the
   clutch is automatic and the engine never stalls.
 - The automatic gearbox ignores the clutch pedal (automatic clutch, no stalling).
@@ -101,7 +104,8 @@ and plays force feedback, both through hid-fanatecff on Linux.
   convention of hid-fanatecff couldn't be verified without hardware).
 - Tune the default force strength (0.5, with 300 N·m of steering torque as full scale;
   tires peak around 260 N·m).
-- That the game can set the rotation range (see below; last seen failing).
+- That the game can set the rotation range (see below; last seen failing), and the soft
+  lock where it can't (strength and feel on a direct drive base; may need damping).
 
 ### Troubleshooting on the user's machine
 
@@ -114,8 +118,8 @@ both named "Fanatec FANATEC Wheel" (padded with spaces). NixOS config uses
   `basename "$(readlink -f /sys/class/input/eventN/device/device/driver)"`,
   `lsmod | grep hid_fanatec`, `sudo evtest /dev/input/eventN` (EV_FF with FF_CONSTANT).
   A reboot into a kernel with the module fixed it; replugging the base can also help.
-- **"Couldn't set the wheel range in …/range: Permission denied":** the steering then
-  covers the base's own (much larger) range. The `range` sysfs file is root's; the udev
+- **"Couldn't set the wheel range in …/range: Permission denied":** the game falls
+  back to the soft lock (the panel says "Wheel base is at …°"). The `range` sysfs file is root's; the udev
   rule only does `chown -f :games` on it when the device is added. Needs a `games` group
   (NixOS doesn't create one; `users.groups.games = { };`), the user in it (log in
   again), and the rule to have run after that (replug, or

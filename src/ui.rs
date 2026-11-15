@@ -182,10 +182,32 @@ fn wheel(
             .step_by(10.0)
             .text("Rotation range °"),
     );
-    ui.label(match base.applied {
-        Some(range) => format!("Wheel base set to {range:.0}° (restored on exit)"),
-        None => "Set the wheel base to this range (hid-fanatecff on Linux sets it itself)".into(),
-    });
+    match (base.applied, base.actual) {
+        (Some(range), _) => {
+            ui.label(format!("Wheel base set to {range:.0}° (restored on exit)"));
+        }
+        (None, Some(actual)) => {
+            ui.label(format!(
+                "Wheel base is at {actual:.0}° and can't be changed: soft lock at the range"
+            ));
+        }
+        (None, None) => {
+            let mut other = config.base_range.is_some();
+            ui.checkbox(&mut other, "Wheel base set to a different range (soft lock)")
+                .on_hover_text(
+                    "Otherwise set the base to the rotation range (hid-fanatecff on Linux does it itself)",
+                );
+            config.base_range = other.then(|| {
+                let mut range = config.base_range.unwrap_or(900.0);
+                ui.add(
+                    egui::Slider::new(&mut range, 180.0..=2880.0)
+                        .step_by(10.0)
+                        .text("Wheel base range °"),
+                );
+                range
+            });
+        }
+    }
     ui.add(egui::Slider::new(&mut config.deadzone, 0.0..=0.15).text("Pedal dead zone"));
 }
 
