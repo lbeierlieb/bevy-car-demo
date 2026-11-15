@@ -300,6 +300,9 @@ fn axle_sliders(ui: &mut egui::Ui, axle: &mut AxleSetup) {
     let mut camber = axle.geometry.static_camber.to_degrees();
     ui.add(egui::Slider::new(&mut camber, -5.0..=1.0).text("Static camber °"));
     axle.geometry.static_camber = camber.to_radians();
+    let mut toe = axle.geometry.static_toe.to_degrees();
+    ui.add(egui::Slider::new(&mut toe, -2.0..=2.0).text("Toe-in °"));
+    axle.geometry.static_toe = toe.to_radians();
     // Moving the upper arm's inner pivot outward shortens the arm: more camber gain.
     ui.add(egui::Slider::new(&mut axle.geometry.upper_pivot.x, 0.25..=0.6).text("Upper pivot x m"));
 }

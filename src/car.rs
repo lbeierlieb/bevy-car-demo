@@ -50,6 +50,11 @@ impl CarSetup {
             front: axle,
             rear: AxleSetup {
                 spring_rate: 65_000.0,
+                // Toe-in at the rear keeps the car stable, especially off throttle.
+                geometry: ArmGeometry {
+                    static_toe: 0.25f32.to_radians(),
+                    ..axle.geometry
+                },
                 ..axle
             },
             max_steer: 0.5,

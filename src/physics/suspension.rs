@@ -32,6 +32,9 @@ pub struct ArmGeometry {
     pub spring_arm_fraction: f32,
     /// Camber at design ride height, in radians (negative: top of the wheel leans inward).
     pub static_camber: f32,
+    /// Toe of each wheel, in radians (positive: toe-in, the front of the wheel points
+    /// inward).
+    pub static_toe: f32,
 }
 
 impl Default for ArmGeometry {
@@ -47,6 +50,7 @@ impl Default for ArmGeometry {
             spring_top: Vec2::new(0.55, 0.20),
             spring_arm_fraction: 0.7,
             static_camber: -0.02,
+            static_toe: 0.0,
         }
     }
 }
@@ -142,7 +146,9 @@ impl AxleSetup {
         let to_3d = |p: Vec2| Vec3::new(side * p.x, p.y, axle_z);
         let camber = g.static_camber - l.upright_angle;
         let (lower_ball, upper_ball) = (to_3d(l.lower_ball), to_3d(l.upper_ball));
-        // Steering turns the upright about the kingpin axis through both ball joints.
+        // Steering turns the upright about the kingpin axis through both ball joints, from
+        // its toe angle (positive steer turns left, towards -x, the left side).
+        let steer = steer + side * g.static_toe;
         let steer = Quat::from_axis_angle((upper_ball - lower_ball).normalize(), steer);
         CornerPose {
             lower_pivot: to_3d(g.lower_pivot),
@@ -386,6 +392,18 @@ mod tests {
         assert!(l.upper_ball.distance(g.upper_ball) < 1e-5);
         assert!(l.wheel_center.distance(g.wheel_center) < 1e-5);
         assert!(l.upright_angle.abs() < 1e-5);
+    }
+
+    #[test]
+    fn toe_in_points_both_wheels_inward() {
+        let mut a = axle();
+        a.geometry.static_toe = 1f32.to_radians();
+        let theta = a.geometry.design_angle();
+        for side in [-1.0, 1.0] {
+            let forward = a.pose(theta, 0.0, side, 0.0).upright * Vec3::NEG_Z;
+            // Forward is -z; the wheel on the +x side points a little towards -x.
+            assert!(forward.x * side < -0.01, "side {side}: {forward}");
+        }
     }
 
     #[test]
