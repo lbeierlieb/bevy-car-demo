@@ -161,7 +161,9 @@ mod tests {
 
     #[test]
     fn pitch_glides_without_steps_or_clipping() {
-        let synth = EngineSynth { targets: Arc::new(Targets::default()) };
+        let synth = EngineSynth {
+            targets: Arc::new(Targets::default()),
+        };
         let mut voice = synth.decoder();
         // Jump from idle to a high note at full throttle.
         synth.targets.set(IDLE_HZ, 1.0);
