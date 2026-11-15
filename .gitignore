@@ -2,3 +2,4 @@
 /result*
 /tools/bake/target
 /tools/bake/cache
+/tools/dev/fakewheel/target
