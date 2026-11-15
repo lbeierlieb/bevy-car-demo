@@ -53,7 +53,7 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, mut cars: Query<&mu
                 ui.label("F1: gizmos    F2: this panel    M: mute");
                 ui.label("Left-drag: orbit    Scroll: zoom");
             });
-            ui.collapsing("Map: Gerach, Bavaria", |ui| {
+            ui.collapsing("Map: Gerach to Rattelsdorf, Bavaria", |ui| {
                 ui.label("Map data © OpenStreetMap contributors (ODbL)");
                 ui.label("Elevation: DGM1 © Bayerische Vermessungsverwaltung (CC BY 4.0)");
             });

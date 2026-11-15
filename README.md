@@ -18,9 +18,10 @@ A small Bevy demo of car simulation techniques:
   terrain triangles. Tire load comes from carcass stiffness and damping. Forces come
   from a simplified Pacejka Magic Formula, with combined slip normalised by peak
   slip. Wheel spin is updated implicitly, which keeps it stable.
-- **Real-world low-poly terrain**: a 3 km square around the villages of Gerach
-  (96161, Bavaria), Mauschendorf and Sendelbach, from the Bavarian 1 m lidar
-  terrain model. The map is split into 96 m chunks, each meshed at its own
+- **Real-world low-poly terrain**: a 9.1 × 5.2 km area of Upper Franconia,
+  from Gerach (96161, Bavaria), Mauschendorf and Sendelbach in the west to
+  Rattelsdorf in the east, with Reckendorf, Laimbach, Höfen and Freudeneck in
+  between. Elevation comes from the Bavarian 1 m lidar terrain model. The map is split into 96 m chunks, each meshed at its own
   resolution: 2 m near buildings and paved roads, 4 m around farm tracks, 8 m
   elsewhere, with seams kept crack-free. Roads
   (with widths and surfaces from their OSM tags), streams, land use (fields,
@@ -114,7 +115,7 @@ cargo build --release
 ./target/release/bake <lat> <lon> <width_m>[x<height_m>] ../../assets/<name>.terrain [<spawn_lat> <spawn_lon>]
 ```
 
-The map was baked with `50.03674 10.80097 3072 ../../assets/gerach.terrain
+The map was baked with `50.0265807 10.8428097 9120x5184 ../../assets/gerach.terrain
 50.0304493 10.8065719`, which spawns the cars in Gerach. To use a different file,
 change `BAKED` in `src/terrain.rs`. The public Overpass server sometimes answers
 that it's busy; the tool then retries every minute, up to five times. Only chunks near the camera are on the GPU, so map size is limited by

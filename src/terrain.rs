@@ -6,7 +6,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
-/// Gerach (96161, Bavaria) with Mauschendorf and Sendelbach: a 3 km square.
+/// From Gerach (96161, Bavaria) to Rattelsdorf: 9.1 × 5.2 km.
 const BAKED: &[u8] = include_bytes!("../assets/gerach.terrain");
 /// Width of the raised rim at the map edge (baked into the heights; roads stop before it).
 const RIM: f32 = 30.0;
