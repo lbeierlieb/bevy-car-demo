@@ -10,6 +10,7 @@ use crate::debug::DebugView;
 use crate::input::{Action, Capture, Capturing, WheelConfig, action_value, input_name};
 use crate::physics::suspension::AxleSetup;
 use crate::sim::{CHASSIS_HZ, SUBSTEPS};
+use crate::wheel_base::WheelBase;
 
 const CORNER_NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
 
@@ -38,6 +39,7 @@ fn panel(
     mut config: ResMut<WheelConfig>,
     mut capture: ResMut<Capture>,
     gamepads: Query<(&Name, &Gamepad)>,
+    base: Res<WheelBase>,
 ) -> Result {
     let mut automatic = None;
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
@@ -68,7 +70,7 @@ fn panel(
             telemetry(ui, &car);
             ui.collapsing("Setup", |ui| setup(ui, &mut car));
             ui.collapsing("Wheel and pedals", |ui| {
-                wheel(ui, &mut config, &mut capture, &gamepads);
+                wheel(ui, &mut config, &mut capture, &gamepads, &base);
             });
             ui.collapsing("Controls", |ui| {
                 ui.label("W/S or arrows: throttle, brake");
@@ -101,6 +103,7 @@ fn wheel(
     config: &mut WheelConfig,
     capture: &mut Capture,
     gamepads: &Query<(&Name, &Gamepad)>,
+    base: &WheelBase,
 ) {
     let mut names: Vec<&str> = gamepads.iter().map(|(name, _)| name.as_str()).collect();
     names.sort_unstable();
@@ -161,6 +164,10 @@ fn wheel(
             .step_by(10.0)
             .text("Rotation range °"),
     );
+    ui.label(match base.applied {
+        Some(range) => format!("Wheel base set to {range:.0}° (restored on exit)"),
+        None => "Set the wheel base to this range (hid-fanatecff on Linux sets it itself)".into(),
+    });
     ui.add(egui::Slider::new(&mut config.deadzone, 0.0..=0.15).text("Pedal dead zone"));
 }
 

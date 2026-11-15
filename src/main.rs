@@ -13,6 +13,7 @@ mod terrain;
 mod trees;
 mod ui;
 mod visuals;
+mod wheel_base;
 
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
@@ -40,6 +41,7 @@ fn main() {
             scenery::SceneryPlugin,
             sim::SimPlugin,
             input::InputPlugin,
+            wheel_base::WheelBasePlugin,
             car::CarPlugin,
             visuals::VisualsPlugin,
             cockpit::CockpitPlugin,

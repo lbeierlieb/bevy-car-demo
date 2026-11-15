@@ -88,8 +88,11 @@ bindings and settings are saved to `~/.config/car-sim/wheel.cfg` (on the web, in
 browser's local storage).
 
 The wheel steers the front wheels directly at a fixed ratio: either end of the
-rotation range is full lock. Set the wheel base to the same rotation range as the
-slider (540° by default), and the steering wheel in the cockpit turns with yours. The
+rotation range is full lock, and the steering wheel in the cockpit turns with yours.
+On Linux with the [hid-fanatecff](https://github.com/gotzl/hid-fanatecff) driver,
+the game sets Fanatec wheel bases to the range on the slider (540° by default) and
+restores their own range on exit; otherwise set the base to the same range by hand.
+Writing the range needs the driver's udev rules (your user in the `games` group). The
 paddles shift like Q/E (in automatic mode they select reverse or drive at a stop).
 
 Gizmo colours: yellow for A-arm links, white for uprights, red for coilovers,
@@ -107,6 +110,7 @@ tire grip force, cyan for roll centres.
 | `src/sim.rs` | Multi-rate loop, controls to wheel torques, driving tests |
 | `src/car.rs` | Setups, spawning, keyboard and wheel to controls |
 | `src/input.rs` | Wheel, pedal and shifter bindings, config file |
+| `src/wheel_base.rs` | Sets the wheel base's rotation range (Linux, hid-fanatecff) |
 | `src/terrain.rs` | Baked map loading, terrain and road meshes, raycast, spawns |
 | `src/buildings.rs` | Low-poly houses from the OSM building outlines (visual only) |
 | `src/trees.rs` | Trees in forest areas and bushes on scrub (visual only) |
