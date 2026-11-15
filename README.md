@@ -46,6 +46,9 @@ A small Bevy demo of car simulation techniques:
   and a telemetry panel with live-tunable springs, dampers, camber, arm geometry,
   tire parameters and brakes (torque and front/rear split). A HUD in the bottom
   right shows speed and gear inside a rev counter.
+- A map of the whole area (K): the ground in its land use colours, drawn once into
+  a single image, so it needs no terrain chunks. Roads, houses and the cars are drawn
+  on top; drag to move it and scroll to zoom.
 - A driver's view (C) from inside a low-poly cockpit, with a steering wheel that
   turns and a working rev counter and speedometer on the dashboard.
 
@@ -77,6 +80,7 @@ pull request, and every push to `main` deploys the web build to GitHub Pages.
 | F1 / F2 | Toggle gizmos / telemetry panel |
 | M | Mute engine sound |
 | C | Switch between chase and driver's view |
+| K | Map of the whole area (drag to move, scroll to zoom; K or Esc closes) |
 | Left-drag, scroll | Orbit and zoom the camera (driver's view: look around) |
 
 ### Steering wheel and pedals
@@ -95,6 +99,7 @@ the game sets Fanatec wheel bases to the range on the slider (540° by default) 
 restores their own range on exit; otherwise set the base to the same range by hand.
 Writing the range needs the driver's udev rules (your user in the `games` group). The
 paddles shift like Q/E (in automatic mode they select reverse or drive at a stop).
+Buttons can also be bound to the camera view (like C) and the map (like K).
 
 With a clutch pedal bound, you work the clutch: let it out to pull away, and press
 it to change gear at once (without pressing it, the paddles still shift with the
@@ -146,6 +151,7 @@ tire grip force, cyan for roll centres.
 | `src/visuals.rs` | Procedural meshes posed from the simulation |
 | `src/debug.rs`, `src/ui.rs`, `src/camera.rs` | Gizmos, telemetry panel, chase and driver cameras |
 | `src/hud.rs` | Speed, gear and rev counter HUD |
+| `src/map.rs` | Map of the whole area with roads, houses and the cars |
 | `src/cockpit.rs` | Interior for the driver's view: dashboard, steering wheel, gauges |
 
 ## Baking another location

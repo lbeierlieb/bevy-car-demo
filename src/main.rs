@@ -6,6 +6,7 @@ mod cockpit;
 mod debug;
 mod hud;
 mod input;
+mod map;
 mod physics;
 mod scenery;
 mod sim;
@@ -49,6 +50,7 @@ fn main() {
             debug::DebugPlugin,
             ui::UiPlugin,
             hud::HudPlugin,
+            map::MapPlugin,
             audio::AudioPlugin,
         ))
         .add_systems(Startup, setup)

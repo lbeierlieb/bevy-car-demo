@@ -1,0 +1,305 @@
+//! Map of the whole area (K, or a wheel button bound to "Map"): the ground in its land use
+//! colours as one image, with roads, houses and the cars drawn on top. Drag to move,
+//! scroll to zoom. Driving goes on underneath.
+
+use bevy::prelude::*;
+use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Rect, Shape, Stroke, pos2, vec2};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
+
+use crate::buildings::Footprint;
+use crate::car::{ActiveCar, Car};
+use crate::input::WheelInput;
+use crate::terrain::{RoadKind, Terrain};
+
+/// Metres per pixel of the ground image: 1920 pixels across this map, within the 2048
+/// that every GPU (and WebGL2) supports as a texture size.
+const PIXEL: f32 = 5.0;
+/// Houses are drawn when zoomed in to fewer metres per screen point than this.
+const HOUSES_BELOW: f32 = 3.0;
+/// Closest zoom (metres per screen point).
+const MIN_SCALE: f32 = 0.2;
+/// Narrowest a road is drawn, in screen points, however far out the map is zoomed.
+const MIN_ROAD_WIDTH: f32 = 1.5;
+
+const BACKGROUND: Color32 = Color32::from_rgb(28, 30, 34);
+const PANEL: Color32 = Color32::from_rgba_premultiplied(10, 12, 16, 190);
+const HOUSE: Color32 = Color32::from_rgb(150, 82, 66);
+const TEXT: Color32 = Color32::from_rgb(235, 235, 230);
+
+pub struct MapPlugin;
+
+impl Plugin for MapPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<MapView>()
+            .add_systems(Update, toggle)
+            .add_systems(
+                EguiPrimaryContextPass,
+                draw.run_if(|view: Res<MapView>| view.open),
+            );
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct MapView {
+    pub open: bool,
+    /// Map point in the middle of the screen (x east, z south).
+    center: Vec2,
+    /// Metres per screen point; 0 until the map is first drawn, which fits the whole map.
+    scale: f32,
+    /// Built the first time the map opens.
+    layers: Option<Layers>,
+}
+
+/// What the map draws, prepared once.
+struct Layers {
+    ground: egui::TextureHandle,
+    /// Each road's bounding box, to skip roads off screen.
+    road_bounds: Vec<(Vec2, Vec2)>,
+    houses: Vec<[Vec2; 4]>,
+}
+
+impl Layers {
+    fn new(ctx: &egui::Context, terrain: &Terrain) -> Self {
+        let size = terrain.half_size() * 2.0;
+        let (w, h) = ((size.x / PIXEL) as usize, (size.y / PIXEL) as usize);
+        let mut pixels = Vec::with_capacity(w * h);
+        for py in 0..h {
+            for px in 0..w {
+                let p = (Vec2::new(px as f32, py as f32) + 0.5) * PIXEL - terrain.half_size();
+                pixels.push(color32(terrain.ground_color_at(p.x, p.y, py * w + px)));
+            }
+        }
+        let ground = ctx.load_texture(
+            "map ground",
+            egui::ColorImage::new([w, h], pixels),
+            egui::TextureOptions::NEAREST,
+        );
+        let road_bounds = terrain
+            .roads
+            .iter()
+            .map(|road| {
+                let lo = road
+                    .points
+                    .iter()
+                    .copied()
+                    .reduce(Vec2::min)
+                    .unwrap_or_default();
+                let hi = road
+                    .points
+                    .iter()
+                    .copied()
+                    .reduce(Vec2::max)
+                    .unwrap_or_default();
+                (lo - road.width, hi + road.width)
+            })
+            .collect();
+        let houses = terrain
+            .buildings
+            .iter()
+            .filter_map(|building| Footprint::fit(&building.outline))
+            .map(|footprint| footprint.corners())
+            .collect();
+        Self {
+            ground,
+            road_bounds,
+            houses,
+        }
+    }
+}
+
+/// K, the wheel's map button or (to close) Escape. Opening centres the map on the car
+/// being driven, at the last zoom.
+fn toggle(
+    keys: Res<ButtonInput<KeyCode>>,
+    wheel: Res<WheelInput>,
+    active: Res<ActiveCar>,
+    cars: Query<&Car>,
+    mut view: ResMut<MapView>,
+) {
+    let close = view.open && keys.just_pressed(KeyCode::Escape);
+    if !(keys.just_pressed(KeyCode::KeyK) || wheel.map || close) {
+        return;
+    }
+    view.open = !view.open;
+    if view.open
+        && view.scale > 0.0
+        && let Some(car) = cars.iter().find(|car| car.index == active.0)
+    {
+        view.center = car.body.position.xz();
+    }
+}
+
+fn draw(
+    mut contexts: EguiContexts,
+    terrain: Res<Terrain>,
+    active: Res<ActiveCar>,
+    cars: Query<&Car>,
+    mut view: ResMut<MapView>,
+) -> Result {
+    let view = &mut *view;
+    let ctx = contexts.ctx_mut()?;
+    let screen = ctx.content_rect();
+    let half = terrain.half_size();
+    let fit = (2.0 * half.x / screen.width()).max(2.0 * half.y / screen.height()) * 1.05;
+    if view.scale <= 0.0 {
+        view.scale = fit;
+    }
+    if view.layers.is_none() {
+        view.layers = Some(Layers::new(ctx, &terrain));
+    }
+    egui::Area::new(egui::Id::new("map"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
+            let response = ui.allocate_rect(screen, egui::Sense::click_and_drag());
+            // Drag to move; scroll (or pinch) to zoom about the pointer.
+            if response.dragged() {
+                let drag = response.drag_delta();
+                view.center -= Vec2::new(drag.x, drag.y) * view.scale;
+            }
+            if let Some(pointer) = response.hover_pos() {
+                let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+                let zoom = (-scroll * 0.003).exp() / pinch;
+                if zoom != 1.0 {
+                    let offset =
+                        Vec2::new(pointer.x - screen.center().x, pointer.y - screen.center().y);
+                    let under = view.center + offset * view.scale;
+                    view.scale = (view.scale * zoom).clamp(MIN_SCALE, fit * 1.5);
+                    view.center = under - offset * view.scale;
+                }
+            }
+            view.center = view.center.clamp(-half, half);
+
+            let (center, scale) = (view.center, view.scale);
+            let to_screen =
+                |p: Vec2| screen.center() + vec2(p.x - center.x, p.y - center.y) / scale;
+            let visible = |lo: Vec2, hi: Vec2| {
+                let (a, b) = (to_screen(lo), to_screen(hi));
+                Rect::from_min_max(a, b).intersects(screen)
+            };
+            let painter = ui.painter_at(screen);
+            let layers = view.layers.as_ref().expect("map layers built above");
+            painter.rect_filled(screen, 0.0, BACKGROUND);
+            painter.image(
+                layers.ground.id(),
+                Rect::from_min_max(to_screen(-half), to_screen(half)),
+                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+
+            // Streams first, then tracks, then paved roads on top.
+            for kind in [RoadKind::Water, RoadKind::Unpaved, RoadKind::Paved] {
+                let color = color32(kind.color());
+                for (road, &(lo, hi)) in terrain.roads.iter().zip(&layers.road_bounds) {
+                    if road.kind != kind || !visible(lo, hi) {
+                        continue;
+                    }
+                    let width = (road.width / scale).max(MIN_ROAD_WIDTH);
+                    let points = road.points.iter().map(|p| to_screen(*p)).collect();
+                    painter.line(points, Stroke::new(width, color));
+                }
+            }
+
+            if scale < HOUSES_BELOW {
+                for house in &layers.houses {
+                    if visible(house[0], house[0]) || visible(house[2], house[2]) {
+                        let points = house.iter().map(|p| to_screen(*p)).collect();
+                        painter.add(Shape::convex_polygon(points, HOUSE, Stroke::NONE));
+                    }
+                }
+            }
+
+            // The cars as arrows, the one being driven larger and outlined in white.
+            let mut cars: Vec<&Car> = cars.iter().collect();
+            cars.sort_by_key(|car| car.index == active.0);
+            for car in cars {
+                let driven = car.index == active.0;
+                let at = to_screen(car.body.position.xz());
+                let forward = (car.body.rotation * Vec3::NEG_Z)
+                    .xz()
+                    .normalize_or(Vec2::NEG_Y);
+                let (ahead, side) = (vec2(forward.x, forward.y), vec2(-forward.y, forward.x));
+                let size = if driven { 11.0 } else { 8.0 };
+                let points = vec![
+                    at + ahead * size,
+                    at - ahead * size * 0.7 + side * size * 0.7,
+                    at - ahead * size * 0.3,
+                    at - ahead * size * 0.7 - side * size * 0.7,
+                ];
+                let outline = if driven {
+                    Color32::WHITE
+                } else {
+                    Color32::BLACK
+                };
+                // Not convex (the notch at the back), so filled as two triangles.
+                let fill = color32(car.setup.color.to_linear().to_f32_array());
+                for tri in [[0, 1, 2], [0, 2, 3]] {
+                    let tri = tri.iter().map(|&i| points[i]).collect();
+                    painter.add(Shape::convex_polygon(tri, fill, Stroke::NONE));
+                }
+                painter.add(Shape::closed_line(points, Stroke::new(1.5, outline)));
+            }
+
+            scale_bar(&painter, screen, scale);
+            let help = "Drag: move    Scroll: zoom    K / Esc: close";
+            label(
+                &painter,
+                screen.left_bottom() + vec2(12.0, -12.0),
+                Align2::LEFT_BOTTOM,
+                help,
+            );
+            label(
+                &painter,
+                screen.right_top() + vec2(-12.0, 12.0),
+                Align2::RIGHT_TOP,
+                "Map data © OpenStreetMap contributors",
+            );
+        });
+    Ok(())
+}
+
+/// A bar of a round length (1, 2 or 5 times a power of ten metres) about 120 points long.
+fn scale_bar(painter: &egui::Painter, screen: Rect, scale: f32) {
+    let target = 120.0 * scale;
+    let power = 10f32.powf(target.log10().floor());
+    let metres = [1.0, 2.0, 5.0, 10.0]
+        .into_iter()
+        .map(|f| f * power)
+        .rfind(|&m| m <= target)
+        .unwrap_or(power);
+    let length = metres / scale;
+    let right = screen.right_bottom() + vec2(-16.0, -16.0);
+    let left = right - vec2(length, 0.0);
+    let text = if metres >= 1000.0 {
+        format!("{} km", metres / 1000.0)
+    } else {
+        format!("{metres} m")
+    };
+    let background = Rect::from_min_max(left - vec2(8.0, 26.0), right + vec2(8.0, 6.0));
+    painter.rect_filled(background, 4.0, PANEL);
+    painter.line(
+        vec![left - vec2(0.0, 5.0), left, right, right - vec2(0.0, 5.0)],
+        Stroke::new(2.0, TEXT),
+    );
+    painter.text(
+        pos2((left.x + right.x) / 2.0, left.y - 6.0),
+        Align2::CENTER_BOTTOM,
+        text,
+        FontId::proportional(13.0),
+        TEXT,
+    );
+}
+
+/// Text on a dark box, anchored at `at`.
+fn label(painter: &egui::Painter, at: Pos2, anchor: Align2, text: &str) {
+    let galley = painter.layout_no_wrap(text.into(), FontId::proportional(13.0), TEXT);
+    let rect = anchor.anchor_size(at, galley.size());
+    painter.rect_filled(rect.expand(6.0), 4.0, PANEL);
+    painter.galley(rect.min, galley, TEXT);
+}
+
+/// A linear colour (as the meshes use) for egui, which works in sRGB.
+fn color32(linear: [f32; 4]) -> Color32 {
+    let [r, g, b, _] = Srgba::from(LinearRgba::from_f32_array(linear)).to_u8_array();
+    Color32::from_rgb(r, g, b)
+}

@@ -42,10 +42,11 @@ pub enum Action {
     Gate(i8),
     Ignition,
     View,
+    Map,
 }
 
 impl Action {
-    pub const ALL: [Action; 16] = [
+    pub const ALL: [Action; 17] = [
         Action::Steer,
         Action::Throttle,
         Action::Brake,
@@ -62,6 +63,7 @@ impl Action {
         Action::Gate(6),
         Action::Ignition,
         Action::View,
+        Action::Map,
     ];
 
     /// Name in the config file.
@@ -78,6 +80,7 @@ impl Action {
             Action::Gate(gear) => format!("gate_{gear}"),
             Action::Ignition => "ignition".into(),
             Action::View => "view".into(),
+            Action::Map => "map".into(),
         }
     }
 
@@ -94,6 +97,7 @@ impl Action {
             Action::Gate(gear) => format!("Shifter {gear}"),
             Action::Ignition => "Ignition".into(),
             Action::View => "Camera view".into(),
+            Action::Map => "Map".into(),
         }
     }
 
@@ -385,6 +389,7 @@ pub struct WheelInput {
     pub shift_down: bool,
     pub ignition: bool,
     pub view: bool,
+    pub map: bool,
     /// With an H-shifter bound: the gate the lever is in, or neutral (0) between gates.
     pub shifter: Option<i8>,
     /// Buttons held last frame, to find presses.
@@ -511,6 +516,7 @@ fn read_wheel(config: Res<WheelConfig>, gamepads: Gamepads, mut wheel: ResMut<Wh
         shift_down: pressed(Action::ShiftDown),
         ignition: pressed(Action::Ignition),
         view: pressed(Action::View),
+        map: pressed(Action::Map),
         shifter,
         held,
     };

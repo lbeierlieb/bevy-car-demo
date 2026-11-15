@@ -30,6 +30,17 @@ pub enum RoadKind {
     Water,
 }
 
+impl RoadKind {
+    /// Vertex colour of the ribbon (linear).
+    pub fn color(self) -> [f32; 4] {
+        match self {
+            RoadKind::Paved => [0.24, 0.24, 0.26, 1.0],
+            RoadKind::Unpaved => [0.56, 0.49, 0.38, 1.0],
+            RoadKind::Water => [0.22, 0.42, 0.58, 1.0],
+        }
+    }
+}
+
 pub struct Road {
     pub kind: RoadKind,
     pub width: f32,
@@ -198,6 +209,12 @@ impl Terrain {
         chunk.classes[local(iz) * m + local(ix)]
     }
 
+    /// Ground colour at (x, z), as the terrain is drawn there.
+    pub fn ground_color_at(&self, x: f32, z: f32, variation: usize) -> [f32; 4] {
+        let (_, normal) = self.sample(x, z);
+        ground_color(self.land_class(x, z), normal.y, variation)
+    }
+
     /// Whether (x, z) is inside the map, away from the rim that slopes down at its edge.
     pub fn inside(&self, x: f32, z: f32) -> bool {
         let inner = self.half_size() - RIM;
@@ -363,11 +380,7 @@ impl RoadRibbons {
     pub fn new(terrain: &Terrain) -> Self {
         let mut ribbons = Vec::new();
         for road in &terrain.roads {
-            let color = match road.kind {
-                RoadKind::Paved => [0.24, 0.24, 0.26, 1.0],
-                RoadKind::Unpaved => [0.56, 0.49, 0.38, 1.0],
-                RoadKind::Water => [0.22, 0.42, 0.58, 1.0],
-            };
+            let color = road.kind.color();
             // Skip where the road climbs the rim at the map edge.
             for run in road
                 .points
