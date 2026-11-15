@@ -11,6 +11,8 @@ const BAKED: &[u8] = include_bytes!("../assets/gerach.terrain");
 const RIM: f32 = 30.0;
 /// How far road ribbons float above the terrain, to avoid z-fighting.
 const ROAD_LIFT: f32 = 0.05;
+/// Maximum spacing of road ribbon vertices, along and across the road.
+const DRAPE_STEP: f32 = 1.0;
 
 pub struct TerrainPlugin;
 
@@ -260,24 +262,44 @@ impl Terrain {
                 .split(|p| !inside(p))
                 .filter(|run| run.len() >= 2)
             {
+                // Drape the ribbon: vertices at most `DRAPE_STEP` apart along and across
+                // the road, each set onto the terrain, so it follows the 2 m terrain mesh.
+                let run = resample(run, DRAPE_STEP);
                 let n = run.len();
-                let edges: Vec<(Vec3, Vec3)> = (0..n)
+                let across = (road.width / DRAPE_STEP).ceil().max(1.0) as usize;
+                let rows: Vec<Vec<Vec3>> = (0..n)
                     .map(|i| {
                         let tangent = (run[(i + 1).min(n - 1)] - run[i.saturating_sub(1)])
                             .normalize_or_zero();
                         let side = Vec2::new(-tangent.y, tangent.x) * road.width / 2.0;
-                        (lift(run[i] - side), lift(run[i] + side))
+                        (0..=across)
+                            .map(|j| lift(run[i] - side + side * (2.0 * j as f32 / across as f32)))
+                            .collect()
                     })
                     .collect();
-                for pair in edges.windows(2) {
-                    let ((l0, r0), (l1, r1)) = (pair[0], pair[1]);
-                    mesh.triangle([l0, r0, l1], color);
-                    mesh.triangle([r0, r1, l1], color);
+                for pair in rows.windows(2) {
+                    for j in 0..across {
+                        let (a, b) = (pair[0][j], pair[0][j + 1]);
+                        let (c, d) = (pair[1][j], pair[1][j + 1]);
+                        mesh.triangle([a, b, c], color);
+                        mesh.triangle([b, d, c], color);
+                    }
                 }
             }
         }
         mesh.build()
     }
+}
+
+/// Resamples a polyline so consecutive points are at most `step` apart, keeping the
+/// original vertices.
+fn resample(points: &[Vec2], step: f32) -> Vec<Vec2> {
+    let mut out = vec![points[0]];
+    for pair in points.windows(2) {
+        let steps = (pair[0].distance(pair[1]) / step).ceil().max(1.0) as usize;
+        out.extend((1..=steps).map(|i| pair[0].lerp(pair[1], i as f32 / steps as f32)));
+    }
+    out
 }
 
 /// Little-endian reader over the baked file.
