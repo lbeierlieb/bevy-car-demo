@@ -106,7 +106,8 @@ With a clutch pedal bound, you work the clutch: let it out to pull away, and pre
 it to change gear at once (without pressing it, the paddles still shift with the
 automatic clutch). Drop it at low revs or stop in gear and the engine stalls; start
 it again with the ignition button or I. Without a clutch pedal, the clutch works by
-itself and the engine never stalls.
+itself and the engine never stalls. The same goes for the automatic gearbox (G): it
+ignores the clutch pedal.
 
 An H-shifter is bound gate by gate (move the lever into each). The gear follows the
 lever, and the gearbox is in neutral whenever the lever is between gates; reverse

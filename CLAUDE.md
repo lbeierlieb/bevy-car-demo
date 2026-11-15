@@ -89,6 +89,7 @@ and plays force feedback, both through hid-fanatecff on Linux.
   either end is full lock.
 - Clutch pedal: engine can stall, ignition restarts it. Without a bound pedal the
   clutch is automatic and the engine never stalls.
+- The automatic gearbox ignores the clutch pedal (automatic clutch, no stalling).
 - H-shifter: with a clutch pedal bound, a gear only goes in with the clutch pressed
   (otherwise neutral). Without a pedal, the automatic clutch shifts. Paddles shift
   with the automatic clutch even when a pedal is bound.

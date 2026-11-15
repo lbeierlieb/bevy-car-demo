@@ -232,7 +232,8 @@ impl Drivetrain {
     }
 
     /// Advances by `dt` with the driven wheels turning at `wheel_omega` (rad/s, averaged)
-    /// and returns the torque for them. `clutch` is the pedal's travel, if there's a pedal.
+    /// and returns the torque for them. `clutch` is the pedal's travel, if there's a pedal;
+    /// the automatic gearbox works the clutch itself and ignores the pedal.
     /// The automatic only shifts while the wheels are `grounded`: in the air they spin
     /// freely and would make it hunt between gears.
     pub fn step(
@@ -244,6 +245,7 @@ impl Drivetrain {
         grounded: bool,
         dt: f32,
     ) -> WheelDrive {
+        let clutch = clutch.filter(|_| !self.automatic);
         self.clutch_pedal = clutch;
         // Without a pedal, the automatic clutch never lets the engine stall.
         if clutch.is_none() {
@@ -454,6 +456,22 @@ mod tests {
             drivetrain.shift_by(&engine, -1, 0.0, 0.0);
         }
         assert_eq!(drivetrain.selected_gear(), -1);
+    }
+
+    #[test]
+    fn automatic_ignores_the_clutch_pedal() {
+        let engine = EngineSetup::default();
+        // Wherever the pedal is, the automatic pulls away and shifts up.
+        for pedal in [0.0, 0.5, 1.0] {
+            let mut drivetrain = Drivetrain::new(&engine);
+            drivetrain.automatic = true;
+            let speed = drive_with_clutch(&mut drivetrain, &engine, 1.0, |_| pedal, 8.0);
+            assert!(drivetrain.running, "pedal {pedal}");
+            assert!(
+                speed > 20.0 && drivetrain.gear >= 2,
+                "pedal {pedal}: {speed} m/s"
+            );
+        }
     }
 
     /// Like `drive`, with the clutch pedal at `clutch(t)` over the run.
