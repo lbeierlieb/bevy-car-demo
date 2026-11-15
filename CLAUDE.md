@@ -30,6 +30,14 @@ repo, so everything worth knowing between sessions belongs here.
   To look at nixpkgs, use the pinned rev from `flake.lock` directly, e.g.
   `nix build 'github:NixOS/nixpkgs/<rev>#linuxPackages.hid-fanatecff'`.
 - Passwordless sudo works.
+- Never search the whole filesystem (`find /` and the like): the read-only part of
+  `/nix/store` is shared from the host over virtiofs, and walking it exhausts the host's
+  file descriptors. Every program then fails with "cannot open shared object file:
+  Error 23". To recover, push the inode cache out with memory pressure from bash alone
+  (`s=x; for ((i=0;i<30;i++)); do s=$s$s; done; unset s`, about 1 GB), then
+  `sudo sh -c 'echo 2 > /proc/sys/vm/drop_caches'`.
+- Dependency sources (no `~/.cargo/registry`): they're tarballs in the store, e.g.
+  `ls -d /nix/store/*cargo-src-egui-0.36*`; unpack into the scratchpad with `tar xzf`.
 - Bake tool: `cd tools/bake; nix develop /repo -c cargo build --release; ./target/release/bake …`.
 
 ### Screenshots (`tools/dev`)
@@ -37,8 +45,10 @@ repo, so everything worth knowing between sessions belongs here.
 `tools/dev/unstrip.sh` copies `tools/dev/shot.rs` into `src/` and hooks it into
 `main.rs`; `tools/dev/shot.sh out.png [frames] [keys]` renders headless and saves a
 screenshot; `tools/dev/strip.sh` removes the hook. Always run `strip.sh` and check that
-`grep -c shot src/main.rs` prints 0 before committing. `CAM`/`CAMAT` env vars place
-the camera (see `shot.rs`).
+`grep -c shot src/main.rs` prints 0 before committing. Keys are pressed from a third of
+the frames until the shot (`k` opens the map). `CLICK="x,y,frame"` clicks into the
+1280×720 window, e.g. on the map. `CAM`/`CAMAT` env vars place the camera (see
+`shot.rs`). `shot.sh` fetches Mesa and Xvfb from the pinned nixpkgs on first use.
 
 ### Virtual wheel (`tools/dev/fakewheel`)
 
