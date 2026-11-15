@@ -270,6 +270,9 @@ fn drive(
                 drivetrain.shift_to(&setup.engine, if shift < 0 { -1 } else { 1 });
             }
             (go, stop)
+        } else if let Some(gate) = wheel.shifter {
+            drivetrain.select_gate(&setup.engine, gate, speed);
+            (forward, back)
         } else {
             // Q/E or the paddles shift down/up.
             if shift != 0 {

@@ -374,6 +374,8 @@ pub struct WheelInput {
     pub shift_down: bool,
     pub ignition: bool,
     pub view: bool,
+    /// With an H-shifter bound: the gate the lever is in, or neutral (0) between gates.
+    pub shifter: Option<i8>,
     /// Buttons held last frame, to find presses.
     held: Vec<Action>,
 }
@@ -432,6 +434,17 @@ fn read_wheel(
         .filter(|a| !a.analog() && value(*a).is_some_and(|v| v > 0.5))
         .collect();
     let pressed = |action| held.contains(&action) && !wheel.held.contains(&action);
+    // Each gate is a button held while the lever is in it: the gear is whichever is held.
+    let gates = (1..=6).chain([-1]);
+    let shifter_bound = gates
+        .clone()
+        .any(|gear| config.binding(Action::Gate(gear)).is_some());
+    let shifter = shifter_bound.then(|| {
+        gates
+            .clone()
+            .find(|&gear| held.contains(&Action::Gate(gear)))
+            .unwrap_or(0)
+    });
     *wheel = WheelInput {
         steer: value(Action::Steer),
         throttle: value(Action::Throttle),
@@ -442,6 +455,7 @@ fn read_wheel(
         shift_down: pressed(Action::ShiftDown),
         ignition: pressed(Action::Ignition),
         view: pressed(Action::View),
+        shifter,
         held,
     };
 }

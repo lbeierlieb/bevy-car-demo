@@ -193,6 +193,26 @@ impl Drivetrain {
         }
     }
 
+    /// An H-shifter's lever in `gate` (0 between gates): the gear follows the lever. With a
+    /// clutch pedal, a gear only goes in while the pedal is pressed; otherwise the box stays
+    /// in neutral until it is. Reverse only goes in when (nearly) stopped (`speed` in m/s).
+    pub fn select_gate(&mut self, engine: &EngineSetup, gate: i8, speed: f32) {
+        let gate = if gate < 0 && speed.abs() > 2.0 {
+            0
+        } else {
+            gate
+        };
+        if gate == self.selected_gear() {
+            return;
+        }
+        let clutch_in = self.clutch_pedal.is_some_and(|travel| travel > CLUTCH_IN);
+        if gate == 0 || self.clutch_pedal.is_none() || clutch_in {
+            self.shift_to(engine, gate);
+        } else {
+            self.shift_to(engine, 0);
+        }
+    }
+
     /// Starts a gear change; the clutch opens for `shift_time`. With the clutch pedal
     /// pressed, the gear goes in at once.
     pub fn shift_to(&mut self, engine: &EngineSetup, gear: i8) {
@@ -494,6 +514,37 @@ mod tests {
         assert_eq!(drivetrain.gear, 2);
         let out = drivetrain.step(&engine, 1.0, Some(1.0), 20.0, true, 1.0 / 120.0);
         assert_eq!(out.torque, 0.0);
+    }
+
+    #[test]
+    fn h_shifter_needs_the_clutch_pedal() {
+        let engine = EngineSetup::default();
+        let mut drivetrain = Drivetrain::new(&engine);
+        let dt = 1.0 / 120.0;
+        // Clutch pedal out, lever into third: the gear doesn't go in, the box is in neutral.
+        drivetrain.step(&engine, 0.0, Some(0.0), 30.0, true, dt);
+        drivetrain.select_gate(&engine, 3, 10.0);
+        for _ in 0..60 {
+            drivetrain.step(&engine, 0.0, Some(0.0), 30.0, true, dt);
+        }
+        assert_eq!(drivetrain.gear, 0);
+        // Pressing the clutch with the lever still in third puts it in, at once.
+        drivetrain.step(&engine, 0.0, Some(1.0), 30.0, true, dt);
+        drivetrain.select_gate(&engine, 3, 10.0);
+        assert_eq!(drivetrain.gear, 3);
+        // Out of gear needs no clutch; reverse is refused while rolling.
+        drivetrain.step(&engine, 0.0, Some(0.0), 30.0, true, dt);
+        drivetrain.select_gate(&engine, 0, 10.0);
+        drivetrain.step(&engine, 0.0, Some(1.0), 30.0, true, dt);
+        drivetrain.select_gate(&engine, -1, 10.0);
+        assert_eq!(drivetrain.selected_gear(), 0);
+        // Without a pedal, the automatic clutch puts the gear in.
+        let mut drivetrain = Drivetrain::new(&engine);
+        drivetrain.select_gate(&engine, 2, 10.0);
+        for _ in 0..60 {
+            drivetrain.step(&engine, 0.0, None, 30.0, true, dt);
+        }
+        assert_eq!(drivetrain.gear, 2);
     }
 
     #[test]
