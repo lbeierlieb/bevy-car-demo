@@ -48,8 +48,10 @@ pub struct Terrain {
     /// Chunk side in cells, and the chunks, row-major in z.
     chunk_cells: usize,
     chunks: Vec<Chunk>,
-    /// Where the cars start (they're placed on the nearest paved road).
+    /// Where the cars start (they're placed on the nearest paved road), and the direction
+    /// they should face along it (zero if none).
     spawn: Vec2,
+    spawn_heading: Vec2,
     pub roads: Vec<Road>,
     pub buildings: Vec<Building>,
 }
@@ -82,11 +84,12 @@ impl Terrain {
     pub fn baked() -> Self {
         let mut r = Bytes(BAKED);
         assert_eq!(r.take(4), b"CSTR", "not a baked terrain file");
-        assert_eq!(r.u32(), 5, "unsupported terrain version");
+        assert_eq!(r.u32(), 6, "unsupported terrain version");
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
         let cell = r.f32();
         let chunk_cells = r.u32() as usize;
         let spawn = Vec2::new(r.f32(), r.f32());
+        let spawn_heading = Vec2::new(r.f32(), r.f32());
         let n = cells_x + 1;
         let mut heights = vec![0.0; n * (cells_z + 1)];
         let mut chunks = Vec::new();
@@ -133,6 +136,7 @@ impl Terrain {
             chunk_cells,
             chunks,
             spawn,
+            spawn_heading,
             roads,
             buildings,
         }
@@ -237,29 +241,44 @@ impl Terrain {
         })
     }
 
-    /// `count` spots along the paved road nearest the spawn point, `spacing` metres apart,
-    /// as (position in xz, yaw facing along the road).
+    /// `count` spots on the paved road nearest the spawn point, `spacing` metres apart, as
+    /// (position in xz, yaw facing along the road). The first is the closest point on the
+    /// road to the spawn point, facing in the road direction closest to the spawn heading;
+    /// the others line up behind it.
     pub fn road_spawns(&self, count: usize, spacing: f32) -> Vec<(Vec2, f32)> {
-        let (road, start) = self
+        // Closest point on any segment: (road, segment start index, point).
+        let (road, i, start) = self
             .roads
             .iter()
             .filter(|r| r.kind == RoadKind::Paved && r.width >= 5.0)
             .flat_map(|r| {
-                r.points
-                    .iter()
-                    .enumerate()
-                    .map(move |(i, p)| (r, i, p.distance(self.spawn)))
+                r.points.windows(2).enumerate().map(move |(i, pair)| {
+                    let (a, b) = (pair[0], pair[1]);
+                    let t = ((self.spawn - a).dot(b - a) / (b - a).length_squared().max(1e-6))
+                        .clamp(0.0, 1.0);
+                    (r, i, a.lerp(b, t))
+                })
             })
-            .min_by(|a, b| a.2.total_cmp(&b.2))
-            .map(|(r, i, _)| (r, i))
+            .min_by(|a, b| {
+                a.2.distance(self.spawn)
+                    .total_cmp(&b.2.distance(self.spawn))
+            })
             .expect("map has no paved roads");
-        // Walk towards whichever end of the road is further away.
-        let forward = start < road.points.len() / 2;
-        let mut points: Vec<Vec2> = if forward {
-            road.points[start..].to_vec()
+        // Face along the spawn heading; without one, so there's more road behind.
+        let n = road.points.len();
+        let forward = if self.spawn_heading == Vec2::ZERO {
+            i >= n / 2
         } else {
-            road.points[..=start].iter().rev().copied().collect()
+            (road.points[i + 1] - road.points[i]).dot(self.spawn_heading) >= 0.0
         };
+        // Walk backwards from the start; the cars face the other way.
+        let behind: Vec<Vec2> = if forward {
+            road.points[..=i].iter().rev().copied().collect()
+        } else {
+            road.points[i + 1..].to_vec()
+        };
+        let mut points = vec![start];
+        points.extend(behind);
         points.dedup();
         let mut spawns = Vec::new();
         let mut next = 0.0;
@@ -268,8 +287,8 @@ impl Terrain {
             let length = pair[0].distance(pair[1]);
             while spawns.len() < count && next <= travelled + length {
                 let along = pair[0].lerp(pair[1], (next - travelled) / length);
-                let dir = (pair[1] - pair[0]) / length;
-                spawns.push((along, (-dir.x).atan2(-dir.y)));
+                let facing = (pair[0] - pair[1]) / length;
+                spawns.push((along, (-facing.x).atan2(-facing.y)));
                 next += spacing;
             }
             travelled += length;
@@ -546,8 +565,15 @@ mod tests {
         let spawns = terrain.road_spawns(3, 9.0);
         assert_eq!(spawns.len(), 3);
         assert!(spawns[0].0.distance(spawns[2].0) > 10.0);
-        // Near the baked spawn point (Gerach), not somewhere else on the map.
-        assert!(spawns[0].0.distance(terrain.spawn) < 200.0);
+        // At the baked spawn point (Gerach), facing along the spawn heading.
+        assert!(spawns[0].0.distance(terrain.spawn) < 30.0);
+        for (p, yaw) in &spawns {
+            let facing = Vec2::new(-yaw.sin(), -yaw.cos());
+            assert!(
+                facing.dot(terrain.spawn_heading) > 0.5,
+                "facing {facing} at {p}"
+            );
+        }
     }
 
     #[test]

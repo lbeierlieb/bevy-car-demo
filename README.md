@@ -123,11 +123,13 @@ covers Bavaria, so locations elsewhere would need another elevation source.
 nix develop
 cd tools/bake
 cargo build --release
-./target/release/bake <lat> <lon> <width_m>[x<height_m>] ../../assets/<name>.terrain [<spawn_lat> <spawn_lon>]
+./target/release/bake <lat> <lon> <width_m>[x<height_m>] ../../assets/<name>.terrain \
+    [<spawn_lat> <spawn_lon> [<spawn_heading>]]
 ```
 
 The map was baked with `50.0118569 10.8455963 9600x8448 ../../assets/gerach.terrain
-50.0304493 10.8065719`, which spawns the cars in Gerach. To use a different file,
+50.0305556 10.8046389 180`, which starts the cars on the road nearest that point in
+Gerach, facing as close to south (180°) as the road allows, one behind the other. To use a different file,
 change `BAKED` in `src/terrain.rs`. The public Overpass server sometimes answers
 that it's busy; the tool then retries every minute, up to five times. Only chunks near the camera are on the GPU, so map size is limited by
 the size of the baked file, which is embedded in the program (about 0.65 MB per km²

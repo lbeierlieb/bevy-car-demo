@@ -1,7 +1,8 @@
 //! Bakes a rectangle of real-world terrain, land use, roads and buildings into the binary
 //! format that car-sim embeds (see `src/terrain.rs` in the game for the reader).
 //!
-//! Usage: `bake <lat> <lon> <width_m>[x<height_m>] <out_file> [<spawn_lat> <spawn_lon>]`
+//! Usage: `bake <lat> <lon> <width_m>[x<height_m>] <out_file> [<spawn_lat> <spawn_lon>
+//! [<spawn_heading>]]`, the heading in compass degrees (0 north, 90 east).
 //!
 //! Elevation is the 1 m lidar terrain model (DGM1) of the Bavarian surveying
 //! administration, so this only works inside Bavaria. Everything else comes from
@@ -471,20 +472,16 @@ fn inside_rings(rings: &[Vec<Point>], (px, pz): Point) -> bool {
 fn main() -> Result<(), Error> {
     let args: Vec<String> = std::env::args().collect();
     let (lat, lon, size, out, spawn) = match args.as_slice() {
-        [_, lat, lon, size, out] => (lat, lon, size, out, None),
-        [_, lat, lon, size, out, spawn_lat, spawn_lon] => (
-            lat,
-            lon,
-            size,
-            out,
-            Some((spawn_lat.parse::<f64>()?, spawn_lon.parse::<f64>()?)),
-        ),
+        [_, lat, lon, size, out, spawn @ ..] if spawn.len() <= 3 && spawn.len() != 1 => {
+            (lat, lon, size, out, spawn)
+        }
         _ => {
             return Err("usage: bake <lat> <lon> <width_m>[x<height_m>] <out_file> \
-                        [<spawn_lat> <spawn_lon>]"
+                        [<spawn_lat> <spawn_lon> [<spawn_heading>]]"
                 .into());
         }
     };
+    let spawn: Vec<f64> = spawn.iter().map(|v| v.parse()).collect::<Result<_, _>>()?;
     let center = (lat.parse::<f64>()?, lon.parse::<f64>()?);
     let (east, north) = utm32(center.0, center.1);
     // Centre on a whole metre so grid vertices line up with lidar pixel edges.
@@ -767,7 +764,8 @@ fn main() -> Result<(), Error> {
     }
 
     // Write (all little-endian): b"CSTR", version u32, cells along x and z u32, cell size f32,
-    // chunk cells u32, spawn point (x, z) f32,
+    // chunk cells u32, spawn point (x, z) f32, spawn heading as a direction (x, z) f32
+    // ((0, 0) if not given),
     // then per chunk (row-major, rows along z): step u8 (in cells), the chunk's
     // (chunk cells / step + 1)² vertex heights f32 relative to the lowest point and
     // (chunk cells / step)² land use classes u8 (row-major),
@@ -776,17 +774,28 @@ fn main() -> Result<(), Error> {
     // building count u32, then per building: levels f32 (0: unknown), point count u32,
     // outline points (x, z) f32.
     let base = heights.iter().copied().fold(f64::INFINITY, f64::min);
-    let spawn = spawn.map_or((0.0, 0.0), |(lat, lon)| frame.to_local(lat, lon));
+    let (spawn, heading) = match spawn[..] {
+        [lat, lon, ref heading @ ..] => (
+            frame.to_local(lat, lon),
+            // Compass degrees to the map frame (x east, z south).
+            heading.first().map_or((0.0, 0.0), |h| {
+                (h.to_radians().sin(), -h.to_radians().cos())
+            }),
+        ),
+        _ => ((0.0, 0.0), (0.0, 0.0)),
+    };
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&5u32.to_le_bytes());
+    put(&6u32.to_le_bytes());
     put(&(cells_x as u32).to_le_bytes());
     put(&(cells_z as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
     put(&(CHUNK_CELLS as u32).to_le_bytes());
     put(&(spawn.0 as f32).to_le_bytes());
     put(&(spawn.1 as f32).to_le_bytes());
+    put(&(heading.0 as f32).to_le_bytes());
+    put(&(heading.1 as f32).to_le_bytes());
     for cz in 0..chunks_z {
         for cx in 0..chunks_x {
             let s = steps[cz * chunks_x + cx];
