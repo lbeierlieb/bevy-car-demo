@@ -244,7 +244,7 @@ struct Area {
 struct Osm {
     nodes: HashMap<u64, Point>,
     ways: HashMap<u64, (Vec<u64>, Tags)>,
-    relations: Vec<(u64, Vec<u64>, Tags)>,
+    relations: HashMap<u64, (Vec<u64>, Tags)>,
 }
 
 impl Osm {
@@ -259,7 +259,7 @@ impl Osm {
                     Event::End(e) if matches!(e.name().as_ref(), "way" | "relation") => {
                         if let Some((relation, id, refs, tags)) = current.take() {
                             if relation {
-                                self.relations.push((id, refs, tags));
+                                self.relations.insert(id, (refs, tags));
                             } else {
                                 self.ways.insert(id, (refs, tags));
                             }
@@ -354,22 +354,19 @@ fn fetch_osm(frame: &Frame, center: Point, half_size: f64) -> Result<Osm, Error>
     let dlon = dlat / center.0.to_radians().cos();
     let (lat, lon) = center;
     let mut osm = Osm::default();
-    let url = format!(
-        "https://api.openstreetmap.org/api/0.6/map?bbox={:.6},{:.6},{:.6},{:.6}",
-        lon - dlon,
-        lat - dlat,
-        lon + dlon,
-        lat + dlat
-    );
-    osm.parse(&String::from_utf8(get(&url)?)?, frame)?;
+    fetch_box(
+        &mut osm,
+        frame,
+        [lon - dlon, lat - dlat, lon + dlon, lat + dlat],
+    )?;
     // The map call omits multipolygon member ways outside the box: fetch those in full.
     let multipolygons: Vec<u64> = osm
         .relations
         .iter()
-        .filter(|(_, _, tags)| {
+        .filter(|(_, (_, tags))| {
             tags.get("type").is_some_and(|t| t == "multipolygon") && land_class(tags).is_some()
         })
-        .map(|(id, _, _)| *id)
+        .map(|(id, _)| *id)
         .collect();
     for id in multipolygons {
         let url = format!("https://api.openstreetmap.org/api/0.6/relation/{id}/full");
@@ -381,6 +378,37 @@ fn fetch_osm(frame: &Frame, center: Point, half_size: f64) -> Result<Osm, Error>
         }
     }
     Ok(osm)
+}
+
+/// Downloads everything in a `[min lon, min lat, max lon, max lat]` box into `osm`. The
+/// OSM API refuses boxes with more than 50 000 nodes (HTTP 400): those are split into
+/// quarters and fetched recursively. Elements crossing tile borders arrive more than
+/// once; merging by ID removes the duplicates.
+fn fetch_box(
+    osm: &mut Osm,
+    frame: &Frame,
+    [west, south, east, north]: [f64; 4],
+) -> Result<(), Error> {
+    let url = format!(
+        "https://api.openstreetmap.org/api/0.6/map?bbox={west:.6},{south:.6},{east:.6},{north:.6}"
+    );
+    match get(&url) {
+        Ok(xml) => osm.parse(&String::from_utf8(xml)?, frame),
+        Err(e) if matches!(e.downcast_ref(), Some(ureq::Error::StatusCode(400))) => {
+            eprintln!("  too much data, splitting into quarters");
+            let (mid_lon, mid_lat) = ((west + east) / 2.0, (south + north) / 2.0);
+            for quarter in [
+                [west, south, mid_lon, mid_lat],
+                [mid_lon, south, east, mid_lat],
+                [west, mid_lat, mid_lon, north],
+                [mid_lon, mid_lat, east, north],
+            ] {
+                fetch_box(osm, frame, quarter)?;
+            }
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Resamples a polyline at roughly `ROAD_STEP` spacing, keeping the original vertices.
@@ -496,7 +524,7 @@ fn main() -> Result<(), Error> {
             }
         }
     }
-    for (_, members, tags) in &osm.relations {
+    for (members, tags) in osm.relations.values() {
         if tags.get("type").is_some_and(|t| t == "multipolygon")
             && let Some(class) = land_class(tags)
         {

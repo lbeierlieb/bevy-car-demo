@@ -92,8 +92,9 @@ cargo build --release
 ```
 
 Gerach was baked with `50.02955 10.80867 1600`. To use a different file, change
-`BAKED` in `src/terrain.rs`. The OSM API only serves small areas, so keep the size
-to a few kilometres.
+`BAKED` in `src/terrain.rs`. The OSM API refuses requests with more than 50 000 nodes;
+the tool then splits the area into quarters (recursively) and merges the results.
+Map size is limited more by GPU memory: about 65 MB per km² of terrain mesh.
 
 ## Deliberate simplifications
 
