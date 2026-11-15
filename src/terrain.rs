@@ -1,9 +1,8 @@
 //! Real-world terrain baked by `tools/bake`: a heightfield rendered flat-shaded and queried
 //! analytically (the physics sees exactly the triangles that are drawn), plus road ribbons.
+//! Meshes are built per chunk, on demand (see `scenery`).
 
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::visibility::VisibilityRange;
-use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
@@ -15,16 +14,12 @@ const RIM: f32 = 30.0;
 const ROAD_LIFT: f32 = 0.05;
 /// Maximum spacing of road ribbon vertices, along and across the road.
 const DRAPE_STEP: f32 = 1.0;
-/// Chunks whose centre is further from the camera are hidden: just past the fog (which
-/// ends at 480 m) plus half a chunk diagonal.
-const DRAW_DISTANCE: f32 = 560.0;
 
 pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Terrain::baked())
-            .add_systems(Startup, spawn_terrain);
+        app.insert_resource(Terrain::baked());
     }
 }
 
@@ -273,138 +268,123 @@ impl Terrain {
         spawns
     }
 
-    /// Flat-shaded mesh: every triangle gets its own vertices, coloured by land use and slope.
-    fn mesh(&self) -> ChunkedMesh {
-        let mut meshes = ChunkedMesh::new(self);
+    /// Number of chunks; chunks are numbered row-major in z.
+    pub fn chunk_count(&self) -> usize {
         let per_side = self.cells / self.chunk_cells;
-        for (index, chunk) in self.chunks.iter().enumerate() {
-            // Each chunk is meshed at its own resolution.
-            let s = chunk.step;
-            let m = self.chunk_cells / s;
-            let (cx, cz) = (index % per_side, index / per_side);
-            for jz in 0..m {
-                for jx in 0..m {
-                    let (ix, iz) = (
-                        cx * self.chunk_cells + jx * s,
-                        cz * self.chunk_cells + jz * s,
-                    );
-                    let (a, b) = (self.vertex(ix, iz), self.vertex(ix + s, iz));
-                    let (c, d) = (self.vertex(ix, iz + s), self.vertex(ix + s, iz + s));
-                    let mesh = meshes.at(a);
-                    for tri in [[a, d, b], [a, c, d]] {
-                        let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
-                        let class = chunk.classes[jz * m + jx];
-                        mesh.triangle(tri, ground_color(class, normal.y, ix * 31 + iz * 17));
-                    }
+        per_side * per_side
+    }
+
+    /// The chunk containing (x, z), clamped to the map.
+    pub fn chunk_at(&self, p: Vec2) -> usize {
+        let per_side = self.cells / self.chunk_cells;
+        let size = self.chunk_cells as f32 * self.cell;
+        let index = |v: f32| (((v + self.half_size()) / size).max(0.0) as usize).min(per_side - 1);
+        index(p.y) * per_side + index(p.x)
+    }
+
+    /// Lower and upper corners of a chunk in the xz plane.
+    pub fn chunk_bounds(&self, index: usize) -> (Vec2, Vec2) {
+        let per_side = self.cells / self.chunk_cells;
+        let size = self.chunk_cells as f32 * self.cell;
+        let lo = Vec2::new((index % per_side) as f32, (index / per_side) as f32) * size
+            - self.half_size();
+        (lo, lo + size)
+    }
+
+    /// Flat-shaded ground of one chunk, at the chunk's resolution: every triangle gets its
+    /// own vertices, coloured by land use and slope.
+    pub fn ground_mesh(&self, index: usize, mesh: &mut FlatMesh) {
+        let per_side = self.cells / self.chunk_cells;
+        let chunk = &self.chunks[index];
+        let s = chunk.step;
+        let m = self.chunk_cells / s;
+        let (cx, cz) = (index % per_side, index / per_side);
+        for jz in 0..m {
+            for jx in 0..m {
+                let (ix, iz) = (
+                    cx * self.chunk_cells + jx * s,
+                    cz * self.chunk_cells + jz * s,
+                );
+                let (a, b) = (self.vertex(ix, iz), self.vertex(ix + s, iz));
+                let (c, d) = (self.vertex(ix, iz + s), self.vertex(ix + s, iz + s));
+                for tri in [[a, d, b], [a, c, d]] {
+                    let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
+                    let class = chunk.classes[jz * m + jx];
+                    mesh.triangle(tri, ground_color(class, normal.y, ix * 31 + iz * 17));
                 }
             }
         }
-        meshes
     }
+}
 
-    /// Ribbons along the road centrelines, draped onto the terrain.
-    fn road_mesh(&self) -> ChunkedMesh {
-        let mut chunks = ChunkedMesh::new(self);
-        let lift = |p: Vec2| Vec3::new(p.x, self.sample(p.x, p.y).0 + ROAD_LIFT, p.y);
-        for road in &self.roads {
+/// Ribbons along the road centrelines, draped onto the terrain and meshed per chunk.
+pub struct RoadRibbons {
+    /// Each road's runs inside the map, resampled to `DRAPE_STEP`.
+    ribbons: Vec<Ribbon>,
+    /// Per chunk, the (ribbon, row) pairs whose quads start there.
+    by_chunk: Vec<Vec<(usize, usize)>>,
+}
+
+struct Ribbon {
+    color: [f32; 4],
+    width: f32,
+    points: Vec<Vec2>,
+}
+
+impl RoadRibbons {
+    pub fn new(terrain: &Terrain) -> Self {
+        let mut ribbons = Vec::new();
+        for road in &terrain.roads {
             let color = match road.kind {
                 RoadKind::Paved => [0.24, 0.24, 0.26, 1.0],
                 RoadKind::Unpaved => [0.56, 0.49, 0.38, 1.0],
                 RoadKind::Water => [0.22, 0.42, 0.58, 1.0],
             };
             // Skip where the road climbs the rim at the map edge.
-            let inside = |p: &Vec2| self.inside(p.x, p.y);
             for run in road
                 .points
-                .split(|p| !inside(p))
+                .split(|p| !terrain.inside(p.x, p.y))
                 .filter(|run| run.len() >= 2)
             {
-                // Drape the ribbon: vertices at most `DRAPE_STEP` apart along and across
-                // the road, each set onto the terrain, so it follows the 2 m terrain mesh.
-                let run = resample(run, DRAPE_STEP);
-                let n = run.len();
-                let across = (road.width / DRAPE_STEP).ceil().max(1.0) as usize;
-                let rows: Vec<Vec<Vec3>> = (0..n)
-                    .map(|i| {
-                        let tangent = (run[(i + 1).min(n - 1)] - run[i.saturating_sub(1)])
-                            .normalize_or_zero();
-                        let side = Vec2::new(-tangent.y, tangent.x) * road.width / 2.0;
-                        (0..=across)
-                            .map(|j| lift(run[i] - side + side * (2.0 * j as f32 / across as f32)))
-                            .collect()
-                    })
-                    .collect();
-                for pair in rows.windows(2) {
-                    for j in 0..across {
-                        let (a, b) = (pair[0][j], pair[0][j + 1]);
-                        let (c, d) = (pair[1][j], pair[1][j + 1]);
-                        let mesh = chunks.at(a);
-                        mesh.triangle([a, b, c], color);
-                        mesh.triangle([b, d, c], color);
-                    }
-                }
+                ribbons.push(Ribbon {
+                    color,
+                    width: road.width,
+                    points: resample(run, DRAPE_STEP),
+                });
             }
         }
-        chunks
-    }
-}
-
-/// Flat meshes split into square chunks by position, so the camera can cull what's
-/// behind it or beyond the fog instead of drawing the whole map every frame.
-pub struct ChunkedMesh {
-    half_size: f32,
-    chunk_size: f32,
-    per_side: usize,
-    chunks: Vec<FlatMesh>,
-}
-
-impl ChunkedMesh {
-    /// Empty meshes, one per terrain chunk.
-    pub fn new(terrain: &Terrain) -> Self {
-        let per_side = terrain.cells / terrain.chunk_cells;
-        let chunks = (0..per_side * per_side)
-            .map(|_| FlatMesh::default())
-            .collect();
-        Self {
-            half_size: terrain.half_size(),
-            chunk_size: terrain.chunk_cells as f32 * terrain.cell,
-            per_side,
-            chunks,
+        let mut by_chunk = vec![Vec::new(); terrain.chunk_count()];
+        for (r, ribbon) in ribbons.iter().enumerate() {
+            for (i, p) in ribbon.points[..ribbon.points.len() - 1].iter().enumerate() {
+                by_chunk[terrain.chunk_at(*p)].push((r, i));
+            }
         }
+        Self { ribbons, by_chunk }
     }
 
-    /// The chunk containing `p` (by its x and z).
-    pub fn at(&mut self, p: Vec3) -> &mut FlatMesh {
-        let index = |v: f32| {
-            (((v + self.half_size) / self.chunk_size).max(0.0) as usize).min(self.per_side - 1)
-        };
-        &mut self.chunks[index(p.z) * self.per_side + index(p.x)]
-    }
-
-    /// One entity per non-empty chunk, hidden beyond `DRAW_DISTANCE`.
-    pub fn spawn(
-        self,
-        commands: &mut Commands,
-        meshes: &mut Assets<Mesh>,
-        material: Handle<StandardMaterial>,
-        casts_shadows: bool,
-    ) {
-        for chunk in self
-            .chunks
-            .into_iter()
-            .filter(|chunk| !chunk.positions.is_empty())
-        {
-            let mut entity = commands.spawn((
-                Mesh3d(meshes.add(chunk.build())),
-                MeshMaterial3d(material.clone()),
-                // Measured from each chunk's bounding box centre, as vertices are in world space.
-                VisibilityRange {
-                    use_aabb: true,
-                    ..VisibilityRange::abrupt(0.0, DRAW_DISTANCE)
-                },
-            ));
-            if !casts_shadows {
-                entity.insert(NotShadowCaster);
+    /// The ribbon quads starting in one chunk. Vertices are at most `DRAPE_STEP` apart
+    /// along and across the road, each set onto the terrain, so the ribbon follows the
+    /// 2 m terrain mesh.
+    pub fn mesh(&self, terrain: &Terrain, index: usize, mesh: &mut FlatMesh) {
+        let lift = |p: Vec2| Vec3::new(p.x, terrain.sample(p.x, p.y).0 + ROAD_LIFT, p.y);
+        for &(r, i) in &self.by_chunk[index] {
+            let ribbon = &self.ribbons[r];
+            let (points, n) = (&ribbon.points, ribbon.points.len());
+            let across = (ribbon.width / DRAPE_STEP).ceil().max(1.0) as usize;
+            let row = |i: usize| -> Vec<Vec3> {
+                let tangent =
+                    (points[(i + 1).min(n - 1)] - points[i.saturating_sub(1)]).normalize_or_zero();
+                let side = Vec2::new(-tangent.y, tangent.x) * ribbon.width / 2.0;
+                (0..=across)
+                    .map(|j| lift(points[i] - side + side * (2.0 * j as f32 / across as f32)))
+                    .collect()
+            };
+            let (near, far) = (row(i), row(i + 1));
+            for j in 0..across {
+                let (a, b) = (near[j], near[j + 1]);
+                let (c, d) = (far[j], far[j + 1]);
+                mesh.triangle([a, b, c], ribbon.color);
+                mesh.triangle([b, d, c], ribbon.color);
             }
         }
     }
@@ -483,6 +463,10 @@ impl FlatMesh {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.positions.is_empty()
+    }
+
     pub fn build(self) -> Mesh {
         let indices = (0..self.positions.len() as u32).collect();
         Mesh::new(
@@ -520,32 +504,6 @@ fn ground_color(class: u8, up: f32, variation: usize) -> [f32; 4] {
         base
     };
     (base + Vec3::splat(jitter)).extend(1.0).to_array()
-}
-
-fn spawn_terrain(
-    mut commands: Commands,
-    terrain: Res<Terrain>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    // Neither casts shadows: on gentle real terrain self-shadowing is barely visible, and
-    // skipping it keeps the big meshes out of every shadow cascade. They still receive
-    // shadows from houses and cars.
-    let ground = materials.add(StandardMaterial {
-        perceptual_roughness: 0.95,
-        ..default()
-    });
-    terrain
-        .mesh()
-        .spawn(&mut commands, &mut meshes, ground, false);
-    let roads = materials.add(StandardMaterial {
-        perceptual_roughness: 0.9,
-        depth_bias: 1.0,
-        ..default()
-    });
-    terrain
-        .road_mesh()
-        .spawn(&mut commands, &mut meshes, roads, false);
 }
 
 /// Integer hash to [0, 1).

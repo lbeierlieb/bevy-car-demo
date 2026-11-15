@@ -28,9 +28,11 @@ A small Bevy demo of car simulation techniques:
   OpenStreetMap. Houses are boxes with gable roofs fitted to each footprint;
   they're visual only, with no collisions. Forests are filled with low-poly
   spruces and broadleaf trees (and scrub with bushes), scattered on a jittered
-  7 m grid and kept clear of roads and streams. They're also visual only, and
-  merged into one mesh per terrain chunk. The height and raycast queries use the
-  exact rendered triangles.
+  7 m grid and kept clear of roads and streams. They're also visual only. The
+  height and raycast queries use the exact rendered triangles.
+- **Streamed meshes**: ground, roads, houses and trees are meshed per 96 m chunk
+  when the chunk comes within 560 m of the camera, and freed again when it's left
+  behind. GPU memory therefore doesn't grow with the map size.
 - Three setups (baseline, soft, track), debug gizmos for the linkage and forces,
   and a telemetry panel with live-tunable springs, dampers, camber, arm geometry
   and tire parameters.
@@ -76,6 +78,7 @@ tire grip force, cyan for roll centres.
 | `src/terrain.rs` | Baked map loading, terrain and road meshes, raycast, spawns |
 | `src/buildings.rs` | Low-poly houses from the OSM building outlines (visual only) |
 | `src/trees.rs` | Trees in forest areas and bushes on scrub (visual only) |
+| `src/scenery.rs` | Loads and unloads chunk meshes around the camera |
 | `tools/bake` | Separate crate that bakes `assets/*.terrain` from online data |
 | `src/visuals.rs` | Procedural meshes posed from the simulation |
 | `src/debug.rs`, `src/ui.rs`, `src/camera.rs` | Gizmos, telemetry panel, chase camera |
@@ -111,8 +114,9 @@ The map was baked with `50.03674 10.80097 3072 ../../assets/gerach.terrain
 50.0304493 10.8065719`, which spawns the cars in Gerach. To use a different file,
 change `BAKED` in `src/terrain.rs`. The OSM API refuses requests with more than
 50 000 nodes; the tool then splits the area into quarters (recursively) and merges
-the results. Map size is mainly limited by GPU memory. That's about 65 MB per km²
-at full detail; empty fields and forest cost a sixteenth of that.
+the results. Only chunks near the camera are on the GPU, so map size is limited by
+the size of the baked file, which is embedded in the program (about 0.65 MB per km²
+with the current mix of resolutions).
 
 ## Deliberate simplifications
 

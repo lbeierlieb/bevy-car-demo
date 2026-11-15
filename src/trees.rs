@@ -1,12 +1,12 @@
 //! Low-poly trees scattered over the forest areas (and bushes over scrub), visual only.
-//! Positions come from a jittered grid, kept clear of roads and streams. All trees are
-//! merged into the terrain's chunk meshes, so a whole forest costs a few draw calls.
+//! Positions come from a jittered grid, kept clear of roads and streams. Trees are meshed
+//! per terrain chunk, so a whole forest costs a few draw calls.
 
 use std::f32::consts::TAU;
 
 use bevy::prelude::*;
 
-use crate::terrain::{ChunkedMesh, FlatMesh, Terrain, hash};
+use crate::terrain::{FlatMesh, Terrain, hash};
 
 /// Land use classes (as in `tools/bake`).
 const SCRUB: u8 = 7;
@@ -30,99 +30,98 @@ const LEAVES: [[f32; 4]; 3] = [
     [0.20, 0.33, 0.12, 1.0],
 ];
 
-pub struct TreesPlugin;
-
-impl Plugin for TreesPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_trees);
-    }
+/// Tree positions: a jittered grid over forest and scrub, minus the roads.
+pub struct Forest {
+    mask: RoadMask,
 }
 
-fn spawn_trees(
-    mut commands: Commands,
-    terrain: Res<Terrain>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let mut chunks = ChunkedMesh::new(&terrain);
-    let count = scatter(&terrain, |p, i| {
-        let ground = Vec3::new(p.x, terrain.sample(p.x, p.y).0, p.y);
-        let mesh = chunks.at(ground);
-        let size = 0.7 + 0.6 * hash(i ^ 0x5bd1);
-        let pick = (hash(i ^ 0x2c1b) * 3.0) as usize % 3;
-        let turn = hash(i ^ 0x7e3f) * TAU;
-        match terrain.land_class(p.x, p.y) {
-            SCRUB => crown(
-                mesh,
-                ground,
-                0.0,
-                1.0 * size,
-                2.0 * size,
-                LEAVES[pick],
-                turn,
-            ),
-            _ if hash(i ^ 0x1f4a) < 0.6 => {
-                // Spruce: a short trunk and one long cone.
-                trunk(mesh, ground, 2.0 * size, 0.25 * size, turn);
-                cone(
+impl Forest {
+    pub fn new(terrain: &Terrain) -> Self {
+        Self {
+            mask: RoadMask::new(terrain),
+        }
+    }
+
+    /// The trees and bushes of one chunk.
+    pub fn mesh(&self, terrain: &Terrain, index: usize, mesh: &mut FlatMesh) {
+        for (p, i) in self.positions(terrain, index) {
+            let ground = Vec3::new(p.x, terrain.sample(p.x, p.y).0, p.y);
+            let size = 0.7 + 0.6 * hash(i ^ 0x5bd1);
+            let pick = (hash(i ^ 0x2c1b) * 3.0) as usize % 3;
+            let turn = hash(i ^ 0x7e3f) * TAU;
+            match terrain.land_class(p.x, p.y) {
+                SCRUB => crown(
                     mesh,
                     ground,
-                    1.5 * size,
-                    2.4 * size,
-                    15.0 * size,
-                    NEEDLES[pick],
-                    turn,
-                );
-            }
-            _ => {
-                // Broadleaf: a taller trunk and a rounded crown.
-                trunk(mesh, ground, 5.0 * size, 0.3 * size, turn);
-                crown(
-                    mesh,
-                    ground,
-                    4.0 * size,
-                    2.6 * size,
-                    10.0 * size,
+                    0.0,
+                    1.0 * size,
+                    2.0 * size,
                     LEAVES[pick],
                     turn,
-                );
-            }
-        }
-    });
-    info!("{count} trees and bushes");
-    let material = materials.add(StandardMaterial {
-        perceptual_roughness: 0.9,
-        ..default()
-    });
-    chunks.spawn(&mut commands, &mut meshes, material, true);
-}
-
-/// Calls `plant` with the position and a seed for every tree or bush, returning the count.
-fn scatter(terrain: &Terrain, mut plant: impl FnMut(Vec2, u32)) -> usize {
-    let mask = RoadMask::new(terrain);
-    let n = (2.0 * mask.half_size / SPACING) as i32;
-    let mut count = 0;
-    for gz in 0..n {
-        for gx in 0..n {
-            let i = (gz * n + gx) as u32;
-            let jitter = Vec2::new(hash(i ^ 0x3a7c), hash(i ^ 0x6d2e));
-            let p = (Vec2::new(gx as f32, gz as f32) + jitter) * SPACING - mask.half_size;
-            if !terrain.inside(p.x, p.y) || mask.blocked(p) {
-                continue;
-            }
-            // Bushes over scrub are sparser than trees in forest.
-            let keep = match terrain.land_class(p.x, p.y) {
-                FOREST => true,
-                SCRUB => hash(i ^ 0x4b9d) < 0.35,
-                _ => false,
-            };
-            if keep {
-                plant(p, i);
-                count += 1;
+                ),
+                _ if hash(i ^ 0x1f4a) < 0.6 => {
+                    // Spruce: a short trunk and one long cone.
+                    trunk(mesh, ground, 2.0 * size, 0.25 * size, turn);
+                    cone(
+                        mesh,
+                        ground,
+                        1.5 * size,
+                        2.4 * size,
+                        15.0 * size,
+                        NEEDLES[pick],
+                        turn,
+                    );
+                }
+                _ => {
+                    // Broadleaf: a taller trunk and a rounded crown.
+                    trunk(mesh, ground, 5.0 * size, 0.3 * size, turn);
+                    crown(
+                        mesh,
+                        ground,
+                        4.0 * size,
+                        2.6 * size,
+                        10.0 * size,
+                        LEAVES[pick],
+                        turn,
+                    );
+                }
             }
         }
     }
-    count
+
+    /// Positions and seeds of the trees and bushes whose grid cell lies in a chunk.
+    fn positions(&self, terrain: &Terrain, index: usize) -> Vec<(Vec2, u32)> {
+        let half_size = self.mask.half_size;
+        let n = (2.0 * half_size / SPACING) as usize;
+        let (lo, hi) = terrain.chunk_bounds(index);
+        // Grid cells whose corner lies in [lo, hi).
+        let range = |lo: f32, hi: f32| {
+            let first = ((lo + half_size) / SPACING).ceil() as usize;
+            let end = (((hi + half_size) / SPACING).ceil() as usize).min(n);
+            first..end
+        };
+        let mut out = Vec::new();
+        for gz in range(lo.y, hi.y) {
+            for gx in range(lo.x, hi.x) {
+                let i = (gz * n + gx) as u32;
+                let jitter = Vec2::new(hash(i ^ 0x3a7c), hash(i ^ 0x6d2e));
+                let p = (Vec2::new(gx as f32, gz as f32) + jitter) * SPACING - half_size;
+                if !terrain.inside(p.x, p.y) || self.mask.blocked(p) {
+                    continue;
+                }
+                // Bushes over scrub are sparser than trees in forest.
+                let keep = match terrain.land_class(p.x, p.y) {
+                    FOREST => true,
+                    SCRUB => hash(i ^ 0x4b9d) < 0.35,
+                    _ => false,
+                };
+                if keep {
+                    out.push((p, i));
+                }
+            }
+        }
+        out
+    }
 }
 
 /// Cells within `CLEARANCE` of a road or stream.
@@ -242,10 +241,13 @@ mod tests {
     #[test]
     fn trees_grow_in_forest_and_keep_off_roads() {
         let terrain = Terrain::baked();
-        let mut trees = Vec::new();
-        let count = scatter(&terrain, |p, _| trees.push(p));
-        println!("{count} trees and bushes");
-        assert!(count > 1000);
+        let forest = Forest::new(&terrain);
+        let trees: Vec<Vec2> = (0..terrain.chunk_count())
+            .flat_map(|index| forest.positions(&terrain, index))
+            .map(|(p, _)| p)
+            .collect();
+        println!("{} trees and bushes", trees.len());
+        assert!(trees.len() > 1000);
         for p in trees {
             assert!(matches!(terrain.land_class(p.x, p.y), SCRUB | FOREST));
             for road in &terrain.roads {

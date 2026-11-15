@@ -4,6 +4,7 @@ mod camera;
 mod car;
 mod debug;
 mod physics;
+mod scenery;
 mod sim;
 mod terrain;
 mod trees;
@@ -33,8 +34,7 @@ fn main() {
         })
         .add_plugins((
             terrain::TerrainPlugin,
-            buildings::BuildingsPlugin,
-            trees::TreesPlugin,
+            scenery::SceneryPlugin,
             sim::SimPlugin,
             car::CarPlugin,
             visuals::VisualsPlugin,

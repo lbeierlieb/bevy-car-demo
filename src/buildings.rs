@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 
-use crate::terrain::{ChunkedMesh, Terrain};
+use crate::terrain::{FlatMesh, Terrain};
 
 const STOREY: f32 = 2.8;
 /// Roof rise per metre of half-width (about 39°).
@@ -26,32 +26,30 @@ const ROOFS: [[f32; 4]; 4] = [
 ];
 const FLAT_ROOF: [f32; 4] = [0.42, 0.42, 0.44, 1.0];
 
-pub struct BuildingsPlugin;
+/// The OSM buildings, indexed by the chunk their outline starts in.
+pub struct Buildings {
+    by_chunk: Vec<Vec<usize>>,
+}
 
-impl Plugin for BuildingsPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_buildings);
+impl Buildings {
+    pub fn new(terrain: &Terrain) -> Self {
+        let mut by_chunk = vec![Vec::new(); terrain.chunk_count()];
+        for (i, building) in terrain.buildings.iter().enumerate() {
+            by_chunk[terrain.chunk_at(building.outline[0])].push(i);
+        }
+        Self { by_chunk }
+    }
+
+    /// The houses of one chunk.
+    pub fn mesh(&self, terrain: &Terrain, index: usize, mesh: &mut FlatMesh) {
+        for &i in &self.by_chunk[index] {
+            let building = &terrain.buildings[i];
+            house(mesh, terrain, building.levels, &building.outline, i);
+        }
     }
 }
 
-fn spawn_buildings(
-    mut commands: Commands,
-    terrain: Res<Terrain>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let mut chunks = ChunkedMesh::new(&terrain);
-    for (i, building) in terrain.buildings.iter().enumerate() {
-        house(&mut chunks, &terrain, building.levels, &building.outline, i);
-    }
-    let material = materials.add(StandardMaterial {
-        perceptual_roughness: 0.85,
-        ..default()
-    });
-    chunks.spawn(&mut commands, &mut meshes, material, true);
-}
-
-fn house(chunks: &mut ChunkedMesh, terrain: &Terrain, levels: f32, outline: &[Vec2], index: usize) {
+fn house(mesh: &mut FlatMesh, terrain: &Terrain, levels: f32, outline: &[Vec2], index: usize) {
     // Rectangle aligned with the outline's longest edge, with `axis` along its length.
     let longest = (0..outline.len())
         .map(|i| outline[(i + 1) % outline.len()] - outline[i])
@@ -91,7 +89,6 @@ fn house(chunks: &mut ChunkedMesh, terrain: &Terrain, levels: f32, outline: &[Ve
 
     let wall = WALLS[index % WALLS.len()];
     let middle = at(center, (bottom + top) / 2.0);
-    let mesh = chunks.at(middle);
     let mut quad = |q: [Vec3; 4], color: [f32; 4]| {
         let outward = (q[0] + q[1] + q[2] + q[3]) / 4.0 - middle;
         mesh.facing([q[0], q[1], q[2]], color, outward);
