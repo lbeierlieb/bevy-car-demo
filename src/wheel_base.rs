@@ -208,7 +208,7 @@ mod linux {
         /// The first input device with this name that can play a constant force.
         pub fn open(name: &str) -> Option<Self> {
             let (path, mut device) = evdev::enumerate().find(|(_, device)| {
-                device.name() == Some(name)
+                device.name().map(str::trim) == Some(name.trim())
                     && device
                         .supported_ff()
                         .is_some_and(|ff| ff.contains(FFEffectCode::FF_CONSTANT))

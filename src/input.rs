@@ -108,7 +108,7 @@ impl Action {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Binding {
-    /// The gamepad's name, as reported by the system.
+    /// The gamepad's name, as reported by the system (without padding spaces).
     pub device: String,
     pub input: GamepadInput,
     /// Raw value at rest and fully applied. Pedals map linearly from one to the other,
@@ -119,6 +119,11 @@ pub struct Binding {
 }
 
 impl Binding {
+    /// Whether this binding is for the device with this name. Some devices pad their names
+    /// with spaces, which the config file doesn't keep.
+    pub fn is_on(&self, device: &str) -> bool {
+        device.trim() == self.device.trim()
+    }
     /// Pedal travel from 0 (`rest`) to 1 (`full`), with a dead zone at both ends.
     fn travel(&self, raw: f32, deadzone: f32) -> f32 {
         let span = self.full - self.rest;
@@ -461,8 +466,7 @@ impl Gamepads<'_, '_> {
         self.gamepads
             .iter()
             .filter(|(entity, name, _)| {
-                name.as_str() == binding.device
-                    && self.reported.0.contains(&(*entity, binding.input))
+                binding.is_on(name) && self.reported.0.contains(&(*entity, binding.input))
             })
             .find_map(|(_, _, gamepad)| gamepad.get_unclamped(binding.input))
     }
@@ -543,7 +547,7 @@ fn capture(mut capture: ResMut<Capture>, mut config: ResMut<WheelConfig>, gamepa
     };
     let action = capturing.action;
     let binding = |name: &Name, input, rest, full| Binding {
-        device: name.to_string(),
+        device: name.trim().to_string(),
         input,
         rest,
         full,
@@ -661,5 +665,24 @@ mod tests {
         assert_eq!(pedal(-1.0, 1.0).travel(0.97, 0.02), 1.0);
         // Steering uses the whole axis; `full` only gives the direction.
         assert_eq!(pedal(0.0, -0.3).steer(-0.5), 0.5);
+    }
+
+    #[test]
+    fn device_names_match_without_padding() {
+        let mut config = WheelConfig::default();
+        let binding = Binding {
+            device: "Fanatec FANATEC Wheel    ".into(),
+            input: GamepadInput::Axis(GamepadAxis::LeftStickX),
+            rest: 0.0,
+            full: 1.0,
+        };
+        config.bind(Action::Steer, binding);
+        let loaded = WheelConfig::from_text(&config.to_text());
+        assert!(
+            loaded
+                .binding(Action::Steer)
+                .unwrap()
+                .is_on("Fanatec FANATEC Wheel    ")
+        );
     }
 }
