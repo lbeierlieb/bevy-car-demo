@@ -25,10 +25,10 @@ A small Bevy demo of car simulation techniques:
   clutch slips when pulling away and closes gradually after each 0.25 s shift, during
   which the throttle is cut. Gears are shifted by hand by default; the automatic
   shifts by rpm and throttle. The engine sound follows engine rpm.
-- **Real-world low-poly terrain**: a 9.1 × 5.2 km area of Upper Franconia,
-  from Gerach (96161, Bavaria), Mauschendorf and Sendelbach in the west to
-  Rattelsdorf in the east, with Reckendorf, Laimbach, Höfen and Freudeneck in
-  between. Elevation comes from the Bavarian 1 m lidar terrain model. The map is split into 96 m chunks, each meshed at its own
+- **Real-world low-poly terrain**: a 9.6 × 8.4 km area of Upper Franconia,
+  from Gerach (96161, Bavaria), Mauschendorf and Sendelbach in the north-west to
+  Rattelsdorf and Ebing in the east and Baunach in the south, with Reckendorf,
+  Laimbach, Höfen, Daschendorf, Freudeneck and more in between. Elevation comes from the Bavarian 1 m lidar terrain model. The map is split into 96 m chunks, each meshed at its own
   resolution: 2 m near buildings and paved roads, 4 m around farm tracks, 8 m
   elsewhere, with seams kept crack-free. Roads
   (with widths and surfaces from their OSM tags), streams, land use (fields,
@@ -126,7 +126,7 @@ cargo build --release
 ./target/release/bake <lat> <lon> <width_m>[x<height_m>] ../../assets/<name>.terrain [<spawn_lat> <spawn_lon>]
 ```
 
-The map was baked with `50.0265807 10.8428097 9120x5184 ../../assets/gerach.terrain
+The map was baked with `50.0118569 10.8455963 9600x8448 ../../assets/gerach.terrain
 50.0304493 10.8065719`, which spawns the cars in Gerach. To use a different file,
 change `BAKED` in `src/terrain.rs`. The public Overpass server sometimes answers
 that it's busy; the tool then retries every minute, up to five times. Only chunks near the camera are on the GPU, so map size is limited by

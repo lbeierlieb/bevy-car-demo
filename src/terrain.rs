@@ -6,7 +6,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
-/// From Gerach (96161, Bavaria) to Rattelsdorf: 9.1 × 5.2 km.
+/// From Gerach (96161, Bavaria) to Rattelsdorf, Ebing and Baunach: 9.6 × 8.4 km.
 const BAKED: &[u8] = include_bytes!("../assets/gerach.terrain");
 /// Width of the raised rim at the map edge (baked into the heights; roads stop before it).
 const RIM: f32 = 30.0;
