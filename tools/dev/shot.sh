@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# usage: shot.sh out.png [frames] [keys]   (after unstrip.sh; keys: w a s d c t f k, space)
+# usage: shot.sh out.png [frames] [keys]   (after unstrip.sh; keys: w a s d c t f k 3, space)
 # Renders headless with Xvfb and Mesa's software Vulkan (lavapipe), both from the nixpkgs
 # pinned in flake.lock (fetched on first use).
 cd /repo

@@ -32,6 +32,14 @@ impl Table {
     }
 
     pub fn get(&self, point: &[f32]) -> f32 {
+        self.corners(point)
+            .map(|(index, weight)| weight * self.values[index])
+            .sum()
+    }
+
+    /// The grid points around `point` that a lookup there blends, as indices into
+    /// `values`, with their weights (only those with a weight).
+    fn corners(&self, point: &[f32]) -> impl Iterator<Item = (usize, f32)> {
         debug_assert_eq!(point.len(), self.axes.len());
         // Per axis: the grid index below the point, the one above, and the weight of the
         // one above.
@@ -46,22 +54,46 @@ impl Table {
                 None => (0, 0, 0.0),
             };
         }
-        let cells = &cells[..self.axes.len()];
-        (0..1usize << cells.len())
-            .map(|corner| {
-                let (mut index, mut weight) = (0, 1.0);
-                for (bit, (axis, &(lo, hi, t))) in self.axes.iter().zip(cells).enumerate() {
-                    let up = corner >> bit & 1 == 1;
-                    index = index * axis.len() + if up { hi } else { lo };
-                    weight *= if up { t } else { 1.0 - t };
-                }
-                if weight == 0.0 {
-                    0.0
-                } else {
-                    weight * self.values[index]
-                }
-            })
-            .sum()
+        let dims = self.axes.len();
+        (0..1usize << dims).filter_map(move |corner| {
+            let (mut index, mut weight) = (0, 1.0);
+            for (bit, (axis, &(lo, hi, t))) in self.axes.iter().zip(&cells[..dims]).enumerate() {
+                let up = corner >> bit & 1 == 1;
+                index = index * axis.len() + if up { hi } else { lo };
+                weight *= if up { t } else { 1.0 - t };
+            }
+            (weight > 0.0).then_some((index, weight))
+        })
+    }
+
+    pub fn axis(&self, axis: usize) -> &[f32] {
+        &self.axes[axis]
+    }
+
+    /// The value at a grid point, by its index along each axis.
+    pub fn cell(&self, cell: &[usize]) -> f32 {
+        self.values[self.flat(cell)]
+    }
+
+    pub fn set_cell(&mut self, cell: &[usize], value: f32) {
+        let index = self.flat(cell);
+        self.values[index] = value;
+    }
+
+    /// Scales the grid points a lookup at `point` blends, each by `factor` in proportion
+    /// to its weight there: a correction where the engine runs.
+    pub fn scale_at(&mut self, point: &[f32], factor: f32) {
+        let corners: Vec<_> = self.corners(point).collect();
+        for (index, weight) in corners {
+            self.values[index] *= 1.0 + weight * (factor - 1.0);
+        }
+    }
+
+    fn flat(&self, cell: &[usize]) -> usize {
+        debug_assert_eq!(cell.len(), self.axes.len());
+        cell.iter()
+            .zip(&self.axes)
+            .fold(0, |flat, (&i, axis)| flat * axis.len() + i)
     }
 }
 
@@ -91,6 +123,19 @@ mod tests {
         // Outside the grid, and along the constant axis, the edge values hold.
         assert!((table.get(&[-1.0, 99.0, 20.0]) - 10.0).abs() < 1e-5);
         assert!((table.get(&[4.0, -3.0, -5.0]) - 6.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn edits_cells_and_corrects_around_a_point() {
+        let mut table = Table::bake(vec![vec![0.0, 1.0], vec![0.0, 1.0, 2.0]], |p| p[0] + p[1]);
+        assert_eq!(table.cell(&[1, 2]), 3.0);
+        table.set_cell(&[0, 1], 5.0);
+        assert_eq!(table.get(&[0.0, 1.0]), 5.0);
+        // Halfway between two points, each takes half the correction.
+        table.scale_at(&[1.0, 1.5], 1.2);
+        assert!((table.cell(&[1, 1]) - 2.0 * 1.1).abs() < 1e-6);
+        assert!((table.cell(&[1, 2]) - 3.0 * 1.1).abs() < 1e-6);
+        assert_eq!(table.cell(&[0, 1]), 5.0);
     }
 
     #[test]

@@ -4,6 +4,7 @@ mod camera;
 mod car;
 mod cockpit;
 mod debug;
+mod ecu_ui;
 mod hud;
 mod input;
 mod map;
@@ -49,6 +50,7 @@ fn main() {
             camera::CameraPlugin,
             debug::DebugPlugin,
             ui::UiPlugin,
+            ecu_ui::EcuUiPlugin,
             hud::HudPlugin,
             map::MapPlugin,
             audio::AudioPlugin,

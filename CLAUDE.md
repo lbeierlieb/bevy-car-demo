@@ -46,7 +46,7 @@ repo, so everything worth knowing between sessions belongs here.
 `main.rs`; `tools/dev/shot.sh out.png [frames] [keys]` renders headless and saves a
 screenshot; `tools/dev/strip.sh` removes the hook. Always run `strip.sh` and check that
 `grep -c shot src/main.rs` prints 0 before committing. Keys are pressed from a third of
-the frames until the shot (`k` opens the map). `CLICK="x,y,frame"` clicks into the
+the frames until the shot (`k` opens the map, `3` the ECU window). `CLICK="x,y,frame"` clicks into the
 1280×720 window, e.g. on the map. `CAM`/`CAMAT` env vars place the camera (see
 `shot.rs`). `shot.sh` fetches Mesa and Xvfb from the pinned nixpkgs on first use.
 
@@ -171,7 +171,12 @@ phasing, VTEC-style cam switching).
   between the NA and turbo builds (about 310 N·m on 0.7 bar) and sets the octane.
   No exhaust thermal mass yet: the exhaust temperature is that of the gas leaving the
   cylinders, and it drives the turbine directly.
-- Next in the plan: an ECU tuning UI (fuel, spark, rev limit maps).
+- ECU tuning window (F3, `src/ecu_ui.rs`): VE, target λ and spark grids with the
+  operating point, block selection and +/-/set, "Correct VE here" (scales the cells
+  around the operating point by measured/target λ), rev limiter, idle, factory tune.
+  Tunes aren't saved yet, and swapping the engine build in the setup panel replaces
+  the tune with the new build's factory tune.
+- Next in the plan: the offline cycle sim in `tools/bake` and hardware parts.
 
 ## Audio
 

@@ -106,7 +106,7 @@ fn panel(
                 ui.label("(automatic: S at a stop selects reverse)");
                 ui.label("A/D: steer    Space: handbrake");
                 ui.label("Tab: next car    R: reset car");
-                ui.label("F1: gizmos    F2: this panel    M: mute");
+                ui.label("F1: gizmos    F2: this panel    F3: ECU tune    M: mute");
                 ui.label("C: chase/driver view    K: map");
                 ui.label("Wheel and pedals: bind them under \"Wheel and pedals\"");
                 ui.label("Left-drag: orbit or look around    Scroll: zoom");
