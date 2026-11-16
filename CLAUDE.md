@@ -328,8 +328,8 @@ inline engines have one exhaust (no panning).
 The exhaust hardware colours it (`ExhaustSound::of`, parts compared with the stock ones
 for the engine's size): silencer and cat muffle (level, upper resonances; straight pipe
 loud and rasping), bore (deeper, louder), header length (a quarter-wave resonance), a
-turbine (smeared, quieter pulses). The turbo whistles at its shaft speed (1 Hz per rev/s,
-level ∝ share of its limit², more under load). All constants at the top of `audio.rs`,
+turbine (smeared, quieter pulses). The turbo whistles: band-passed noise (Q 4) centred at 0.7 Hz per shaft rev/s,
+level ∝ share of its limit², more under load. All constants at the top of `audio.rs`,
 none tuned by ear yet. No diverter "pssh" or overrun pops (fuel cut leaves nothing to burn).
 
 The engine sound goes through bevy_audio, which can't set the output buffer size. An

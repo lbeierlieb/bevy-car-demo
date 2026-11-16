@@ -139,16 +139,16 @@ const BORE_PITCH: f32 = 0.25;
 /// and the level that gets through.
 const TURBINE_SMEAR: f32 = 0.0012;
 const TURBINE_LEVEL: f32 = 0.75;
-/// Turbo whistle: its pitch per shaft revolution per second, level at the shaft's speed
-/// limit (at full load; `WHISTLE_IDLE` of it off throttle), its second harmonic, and how
-/// much its breathiness wobbles it.
-const WHISTLE_PITCH: f32 = 1.0;
-const WHISTLE: f32 = 0.015;
+/// Turbo whistle, a band of noise rather than a tone: its centre per shaft revolution per
+/// second, its Q (lower is airier, higher more of a pitch), and its root mean square level
+/// at the shaft's speed limit (at full load; `WHISTLE_IDLE` of it off throttle).
+const WHISTLE_PITCH: f32 = 0.7;
+const WHISTLE_Q: f32 = 4.0;
+const WHISTLE: f32 = 0.012;
 const WHISTLE_IDLE: f32 = 0.3;
-const WHISTLE_HARMONIC: f32 = 0.3;
-const WHISTLE_BREATH: f32 = 0.4;
-/// Highest whistle pitch (Hz), well below the Nyquist frequency.
-const WHISTLE_MAX: f32 = 8000.0;
+/// Lowest and highest centre of the whistle (Hz).
+const WHISTLE_MIN: f32 = 100.0;
+const WHISTLE_MAX: f32 = 6000.0;
 
 /// What the exhaust hardware does to the sound.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -427,12 +427,12 @@ struct EngineVoice {
     /// Position in the four-stroke cycle, in firings.
     cycle: f32,
     banks: [Bank; 2],
-    /// Turbo shaft speed (revolutions per second) and its share of the limit, the
-    /// whistle's phase (0..1), and the slow noise that makes it breathe.
+    /// Turbo shaft speed (revolutions per second) and its share of the limit, and the
+    /// whistle's band-pass filter with the centre it's tuned to (Hz).
     turbo_speed: f32,
     turbo_share: f32,
-    whistle: f32,
-    breath: f32,
+    whistle: Resonator,
+    whistle_tuned: f32,
     /// State of the noise generator.
     seed: u32,
     /// The right sample, waiting for its turn after the left one.
@@ -456,8 +456,8 @@ impl EngineVoice {
             cycle: 0.0,
             turbo_speed: 0.0,
             turbo_share: 0.0,
-            whistle: 0.0,
-            breath: 0.0,
+            whistle: Resonator::default(),
+            whistle_tuned: 0.0,
             seed: 0x2545_f491,
             right: None,
         }
@@ -540,18 +540,22 @@ impl EngineVoice {
         let left = self.banks[0].next(left, &shape);
         let right = self.banks[1].next(right, &shape);
 
-        // The turbo whistles at its shaft speed, louder spooled up and under load.
-        let frequency = (self.turbo_speed * WHISTLE_PITCH).min(WHISTLE_MAX / 2.0);
-        self.whistle = (self.whistle + frequency / rate).fract();
-        let breath = self.noise();
-        self.breath += 0.01 * (breath - self.breath);
-        let wobble = (1.0 + WHISTLE_BREATH * 10.0 * self.breath).max(0.0);
-        let phase = TAU * self.whistle;
+        // The turbo whistles around its shaft speed, louder spooled up and under load: a
+        // band of noise, retuned as the shaft speeds up.
+        let frequency = (self.turbo_speed * WHISTLE_PITCH).clamp(WHISTLE_MIN, WHISTLE_MAX);
+        if (frequency / self.whistle_tuned.max(1.0) - 1.0).abs() > 0.005 {
+            self.whistle.tune(frequency, WHISTLE_Q);
+            self.whistle_tuned = frequency;
+        }
+        // Uniform noise has an RMS of 1/√3, and the band-pass passes a share of it that
+        // grows with its bandwidth: scale it back to an RMS of 1.
+        let band = (PI * self.whistle_tuned / (WHISTLE_Q * rate)).sqrt() / 3f32.sqrt();
+        let hiss = self.noise();
         let whistle = WHISTLE
             * self.turbo_share.powi(2)
             * (WHISTLE_IDLE + (1.0 - WHISTLE_IDLE) * load)
-            * wobble
-            * (phase.sin() + WHISTLE_HARMONIC * (2.0 * phase).sin());
+            * self.whistle.process(hiss)
+            / band;
 
         // Fewer cylinders pulse less often: level them out somewhat.
         let exhaust_level = (MUFFLED_LEVEL + (OPEN_LEVEL - MUFFLED_LEVEL) * open)
@@ -806,6 +810,27 @@ mod tests {
         let turbo_quiet = loudness(turbo, 0.0);
         assert!(turbo_quiet < quiet);
         assert!(loudness(turbo, 1.0) > turbo_quiet * 1.001);
+    }
+
+    #[test]
+    fn the_whistle_is_as_loud_as_set_at_any_pitch() {
+        // No firings (the engine at a standstill), just the whistle at the shaft's limit.
+        for revolutions in [1000.0, 3000.0, 6000.0] {
+            let targets = Arc::new(Targets::new());
+            targets.set_turbo(revolutions, 1.0);
+            targets.set(0.0, 1.0, 1.0);
+            let mut voice = EngineVoice::new(targets);
+            let mut sum = 0.0;
+            for i in 0..2 * SAMPLE_RATE {
+                let (left, _) = voice.frame();
+                if i >= SAMPLE_RATE {
+                    sum += left * left;
+                }
+            }
+            let rms = (sum / SAMPLE_RATE as f32).sqrt();
+            let set = GAIN * WHISTLE;
+            assert!((rms / set - 1.0).abs() < 0.3, "{revolutions}: {rms} for {set}");
+        }
     }
 
     #[test]
