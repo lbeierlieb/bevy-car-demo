@@ -315,22 +315,28 @@ fn fuel(ui: &mut egui::Ui, car: &Car) {
     } else {
         format!("{per_hour:.1} L/h")
     };
-    let average = fuel.average().map_or(String::new(), |average| {
-        format!(
-            "    average {average:.1} L/100 km    range {:.0} km",
-            fuel.litres() / average * 100.0
-        )
-    });
     let starving = if fuel.supply < 0.95 {
         "    STARVING"
     } else {
         ""
     };
     ui.label(format!(
-        "fuel {:.1} of {:.0} L    {now}{average}{starving}",
+        "fuel {:.1} of {:.0} L    now {now}{starving}",
         fuel.litres(),
         tank.litres
     ));
+    let average = fuel.average().map_or("average and range after 1 km".into(), |average| {
+        format!(
+            "average {average:.1} L/100 km    range {:.0} km",
+            fuel.litres() / average * 100.0
+        )
+    });
+    ui.label(format!(
+        "trip (since filling up) {:.1} km, {:.2} L    {average}",
+        fuel.distance / 1000.0,
+        fuel.burnt,
+    ))
+    .on_hover_text("Starts again when the tank is filled: R, or the fuel load slider");
 }
 
 fn telemetry(ui: &mut egui::Ui, car: &Car) {
