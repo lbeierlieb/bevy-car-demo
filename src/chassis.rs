@@ -14,6 +14,7 @@ use crate::body::{Body, Detail, Tone, Wheels};
 use crate::physics::drivetrain::Drive;
 use crate::physics::engine::families::{FAMILIES, Family};
 use crate::physics::engine::parts::Parts;
+use crate::physics::fuel::Tank;
 
 /// Width a transverse engine's gearbox takes up at the end of its crank (m).
 const TRANSAXLE_LENGTH: f32 = 0.36;
@@ -208,6 +209,8 @@ pub struct Chassis {
     pub brakes: f32,
     pub drag_area: f32,
     pub downforce_area: [f32; 2],
+    /// The fuel tank.
+    pub tank: Tank,
     pub bay: EngineBay,
     pub drive: Drive,
     /// Limited-slip differentials from the factory.
@@ -398,6 +401,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.78,
         drag_area: 0.63,
         downforce_area: [0.0, 0.0],
+        tank: Tank {
+            litres: 35.0,
+            at: 1.95,
+            height: 0.3,
+        },
         bay: EngineBay {
             place: "front, transverse",
             orientation: Orientation::Transverse,
@@ -464,6 +472,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.8,
         drag_area: 0.68,
         downforce_area: [0.0, 0.03],
+        tank: Tank {
+            litres: 50.0,
+            at: 2.2,
+            height: 0.3,
+        },
         bay: EngineBay {
             place: "front, transverse",
             orientation: Orientation::Transverse,
@@ -533,6 +546,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.8,
         drag_area: 0.6,
         downforce_area: [0.0, 0.0],
+        tank: Tank {
+            litres: 45.0,
+            at: 1.9,
+            height: 0.4,
+        },
         bay: EngineBay {
             place: "front",
             orientation: Orientation::Longitudinal,
@@ -598,6 +616,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.8,
         drag_area: 0.62,
         downforce_area: [0.0, 0.0],
+        tank: Tank {
+            litres: 55.0,
+            at: 2.35,
+            height: 0.35,
+        },
         bay: EngineBay {
             place: "front",
             orientation: Orientation::Longitudinal,
@@ -665,6 +688,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.8,
         drag_area: 0.64,
         downforce_area: [0.0, 0.0],
+        tank: Tank {
+            litres: 65.0,
+            at: 2.55,
+            height: 0.35,
+        },
         bay: EngineBay {
             place: "front",
             orientation: Orientation::Longitudinal,
@@ -732,6 +760,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.8,
         drag_area: 0.72,
         downforce_area: [0.03, 0.12],
+        tank: Tank {
+            litres: 60.0,
+            at: 2.4,
+            height: 0.35,
+        },
         bay: EngineBay {
             place: "front",
             orientation: Orientation::Longitudinal,
@@ -808,6 +841,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.78,
         drag_area: 0.74,
         downforce_area: [0.0, 0.0],
+        tank: Tank {
+            litres: 75.0,
+            at: 3.1,
+            height: 0.4,
+        },
         bay: EngineBay {
             place: "front",
             orientation: Orientation::Longitudinal,
@@ -879,6 +917,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.84,
         drag_area: 0.6,
         downforce_area: [0.04, 0.1],
+        tank: Tank {
+            litres: 50.0,
+            at: 0.1,
+            height: 0.35,
+        },
         bay: EngineBay {
             place: "middle",
             orientation: Orientation::Longitudinal,
@@ -951,6 +994,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.84,
         drag_area: 0.6,
         downforce_area: [0.0, 0.08],
+        tank: Tank {
+            litres: 65.0,
+            at: -0.1,
+            height: 0.35,
+        },
         bay: EngineBay {
             place: "rear",
             orientation: Orientation::Longitudinal,
@@ -1022,6 +1070,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.82,
         drag_area: 0.68,
         downforce_area: [0.22, 0.42],
+        tank: Tank {
+            litres: 90.0,
+            at: 1.3,
+            height: 0.4,
+        },
         bay: EngineBay {
             place: "middle",
             orientation: Orientation::Longitudinal,
@@ -1096,6 +1149,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.84,
         drag_area: 0.66,
         downforce_area: [0.0, 0.0],
+        tank: Tank {
+            litres: 40.0,
+            at: 1.55,
+            height: 0.3,
+        },
         bay: EngineBay {
             place: "front",
             orientation: Orientation::Longitudinal,
@@ -1162,6 +1220,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.76,
         drag_area: 1.0,
         downforce_area: [0.0, 0.0],
+        tank: Tank {
+            litres: 80.0,
+            at: 2.6,
+            height: 0.45,
+        },
         bay: EngineBay {
             place: "front",
             orientation: Orientation::Longitudinal,
@@ -1233,6 +1296,11 @@ pub static CHASSIS: [Chassis; 13] = [
         brakes: 0.76,
         drag_area: 1.15,
         downforce_area: [0.0, 0.0],
+        tank: Tank {
+            litres: 70.0,
+            at: 1.9,
+            height: 0.4,
+        },
         bay: EngineBay {
             place: "front, transverse",
             orientation: Orientation::Transverse,

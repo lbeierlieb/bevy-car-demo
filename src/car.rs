@@ -7,6 +7,7 @@ use crate::input::WheelInput;
 use crate::physics::drivetrain::{Differential, Drive, Drivetrain, EngineSetup};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::parts::Parts;
+use crate::physics::fuel::{self, Fuel, Tank};
 use crate::physics::rigid_body::RigidBody;
 use crate::physics::suspension::{ArmGeometry, AxleSetup, Corner};
 use crate::physics::tire::{COMPOUNDS, TireParams};
@@ -20,9 +21,12 @@ pub struct CarSetup {
     pub color: Color,
     /// What the car is built of, apart from the engine (see `engine.parts`).
     pub build: CarBuild,
+    /// Sprung mass without fuel (kg), and its principal moments of inertia (kg·m²).
     pub sprung_mass: f32,
-    /// Principal moments of inertia of the sprung mass (kg·m²).
     pub inertia: Vec3,
+    /// The fuel tank, and where its centre is in the chassis frame.
+    pub tank: Tank,
+    pub tank_at: Vec3,
     /// Axle positions along the chassis z axis (forward is -z), from the centre of mass.
     pub front_z: f32,
     pub rear_z: f32,
@@ -73,7 +77,13 @@ impl CarSetup {
             .sum();
         let inertia = RigidBody::box_inertia(chassis.mass, size) + Vec3::new(spread, spread, 0.0);
 
-        let front_share = rear_z / chassis.wheelbase;
+        let tank = chassis.tank;
+        let tank_at = Vec3::new(0.0, tank.height - chassis.cg_height, front_z + tank.at);
+        // Springs, tires and brakes are matched to the car with half a tank.
+        let fuel_mass = 0.5 * tank.litres * fuel::DENSITY;
+        let laden = sprung_mass + fuel_mass;
+        let front_share =
+            (sprung_mass * rear_z + fuel_mass * (rear_z - tank_at.z)) / (laden * chassis.wheelbase);
         let (_, ride, damping, camber) = SUSPENSIONS[build.suspension];
         let compound = COMPOUNDS[build.tires];
         let grip = chassis.grip * compound.grip;
@@ -116,19 +126,19 @@ impl CarSetup {
                     mu: grip,
                     // The tires are sized for the car: their friction is `grip` at rest
                     // (warm and new).
-                    nominal_load: (sprung_mass * share / 2.0 + unsprung_mass) * 9.81,
+                    nominal_load: (laden * share / 2.0 + unsprung_mass) * 9.81,
                     ..stock
                 },
             };
             axle.tune(
                 chassis.ride[i] * ride,
                 chassis.damping * damping,
-                sprung_mass * share / 2.0,
+                laden * share / 2.0,
             );
             axle
         };
 
-        let mass = sprung_mass + 2.0 * (chassis.unsprung[0] + chassis.unsprung[1]);
+        let mass = laden + 2.0 * (chassis.unsprung[0] + chassis.unsprung[1]);
         let radius = (chassis.tire_radius[0] + chassis.tire_radius[1]) / 2.0;
         // Braking as hard as the tires can, the weight shifts forward by the height of
         // the centre of mass over the wheelbase; a little more to the front keeps the
@@ -152,6 +162,8 @@ impl CarSetup {
             color: build.paint(),
             sprung_mass,
             inertia,
+            tank,
+            tank_at,
             front_z,
             rear_z,
             front: axle(0),
@@ -194,22 +206,45 @@ impl CarSetup {
         if front { &self.front } else { &self.rear }
     }
 
-    /// Sprung mass carried by each wheel of the front or the rear axle (kg).
-    pub fn corner_mass(&self, front: bool) -> f32 {
+    /// Sprung mass carried by each wheel of the front or the rear axle (kg) with `litres`
+    /// of fuel.
+    pub fn corner_mass_with(&self, front: bool, litres: f32) -> f32 {
         let wheelbase = self.rear_z - self.front_z;
-        let share = if front { self.rear_z } else { -self.front_z } / wheelbase;
-        self.sprung_mass * share / 2.0
+        let fuel = litres * fuel::DENSITY;
+        let (body, tank) = if front {
+            (self.rear_z, self.rear_z - self.tank_at.z)
+        } else {
+            (-self.front_z, self.tank_at.z - self.front_z)
+        };
+        (self.sprung_mass * body + fuel * tank) / wheelbase / 2.0
     }
 
-    /// Mass of the whole car (kg).
+    /// Sprung mass carried by each wheel of the front or the rear axle with half a tank,
+    /// which the springs are matched to (kg).
+    pub fn corner_mass(&self, front: bool) -> f32 {
+        self.corner_mass_with(front, self.tank.litres / 2.0)
+    }
+
+    /// Mass of the whole car with `litres` of fuel (kg).
+    pub fn mass_with(&self, litres: f32) -> f32 {
+        let unsprung = 2.0 * (self.front.unsprung_mass + self.rear.unsprung_mass);
+        self.sprung_mass + litres * fuel::DENSITY + unsprung
+    }
+
+    /// Share of the car's weight on the front axle with `litres` of fuel.
+    pub fn front_weight_with(&self, litres: f32) -> f32 {
+        let unsprung = self.front.unsprung_mass;
+        (2.0 * self.corner_mass_with(true, litres) + 2.0 * unsprung) / self.mass_with(litres)
+    }
+
+    /// Mass of the whole car with half a tank (kg).
     pub fn mass(&self) -> f32 {
-        self.sprung_mass + 2.0 * (self.front.unsprung_mass + self.rear.unsprung_mass)
+        self.mass_with(self.tank.litres / 2.0)
     }
 
-    /// Share of the car's weight on the front axle.
+    /// Share of the car's weight on the front axle with half a tank.
     pub fn front_weight(&self) -> f32 {
-        let unsprung = [self.front.unsprung_mass, self.rear.unsprung_mass];
-        (2.0 * self.corner_mass(true) + 2.0 * unsprung[0]) / self.mass()
+        self.front_weight_with(self.tank.litres / 2.0)
     }
 }
 
@@ -250,6 +285,9 @@ pub struct Car {
     /// lets through right now.
     pub traction_control: bool,
     pub traction: f32,
+    /// The fuel in the tank, and the share of the tank the driver fills it to (on a reset).
+    pub fuel: Fuel,
+    pub fill: f32,
 }
 
 impl Car {
@@ -269,6 +307,7 @@ impl Car {
 
     fn new(index: usize, setup: CarSetup, position: Vec3, rotation: Quat) -> Self {
         let body = RigidBody::new(position, rotation, setup.sprung_mass, setup.inertia);
+        let fuel = Fuel::new(setup.tank.litres);
         let corners =
             [(-1.0, true), (1.0, true), (-1.0, false), (1.0, false)].map(|(side, front)| {
                 let z = if front { setup.front_z } else { setup.rear_z };
@@ -284,7 +323,31 @@ impl Car {
             steering_torque: 0.0,
             traction_control: true,
             traction: 1.0,
+            fuel,
+            fill: 1.0,
         }
+        .with_fuel_load()
+    }
+
+    /// The body's mass, balance and inertia with the fuel that's in the tank now.
+    pub fn load_fuel(&mut self) {
+        let body = &mut self.body;
+        body.mass = self.setup.sprung_mass;
+        body.inertia = self.setup.inertia;
+        body.center = Vec3::ZERO;
+        body.load(self.fuel.mass(), self.setup.tank_at);
+    }
+
+    fn with_fuel_load(mut self) -> Self {
+        self.load_fuel();
+        self
+    }
+
+    /// Fills the tank to `fill` (a share of it) now and at every reset.
+    pub fn refuel(&mut self, fill: f32) {
+        self.fill = fill.clamp(0.0, 1.0);
+        self.fuel = Fuel::new(self.fill * self.setup.tank.litres);
+        self.load_fuel();
     }
 
     /// Places the car upright, at rest, just above the ground at its current spot.
@@ -298,6 +361,7 @@ impl Car {
     pub fn place(&mut self, terrain: &Terrain, p: Vec2, yaw: f32) {
         let mut placed = Self::spawn_at(self.index, self.setup.clone(), terrain, p.x, p.y, yaw);
         placed.keep_settings(self);
+        placed.refuel(self.fill);
         *self = placed;
     }
 
@@ -321,6 +385,10 @@ impl Car {
                 corner.tread = old.tread;
             }
         }
+        car.fill = self.fill;
+        car.fuel = self.fuel;
+        car.fuel.fit(&car.setup.tank);
+        car.load_fuel();
         car
     }
 

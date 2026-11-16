@@ -274,3 +274,79 @@ fn tire_temperatures() {
         }
     }
 }
+
+/// Fuel burnt cruising straight on at `speed` (m/s) with the automatic gearbox, once
+/// there (L/100 km).
+fn cruising_consumption(setup: CarSetup, speed: f32) -> f32 {
+    let terrain = Terrain::flat();
+    // From one corner of the flat square along its diagonal.
+    let mut car = Car::spawn_at(0, setup, &terrain, -480.0, -480.0, -0.75 * std::f32::consts::PI);
+    car.drivetrain.automatic = true;
+    let dt = 1.0 / CHASSIS_HZ as f32;
+    let (mut litres, mut distance) = (0.0, 0.0f64);
+    for step in 0..(60.0 / dt) as usize {
+        let forward = car.forward_speed();
+        car.controls.throttle = (0.3 + 0.5 * (speed - forward)).clamp(0.0, 1.0);
+        car.controls.steer = 0.0;
+        let before = car.fuel.burnt;
+        step_car(&mut car, &terrain, dt);
+        if step as f32 * dt > 30.0 {
+            litres += car.fuel.burnt - before;
+            distance += f64::from(car.forward_speed() * dt);
+        }
+    }
+    (litres / distance * 100e3) as f32
+}
+
+/// The coupé's 2-litre burns about what such a car does at 100 km/h.
+#[test]
+fn cruising_consumption_is_plausible() {
+    let consumption = cruising_consumption(CarSetup::factory(3, 0), 100.0 / 3.6);
+    assert!((5.0..9.0).contains(&consumption), "{consumption:.1} L/100 km");
+}
+
+/// Prints every factory car's consumption at 100 and 150 km/h:
+/// `cargo test --profile release-dev consumption -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn consumption() {
+    use crate::chassis::CHASSIS;
+    for (chassis, made) in CHASSIS.iter().enumerate() {
+        for option in 0..made.engines.len() {
+            let at = |kmh: f32| cruising_consumption(CarSetup::factory(chassis, option), kmh / 3.6);
+            println!(
+                "{:<10} {:<6} {:5.1} L/100 km at 100 km/h, {:5.1} at 150",
+                made.name,
+                made.engines[option],
+                at(100.0),
+                at(150.0),
+            );
+        }
+    }
+}
+
+/// Going round the circle near the limit with `litres` in the tank: the least share of its
+/// fuel the engine got.
+fn starved(litres: f32) -> f32 {
+    let terrain = Terrain::flat();
+    let mut car = Car::spawn_at(0, CarSetup::factory(3, 0), &terrain, 0.0, 0.0, 0.0);
+    car.refuel(litres / car.setup.tank.litres);
+    car.drivetrain.gear = 2;
+    let dt = 1.0 / CHASSIS_HZ as f32;
+    let mut least = 1.0f32;
+    for _ in 0..(20.0 / dt) as usize {
+        let forward = car.forward_speed();
+        car.controls.steer = 0.15;
+        car.controls.throttle = (0.3 + 0.5 * (14.0 - forward)).clamp(0.0, 1.0);
+        step_car(&mut car, &terrain, dt);
+        least = least.min(car.drivetrain.engine.fuel_supply);
+    }
+    least
+}
+
+#[test]
+fn a_nearly_empty_tank_starves_the_engine_in_a_long_corner() {
+    assert!(starved(15.0) > 0.99);
+    // It leans out and slows the car until the fuel just about reaches the pickup.
+    assert!(starved(3.0) < 0.8);
+}

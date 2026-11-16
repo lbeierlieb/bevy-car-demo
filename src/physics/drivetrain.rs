@@ -324,10 +324,10 @@ impl Drivetrain {
     ) -> WheelDrive {
         let clutch = clutch.filter(|_| !self.automatic);
         self.clutch_pedal = clutch;
-        // Without a pedal, the automatic clutch never lets the engine stall. A blown engine
-        // stays off.
-        if clutch.is_none() {
-            self.running = true;
+        // Without a pedal, the automatic clutch never lets the engine stall: it starts
+        // again by itself, as long as it gets fuel. A blown engine stays off.
+        if clutch.is_none() && self.engine.fuel_supply > 0.5 {
+            self.start(engine);
         }
         if self.engine.blown(&engine.build.hardware) {
             self.running = false;

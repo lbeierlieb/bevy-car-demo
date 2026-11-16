@@ -144,6 +144,11 @@ pub struct Engine {
     pub damage: Damage,
     /// Highest cylinder pressure, averaged over `PEAK_LAG` (Pa).
     pub peak_pressure: f32,
+    /// Share of the fuel the ECU asks for that the pump delivers (less when it draws air
+    /// from a nearly empty tank); set by the car.
+    pub fuel_supply: f32,
+    /// Fuel injected in the last step (kg/s).
+    pub fuel_flow: f32,
 }
 
 /// One cycle (two revolutions) of all cylinders.
@@ -185,6 +190,8 @@ impl Default for Engine {
             airspeed: 0.0,
             damage: Damage::default(),
             peak_pressure: AMBIENT_PRESSURE,
+            fuel_supply: 1.0,
+            fuel_flow: 0.0,
         }
     }
 }
@@ -252,6 +259,7 @@ impl Engine {
 
         let cycle = self.cycle(build, rpm);
         let cycles = rpm.abs() / 120.0;
+        self.fuel_flow = cycle.fuel * cycles;
         let flow = cycle.exhaust * cycles;
         let gas = cycle.exhaust_temperature;
         self.exhaust_pressure = exhaust_pressure(hardware, flow, gas, self.wastegate);
@@ -414,7 +422,7 @@ impl Engine {
         let air = ve * p / (R_AIR * self.charge_temperature) * displacement;
         let load = air / (ambient_density() * displacement);
         let fuel = if self.firing {
-            a.fuel * hardware.cylinders as f32
+            a.fuel * hardware.cylinders as f32 * self.fuel_supply
         } else {
             0.0
         };

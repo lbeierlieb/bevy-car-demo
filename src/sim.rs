@@ -102,15 +102,24 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
         force += push * SUBSTEPS as f32;
         torque += (body.rotation * Vec3::new(0.0, 0.0, z)).cross(push) * SUBSTEPS as f32;
     }
-    body.add_force(force / SUBSTEPS as f32 + GRAVITY * body.mass + drag);
+    body.add_force(force / SUBSTEPS as f32);
+    body.add_force_at_center(GRAVITY * body.mass + drag);
     body.add_torque(torque / SUBSTEPS as f32);
+    let velocity = body.velocity;
     body.integrate(dt);
+
+    // The engine drinks from the tank, and the fuel sloshes with what the car feels.
+    let felt = body.rotation.inverse() * ((body.velocity - velocity) / dt - GRAVITY);
+    let flow = car.drivetrain.engine.fuel_flow;
+    car.fuel.step(&car.setup.tank, flow, felt, dt);
+    car.load_fuel();
 }
 
 /// Engine torque to the driven wheels through the differentials (less what traction
 /// control holds back), biased brakes, rear handbrake, and steering.
 fn apply_controls(car: &mut Car, dt: f32) {
     car.drivetrain.engine.airspeed = car.forward_speed();
+    car.drivetrain.engine.fuel_supply = car.fuel.supply;
     let Car {
         setup,
         corners,
