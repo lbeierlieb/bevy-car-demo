@@ -25,11 +25,11 @@ const fn part(name: &'static str, fit: fn(&mut EngineHardware)) -> Part {
 }
 
 const PISTONS: usize = 0;
-const TURBO: usize = 10;
+const TURBO: usize = 12;
 /// The intercooler's slot: it only matters with a turbo.
-pub const INTERCOOLER: usize = 11;
+pub const INTERCOOLER: usize = 13;
 
-pub const SLOTS: [Slot; 17] = [
+pub const SLOTS: [Slot; 19] = [
     Slot {
         name: "Pistons",
         about: "Compression ratio: more is more efficient, but knocks earlier",
@@ -57,6 +57,34 @@ pub const SLOTS: [Slot; 17] = [
             part("Stock (143 mm)", |_| {}),
             part("Short (136 mm)", |h| h.rod_length = 0.136),
             part("Long (150 mm)", |h| h.rod_length = 0.150),
+        ],
+    },
+    Slot {
+        name: "Internals",
+        about: "Forged rods take more pull at high rpm and more push under boost; forged \
+                pistons are lighter (easing the rods) and take more knock",
+        parts: &[
+            part("Stock (cast)", |_| {}),
+            part("Forged rods", |h| {
+                h.bottom_end.rod_strength = 42e3;
+                h.bottom_end.rod_mass = 0.55;
+            }),
+            part("Forged rods and pistons", |h| {
+                h.bottom_end.rod_strength = 42e3;
+                h.bottom_end.rod_mass = 0.55;
+                h.bottom_end.piston_mass = 0.36;
+                h.bottom_end.piston_toughness = 2.0;
+            }),
+        ],
+    },
+    Slot {
+        name: "Head gasket",
+        about: "Seals the cylinder pressure: boost and knock lift a weak one",
+        parts: &[
+            part("Stock (130 bar)", |_| {}),
+            part("Multi-layer steel, head studs (180 bar)", |h| {
+                h.head_gasket = 180e5
+            }),
         ],
     },
     Slot {
@@ -367,17 +395,20 @@ mod tests {
             }
             parts.hardware().redline()
         };
-        let (crank, cams, springs) = (1, 3, 4);
+        let (crank, internals, cams, springs) = (1, 3, 5, 6);
         assert_eq!(redline(&[]), 6800.0);
-        // Wilder cams on the stock springs float later (the longer duration eases the
+        // A wilder cam on the stock springs floats later (the longer duration eases the
         // valves' deceleration more than the lift adds), but not much.
-        let race = redline(&[(cams, 2)]);
-        assert!((7200.0..7800.0).contains(&race), "{race}");
-        // Stiffer springs: the bottom end limits then, and a short stroke revs higher.
-        let sprung = redline(&[(cams, 2), (springs, 2)]);
-        assert!(sprung > race + 300.0, "{sprung}");
-        assert!(redline(&[(cams, 2), (springs, 2), (crank, 1)]) > sprung + 300.0);
-        assert!(redline(&[(cams, 2), (springs, 2), (crank, 2)]) < sprung - 300.0);
+        let sport = redline(&[(cams, 1)]);
+        assert!((6900.0..7400.0).contains(&sport), "{sport}");
+        // Stiffer springs: the rods limit then, and a short stroke revs higher.
+        let sprung = redline(&[(cams, 1), (springs, 2)]);
+        assert!(sprung > sport, "{sprung}");
+        assert!(redline(&[(cams, 1), (springs, 2), (crank, 1)]) >= sprung + 300.0);
+        assert!(redline(&[(cams, 1), (springs, 2), (crank, 2)]) <= sprung - 300.0);
+        // Forged internals rev higher still.
+        let forged = redline(&[(cams, 1), (springs, 2), (internals, 2)]);
+        assert!(forged > sprung + 1500.0, "{forged}");
     }
 
     #[test]

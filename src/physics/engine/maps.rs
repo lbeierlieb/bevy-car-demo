@@ -99,6 +99,8 @@ pub struct EngineMaps {
     exhaust_temperature: Table,
     /// Share of the fuel's energy that goes into the coolant, by rpm and load.
     heat_to_coolant: Table,
+    /// Highest cylinder pressure at MBT spark (Pa) by rpm and load.
+    peak_pressure: Table,
     /// Friction mean effective pressure (Pa) with the oil warm, by rpm.
     friction: Table,
 }
@@ -177,17 +179,19 @@ impl EngineMaps {
             knock_limit: take("knock_limit")?,
             exhaust_temperature: take("exhaust_temperature")?,
             heat_to_coolant: take("heat_to_coolant")?,
+            peak_pressure: take("peak_pressure")?,
             friction: take("friction")?,
         })
     }
 
-    fn named(&self) -> [(&'static str, &Table); 6] {
+    fn named(&self) -> [(&'static str, &Table); 7] {
         [
             ("mbt", &self.mbt),
             ("efficiency", &self.efficiency),
             ("knock_limit", &self.knock_limit),
             ("exhaust_temperature", &self.exhaust_temperature),
             ("heat_to_coolant", &self.heat_to_coolant),
+            ("peak_pressure", &self.peak_pressure),
             ("friction", &self.friction),
         ]
     }
@@ -226,6 +230,11 @@ impl EngineMaps {
         self.heat_to_coolant.get(&[rpm, load])
     }
 
+    /// Highest cylinder pressure at MBT spark (Pa).
+    pub fn peak_pressure(&self, rpm: f32, load: f32) -> f32 {
+        self.peak_pressure.get(&[rpm, load])
+    }
+
     /// Friction mean effective pressure (Pa) at `rpm` with the oil at `oil` (K).
     pub fn friction(&self, rpm: f32, oil: f32) -> f32 {
         self.friction.get(&[rpm]) * friction_oil_factor(oil)
@@ -243,9 +252,9 @@ pub struct Bake {
     /// The VE tables once they're done.
     ve: Vec<Table>,
     /// Grid points of the maps by load, and their values so far (MBT, efficiency, knock
-    /// limit, exhaust temperature, heat to coolant).
+    /// limit, exhaust temperature, heat to coolant, peak pressure).
     load_points: Vec<Vec<f32>>,
-    load_values: Vec<[f32; 5]>,
+    load_values: Vec<[f32; 6]>,
 }
 
 impl Bake {
@@ -323,6 +332,7 @@ impl Bake {
             knock_limit: column(2),
             exhaust_temperature: column(3),
             heat_to_coolant: column(4),
+            peak_pressure: column(5),
             friction,
         }
     }
@@ -365,9 +375,9 @@ fn ve_point(hardware: &EngineHardware, profile: usize, point: &[f32]) -> f32 {
 }
 
 /// The maps by load at a point of `load_axes` (MBT, efficiency, knock limit, exhaust
-/// temperature, heat to coolant), on the first cam profile, unphased, finding the intake
+/// temperature, heat to coolant, peak pressure), on the first cam profile, unphased, finding the intake
 /// pressure for the load in `ve`, the first profile's VE.
-fn load_point(hardware: &EngineHardware, ve: &Table, point: &[f32]) -> [f32; 5] {
+fn load_point(hardware: &EngineHardware, ve: &Table, point: &[f32]) -> [f32; 6] {
     let (rpm, load) = (point[0], point[1]);
     // The exhaust pressure the engine would about have: a little over ambient, or over
     // the boost.
@@ -400,7 +410,8 @@ fn load_point(hardware: &EngineHardware, ve: &Table, point: &[f32]) -> [f32; 5] 
     // The work at MBT: the closed part at MBT, the gas exchange as it ran. The runtime
     // model takes the pumping as (exhaust − intake pressure) × the swept volume, so the
     // efficiency is of the work before that.
-    let closed = cylinder.burn(&result.trapped, &conditions, mbt).work;
+    let burn = cylinder.burn(&result.trapped, &conditions, mbt);
+    let closed = burn.work;
     let swept = f64::from(hardware.displacement()) / f64::from(hardware.cylinders);
     let pumping = (conditions.exhaust_pressure - intake) * swept;
     let work = result.work - result.closed_work + closed + pumping;
@@ -418,6 +429,7 @@ fn load_point(hardware: &EngineHardware, ve: &Table, point: &[f32]) -> [f32; 5] 
         knock_limit,
         result.exhaust_temperature,
         per_fuel(result.heat),
+        burn.peak,
     ]
     .map(|value| value as f32)
 }

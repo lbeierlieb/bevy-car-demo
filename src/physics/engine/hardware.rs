@@ -2,8 +2,12 @@
 
 use std::f32::consts::PI;
 
-/// Mean piston speed the bottom end is made for (m/s).
-const PISTON_SPEED_LIMIT: f32 = 23.0;
+/// Share of the rods' strength their pull at the redline stays below.
+const ROD_MARGIN: f32 = 0.7;
+/// A rod buckles pushing at this many times the pull that breaks it.
+pub const BUCKLING: f32 = 2.5;
+/// Crank angle of the highest cylinder pressure, about (rad after top dead centre).
+const PEAK_ANGLE: f32 = 12.0 * PI / 180.0;
 /// Share of the valve float speed the redline stays below.
 const FLOAT_MARGIN: f32 = 0.95;
 
@@ -21,6 +25,9 @@ pub struct EngineHardware {
     /// Connecting rod length, centre to centre (m).
     pub rod_length: f32,
     pub compression_ratio: f32,
+    pub bottom_end: BottomEnd,
+    /// Highest cylinder pressure the head gasket seals for good (Pa).
+    pub head_gasket: f32,
     /// Cam profiles the valvetrain can switch between (like VTEC); one for fixed cams.
     pub cams: Vec<CamProfile>,
     /// How far the cam phasers can advance the intake cam and retard the exhaust cam
@@ -50,6 +57,19 @@ pub struct CamProfile {
     pub lobe_separation: f32,
     /// Valve lift (m).
     pub lift: f32,
+}
+
+/// Pistons and rods: their masses pull on the rods at the top of every exhaust stroke,
+/// with the square of the rpm, and the gas pushes on them after every firing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BottomEnd {
+    /// Piston with pin and rings, and connecting rod (kg).
+    pub piston_mass: f32,
+    pub rod_mass: f32,
+    /// Pull that breaks a rod (N); pushing, it buckles at `BUCKLING` times that.
+    pub rod_strength: f32,
+    /// How much more knock the pistons take than stock ones.
+    pub piston_toughness: f32,
 }
 
 /// The valve springs and what they move. Above the speed where the spring can no longer
@@ -227,12 +247,47 @@ impl EngineHardware {
     }
 
     /// Highest speed the engine is made for on cam profile `profile` (rpm): clear of
-    /// valve float, and within the bottom end's piston speed; rounded down to 100 rpm.
+    /// valve float, and with the rods' pull well within their strength; rounded down to
+    /// 100 rpm.
     pub fn safe_rpm(&self, profile: usize) -> f32 {
         let cam = &self.cams[profile.min(self.cams.len() - 1)];
         let valves = FLOAT_MARGIN * self.valves.float_rpm(cam);
-        let bottom = PISTON_SPEED_LIMIT / (2.0 * self.stroke) * 60.0;
-        (valves.min(bottom) / 100.0).floor() * 100.0
+        let pull = self.rod_pull(1.0);
+        let omega = (ROD_MARGIN * self.bottom_end.rod_strength / pull).sqrt();
+        let rods = omega * 60.0 / (2.0 * PI);
+        (valves.min(rods) / 100.0).floor() * 100.0
+    }
+
+    /// Mass moving up and down with each piston: the piston and about a third of the rod
+    /// (kg).
+    fn reciprocating_mass(&self) -> f32 {
+        self.bottom_end.piston_mass + self.bottom_end.rod_mass / 3.0
+    }
+
+    /// Inertia force on a rod at top dead centre at crank speed `omega` (rad/s; N),
+    /// m·r·ω²·(1 + r/l).
+    fn rod_pull(&self, omega: f32) -> f32 {
+        let r = self.stroke / 2.0;
+        self.reciprocating_mass() * r * omega * omega * (1.0 + r / self.rod_length)
+    }
+
+    /// Load on the rods relative to what breaks them (1 breaks them at once): the larger
+    /// of the pull at top dead centre of the gas exchange, and the gas's push at the
+    /// `peak` cylinder pressure (Pa) less the inertia there, against buckling.
+    pub fn rod_load(&self, rpm: f32, peak: f32) -> f32 {
+        let omega = rpm * 2.0 * PI / 60.0;
+        let pull = self.rod_pull(omega);
+        let r = self.stroke / 2.0;
+        let lambda = r / self.rod_length;
+        let at_peak = self.reciprocating_mass()
+            * r
+            * omega
+            * omega
+            * (PEAK_ANGLE.cos() + lambda * (2.0 * PEAK_ANGLE).cos());
+        let area = PI / 4.0 * self.bore * self.bore;
+        let push = peak * area - at_peak;
+        let strength = self.bottom_end.rod_strength;
+        (pull / strength).max(push / (BUCKLING * strength))
     }
 
     /// The redline: the safe speed on the last cam profile (the one for high rpm), which the
@@ -263,6 +318,13 @@ impl Default for EngineHardware {
             stroke: 0.086,
             rod_length: 0.143,
             compression_ratio: 10.5,
+            bottom_end: BottomEnd {
+                piston_mass: 0.42,
+                rod_mass: 0.6,
+                rod_strength: 30e3,
+                piston_toughness: 1.0,
+            },
+            head_gasket: 130e5,
             cams: vec![CamProfile {
                 intake_duration: 240.0,
                 exhaust_duration: 240.0,

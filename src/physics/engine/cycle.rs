@@ -426,6 +426,8 @@ pub struct Burn {
     pub heat: f64,
     /// The end gas's knock integral when the flame reaches it (knock at 1).
     pub knock: f64,
+    /// Highest cylinder pressure (Pa).
+    pub peak: f64,
     end: Charge,
 }
 
@@ -499,7 +501,7 @@ impl Cylinder {
         };
 
         let mut charge = *trapped;
-        let (mut work, mut heat, mut knock) = (0.0, 0.0, 0.0);
+        let (mut work, mut heat, mut knock, mut peak) = (0.0, 0.0, 0.0, 0.0f64);
         let mut angle = start;
         let mut burnt = 0.0;
         while angle < end {
@@ -507,6 +509,7 @@ impl Cylinder {
             let (v, v1) = (self.volume(angle), self.volume(next));
             let t = charge.temperature();
             let p = charge.mass * R * t / v;
+            peak = peak.max(p);
             let burnt1 = wiebe(next);
             // Woschni: the gas moves with the piston, and faster once combustion pushes
             // the pressure above motoring.
@@ -538,6 +541,7 @@ impl Cylinder {
             work,
             heat,
             knock,
+            peak,
             end: charge,
         }
     }

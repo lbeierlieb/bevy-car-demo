@@ -1,8 +1,9 @@
 //! What wears and breaks in the engine. Each part has a wear from 0 (new) to 1 (failed).
-//! Pistons and valves wear per cylinder: a holed piston or bent valves kill the cylinder,
-//! and the others run on.
-//! A blown head gasket costs compression and heats the coolant. Spun bearings wreck the
-//! engine for good.
+//! Pistons, valves and rods wear per cylinder: a holed piston or bent valves kill the
+//! cylinder, and the others run on. A blown head gasket costs compression and heats the
+//! coolant. A broken rod or a spun bearing wrecks the engine for good.
+
+use super::hardware::EngineHardware;
 
 /// Most cylinders an engine can have (the per-cylinder state is a fixed array).
 pub const MAX_CYLINDERS: usize = 8;
@@ -20,6 +21,12 @@ const OIL_LIMIT: f32 = 423.0;
 /// valves start to touch the pistons, and the wear per cycle per unit of float beyond.
 const VALVE_CONTACT: f32 = 0.06;
 const VALVE_WEAR: f32 = 0.3;
+/// Rod fatigue: below this load (relative to the breaking load) a rod lasts for ever;
+/// above it, it lasts load^-ROD_FATIGUE cycles (one at the breaking load).
+const ROD_ENDURANCE: f32 = 0.75;
+const ROD_FATIGUE: i32 = 40;
+/// Head gasket wear per cycle per unit of peak pressure over what it seals (relative).
+const GASKET_WEAR: f32 = 0.02;
 /// Efficiency lost with the pistons and rings worn out (blow-by), and with the head
 /// gasket blown (leaking compression).
 const PISTON_EFFICIENCY: f32 = 0.3;
@@ -34,12 +41,16 @@ pub struct CylinderWear {
     pub piston: f32,
     /// Valves, from meeting the piston when they float.
     pub valves: f32,
+    /// Connecting rod fatigue.
+    pub rod: f32,
 }
 
 impl CylinderWear {
     /// Why this cylinder no longer fires, if it doesn't.
     pub fn failure(&self) -> Option<&'static str> {
-        if self.piston >= 1.0 {
+        if self.rod >= 1.0 {
+            Some("broken rod")
+        } else if self.piston >= 1.0 {
             Some("holed piston")
         } else if self.valves >= 1.0 {
             Some("bent valves")
@@ -54,6 +65,10 @@ pub struct Strain {
     pub rpm: f32,
     /// Valve float: spring force short of the valves' inertia, relative to it.
     pub float: f32,
+    /// Load on the rods relative to what breaks them, and the highest cylinder pressure
+    /// relative to what the head gasket seals.
+    pub rod: f32,
+    pub gasket: f32,
     /// Spark advance past the knock limit (degrees) and load (air relative to filling the
     /// displacement at ambient).
     pub knock: f32,
@@ -71,13 +86,21 @@ pub struct Damage {
 }
 
 impl Damage {
-    /// Wears the parts of an engine with `cylinders` cylinders by what it went through in
-    /// `dt`.
-    pub fn step(&mut self, cylinders: usize, strain: &Strain, dt: f32) {
-        let knock = KNOCK_WEAR * strain.knock.powi(2) * strain.load;
+    /// Wears the parts of `hardware` by what it went through in `dt`.
+    pub fn step(&mut self, hardware: &EngineHardware, strain: &Strain, dt: f32) {
+        let toughness = hardware.bottom_end.piston_toughness;
+        let knock = KNOCK_WEAR * strain.knock.powi(2) * strain.load / toughness;
         let cycles = strain.rpm / 120.0;
         let contact = VALVE_WEAR * (strain.float - VALVE_CONTACT).max(0.0) * cycles;
+        let fatigue = if strain.rod > ROD_ENDURANCE {
+            strain.rod.powi(ROD_FATIGUE) * cycles
+        } else {
+            0.0
+        };
+        let cylinders = hardware.cylinders as usize;
         for (cylinder, spread) in self.cylinders.iter_mut().zip(SPREAD).take(cylinders) {
+            // A dead cylinder's piston still goes up and down on its rod.
+            cylinder.rod = (cylinder.rod + fatigue * spread * dt).min(1.0);
             if cylinder.failure().is_none() {
                 cylinder.piston = (cylinder.piston + knock * spread * dt).min(1.0);
                 cylinder.valves = (cylinder.valves + contact * spread * dt).min(1.0);
@@ -86,7 +109,8 @@ impl Damage {
         let wear = |part: &mut f32, rate: f32| *part = (*part + rate * dt).min(1.0);
         wear(
             &mut self.head_gasket,
-            HEAT_WEAR * (strain.coolant - COOLANT_LIMIT).max(0.0),
+            HEAT_WEAR * (strain.coolant - COOLANT_LIMIT).max(0.0)
+                + GASKET_WEAR * (strain.gasket - 1.0).max(0.0) * cycles,
         );
         wear(
             &mut self.bearings,
@@ -106,7 +130,8 @@ impl Damage {
 
     /// Broken beyond running: it won't turn over, or no cylinder fires.
     pub fn wrecked(&self, cylinders: usize) -> bool {
-        self.bearings >= 1.0 || self.firing(cylinders) == 0.0
+        let rods = self.cylinders.iter().any(|cylinder| cylinder.rod >= 1.0);
+        self.bearings >= 1.0 || rods || self.firing(cylinders) == 0.0
     }
 
     pub fn gasket_blown(&self) -> bool {
@@ -146,6 +171,7 @@ impl Damage {
                 [
                     (format!("Piston {}", i + 1), c.piston),
                     (format!("Valves {}", i + 1), c.valves),
+                    (format!("Rod {}", i + 1), c.rod),
                 ]
             })
             .collect();
@@ -185,6 +211,8 @@ mod tests {
         Strain {
             rpm: 3000.0,
             float: 0.0,
+            rod: 0.5,
+            gasket: 0.6,
             knock,
             load: 1.0,
             coolant: 360.0,
@@ -195,9 +223,10 @@ mod tests {
     #[test]
     fn pistons_hole_one_by_one() {
         let mut damage = Damage::default();
+        let hardware = EngineHardware::default();
         let mut first = None;
         for step in 0..100_000 {
-            damage.step(4, &strain(12.0), 0.01);
+            damage.step(&hardware, &strain(12.0), 0.01);
             let firing = damage.firing(4);
             if firing < 1.0 && first.is_none() {
                 first = Some(step);
@@ -218,13 +247,14 @@ mod tests {
     #[test]
     fn floating_valves_bend_on_a_missed_shift() {
         let mut damage = Damage::default();
+        let hardware = EngineHardware::default();
         // Just floating: no contact yet.
         let floating = Strain {
             rpm: 7300.0,
             float: 0.03,
             ..strain(0.0)
         };
-        damage.step(4, &floating, 10.0);
+        damage.step(&hardware, &floating, 10.0);
         assert_eq!(damage.worst(4), 0.0);
         // A fifth-to-second shift: 9000 rpm for a tenth of a second.
         let missed = Strain {
@@ -233,21 +263,47 @@ mod tests {
             ..strain(0.0)
         };
         for _ in 0..12 {
-            damage.step(4, &missed, 0.01);
+            damage.step(&hardware, &missed, 0.01);
         }
         assert!(damage.firing(4) < 0.5, "{:?}", damage.cylinders);
     }
 
     #[test]
+    fn rods_tire_and_break() {
+        let hardware = EngineHardware::default();
+        let at = |rpm: f32| Strain {
+            rpm,
+            rod: hardware.rod_load(rpm, 20e5),
+            ..strain(0.0)
+        };
+        // Within the redline, they last; a little past the float speed, for minutes;
+        // further on, seconds.
+        let mut damage = Damage::default();
+        damage.step(&hardware, &at(6800.0), 3600.0);
+        assert_eq!(damage.worst(4), 0.0);
+        damage.step(&hardware, &at(7900.0), 10.0);
+        let wear = damage.worst(4);
+        assert!(wear > 0.0 && wear < 0.2, "{wear}");
+        damage.step(&hardware, &at(8500.0), 10.0);
+        assert!(damage.wrecked(4));
+        assert!(damage.failures(4)[0].ends_with("broken rod"));
+        // A missed shift to 9500 rpm breaks one at once.
+        let mut damage = Damage::default();
+        damage.step(&hardware, &at(9500.0), 0.02);
+        assert!(damage.wrecked(4));
+    }
+
+    #[test]
     fn overheating_blows_the_gasket_and_spins_a_bearing() {
         let mut damage = Damage::default();
+        let hardware = EngineHardware::default();
         let hot = Strain {
             coolant: 400.0,
             oil: 440.0,
             ..strain(0.0)
         };
         for _ in 0..100 {
-            damage.step(4, &hot, 1.0);
+            damage.step(&hardware, &hot, 1.0);
         }
         assert!(damage.gasket_blown() && damage.efficiency(4) < 0.9);
         assert!(damage.extra_coolant_heat() > 0.0);

@@ -64,6 +64,16 @@ const FLOAT_LEAST: f32 = 0.1;
 /// springs' (Pa/N), which the friction map includes.
 const SPRING_FRICTION: f32 = 20.0;
 const STOCK_SPRING_FORCE: f32 = 370.0;
+/// Rise of the highest cylinder pressure per degree of spark advance from MBT (relative),
+/// and most it rises (with the burn all around top dead centre); and the rise per degree
+/// of knock (the pressure waves of the end gas exploding), which hits the head gasket
+/// and the pistons rather than the rods.
+const PEAK_PER_DEGREE: f32 = 0.03;
+const PEAK_MOST: f32 = 0.35;
+const KNOCK_PEAK: f32 = 0.03;
+/// Time over which the highest cylinder pressure is averaged for the wear (s): a step's
+/// spike (the ECU's spark lagging a sudden change) shouldn't break anything.
+const PEAK_LAG: f32 = 0.1;
 /// Intake manifold pressure after the starter has cranked the engine (Pa).
 const CRANKED_PRESSURE: f32 = 30e3;
 
@@ -130,6 +140,8 @@ pub struct Engine {
     pub airspeed: f32,
     /// Wear and failures of the parts.
     pub damage: Damage,
+    /// Highest cylinder pressure, averaged over `PEAK_LAG` (Pa).
+    pub peak_pressure: f32,
 }
 
 /// One cycle (two revolutions) of all cylinders.
@@ -150,6 +162,8 @@ pub struct Cycle {
     pub exhaust_temperature: f32,
     /// Spark advance past the knock limit (degrees; 0 without knock).
     pub knock: f32,
+    /// Highest cylinder pressure, without the knock's pressure waves (Pa).
+    pub peak_pressure: f32,
 }
 
 impl Default for Engine {
@@ -168,6 +182,7 @@ impl Default for Engine {
             thermal: Thermal::warm(),
             airspeed: 0.0,
             damage: Damage::default(),
+            peak_pressure: AMBIENT_PRESSURE,
         }
     }
 }
@@ -255,15 +270,18 @@ impl Engine {
         let (cooling, airspeed) = (&hardware.cooling, self.airspeed);
         self.thermal.step(cooling, to_coolant, to_oil, airspeed, dt);
 
+        self.peak_pressure += (cycle.peak_pressure - self.peak_pressure) * (dt / PEAK_LAG).min(1.0);
         let strain = Strain {
             rpm: rpm.abs(),
             float: self.valve_float(hardware, rpm.abs()),
+            rod: hardware.rod_load(rpm.abs(), self.peak_pressure),
+            gasket: self.peak_pressure * (1.0 + KNOCK_PEAK * cycle.knock) / hardware.head_gasket,
             knock: cycle.knock,
             load: cycle.load,
             coolant: self.thermal.coolant,
             oil: self.thermal.oil,
         };
-        self.damage.step(cylinders, &strain, dt);
+        self.damage.step(hardware, &strain, dt);
     }
 
     /// Air into the ducts ahead of the throttle with them at `pressure` (Pa): through the
@@ -391,7 +409,9 @@ impl Engine {
         };
         let cylinders = hardware.cylinders as usize;
         let firing = self.damage.firing(cylinders);
-        let (lambda, indicated, exhaust_temperature, knock) = if fuel > 0.0 && firing > 0.0 {
+        // Compressed without burning, the charge peaks at top dead centre.
+        let motored = p * hardware.compression_ratio.powf(1.3);
+        let (lambda, indicated, exhaust_temperature, knock, peak) = if fuel > 0.0 && firing > 0.0 {
             let lambda = air / (fuel * STOICHIOMETRIC);
             let offset = a.spark - maps.mbt(rpm, load);
             let indicated = air / STOICHIOMETRIC
@@ -408,9 +428,11 @@ impl Engine {
             let (charge, coolant) = (self.charge_temperature, self.thermal.coolant);
             let shift = maps::knock_limit_shift(charge, coolant, build.octane);
             let knock = (a.spark - maps.knock_limit(rpm, load) - shift).max(0.0);
-            (lambda, indicated, temperature, knock)
+            let rise = PEAK_MOST * (PEAK_PER_DEGREE * offset / PEAK_MOST).tanh();
+            let peak = maps.peak_pressure(rpm, load) * (1.0 + rise);
+            (lambda, indicated, temperature, knock, peak.max(motored))
         } else {
-            (f32::INFINITY, 0.0, AMBIENT_TEMPERATURE, 0.0)
+            (f32::INFINITY, 0.0, AMBIENT_TEMPERATURE, 0.0, motored)
         };
         let pumping = (self.exhaust_pressure - p) * displacement;
         let springs = hardware.valves.force(self.cam(hardware).lift) - STOCK_SPRING_FORCE;
@@ -426,6 +448,7 @@ impl Engine {
             exhaust: air + fuel,
             exhaust_temperature,
             knock,
+            peak_pressure: peak,
         }
     }
 }
@@ -701,6 +724,46 @@ mod tests {
         let engine = run_flat_out(&build, rpm, 120.0);
         assert!(engine.blown(&build.hardware));
         assert!(engine.torque(&build, rpm) < 0.0);
+        let failures = engine.damage.failures(4);
+        assert!(
+            failures.iter().all(|f| f.ends_with("holed piston")),
+            "{failures:?}"
+        );
+        // Light knock on cheaper fuel wears the pistons, and the rods hold.
+        let cheap = EngineBuild {
+            octane: 91.0,
+            ..EngineBuild::default()
+        };
+        let engine = run_flat_out(&cheap, 2000.0, 60.0);
+        let pistons = engine.damage.cylinders[2].piston;
+        assert!(
+            pistons > 0.01 && !engine.blown(&cheap.hardware),
+            "{pistons}"
+        );
+        assert_eq!(engine.damage.cylinders[2].rod, 0.0);
+    }
+
+    #[test]
+    fn big_boost_needs_a_strong_bottom_end() {
+        // Lots of boost on race fuel, with the spark near MBT: the knock no longer holds
+        // the cylinder pressure down (the factory tune on pump fuel does).
+        let build = |parts: &parts::Parts| {
+            let mut build = EngineBuild::new(parts.hardware());
+            build.octane = 110.0;
+            build.ecu = Ecu::calibrated(&build.hardware, &build.maps, 110.0, parts.ecu);
+            build
+        };
+        let mut parts = parts::Parts::turbo();
+        parts.boost = 1.4;
+        let stock = build(&parts);
+        let engine = run_flat_out(&stock, 5500.0, 20.0);
+        assert!(engine.blown(&stock.hardware), "{:?}", engine.damage);
+        // Forged internals and a steel gasket hold it.
+        parts.chosen[3] = 2;
+        parts.chosen[4] = 1;
+        let strong = build(&parts);
+        let engine = run_flat_out(&strong, 5500.0, 20.0);
+        assert!(engine.damage.worst(4) < 0.05, "{:?}", engine.damage);
     }
 
     #[test]
