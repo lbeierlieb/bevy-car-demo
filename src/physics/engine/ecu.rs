@@ -3,7 +3,7 @@
 
 use super::hardware::EngineHardware;
 use super::maps::{self, EngineMaps};
-use super::table::Table;
+use super::table::{self, Table};
 use super::turbo;
 use super::{AMBIENT_PRESSURE, AMBIENT_TEMPERATURE, R_AIR, STOICHIOMETRIC};
 
@@ -194,17 +194,9 @@ impl Ecu {
 }
 
 /// Tunes as text: a comment, `engine <name>` (the build it was made for), the settings as
-/// `<key> <value>`, and each map as `table <name>`, an `axis` line per axis, and `values`
-/// lines (one per point of the first axis).
+/// `<key> <value>`, and the maps (see `table::write_table`).
 impl Ecu {
     pub fn to_text(&self, engine: &str) -> String {
-        let join = |values: &[f32]| {
-            values
-                .iter()
-                .map(f32::to_string)
-                .collect::<Vec<_>>()
-                .join(" ")
-        };
         let mut text = format!("# car-sim ECU tune\nengine {engine}\n");
         text += &format!("cylinders {}\n", self.cylinders);
         for (key, value) in self.settings() {
@@ -215,14 +207,7 @@ impl Ecu {
             ("lambda", &self.lambda),
             ("spark", &self.spark),
         ] {
-            text += &format!("table {name}\n");
-            for axis in table.axes() {
-                text += &format!("axis {}\n", join(axis));
-            }
-            let row = table.values().len() / table.axes()[0].len();
-            for values in table.values().chunks(row) {
-                text += &format!("values {}\n", join(values));
-            }
+            table::write_table(&mut text, name, table);
         }
         text
     }
@@ -231,40 +216,23 @@ impl Ecu {
     /// its value. Returns the engine the tune was made for.
     pub fn read_text(&mut self, text: &str) -> Option<String> {
         let mut engine = None;
-        // The table being read: its name, axes and values so far.
-        let mut table: Option<(String, Vec<Vec<f32>>, Vec<f32>)> = None;
-        let numbers = |rest: &str| {
-            rest.split_whitespace()
-                .map(str::parse)
-                .collect::<Result<Vec<f32>, _>>()
-                .ok()
-        };
-        for line in text.lines().chain(["end"]) {
-            let (key, rest) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
-            match (key, &mut table) {
-                ("axis", Some((_, axes, _))) => axes.extend(numbers(rest)),
-                ("values", Some((_, _, values))) => {
-                    values.extend(numbers(rest).into_iter().flatten())
-                }
+        let mut tables = Vec::new();
+        table::read_text(
+            text,
+            |key, value| match key {
+                "engine" => engine = Some(value.to_string()),
+                "cylinders" => self.cylinders = value.parse().unwrap_or(self.cylinders),
                 _ => {
-                    if let Some((name, axes, values)) = table.take() {
-                        self.set_table(&name, axes, values);
-                    }
-                    match key {
-                        "engine" => engine = Some(rest.trim().to_string()),
-                        "table" => table = Some((rest.trim().to_string(), Vec::new(), Vec::new())),
-                        "cylinders" => {
-                            self.cylinders = rest.trim().parse().unwrap_or(self.cylinders)
-                        }
-                        _ => {
-                            let value = rest.trim().parse::<f32>().ok().filter(|v| v.is_finite());
-                            if let (Some(field), Some(value)) = (self.setting(key), value) {
-                                *field = value;
-                            }
-                        }
+                    let value = value.parse::<f32>().ok().filter(|v| v.is_finite());
+                    if let (Some(field), Some(value)) = (self.setting(key), value) {
+                        *field = value;
                     }
                 }
-            }
+            },
+            |name, axes, values| tables.push((name.to_string(), axes, values)),
+        );
+        for (name, axes, values) in tables {
+            self.set_table(&name, axes, values);
         }
         engine
     }

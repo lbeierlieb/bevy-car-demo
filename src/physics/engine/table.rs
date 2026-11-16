@@ -118,6 +118,63 @@ impl Table {
     }
 }
 
+/// Writes `table` as text: `table <name>`, an `axis` line per axis, and `values` lines (one
+/// per point of the first axis).
+pub fn write_table(text: &mut String, name: &str, table: &Table) {
+    let join = |values: &[f32]| {
+        values
+            .iter()
+            .map(f32::to_string)
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    *text += &format!("table {name}\n");
+    for axis in table.axes() {
+        *text += &format!("axis {}\n", join(axis));
+    }
+    let row = table.values().len() / table.axes()[0].len();
+    for values in table.values().chunks(row) {
+        *text += &format!("values {}\n", join(values));
+    }
+}
+
+/// Reads text of tables written by `write_table` and other `<key> <value>` lines: `table`
+/// gets each table (its name, axes and values, which may not fit together if the text is
+/// broken), `line` each other line (comments too).
+pub fn read_text(
+    text: &str,
+    mut line: impl FnMut(&str, &str),
+    mut table: impl FnMut(&str, Vec<Vec<f32>>, Vec<f32>),
+) {
+    // The table being read: its name, and its axes and values so far.
+    let mut current = None;
+    let (mut axes, mut values) = (Vec::new(), Vec::new());
+    let numbers = |rest: &str| {
+        rest.split_whitespace()
+            .map(str::parse)
+            .collect::<Result<Vec<f32>, _>>()
+            .ok()
+    };
+    for text_line in text.lines().chain(["end"]) {
+        let trimmed = text_line.trim();
+        let (key, rest) = trimmed.split_once(' ').unwrap_or((trimmed, ""));
+        match key {
+            "axis" if current.is_some() => axes.extend(numbers(rest)),
+            "values" if current.is_some() => values.extend(numbers(rest).into_iter().flatten()),
+            _ => {
+                if let Some(name) = current.take() {
+                    table(name, std::mem::take(&mut axes), std::mem::take(&mut values));
+                }
+                if key == "table" {
+                    current = Some(rest.trim());
+                } else {
+                    line(key, rest.trim());
+                }
+            }
+        }
+    }
+}
+
 /// A curve through `points` (ascending in x), linear in between and flat beyond the ends.
 pub fn curve(points: &[(f32, f32)], x: f32) -> f32 {
     let i = points.partition_point(|&(px, _)| px <= x);
