@@ -1,5 +1,6 @@
 //! What wears and breaks in the engine. Each part has a wear from 0 (new) to 1 (failed).
-//! Pistons wear per cylinder: a holed piston kills its cylinder, and the others run on.
+//! Pistons and valves wear per cylinder: a holed piston or bent valves kill the cylinder,
+//! and the others run on.
 //! A blown head gasket costs compression and heats the coolant. Spun bearings wreck the
 //! engine for good.
 
@@ -15,6 +16,10 @@ const KNOCK_WEAR: f32 = 2e-4;
 const HEAT_WEAR: f32 = 2e-3;
 const COOLANT_LIMIT: f32 = 393.0;
 const OIL_LIMIT: f32 = 423.0;
+/// Valve float (spring force short of the valves' inertia, relative to it) where the
+/// valves start to touch the pistons, and the wear per cycle per unit of float beyond.
+const VALVE_CONTACT: f32 = 0.06;
+const VALVE_WEAR: f32 = 0.3;
 /// Efficiency lost with the pistons and rings worn out (blow-by), and with the head
 /// gasket blown (leaking compression).
 const PISTON_EFFICIENCY: f32 = 0.3;
@@ -27,17 +32,28 @@ const GASKET_HEAT: f32 = 0.1;
 pub struct CylinderWear {
     /// Pistons and rings, from knock.
     pub piston: f32,
+    /// Valves, from meeting the piston when they float.
+    pub valves: f32,
 }
 
 impl CylinderWear {
     /// Why this cylinder no longer fires, if it doesn't.
     pub fn failure(&self) -> Option<&'static str> {
-        (self.piston >= 1.0).then_some("holed piston")
+        if self.piston >= 1.0 {
+            Some("holed piston")
+        } else if self.valves >= 1.0 {
+            Some("bent valves")
+        } else {
+            None
+        }
     }
 }
 
 /// What the engine went through in one step, for the wear.
 pub struct Strain {
+    pub rpm: f32,
+    /// Valve float: spring force short of the valves' inertia, relative to it.
+    pub float: f32,
     /// Spark advance past the knock limit (degrees) and load (air relative to filling the
     /// displacement at ambient).
     pub knock: f32,
@@ -59,9 +75,12 @@ impl Damage {
     /// `dt`.
     pub fn step(&mut self, cylinders: usize, strain: &Strain, dt: f32) {
         let knock = KNOCK_WEAR * strain.knock.powi(2) * strain.load;
+        let cycles = strain.rpm / 120.0;
+        let contact = VALVE_WEAR * (strain.float - VALVE_CONTACT).max(0.0) * cycles;
         for (cylinder, spread) in self.cylinders.iter_mut().zip(SPREAD).take(cylinders) {
             if cylinder.failure().is_none() {
                 cylinder.piston = (cylinder.piston + knock * spread * dt).min(1.0);
+                cylinder.valves = (cylinder.valves + contact * spread * dt).min(1.0);
             }
         }
         let wear = |part: &mut f32, rate: f32| *part = (*part + rate * dt).min(1.0);
@@ -123,7 +142,12 @@ impl Damage {
         let mut parts: Vec<(String, f32)> = self.cylinders[..cylinders.min(MAX_CYLINDERS)]
             .iter()
             .enumerate()
-            .map(|(i, c)| (format!("Piston {}", i + 1), c.piston))
+            .flat_map(|(i, c)| {
+                [
+                    (format!("Piston {}", i + 1), c.piston),
+                    (format!("Valves {}", i + 1), c.valves),
+                ]
+            })
             .collect();
         parts.push(("Head gasket".to_string(), self.head_gasket));
         parts.push(("Bearings".to_string(), self.bearings));
@@ -159,6 +183,8 @@ mod tests {
 
     fn strain(knock: f32) -> Strain {
         Strain {
+            rpm: 3000.0,
+            float: 0.0,
             knock,
             load: 1.0,
             coolant: 360.0,
@@ -187,6 +213,29 @@ mod tests {
             }
         }
         panic!("never wrecked");
+    }
+
+    #[test]
+    fn floating_valves_bend_on_a_missed_shift() {
+        let mut damage = Damage::default();
+        // Just floating: no contact yet.
+        let floating = Strain {
+            rpm: 7300.0,
+            float: 0.03,
+            ..strain(0.0)
+        };
+        damage.step(4, &floating, 10.0);
+        assert_eq!(damage.worst(4), 0.0);
+        // A fifth-to-second shift: 9000 rpm for a tenth of a second.
+        let missed = Strain {
+            rpm: 9000.0,
+            float: 0.55,
+            ..strain(0.0)
+        };
+        for _ in 0..12 {
+            damage.step(4, &missed, 0.01);
+        }
+        assert!(damage.firing(4) < 0.5, "{:?}", damage.cylinders);
     }
 
     #[test]

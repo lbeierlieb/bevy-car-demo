@@ -2,6 +2,11 @@
 
 use std::f32::consts::PI;
 
+/// Mean piston speed the bottom end is made for (m/s).
+const PISTON_SPEED_LIMIT: f32 = 23.0;
+/// Share of the valve float speed the redline stays below.
+const FLOAT_MARGIN: f32 = 0.95;
+
 /// Everything about the engine that is hardware. The cylinder side (bottom end, head,
 /// cams, runners, headers) shapes the baked maps, so changing it means baking them again;
 /// the parts between the manifolds and the outside (filter, throttle, idle valve, exhaust
@@ -26,6 +31,7 @@ pub struct EngineHardware {
     /// exhaust retarded), on top of the phasers.
     pub intake_timing: f32,
     pub exhaust_timing: f32,
+    pub valves: ValveTrain,
     pub intake: Intake,
     /// A turbocharger between the air filter and the throttle, and in the exhaust.
     pub turbo: Option<Turbo>,
@@ -33,9 +39,6 @@ pub struct EngineHardware {
     pub cooling: Cooling,
     /// Flywheel and crank inertia (kg·m²).
     pub inertia: f32,
-    /// Highest speed the bottom end and valvetrain are made for (rpm): the redline, and
-    /// where the factory tune limits the revs.
-    pub redline: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,6 +50,36 @@ pub struct CamProfile {
     pub lobe_separation: f32,
     /// Valve lift (m).
     pub lift: f32,
+}
+
+/// The valve springs and what they move. Above the speed where the spring can no longer
+/// pull the valve after the cam's closing flank, the valve floats: it lofts off the cam
+/// and bounces on its seat, and in an interference engine it can meet the piston.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ValveTrain {
+    /// Spring force with the valve closed (N), and its rise with lift (N/m).
+    pub seat_force: f32,
+    pub rate: f32,
+    /// Moving mass per valve as the spring sees it: valve, retainer, follower and a third
+    /// of the spring (kg).
+    pub mass: f32,
+}
+
+impl ValveTrain {
+    /// Spring force at full `lift` (N).
+    pub fn force(&self, lift: f32) -> f32 {
+        self.seat_force + self.rate * lift
+    }
+
+    /// Engine speed (rpm) where the valves start to float on `cam`. The lift curve
+    /// L·(1 - x²)^1.5 over the duration D decelerates the valve at most by 12·L·ω²/D² over
+    /// the nose, which the spring's force at full lift has to provide.
+    pub fn float_rpm(&self, cam: &CamProfile) -> f32 {
+        let duration = cam.intake_duration.min(cam.exhaust_duration).to_radians();
+        let omega =
+            (self.force(cam.lift) * duration * duration / (12.0 * self.mass * cam.lift)).sqrt();
+        omega * 60.0 / (2.0 * PI)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -193,6 +226,21 @@ impl EngineHardware {
         self.cams.len() > 1 || self.intake_phasing > 0.0 || self.exhaust_phasing > 0.0
     }
 
+    /// Highest speed the engine is made for on cam profile `profile` (rpm): clear of
+    /// valve float, and within the bottom end's piston speed; rounded down to 100 rpm.
+    pub fn safe_rpm(&self, profile: usize) -> f32 {
+        let cam = &self.cams[profile.min(self.cams.len() - 1)];
+        let valves = FLOAT_MARGIN * self.valves.float_rpm(cam);
+        let bottom = PISTON_SPEED_LIMIT / (2.0 * self.stroke) * 60.0;
+        (valves.min(bottom) / 100.0).floor() * 100.0
+    }
+
+    /// The redline: the safe speed on the last cam profile (the one for high rpm), which the
+    /// rev counter shows and the factory tune limits the revs to.
+    pub fn redline(&self) -> f32 {
+        self.safe_rpm(self.cams.len() - 1)
+    }
+
     /// Swept volume of all cylinders (m³).
     pub fn displacement(&self) -> f32 {
         PI / 4.0 * self.bore * self.bore * self.stroke * self.cylinders as f32
@@ -225,6 +273,11 @@ impl Default for EngineHardware {
             exhaust_phasing: 0.0,
             intake_timing: 0.0,
             exhaust_timing: 0.0,
+            valves: ValveTrain {
+                seat_force: 180.0,
+                rate: 20e3,
+                mass: 0.1,
+            },
             intake: Intake {
                 filter_area: 2.5e-3,
                 throttle_diameter: 0.055,
@@ -242,7 +295,6 @@ impl Default for EngineHardware {
             },
             cooling: Cooling::default(),
             inertia: 0.18,
-            redline: 6800.0,
         }
     }
 }

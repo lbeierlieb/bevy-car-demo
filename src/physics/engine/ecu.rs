@@ -226,7 +226,8 @@ impl Ecu {
             ve,
             spark,
             idle_rpm: 850.0,
-            rev_limit: hardware.redline,
+            // Without cam control, the valvetrain stays on the first profile.
+            rev_limit: hardware.safe_rpm(if model.cam_control() { usize::MAX } else { 0 }),
             limiter_cut: 0.08,
             limiter_fuel: 0.04,
         }
@@ -326,7 +327,7 @@ impl CamControl {
         // From where the second profile breathes better all the way to the redline.
         let mut switch_rpm = 9500.0;
         if hardware.cams.len() > 1 {
-            let mut rpm = (hardware.redline / 100.0).floor() * 100.0;
+            let mut rpm = hardware.redline();
             while rpm >= 2000.0 && best(1, rpm, 100e3).2 > best(0, rpm, 100e3).2 {
                 switch_rpm = rpm;
                 rpm -= 100.0;

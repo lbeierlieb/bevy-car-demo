@@ -56,6 +56,14 @@ const TURBO_LIMIT: f32 = 25000.0;
 const WASTEGATE_LAG: f32 = 0.05;
 const INTERCOOLER_LAG: f32 = 2.0;
 const INTERCOOLER_FLOW: f32 = 0.05;
+/// Volumetric efficiency lost per unit of valve float (spring force short of what the
+/// valves' inertia needs, relative to it), and the least that's left.
+const FLOAT_LOSS: f32 = 2.5;
+const FLOAT_LEAST: f32 = 0.1;
+/// Friction mean effective pressure per newton of valve spring force over the stock
+/// springs' (Pa/N), which the friction map includes.
+const SPRING_FRICTION: f32 = 20.0;
+const STOCK_SPRING_FORCE: f32 = 370.0;
 /// Intake manifold pressure after the starter has cranked the engine (Pa).
 const CRANKED_PRESSURE: f32 = 30e3;
 
@@ -248,6 +256,8 @@ impl Engine {
         self.thermal.step(cooling, to_coolant, to_oil, airspeed, dt);
 
         let strain = Strain {
+            rpm: rpm.abs(),
+            float: self.valve_float(hardware, rpm.abs()),
             knock: cycle.knock,
             load: cycle.load,
             coolant: self.thermal.coolant,
@@ -329,18 +339,37 @@ impl Engine {
         }
     }
 
-    /// Air the cylinders draw (kg/s) at `rpm` with the intake manifold at `intake` (Pa).
-    fn cylinder_flow(&self, build: &EngineBuild, rpm: f32, intake: f32) -> f32 {
+    /// The cam profile the valvetrain is on.
+    fn cam(&self, hardware: &EngineHardware) -> hardware::CamProfile {
+        hardware.cams[self.actuators.cam_profile.min(hardware.cams.len() - 1)]
+    }
+
+    /// How far past valve float the valvetrain is at `rpm`: the force the valves' inertia
+    /// needs over what the springs have, less one (0 below the float speed).
+    pub fn valve_float(&self, hardware: &EngineHardware, rpm: f32) -> f32 {
+        let float = hardware.valves.float_rpm(&self.cam(hardware));
+        ((rpm / float).powi(2) - 1.0).max(0.0)
+    }
+
+    /// Volumetric efficiency at `rpm` with the intake manifold at `intake` (Pa), as the
+    /// actuators set the cams; floating valves lose it.
+    fn ve(&self, build: &EngineBuild, rpm: f32, intake: f32) -> f32 {
         let a = &self.actuators;
-        let ratio = self.exhaust_pressure / intake;
         let ve = build.maps.ve(
             a.cam_profile,
-            rpm.abs(),
+            rpm,
             intake,
-            ratio,
+            self.exhaust_pressure / intake,
             a.intake_phase,
             a.exhaust_phase,
         );
+        let float = self.valve_float(&build.hardware, rpm);
+        ve * (1.0 - FLOAT_LOSS * float).max(FLOAT_LEAST)
+    }
+
+    /// Air the cylinders draw (kg/s) at `rpm` with the intake manifold at `intake` (Pa).
+    fn cylinder_flow(&self, build: &EngineBuild, rpm: f32, intake: f32) -> f32 {
+        let ve = self.ve(build, rpm.abs(), intake);
         ve * intake / (R_AIR * self.charge_temperature) * build.hardware.displacement() * rpm.abs()
             / 120.0
     }
@@ -351,14 +380,7 @@ impl Engine {
         let rpm = rpm.abs();
         let a = &self.actuators;
         let p = self.intake_pressure;
-        let ve = maps.ve(
-            a.cam_profile,
-            rpm,
-            p,
-            self.exhaust_pressure / p,
-            a.intake_phase,
-            a.exhaust_phase,
-        );
+        let ve = self.ve(build, rpm, p);
         let displacement = hardware.displacement();
         let air = ve * p / (R_AIR * self.charge_temperature) * displacement;
         let load = air / (ambient_density() * displacement);
@@ -391,7 +413,9 @@ impl Engine {
             (f32::INFINITY, 0.0, AMBIENT_TEMPERATURE, 0.0)
         };
         let pumping = (self.exhaust_pressure - p) * displacement;
-        let friction = maps.friction(rpm, self.thermal.oil) * displacement;
+        let springs = hardware.valves.force(self.cam(hardware).lift) - STOCK_SPRING_FORCE;
+        let friction =
+            (maps.friction(rpm, self.thermal.oil) + SPRING_FRICTION * springs) * displacement;
         Cycle {
             load,
             lambda,
@@ -563,6 +587,32 @@ mod tests {
         assert!((3000.0..=5500.0).contains(&peak.0), "{curve:?}");
         assert!((180.0..=230.0).contains(&peak.1), "{curve:?}");
         assert!(curve.iter().all(|&(_, t)| t > 120.0), "{curve:?}");
+    }
+
+    #[test]
+    fn floating_valves_cap_the_revs_and_bend() {
+        let build = EngineBuild::default();
+        let float = build.hardware.valves.float_rpm(&build.hardware.cams[0]);
+        assert!((7000.0..7500.0).contains(&float), "{float} rpm");
+        // Held past the float speed (the rev limiter left behind): the power falls away.
+        let below = steady_torque(&build, float - 200.0, 1.0);
+        let past = steady_torque(&build, float * 1.05, 1.0);
+        assert!(past < 0.85 * below, "{below} then {past} N·m");
+        let mut engine = Engine::default();
+        for _ in 0..60 {
+            engine.step(&build, 1.0, float * 1.05, true, 1.0 / 120.0);
+        }
+        let damage = engine.damage;
+        assert!(
+            damage.firing(4) == 1.0 && damage.worst(4) > 0.0,
+            "{damage:?}"
+        );
+        // Bent valves leave the engine running on the other cylinders.
+        for _ in 0..240 {
+            engine.step(&build, 1.0, float * 1.1, true, 1.0 / 120.0);
+        }
+        assert!(engine.damage.firing(4) < 1.0);
+        assert!(engine.torque(&build, 4000.0) < steady_torque(&build, 4000.0, 1.0));
     }
 
     #[test]

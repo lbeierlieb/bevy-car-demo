@@ -4,7 +4,8 @@
 
 use super::ecu::EcuModel;
 use super::hardware::{
-    CamProfile, Compressor, Diverter, EngineHardware, Intercooler, Turbine, Turbo, Wastegate,
+    CamProfile, Compressor, Diverter, EngineHardware, Intercooler, Turbine, Turbo, ValveTrain,
+    Wastegate,
 };
 
 /// A kind of part, and the parts there are of it (the first is stock).
@@ -24,11 +25,11 @@ const fn part(name: &'static str, fit: fn(&mut EngineHardware)) -> Part {
 }
 
 const PISTONS: usize = 0;
-const TURBO: usize = 9;
+const TURBO: usize = 10;
 /// The intercooler's slot: it only matters with a turbo.
-pub const INTERCOOLER: usize = 10;
+pub const INTERCOOLER: usize = 11;
 
-pub const SLOTS: [Slot; 16] = [
+pub const SLOTS: [Slot; 17] = [
     Slot {
         name: "Pistons",
         about: "Compression ratio: more is more efficient, but knocks earlier",
@@ -41,17 +42,12 @@ pub const SLOTS: [Slot; 16] = [
     },
     Slot {
         name: "Crankshaft",
-        about: "Stroke: a longer one makes a bigger engine that runs out of breath sooner",
+        about: "Stroke: a longer one makes a bigger engine; the pistons move faster, so it \
+                revs less",
         parts: &[
             part("Stock (86 mm, 2.0 l)", |_| {}),
-            part("Short stroke (80 mm, 1.9 l)", |h| {
-                h.stroke = 0.080;
-                h.redline += 400.0;
-            }),
-            part("Stroker (92 mm, 2.1 l)", |h| {
-                h.stroke = 0.092;
-                h.redline -= 300.0;
-            }),
+            part("Short stroke (80 mm, 1.9 l)", |h| h.stroke = 0.080),
+            part("Stroker (92 mm, 2.1 l)", |h| h.stroke = 0.092),
         ],
     },
     Slot {
@@ -65,22 +61,31 @@ pub const SLOTS: [Slot; 16] = [
     },
     Slot {
         name: "Camshafts",
-        about: "Longer duration and more lift breathe better high up (and rev higher), worse \
-                low down and at idle. A switching cam has a mild and a wild profile, and \
+        about: "Longer duration and more lift breathe better high up, worse low down and at \
+                idle (more lift needs stiffer valve springs). A switching cam has a mild and a wild profile, and \
                 needs an ECU to switch between them",
         parts: &[
             part("Stock (240°, 9.5 mm)", |_| {}),
             part("Sport (256°, 10.5 mm)", |h| {
-                h.cams = vec![cam(256.0, 108.0, 0.0105)];
-                h.redline += 600.0;
+                h.cams = vec![cam(256.0, 108.0, 0.0105)]
             }),
             part("Race (276°, 11.5 mm)", |h| {
-                h.cams = vec![cam(276.0, 106.0, 0.0115)];
-                h.redline += 1200.0;
+                h.cams = vec![cam(276.0, 106.0, 0.0115)]
             }),
             part("Switching (236° / 264°)", |h| {
-                h.cams = vec![cam(236.0, 112.0, 0.009), cam(264.0, 108.0, 0.011)];
-                h.redline += 1000.0;
+                h.cams = vec![cam(236.0, 112.0, 0.009), cam(264.0, 108.0, 0.011)]
+            }),
+        ],
+    },
+    Slot {
+        name: "Valve springs",
+        about: "Stiffer springs keep the valves on the cams to higher rpm (where they'd \
+                float and could meet the pistons), at a little more friction",
+        parts: &[
+            part("Stock", |_| {}),
+            part("Uprated", |h| set_springs(h, 240.0, 28e3, 0.1)),
+            part("Race, titanium retainers", |h| {
+                set_springs(h, 280.0, 34e3, 0.085)
             }),
         ],
     },
@@ -213,6 +218,14 @@ fn cam(duration: f32, lobe_separation: f32, lift: f32) -> CamProfile {
     }
 }
 
+fn set_springs(hardware: &mut EngineHardware, seat_force: f32, rate: f32, mass: f32) {
+    hardware.valves = ValveTrain {
+        seat_force,
+        rate,
+        mass,
+    };
+}
+
 /// A turbo kit: the turbo with compressor and turbine wheels of these diameters, the
 /// turbine's flow area, the shaft's inertia and the wastegate's flow area (a small turbine
 /// needs a big one to let the excess exhaust past), a diverter valve, the stock
@@ -343,6 +356,28 @@ mod tests {
         let charger = turbo.turbo.unwrap();
         assert_eq!(charger.wastegate.spring, 0.6e5);
         assert_eq!(charger.wastegate.area, 3e-4);
+    }
+
+    #[test]
+    fn springs_and_stroke_set_the_redline() {
+        let redline = |choices: &[(usize, usize)]| {
+            let mut parts = Parts::stock();
+            for &(slot, part) in choices {
+                parts.chosen[slot] = part;
+            }
+            parts.hardware().redline()
+        };
+        let (crank, cams, springs) = (1, 3, 4);
+        assert_eq!(redline(&[]), 6800.0);
+        // Wilder cams on the stock springs float later (the longer duration eases the
+        // valves' deceleration more than the lift adds), but not much.
+        let race = redline(&[(cams, 2)]);
+        assert!((7200.0..7800.0).contains(&race), "{race}");
+        // Stiffer springs: the bottom end limits then, and a short stroke revs higher.
+        let sprung = redline(&[(cams, 2), (springs, 2)]);
+        assert!(sprung > race + 300.0, "{sprung}");
+        assert!(redline(&[(cams, 2), (springs, 2), (crank, 1)]) > sprung + 300.0);
+        assert!(redline(&[(cams, 2), (springs, 2), (crank, 2)]) < sprung - 300.0);
     }
 
     #[test]

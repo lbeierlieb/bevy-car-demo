@@ -83,7 +83,7 @@ impl EngineSetup {
 
     /// The engine's redline, for the rev counter and the gearbox.
     pub fn redline_rpm(&self) -> f32 {
-        self.build.hardware.redline
+        self.build.hardware.redline()
     }
 
     /// End of a rev counter's scale: a whole thousand above the redline.
