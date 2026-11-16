@@ -26,6 +26,33 @@ const CLUTCH_IN: f32 = 0.6;
 /// Time the automatic stays in a gear before it shifts again (s): just after a shift, the
 /// clutch closing can spin the wheels up for a moment, and that isn't speed to shift on.
 const AUTO_DWELL: f32 = 1.0;
+/// The throttle linkage, pedal travel to plate opening (linear in between): a progressive
+/// cam. A butterfly passes most of the air the engine can take long before it's fully
+/// open, so a straight linkage would put nearly all the torque in the first third of the
+/// pedal. This one spreads it over the travel, about in proportion around 3500 rpm.
+const LINKAGE: [(f32, f32); 10] = [
+    (0.0, 0.0),
+    (0.1, 0.1),
+    (0.2, 0.14),
+    (0.3, 0.17),
+    (0.4, 0.2),
+    (0.5, 0.235),
+    (0.6, 0.27),
+    (0.7, 0.32),
+    (0.8, 0.38),
+    (0.9, 0.5),
+];
+
+/// Throttle plate opening (0..1) for the pedal pressed to `pedal` (0..1).
+pub fn throttle_plate(pedal: f32) -> f32 {
+    let pedal = pedal.clamp(0.0, 1.0);
+    let next = LINKAGE.iter().position(|&(p, _)| p > pedal);
+    let ((p0, t0), (p1, t1)) = match next {
+        Some(i) => (LINKAGE[i - 1], LINKAGE[i]),
+        None => (LINKAGE[LINKAGE.len() - 1], (1.0, 1.0)),
+    };
+    t0 + (t1 - t0) * (pedal - p0) / (p1 - p0)
+}
 
 /// The wheels the engine drives.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -327,7 +354,8 @@ impl Drivetrain {
         };
         let build = &engine.build;
         let firing = self.running && self.shift.is_none();
-        self.engine.step(build, throttle, self.rpm, firing, dt);
+        self.engine
+            .step(build, throttle_plate(throttle), self.rpm, firing, dt);
         let cycle = self.engine.cycle(build, self.rpm);
         self.load = if firing && cycle.indicated > 0.0 {
             ((cycle.load - 0.2) / 0.7).clamp(0.0, 1.0)
@@ -446,6 +474,21 @@ impl Drivetrain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_linkage_opens_the_plate_progressively() {
+        assert_eq!(throttle_plate(0.0), 0.0);
+        assert_eq!(throttle_plate(1.0), 1.0);
+        assert_eq!(throttle_plate(2.0), 1.0);
+        let mut last = 0.0;
+        for i in 1..=100 {
+            let plate = throttle_plate(i as f32 / 100.0);
+            assert!(plate > last);
+            last = plate;
+        }
+        // Half the pedal is well under half the plate.
+        assert!(throttle_plate(0.5) < 0.3);
+    }
 
     /// A car-like load on the wheels: the car's mass as inertia at the tire radius.
     fn drive(
