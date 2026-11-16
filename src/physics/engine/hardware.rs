@@ -23,6 +23,7 @@ pub struct EngineHardware {
     pub exhaust_phasing: f32,
     pub intake: Intake,
     pub exhaust: Exhaust,
+    pub cooling: Cooling,
     /// Flywheel and crank inertia (kg·m²).
     pub inertia: f32,
 }
@@ -73,6 +74,41 @@ pub struct Exhaust {
     pub silencer_area: Option<f32>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Cooling {
+    /// Radiator frontal area (m²), and the share of the coolant-to-air temperature
+    /// difference it can use.
+    pub radiator_area: f32,
+    pub radiator_effectiveness: f32,
+    /// Coolant temperatures where the thermostat starts to open and is fully open (K).
+    pub thermostat_opens: f32,
+    pub thermostat_open: f32,
+    /// Coolant temperatures where the fan switches on and off again (K), and the air speed
+    /// it draws through the radiator (m/s).
+    pub fan_on: f32,
+    pub fan_off: f32,
+    pub fan_speed: f32,
+    /// Heat capacities of the coolant with the block, and of the oil with the sump (J/K).
+    pub coolant_capacity: f32,
+    pub oil_capacity: f32,
+}
+
+impl Default for Cooling {
+    fn default() -> Self {
+        Self {
+            radiator_area: 0.3,
+            radiator_effectiveness: 0.6,
+            thermostat_opens: 361.0,
+            thermostat_open: 371.0,
+            fan_on: 373.0,
+            fan_off: 368.0,
+            fan_speed: 2.5,
+            coolant_capacity: 55e3,
+            oil_capacity: 15e3,
+        }
+    }
+}
+
 impl Exhaust {
     /// Flow resistance of the parts in series: the pressure drop is this times ṁ²/(2ρ).
     pub fn resistance(&self) -> f32 {
@@ -121,6 +157,7 @@ impl Default for EngineHardware {
                 cat_area: Some(2.0e-3),
                 silencer_area: Some(1.6e-3),
             },
+            cooling: Cooling::default(),
             inertia: 0.18,
         }
     }

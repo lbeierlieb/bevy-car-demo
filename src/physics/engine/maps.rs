@@ -55,7 +55,9 @@ pub struct EngineMaps {
     efficiency: Table,
     /// Exhaust gas temperature at MBT spark and λ = 1 (K) by rpm and load.
     exhaust_temperature: Table,
-    /// Friction mean effective pressure (Pa) by rpm.
+    /// Share of the fuel's energy that goes into the coolant, by rpm and load.
+    heat_to_coolant: Table,
+    /// Friction mean effective pressure (Pa) with the oil warm, by rpm.
     friction: Table,
 }
 
@@ -90,6 +92,10 @@ impl EngineMaps {
             0.82 * otto * (1.0 - 0.1 * (-rpm / 1500.0).exp()) * (0.92 + 0.08 * load.min(1.0))
         });
         let exhaust_temperature = by_load(&|rpm, load| 880.0 + 150.0 * load.min(1.5) + 0.03 * rpm);
+        // More of the heat goes into the walls at low rpm (more time) and light load.
+        let heat_to_coolant = by_load(&|rpm, load| {
+            0.32 * (1.0 - 0.25 * load.min(1.5)) * (1.0 + 0.15 * (-rpm / 2000.0).exp())
+        });
         // Rings and skirts by mean piston speed, more side thrust with shorter rods.
         let rod = 1.0 + 0.5 * (hardware.stroke / (2.0 * hardware.rod_length) - 0.3);
         let friction = Table::bake(vec![rpm_axis()], |p| {
@@ -101,6 +107,7 @@ impl EngineMaps {
             mbt,
             efficiency,
             exhaust_temperature,
+            heat_to_coolant,
             friction,
         }
     }
@@ -130,8 +137,13 @@ impl EngineMaps {
         self.exhaust_temperature.get(&[rpm, load])
     }
 
-    pub fn friction(&self, rpm: f32) -> f32 {
-        self.friction.get(&[rpm])
+    pub fn heat_to_coolant(&self, rpm: f32, load: f32) -> f32 {
+        self.heat_to_coolant.get(&[rpm, load])
+    }
+
+    /// Friction mean effective pressure (Pa) at `rpm` with the oil at `oil` (K).
+    pub fn friction(&self, rpm: f32, oil: f32) -> f32 {
+        self.friction.get(&[rpm]) * friction_oil_factor(oil)
     }
 }
 
@@ -167,6 +179,11 @@ fn ve_placeholder(
     let residual = ((cr - ratio.powf(1.0 / 1.3)) / (cr - 1.0)).max(0.0);
     let backflow = 0.0015 * overlap * (ratio - 1.0).max(0.0) * (2000.0 / rpm.max(600.0)).min(3.0);
     ((breathing + runner + header) * residual * (1.0 - backflow).max(0.0)).max(0.0)
+}
+
+/// Friction relative to warm oil: thick cold oil almost doubles it.
+pub fn friction_oil_factor(oil: f32) -> f32 {
+    1.0 + 0.9 * ((363.0 - oil) / 65.0).clamp(0.0, 1.0)
 }
 
 /// Fraction of the best torque at a spark advance `offset` degrees from MBT.
@@ -236,6 +253,13 @@ mod tests {
         let idle = |profile| maps.ve(profile, 850.0, 30e3, 3.4, 0.0, 0.0);
         assert!(idle(1) < idle(0) * 0.9, "{} vs {}", idle(1), idle(0));
         assert!(stock.overlap(0.0, 0.0) < hardware.cams[1].overlap(0.0, 0.0));
+    }
+
+    #[test]
+    fn cold_oil_adds_friction() {
+        let maps = EngineMaps::bake(&EngineHardware::default());
+        let (cold, warm) = (maps.friction(3000.0, 298.0), maps.friction(3000.0, 368.0));
+        assert!(cold > warm * 1.5, "{cold} vs {warm}");
     }
 
     #[test]

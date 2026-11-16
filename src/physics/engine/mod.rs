@@ -13,12 +13,14 @@ pub mod ecu;
 pub mod hardware;
 pub mod maps;
 mod table;
+pub mod thermal;
 
 use std::f32::consts::PI;
 
 use ecu::{Actuators, Ecu, EcuState, Sensors};
 use hardware::EngineHardware;
 use maps::EngineMaps;
+use thermal::Thermal;
 
 pub const AMBIENT_PRESSURE: f32 = 101_325.0;
 pub const AMBIENT_TEMPERATURE: f32 = 298.0;
@@ -83,6 +85,9 @@ pub struct Engine {
     pub actuators: Actuators,
     /// The cylinders fire: the engine runs and the ignition isn't cut.
     firing: bool,
+    pub thermal: Thermal,
+    /// Speed of the air the car drives through (m/s), for the radiator; set by the car.
+    pub airspeed: f32,
 }
 
 /// One cycle (two revolutions) of all cylinders.
@@ -91,8 +96,12 @@ pub struct Cycle {
     pub load: f32,
     /// Air-fuel ratio (infinite without fuel).
     pub lambda: f32,
-    /// Work done by the gas on the pistons, and lost to pumping and friction (J).
+    /// Fuel burnt (kg).
+    pub fuel: f32,
+    /// Work done by the gas on the pistons, lost to friction, and lost to pumping and
+    /// friction together (J).
     pub indicated: f32,
+    pub friction: f32,
     pub losses: f32,
     /// Gas leaving through the exhaust valves (kg) and its temperature (K).
     pub exhaust: f32,
@@ -108,6 +117,8 @@ impl Default for Engine {
             ecu: EcuState::default(),
             actuators: Actuators::default(),
             firing: true,
+            thermal: Thermal::warm(),
+            airspeed: 0.0,
         }
     }
 }
@@ -151,8 +162,19 @@ impl Engine {
         }
 
         let cycle = self.cycle(build, rpm);
-        let flow = cycle.exhaust * rpm.abs() / 120.0;
+        let cycles = rpm.abs() / 120.0;
+        let flow = cycle.exhaust * cycles;
         self.exhaust_pressure = exhaust_pressure(hardware, flow, cycle.exhaust_temperature);
+
+        // The cylinder walls heat the coolant; friction heats the coolant and the oil
+        // (through the pistons and the bearings), and the oil also cools the pistons.
+        let fuel_power = cycle.fuel * FUEL_ENERGY * cycles;
+        let friction_power = cycle.friction * cycles;
+        let walls = build.maps.heat_to_coolant(rpm.abs(), cycle.load);
+        let to_coolant = walls * fuel_power + 0.5 * friction_power;
+        let to_oil = 0.5 * friction_power + 0.03 * fuel_power;
+        let (cooling, airspeed) = (&hardware.cooling, self.airspeed);
+        self.thermal.step(cooling, to_coolant, to_oil, airspeed, dt);
     }
 
     /// Torque on the crank at `rpm`. A stopped engine only drags, against the way it's
@@ -219,11 +241,13 @@ impl Engine {
             (f32::INFINITY, 0.0, AMBIENT_TEMPERATURE)
         };
         let pumping = (self.exhaust_pressure - p) * displacement;
-        let friction = maps.friction(rpm) * displacement;
+        let friction = maps.friction(rpm, self.thermal.oil) * displacement;
         Cycle {
             load,
             lambda,
+            fuel,
             indicated,
+            friction,
             losses: pumping + friction,
             exhaust: air + fuel,
             exhaust_temperature,

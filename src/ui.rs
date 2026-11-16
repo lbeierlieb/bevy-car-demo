@@ -267,6 +267,13 @@ fn engine(ui: &mut egui::Ui, car: &Car) {
         engine.actuators.spark,
         engine.torque(build, drivetrain.rpm),
     ));
+    let thermal = &engine.thermal;
+    ui.label(format!(
+        "coolant {:.0} °C    oil {:.0} °C{}",
+        thermal.coolant - 273.15,
+        thermal.oil - 273.15,
+        if thermal.fan { "    fan" } else { "" },
+    ));
 }
 
 fn telemetry(ui: &mut egui::Ui, car: &Car) {

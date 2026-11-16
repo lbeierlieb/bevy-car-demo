@@ -82,6 +82,7 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
 /// Engine torque to the rear wheels (split evenly, like an open differential), biased
 /// brakes, rear handbrake, and steering.
 fn apply_controls(car: &mut Car, dt: f32) {
+    car.drivetrain.engine.airspeed = car.forward_speed();
     let Car {
         setup,
         corners,
