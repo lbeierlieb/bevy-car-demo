@@ -350,3 +350,82 @@ fn a_nearly_empty_tank_starves_the_engine_in_a_long_corner() {
     // It leans out and slows the car until the fuel just about reaches the pickup.
     assert!(starved(3.0) < 0.8);
 }
+
+/// The coupé driving at `speed` (m/s) along -z on flat ground towards `obstacle`, for
+/// `seconds`, without the driver doing anything once it's let go.
+fn drive_into(obstacle: crate::physics::collision::Upright, speed: f32, seconds: f32) -> Car {
+    use crate::physics::collision::Obstacles;
+    let mut terrain = Terrain::flat();
+    terrain.obstacles = Obstacles::new(vec![obstacle], 8.0);
+    let mut car = Car::spawn_at(0, CarSetup::factory(3, 0), &terrain, 0.0, 0.0, 0.0);
+    let dt = 1.0 / CHASSIS_HZ as f32;
+    // Let it settle on its springs, then send it off.
+    for _ in 0..60 {
+        step_car(&mut car, &terrain, dt);
+    }
+    car.body.velocity = car.body.rotation * Vec3::new(0.0, 0.0, -speed);
+    for corner in &mut car.corners {
+        corner.omega = speed / car.setup.axle(corner.front).tire.radius;
+    }
+    for _ in 0..(seconds / dt) as usize {
+        step_car(&mut car, &terrain, dt);
+    }
+    car
+}
+
+#[test]
+fn a_car_stops_at_a_wall_and_a_tree() {
+    use crate::physics::collision::Upright;
+    let upright = |half: Vec2| Upright {
+        center: Vec2::new(0.0, -10.0),
+        half,
+        bottom: -0.5,
+        top: 6.0,
+        angle: 0.0,
+    };
+    // The car's nose is about 2 m ahead of its centre: a wall 10 m ahead, across.
+    let wall = upright(Vec2::new(10.0, 0.3));
+    let car = drive_into(wall, 20.0, 2.0);
+    let nose = car.setup.hull.placed(car.body.position, car.body.rotation);
+    let front = nose.corners().iter().map(|c| c.z).fold(f32::MAX, f32::min);
+    assert!(front > -9.75, "went into the wall: front at {front}");
+    assert!(car.body.velocity.length() < 3.0, "{}", car.body.velocity);
+    // A trunk in front of the middle of the bonnet.
+    let tree = upright(Vec2::splat(0.3));
+    let car = drive_into(tree, 20.0, 2.0);
+    assert!(car.body.position.z > -8.0, "went through the tree: {}", car.body.position);
+}
+
+#[test]
+fn a_car_on_its_roof_rests_on_it() {
+    let terrain = Terrain::flat();
+    let mut car = Car::spawn_at(0, CarSetup::factory(3, 0), &terrain, 0.0, 0.0, 0.0);
+    car.body.position.y += 2.0;
+    car.body.rotation = Quat::from_rotation_z(std::f32::consts::PI);
+    let dt = 1.0 / CHASSIS_HZ as f32;
+    for _ in 0..(4.0 / dt) as usize {
+        step_car(&mut car, &terrain, dt);
+    }
+    let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
+    let lowest = hull.corners().iter().map(|c| c.y).fold(f32::MAX, f32::min);
+    assert!(lowest > -0.03 && lowest < 0.02, "lowest corner at {lowest}");
+    assert!(car.body.velocity.length() < 0.1, "{}", car.body.velocity);
+}
+
+#[test]
+fn two_cars_collide() {
+    let terrain = Terrain::flat();
+    let mut a = Car::spawn_at(0, CarSetup::factory(3, 0), &terrain, 0.0, 0.0, 0.0);
+    let mut b = Car::spawn_at(1, CarSetup::factory(4, 0), &terrain, 0.0, -12.0, 0.0);
+    let dt = 1.0 / CHASSIS_HZ as f32;
+    a.body.velocity = Vec3::new(0.0, 0.0, -15.0);
+    for _ in 0..(2.0 / dt) as usize {
+        step_car(&mut a, &terrain, dt);
+        step_car(&mut b, &terrain, dt);
+        super::collide_cars(&mut a, &mut b, dt);
+    }
+    // The one hit was pushed along; they didn't pass into each other.
+    assert!(b.body.position.z < -13.0, "{}", b.body.position);
+    let gap = b.body.position.z - a.body.position.z;
+    assert!(gap < -3.5, "{gap}");
+}

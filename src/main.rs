@@ -12,6 +12,7 @@ mod garage;
 mod hud;
 mod input;
 mod map;
+mod obstacles;
 mod physics;
 mod scenery;
 mod sim;
@@ -45,8 +46,11 @@ fn main() {
             ..default()
         })
         .add_plugins((
-            terrain::TerrainPlugin,
-            scenery::SceneryPlugin,
+            (
+                terrain::TerrainPlugin,
+                scenery::SceneryPlugin,
+                obstacles::ObstaclesPlugin,
+            ),
             sim::SimPlugin,
             input::InputPlugin,
             wheel_base::WheelBasePlugin,

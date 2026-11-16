@@ -1,4 +1,5 @@
-//! Debug gizmos: suspension linkage, raycasts, contact patches, tire forces and roll centres.
+//! Debug gizmos: suspension linkage, raycasts, contact patches, tire forces, roll centres,
+//! and the collision boxes of the cars and the obstacles near them.
 
 use bevy::color::palettes::css;
 use bevy::prelude::*;
@@ -6,9 +7,12 @@ use bevy::prelude::*;
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Car};
 use crate::physics::suspension::Corner;
+use crate::terrain::Terrain;
 
 /// Metres of arrow per newton of tire force.
 const FORCE_SCALE: f32 = 1.0 / 4_000.0;
+/// Obstacles within this distance of a car get their boxes drawn (m).
+const OBSTACLE_RANGE: f32 = 30.0;
 
 pub struct DebugPlugin;
 
@@ -55,12 +59,24 @@ fn draw(
     cars: Query<&Car>,
     active: Res<ActiveCar>,
     cameras: Query<&ChaseCamera>,
+    terrain: Res<Terrain>,
     mut gizmos: Gizmos,
 ) {
     // Gizmos draw on top, so they'd cover the dashboard of the car the camera sits in.
     let seated = cameras.iter().any(|camera| camera.driver());
+    for car in &cars {
+        for b in terrain.obstacles.near(car.body.position.xz(), OBSTACLE_RANGE) {
+            for [from, to] in b.obb().edges() {
+                gizmos.line(from, to, css::TOMATO);
+            }
+        }
+    }
     for car in cars.iter().filter(|car| !(seated && car.index == active.0)) {
         let to_world = |p: Vec3| car.body.position + car.body.rotation * p;
+        let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
+        for [from, to] in hull.edges() {
+            gizmos.line(from, to, css::ORANGE);
+        }
         for corner in &car.corners {
             let p = &corner.pose;
             let radius = car.setup.axle(corner.front).tire.radius;

@@ -7,6 +7,7 @@
 use bevy::prelude::*;
 
 use crate::car::Car;
+use crate::physics::collision::{self, GROUND, OBSTACLE};
 use crate::physics::drivetrain::Drive;
 use crate::physics::suspension::ChassisFrame;
 use crate::terrain::Terrain;
@@ -42,8 +43,27 @@ impl Plugin for SimPlugin {
 }
 
 pub fn simulate(time: Res<Time>, terrain: Res<Terrain>, mut cars: Query<&mut Car>) {
+    let dt = time.delta_secs();
     for mut car in &mut cars {
-        step_car(&mut car, &terrain, time.delta_secs());
+        step_car(&mut car, &terrain, dt);
+    }
+    // Cars against each other, each pair whose spheres touch.
+    let mut pairs = cars.iter_combinations_mut();
+    while let Some([mut a, mut b]) = pairs.fetch_next() {
+        collide_cars(&mut a, &mut b, dt);
+    }
+}
+
+/// Two cars' bodies pushed apart where their boxes overlap.
+pub fn collide_cars(a: &mut Car, b: &mut Car, dt: f32) {
+    let hull_a = a.setup.hull.placed(a.body.position, a.body.rotation);
+    let hull_b = b.setup.hull.placed(b.body.position, b.body.rotation);
+    let reach = hull_a.radius() + hull_b.radius();
+    if hull_a.center.distance_squared(hull_b.center) > reach * reach {
+        return;
+    }
+    if let Some(contact) = hull_a.contact(&hull_b) {
+        collision::resolve(&mut a.body, Some(&mut b.body), &[contact], OBSTACLE, dt);
     }
 }
 
@@ -106,7 +126,16 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     body.add_force_at_center(GRAVITY * body.mass + drag);
     body.add_torque(torque / SUBSTEPS as f32);
     let velocity = body.velocity;
-    body.integrate(dt);
+    body.integrate_velocity(dt);
+    // The body's box against the ground, then against houses and trees, before it moves.
+    let hull = setup.hull.placed(body.position, body.rotation);
+    let mut contacts = Vec::new();
+    collision::ground_contacts(&hull, |x, z| terrain.sample(x, z), &mut contacts);
+    collision::resolve(body, None, &contacts, GROUND, dt);
+    contacts.clear();
+    terrain.obstacles.contacts(&hull, &mut contacts);
+    collision::resolve(body, None, &contacts, OBSTACLE, dt);
+    body.integrate_position(dt);
 
     // The engine drinks from the tank, and the fuel sloshes with what the car feels.
     let felt = body.rotation.inverse() * ((body.velocity - velocity) / dt - GRAVITY);

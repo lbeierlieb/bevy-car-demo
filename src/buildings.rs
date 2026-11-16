@@ -99,30 +99,62 @@ impl Footprint {
     }
 }
 
+/// A house's walls: the footprint, from the bottom to the top of the walls (y).
+pub struct Shell {
+    pub footprint: Footprint,
+    pub bottom: f32,
+    pub top: f32,
+}
+
+impl Shell {
+    /// The walls built on `outline`, or `None` for outlines too small to become a house.
+    pub fn of(terrain: &Terrain, levels: f32, outline: &[Vec2]) -> Option<Self> {
+        let footprint = Footprint::fit(outline)?;
+        let storeys = if levels > 0.0 {
+            levels
+        } else if footprint.area() > 60.0 {
+            2.0
+        } else {
+            1.0
+        };
+        let grounds = footprint.corners().map(|c| terrain.sample(c.x, c.y).0);
+        // Sink into the lowest corner; full wall height above the highest one.
+        let bottom = grounds.iter().copied().fold(f32::MAX, f32::min) - 0.3;
+        let top = grounds.iter().copied().fold(f32::MIN, f32::max) + storeys * STOREY + 0.3;
+        Some(Self {
+            footprint,
+            bottom,
+            top,
+        })
+    }
+
+    /// Height of the ridge above the walls (none on a shed's flat roof).
+    pub fn roof_rise(&self) -> f32 {
+        if self.footprint.area() < SHED_AREA {
+            0.0
+        } else {
+            self.footprint.width / 2.0 * ROOF_PITCH
+        }
+    }
+}
+
 fn house(mesh: &mut FlatMesh, terrain: &Terrain, levels: f32, outline: &[Vec2], index: usize) {
-    let Some(footprint) = Footprint::fit(outline) else {
+    let Some(shell) = Shell::of(terrain, levels, outline) else {
         return;
     };
+    let Shell {
+        footprint,
+        bottom,
+        top,
+    } = &shell;
+    let (bottom, top) = (*bottom, *top);
     let Footprint {
         center,
         axis,
         length,
-        width,
-    } = footprint;
-    let area = footprint.area();
-
-    let storeys = if levels > 0.0 {
-        levels
-    } else if area > 60.0 {
-        2.0
-    } else {
-        1.0
-    };
+        width: _,
+    } = *footprint;
     let corners = footprint.corners();
-    let grounds = corners.map(|c| terrain.sample(c.x, c.y).0);
-    // Sink into the lowest corner; full wall height above the highest one.
-    let bottom = grounds.iter().copied().fold(f32::MAX, f32::min) - 0.3;
-    let top = grounds.iter().copied().fold(f32::MIN, f32::max) + storeys * STOREY + 0.3;
     let at = |c: Vec2, y: f32| Vec3::new(c.x, y, c.y);
 
     let wall = WALLS[index % WALLS.len()];
@@ -141,12 +173,12 @@ fn house(mesh: &mut FlatMesh, terrain: &Terrain, levels: f32, outline: &[Vec2], 
     }
 
     let [t0, t1, t2, t3] = corners.map(|c| at(c, top));
-    if area < SHED_AREA {
+    if footprint.area() < SHED_AREA {
         quad([t0, t1, t2, t3], FLAT_ROOF);
         return;
     }
     // Gable roof: the ridge runs along the length, above the middle of each short end.
-    let rise = width / 2.0 * ROOF_PITCH;
+    let rise = shell.roof_rise();
     let r0 = at(center - axis * length / 2.0, top + rise);
     let r1 = at(center + axis * length / 2.0, top + rise);
     let roof = ROOFS[(index / WALLS.len()) % ROOFS.len()];

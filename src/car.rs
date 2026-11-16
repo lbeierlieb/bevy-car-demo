@@ -4,6 +4,7 @@ use bevy::prelude::*;
 
 use crate::chassis::{CLUTCHES, CarBuild, DEFAULT_CHASSIS, SUSPENSIONS};
 use crate::input::WheelInput;
+use crate::physics::collision::Obb;
 use crate::physics::drivetrain::{Differential, Drive, Drivetrain, EngineSetup};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::parts::Parts;
@@ -48,6 +49,9 @@ pub struct CarSetup {
     pub body_offset: Vec3,
     /// The driver's eyes in the chassis frame.
     pub eye: Vec3,
+    /// The box around the body (and the wheels, where they stand out), in the chassis
+    /// frame: what hits the ground, houses, trees and other cars.
+    pub hull: Obb,
 }
 
 impl CarSetup {
@@ -157,6 +161,19 @@ impl CarSetup {
         };
         let body_offset = Vec3::new(0.0, -chassis.cg_height, front_z + chassis.wheelbase / 2.0);
         let [eye_x, eye_y, eye_left] = chassis.eye;
+        let wheels = chassis.wheels();
+        let top = (body.deck.iter().map(|p| p[1]))
+            .chain(body.cabin.iter().map(|p| p[1]))
+            .fold(0.0, f32::max);
+        let (nose, tail) = (body.z(0.0, &wheels), body.z(body.length, &wheels));
+        let half_width = (0..2)
+            .map(|i| (chassis.track[i] + chassis.tire_width[i]) / 2.0)
+            .fold(body.width / 2.0, f32::max);
+        let hull = Obb {
+            center: body_offset + Vec3::new(0.0, (body.floor + top) / 2.0, (nose + tail) / 2.0),
+            axes: [Vec3::X, Vec3::Y, Vec3::Z],
+            half: Vec3::new(half_width, (top - body.floor) / 2.0, (tail - nose) / 2.0),
+        };
         Self {
             name: chassis.name,
             color: build.paint(),
@@ -188,7 +205,8 @@ impl CarSetup {
             drag_area: chassis.drag_area,
             downforce_area: chassis.downforce_area,
             body_offset,
-            eye: body_offset + Vec3::new(-eye_left, eye_y, body.z(eye_x, &chassis.wheels())),
+            eye: body_offset + Vec3::new(-eye_left, eye_y, body.z(eye_x, &wheels)),
+            hull,
             build,
         }
     }

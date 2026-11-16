@@ -1,4 +1,5 @@
-//! Low-poly trees scattered over the forest areas (and bushes over scrub), visual only.
+//! Low-poly trees scattered over the forest areas (and bushes over scrub); trunks are
+//! obstacles (see `obstacles.rs`), bushes aren't.
 //! Positions come from a jittered grid, kept clear of roads and streams. Trees are meshed
 //! per terrain chunk, so a whole forest costs a few draw calls.
 
@@ -30,6 +31,35 @@ const LEAVES: [[f32; 4]; 3] = [
     [0.20, 0.33, 0.12, 1.0],
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Kind {
+    Bush,
+    Spruce,
+    Broadleaf,
+}
+
+/// One tree or bush: where it stands and how it looks.
+pub struct Tree {
+    pub ground: Vec3,
+    pub kind: Kind,
+    /// Scale (about 1).
+    pub size: f32,
+    /// Which colour, and how it's turned about its trunk.
+    pick: usize,
+    turn: f32,
+}
+
+impl Tree {
+    /// The trunk's radius and the tree's height (m); a bush has no trunk.
+    pub fn trunk(&self) -> Option<(f32, f32)> {
+        match self.kind {
+            Kind::Bush => None,
+            Kind::Spruce => Some((0.25 * self.size, 15.0 * self.size)),
+            Kind::Broadleaf => Some((0.3 * self.size, 10.0 * self.size)),
+        }
+    }
+}
+
 /// Tree positions: a jittered grid over forest and scrub, minus the roads.
 pub struct Forest {
     mask: RoadMask,
@@ -43,14 +73,35 @@ impl Forest {
     }
 
     /// The trees and bushes of one chunk.
+    pub fn trees(&self, terrain: &Terrain, index: usize) -> impl Iterator<Item = Tree> {
+        self.positions(terrain, index).into_iter().map(|(p, i)| {
+            let kind = match terrain.land_class(p.x, p.y) {
+                SCRUB => Kind::Bush,
+                _ if hash(i ^ 0x1f4a) < 0.6 => Kind::Spruce,
+                _ => Kind::Broadleaf,
+            };
+            Tree {
+                ground: Vec3::new(p.x, terrain.sample(p.x, p.y).0, p.y),
+                kind,
+                size: 0.7 + 0.6 * hash(i ^ 0x5bd1),
+                pick: (hash(i ^ 0x2c1b) * 3.0) as usize % 3,
+                turn: hash(i ^ 0x7e3f) * TAU,
+            }
+        })
+    }
+
+    /// The trees and bushes of one chunk as a mesh.
     pub fn mesh(&self, terrain: &Terrain, index: usize, mesh: &mut FlatMesh) {
-        for (p, i) in self.positions(terrain, index) {
-            let ground = Vec3::new(p.x, terrain.sample(p.x, p.y).0, p.y);
-            let size = 0.7 + 0.6 * hash(i ^ 0x5bd1);
-            let pick = (hash(i ^ 0x2c1b) * 3.0) as usize % 3;
-            let turn = hash(i ^ 0x7e3f) * TAU;
-            match terrain.land_class(p.x, p.y) {
-                SCRUB => crown(
+        for tree in self.trees(terrain, index) {
+            let Tree {
+                ground,
+                size,
+                pick,
+                turn,
+                ..
+            } = tree;
+            match tree.kind {
+                Kind::Bush => crown(
                     mesh,
                     ground,
                     0.0,
@@ -59,7 +110,7 @@ impl Forest {
                     LEAVES[pick],
                     turn,
                 ),
-                _ if hash(i ^ 0x1f4a) < 0.6 => {
+                Kind::Spruce => {
                     // Spruce: a short trunk and one long cone.
                     trunk(mesh, ground, 2.0 * size, 0.25 * size, turn);
                     cone(
@@ -72,7 +123,7 @@ impl Forest {
                         turn,
                     );
                 }
-                _ => {
+                Kind::Broadleaf => {
                     // Broadleaf: a taller trunk and a rounded crown.
                     trunk(mesh, ground, 5.0 * size, 0.3 * size, turn);
                     crown(

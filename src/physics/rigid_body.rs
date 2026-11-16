@@ -74,6 +74,36 @@ impl RigidBody {
         self.center = center;
     }
 
+    /// Where the centre of mass is in the world.
+    pub fn center_of_mass(&self) -> Vec3 {
+        self.position + self.rotation * self.center
+    }
+
+    /// Velocity of the body's point at `point` (world).
+    pub fn velocity_at(&self, point: Vec3) -> Vec3 {
+        self.velocity + self.angular_velocity.cross(point - self.position)
+    }
+
+    /// The inverse inertia applied to a world-space vector.
+    fn inverse_inertia(&self, v: Vec3) -> Vec3 {
+        self.rotation * ((self.rotation.inverse() * v) / self.inertia)
+    }
+
+    /// How much an impulse along `normal` (unit) at `point` changes the point's speed
+    /// along it, per unit of impulse (1/kg).
+    pub fn inverse_mass_at(&self, point: Vec3, normal: Vec3) -> f32 {
+        let arm = point - self.center_of_mass();
+        1.0 / self.mass + normal.dot(self.inverse_inertia(arm.cross(normal)).cross(arm))
+    }
+
+    /// Changes the velocities at once by an `impulse` (N·s) at `point` (world).
+    pub fn apply_impulse(&mut self, impulse: Vec3, point: Vec3) {
+        let center = self.center_of_mass();
+        let center_velocity = self.velocity_at(center) + impulse / self.mass;
+        self.angular_velocity += self.inverse_inertia((point - center).cross(impulse));
+        self.velocity = center_velocity - self.angular_velocity.cross(center - self.position);
+    }
+
     /// The pose this body will have after `dt` if its velocities stay constant.
     pub fn extrapolate(&self, dt: f32) -> (Vec3, Quat) {
         (
@@ -82,7 +112,15 @@ impl RigidBody {
         )
     }
 
+    #[cfg(test)]
     pub fn integrate(&mut self, dt: f32) {
+        self.integrate_velocity(dt);
+        self.integrate_position(dt);
+    }
+
+    /// The first half of a step: the forces change the velocities (contacts are resolved
+    /// after this, before the body moves).
+    pub fn integrate_velocity(&mut self, dt: f32) {
         // The centre of mass moves with the forces; the torque about it turns the body.
         let center = self.rotation * self.center;
         let center_velocity =
@@ -95,10 +133,14 @@ impl RigidBody {
         self.angular_velocity = self.rotation * (w + w_dot * dt);
 
         self.velocity = center_velocity - self.angular_velocity.cross(center);
-        self.position += self.velocity * dt;
-        self.rotation = rotate_by(self.rotation, self.angular_velocity * dt);
         self.force = Vec3::ZERO;
         self.torque = Vec3::ZERO;
+    }
+
+    /// The second half of a step: the body moves with its velocities.
+    pub fn integrate_position(&mut self, dt: f32) {
+        self.position += self.velocity * dt;
+        self.rotation = rotate_by(self.rotation, self.angular_velocity * dt);
     }
 }
 

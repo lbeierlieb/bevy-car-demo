@@ -6,6 +6,8 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
+use crate::physics::collision::Obstacles;
+
 /// From Gerach (96161, Bavaria) to Rattelsdorf, Ebing and Baunach: 9.6 × 8.4 km.
 const BAKED: &[u8] = include_bytes!("../assets/gerach.terrain");
 /// Width of the raised rim at the map edge (baked into the heights; roads stop before it).
@@ -65,6 +67,9 @@ pub struct Terrain {
     spawn_heading: Vec2,
     pub roads: Vec<Road>,
     pub buildings: Vec<Building>,
+    /// Houses and tree trunks as boxes, for collisions (filled in at startup, see
+    /// `obstacles.rs`; empty in tests unless built).
+    pub obstacles: Obstacles,
 }
 
 struct Chunk {
@@ -150,6 +155,7 @@ impl Terrain {
             spawn_heading,
             roads,
             buildings,
+            obstacles: Obstacles::default(),
         }
     }
 
@@ -174,6 +180,7 @@ impl Terrain {
             spawn_heading: Vec2::NEG_Y,
             roads: Vec::new(),
             buildings: Vec::new(),
+            obstacles: Obstacles::default(),
         }
     }
 
