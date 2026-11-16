@@ -211,6 +211,32 @@ catalogue entries, and things like swap subframes are named so they can be price
   sandbox); other suspension types; turbo kits limited by bay room; prices and saved
   cars; gearbox and clutch damage; collisions of the body.
 
+## Handling
+
+The user drives with the wheel and found slides hard to catch on the power (spin, or
+snap back the other way). `src/sim/handling.rs` has a power-slide test on flat ground
+(`Terrain::flat`, tests only) with a bot driver: circle, floor it, catch after 0.15 s by
+pointing the front wheels where the front axle goes (less a little against the yaw),
+lifting more the further it's sideways. `power_slides` (ignored) prints every car with
+and without traction control; `trace_power_slide` prints one step by step
+(`SLIDE_CAR=chassis,engine SLIDE_TRACE=1`). Findings so far:
+
+- The pedal moved the throttle plate linearly, so the first third of the pedal gave
+  nearly all the torque. Now a progressive linkage (`drivetrain::LINKAGE`, about
+  proportional at 3500 rpm). This was the biggest single factor for the bot.
+- Snap back comes from countersteering to zero front slip while the rear is still
+  saturated; the rear keeps yawing the car until it swings the other way. Real drivers
+  unwind early, helped by the caster pulling the wheel: mechanical trail is now 30 mm
+  (was 15) and the force feedback may change faster.
+- Load sensitivity (`TireParams::load_sensitivity`, 0.1) made slides slightly deeper,
+  not easier, but makes axle balance matter. Relaxation length wasn't added: at speed it
+  lags by only ~20 ms, so it matters only at low speed.
+- Mid- and rear-engined cars still spin with the bot (plausible); front-engined ones
+  are caught (asserted by `a_power_slide_can_be_caught`).
+- Next (agreed): tire types with temperature (grip by tread temperature, heating from
+  slip power) and wear: street (works cold, overheats, no sharp drop past the peak),
+  race (needs heat, wears fast), and one in between.
+
 ## Engine model
 
 Plan agreed with the user: a mean-value engine model that runs live, with an ECU that
