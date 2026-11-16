@@ -162,6 +162,10 @@ phasing, VTEC-style cam switching).
   wastegate/boost, knock, launch control, anti-lag.
 - Order: mean-value model with the simple ECU and placeholder maps; then turbo, thermal
   model, knock; then an ECU tuning UI; then the offline cycle sim and hardware parts.
+- Done so far: `src/physics/engine/` (hardware, placeholder maps, simple ECU with
+  overrun fuel cut, runtime model); the drivetrain calls it. Default build is tuned to
+  the old torque curve (about 200 N·m at 4200 rpm). No thermal mass yet: the exhaust
+  temperature is that of the gas leaving the cylinders.
 
 ## Audio
 

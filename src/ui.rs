@@ -71,6 +71,7 @@ fn panel(
                     automatic = Some(on);
                 }
             });
+            engine(ui, &car);
             ui.label(format!(
                 "Chassis {CHASSIS_HZ:.0} Hz, corners {:.0} Hz ({SUBSTEPS} substeps)",
                 CHASSIS_HZ * SUBSTEPS as f64
@@ -246,6 +247,26 @@ fn force_feedback(ui: &mut egui::Ui, config: &mut WheelConfig, ffb: &mut ForceFe
         ui.checkbox(&mut config.ffb_invert, "Reverse direction")
             .on_hover_text("Tick if the test pushes the wheel to the right");
     });
+}
+
+/// Manifold pressure, mixture, spark, torque and exhaust temperature.
+fn engine(ui: &mut egui::Ui, car: &Car) {
+    let (drivetrain, build) = (&car.drivetrain, &car.setup.engine.build);
+    let engine = &drivetrain.engine;
+    let cycle = engine.cycle(build, drivetrain.rpm);
+    // Without combustion (stalled, or fuel cut), the exhaust is just air.
+    let (lambda, exhaust) = if cycle.lambda.is_finite() {
+        let celsius = cycle.exhaust_temperature - 273.15;
+        (format!("{:.2}", cycle.lambda), format!("{celsius:.0} °C"))
+    } else {
+        ("-".to_string(), "-".to_string())
+    };
+    ui.label(format!(
+        "{:.0} kPa    λ {lambda}    spark {:.0}°    {:.0} N·m    exhaust {exhaust}",
+        engine.intake_pressure / 1000.0,
+        engine.actuators.spark,
+        engine.torque(build, drivetrain.rpm),
+    ));
 }
 
 fn telemetry(ui: &mut egui::Ui, car: &Car) {

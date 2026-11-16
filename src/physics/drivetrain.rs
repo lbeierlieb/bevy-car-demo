@@ -14,6 +14,8 @@
 
 use std::f32::consts::PI;
 
+use super::engine::{Engine, EngineBuild};
+
 /// Engine speed to rpm.
 const RPM: f32 = 60.0 / (2.0 * PI);
 /// Below this, a running engine stalls (only with a clutch pedal).
@@ -26,15 +28,11 @@ const AUTO_DWELL: f32 = 1.0;
 
 #[derive(Clone, Debug)]
 pub struct EngineSetup {
+    /// The engine: its parts, maps and ECU.
+    pub build: EngineBuild,
+    /// Idle speed (where the clutch starts to bite) and the redline on the rev counter.
     pub idle_rpm: f32,
     pub redline_rpm: f32,
-    /// Peak torque (N·m), shaped by `TORQUE_CURVE`.
-    pub peak_torque: f32,
-    /// Flywheel and crank inertia (kg·m²).
-    pub inertia: f32,
-    /// Friction torque at zero rpm, and its rise per rpm (engine braking).
-    pub friction: f32,
-    pub friction_per_rpm: f32,
     /// Most torque the clutch can pass while slipping (N·m).
     pub clutch_torque: f32,
     /// Forward gear ratios from first, the reverse ratio, and the final drive.
@@ -44,60 +42,26 @@ pub struct EngineSetup {
     /// Time the clutch stays open for a gear change, and then takes to close again (s).
     pub shift_time: f32,
     pub engage_time: f32,
-    /// Rev limiter: at the redline the fuel is cut for `limiter_cut`, then back on for at
-    /// least `limiter_fuel` (s), so the engine audibly bounces off the limiter.
-    pub limiter_cut: f32,
-    pub limiter_fuel: f32,
 }
 
 impl Default for EngineSetup {
-    /// A 2-litre petrol four: 230 N·m at 4200 rpm, about 130 kW at 6000 rpm.
+    /// A 2-litre petrol four with a six-speed gearbox.
     fn default() -> Self {
         Self {
+            build: EngineBuild::default(),
             idle_rpm: 850.0,
             redline_rpm: 6800.0,
-            peak_torque: 230.0,
-            inertia: 0.18,
-            friction: 12.0,
-            friction_per_rpm: 0.005,
             clutch_torque: 350.0,
             gears: [3.3, 2.1, 1.5, 1.17, 0.95, 0.8],
             reverse: 3.3,
             final_drive: 3.7,
             shift_time: 0.25,
             engage_time: 0.15,
-            limiter_cut: 0.08,
-            limiter_fuel: 0.04,
         }
     }
 }
 
-/// Full-throttle torque as a fraction of the peak, by rpm (linear in between).
-const TORQUE_CURVE: [(f32, f32); 5] = [
-    (800.0, 0.55),
-    (2000.0, 0.8),
-    (4200.0, 1.0),
-    (6000.0, 0.92),
-    (6800.0, 0.8),
-];
-
 impl EngineSetup {
-    /// Engine torque at a throttle (0..1) and rpm: the curve, minus friction. The rev
-    /// limiter is in `Drivetrain`, as it needs state.
-    pub fn torque(&self, throttle: f32, rpm: f32) -> f32 {
-        let shape = TORQUE_CURVE
-            .windows(2)
-            .find(|w| rpm < w[1].0)
-            .map_or(TORQUE_CURVE[4].1, |w| {
-                let t = ((rpm - w[0].0) / (w[1].0 - w[0].0)).clamp(0.0, 1.0);
-                w[0].1 + (w[1].1 - w[0].1) * t
-            });
-        // Below idle, an idle controller opens the throttle to keep the engine running.
-        let idle = ((self.idle_rpm - rpm) / 300.0 + 0.08).clamp(0.0, 1.0);
-        let throttle = throttle.max(idle);
-        throttle * shape * self.peak_torque - self.friction - self.friction_per_rpm * rpm.max(0.0)
-    }
-
     /// Overall ratio from engine to wheels for a gear (-1 reverse, 0 neutral, 1..=6).
     pub fn ratio(&self, gear: i8) -> f32 {
         match gear {
@@ -138,11 +102,9 @@ pub struct Drivetrain {
     /// How far the clutch has closed again after a shift (0..1).
     engaged: f32,
     locked: bool,
-    /// Time left in the rev limiter's cycle: fuel cut, then fuel back on.
-    limiter: f32,
-    /// Throttle the engine actually got in the last step (0..1), after the rev limiter
-    /// and the cut during shifts.
-    pub fuel: f32,
+    pub engine: Engine,
+    /// How hard the engine fired in the last step (0 at idle or cut, 1 at full load).
+    pub load: f32,
     /// Clutch pedal travel (0 released, 1 pressed) in the last step, if there's a pedal.
     clutch_pedal: Option<f32>,
     /// Engine minus wheel rpm through the pedal clutch in the last step, while slipping.
@@ -167,8 +129,8 @@ impl Drivetrain {
             in_gear: AUTO_DWELL,
             engaged: 1.0,
             locked: false,
-            limiter: 0.0,
-            fuel: 0.0,
+            engine: Engine::default(),
+            load: 0.0,
             clutch_pedal: None,
             slip: 0.0,
         }
@@ -179,6 +141,7 @@ impl Drivetrain {
         if !self.running {
             self.running = true;
             self.rpm = self.rpm.max(engine.idle_rpm);
+            self.engine.start();
         }
     }
 
@@ -270,36 +233,26 @@ impl Drivetrain {
                 self.in_gear = 0.0;
             }
         }
-        // While shifting, the clutch is open and the throttle is cut (like the ignition cut
-        // of a sequential gearbox), so the engine doesn't flare up and slam the wheels.
+        // While shifting, the clutch is open and the throttle and ignition are cut (like a
+        // sequential gearbox), so the engine doesn't flare up and slam the wheels.
         let (ratio, throttle) = if self.shift.is_some() {
             (0.0, 0.0)
         } else {
             self.engaged = (self.engaged + dt / engine.engage_time).min(1.0);
             (engine.ratio(self.gear), throttle)
         };
-        // Rev limiter: a cut starts at the redline; after it the fuel comes back for a
-        // moment even if the revs haven't dropped (in gear they barely do), unless the
-        // engine is well over the redline.
-        self.limiter = (self.limiter - dt).max(0.0);
-        if self.limiter == 0.0 && self.rpm >= engine.redline_rpm {
-            self.limiter = engine.limiter_cut + engine.limiter_fuel;
-        }
-        let cut = self.limiter > engine.limiter_fuel || self.rpm > engine.redline_rpm + 200.0;
-        let throttle = if cut { 0.0 } else { throttle };
-        self.fuel = if self.running { throttle } else { 0.0 };
-        let wheel_rpm = wheel_omega * ratio * RPM;
-        // A stalled engine only drags, against the way it's turned (fading out over the
-        // last few rpm, so it holds still rather than chattering at rest).
-        let running = self.running;
-        let engine_torque = move |rpm: f32| {
-            if running {
-                engine.torque(throttle, rpm)
-            } else {
-                let against = -(rpm / 30.0).clamp(-1.0, 1.0);
-                (engine.friction + engine.friction_per_rpm * rpm.abs()) * against
-            }
+        let build = &engine.build;
+        let firing = self.running && self.shift.is_none();
+        self.engine.step(build, throttle, self.rpm, firing, dt);
+        let cycle = self.engine.cycle(build, self.rpm);
+        self.load = if firing && cycle.indicated > 0.0 {
+            ((cycle.load - 0.2) / 0.7).clamp(0.0, 1.0)
+        } else {
+            0.0
         };
+        let wheel_rpm = wheel_omega * ratio * RPM;
+        let state = self.engine;
+        let engine_torque = move |rpm: f32| state.torque(build, rpm);
         if let Some(travel) = clutch {
             let capacity = engine.clutch_torque * (1.0 - travel) * self.engaged;
             return self.step_pedal(engine, engine_torque, capacity, ratio, wheel_rpm, dt);
@@ -316,7 +269,7 @@ impl Drivetrain {
             self.rpm = wheel_rpm;
             WheelDrive {
                 torque: engine_torque(self.rpm) * ratio,
-                inertia: engine.inertia * ratio * ratio,
+                inertia: engine.build.hardware.inertia * ratio * ratio,
             }
         } else {
             // Slipping clutch: it bites from 700 rpm above idle and passes its full torque
@@ -329,7 +282,7 @@ impl Drivetrain {
                 engine.clutch_torque * bite * bite * (3.0 - 2.0 * bite) * self.engaged
             };
             let net = engine_torque(self.rpm) - clutch;
-            self.rpm = (self.rpm + net / engine.inertia * dt * RPM).max(0.0);
+            self.rpm = (self.rpm + net / engine.build.hardware.inertia * dt * RPM).max(0.0);
             WheelDrive {
                 torque: clutch * ratio,
                 inertia: 0.0,
@@ -357,7 +310,7 @@ impl Drivetrain {
             self.rpm = wheel_rpm;
             WheelDrive {
                 torque: engine_torque(self.rpm) * ratio,
-                inertia: engine.inertia * ratio * ratio,
+                inertia: engine.build.hardware.inertia * ratio * ratio,
             }
         } else {
             let slip = self.rpm - wheel_rpm;
@@ -370,7 +323,7 @@ impl Drivetrain {
                 capacity * slip.signum()
             };
             let net = engine_torque(self.rpm) - clutch;
-            self.rpm = (self.rpm + net / engine.inertia * dt * RPM).max(0.0);
+            self.rpm = (self.rpm + net / engine.build.hardware.inertia * dt * RPM).max(0.0);
             // Caught up (or overshot) within the step: lock, if the clutch can hold.
             if ratio != 0.0 && (crossed || (self.rpm - wheel_rpm) * slip <= 0.0) {
                 self.rpm = wheel_rpm.max(0.0);
@@ -515,7 +468,7 @@ mod tests {
         // Stalled, it stays off (in gear, the engine only drags) until started with the
         // clutch in.
         drive_with_clutch(&mut drivetrain, &engine, 1.0, |_| 0.0, 1.0);
-        assert!(!drivetrain.running && drivetrain.fuel == 0.0);
+        assert!(!drivetrain.running && drivetrain.load == 0.0);
         drivetrain.start(&engine);
         drive_with_clutch(&mut drivetrain, &engine, 0.0, |_| 1.0, 1.0);
         assert!(drivetrain.running);
@@ -606,7 +559,7 @@ mod tests {
         for _ in 0..120 {
             drivetrain.step(&engine, 1.0, None, 0.0, true, 1.0 / 120.0);
             (low, high) = (low.min(drivetrain.rpm), high.max(drivetrain.rpm));
-            let fuelled = drivetrain.fuel > 0.0;
+            let fuelled = drivetrain.load > 0.0;
             cuts += (was_fuelled && !fuelled) as u32;
             was_fuelled = fuelled;
         }

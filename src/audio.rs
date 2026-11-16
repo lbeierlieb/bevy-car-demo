@@ -311,7 +311,7 @@ fn update_engine(
     } else {
         1.0
     };
-    engine.targets.set(drivetrain.rpm, drivetrain.fuel, volume);
+    engine.targets.set(drivetrain.rpm, drivetrain.load, volume);
 }
 
 #[cfg(test)]
