@@ -203,10 +203,21 @@ phasing, VTEC-style cam switching).
   on the web); bolt-on parts fit at once. The new engine is new (no damage) and gets a
   factory tune unless unticked. The redline is hardware (cams and crank change it); the
   factory tune's rev limit and the rev counter follow it. No valve float or other
-  mechanical limits yet. Cam switching (VTEC) and phasers exist in the hardware and maps,
-  but no ECU drives them yet, so there are no such parts.
-- Next ideas: an ECU with cam switching/phasing (then VTEC and VVT parts; phasers make
-  the VE grid 25× bigger, so thin it), closed loop, boost control, mechanical limits.
+  mechanical limits yet.
+- ECUs are switchable (agreed with the user): `EcuModel` (Stock, Programmable) is chosen
+  in the garage like a part; the stock one stays. One `Ecu` struct for all models, the
+  model deciding which features it uses (cam control lives in every `Ecu` but only the
+  programmable one drives it, and only it writes the cam settings and maps to tunes).
+  Tunes record `ecu <model>`; loading keeps the fitted model and warns. Programmable:
+  cam switch-over (rpm and MAP, hysteresis) and intake/exhaust phase maps; its factory
+  tune switches where the second profile breathes better all the way to the redline,
+  and phases for the most air from 45 to 75 kPa up (at rest below, for the idle).
+  Parts: a switching cam (236°/264°) and phasers (intake 40°, exhaust 30°); with the
+  stock ECU they stay on the first profile, at rest. Phase axes have 3 points and the
+  ratio axis is coarser with phasers (bake: intake phaser about 2 s, both 6 s, with the
+  switching cam 13 s on 4 cores).
+- Next ideas: closed loop (wideband sensor), knock sensor/control, boost control,
+  launch/anti-lag, mechanical limits (valve float).
 
 ## Audio
 

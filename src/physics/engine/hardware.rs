@@ -187,6 +187,12 @@ impl Exhaust {
 }
 
 impl EngineHardware {
+    /// It has parts only an ECU with cam control can use: a second cam profile, or
+    /// phasers.
+    pub fn has_cam_control(&self) -> bool {
+        self.cams.len() > 1 || self.intake_phasing > 0.0 || self.exhaust_phasing > 0.0
+    }
+
     /// Swept volume of all cylinders (m³).
     pub fn displacement(&self) -> f32 {
         PI / 4.0 * self.bore * self.bore * self.stroke * self.cylinders as f32

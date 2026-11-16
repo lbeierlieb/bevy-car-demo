@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::car::{ActiveCar, Car};
-use crate::physics::engine::ecu::Ecu;
+use crate::physics::engine::ecu::{Ecu, EcuModel};
 use crate::physics::engine::hardware::EngineHardware;
 use crate::physics::engine::maps::{self, Bake, EngineMaps};
 use crate::physics::engine::parts::{INTERCOOLER, Parts, SLOTS};
@@ -194,13 +194,21 @@ fn cache_name(hardware: &EngineHardware) -> String {
     format!("{:016x}", maps::fingerprint(hardware))
 }
 
-/// Puts the engine built from `parts` into `car`, as new (no wear, at rest).
+/// Puts the engine built from `parts` into `car`, as new (no wear, at rest), with a
+/// factory tune or the tune it had (moved over to a different ECU, which takes the
+/// factory's cam control if the old one had none).
 fn fit(car: &mut Car, parts: Parts, hardware: EngineHardware, maps: EngineMaps, retune: bool) {
     let build = &car.setup.engine.build;
+    let factory = || Ecu::calibrated(&hardware, &maps, 95.0, parts.ecu);
     let ecu = if retune {
-        Ecu::calibrated(&hardware, &maps, 95.0)
+        factory()
     } else {
-        build.ecu.clone()
+        let mut ecu = build.ecu.clone();
+        if parts.ecu.cam_control() && !ecu.model.cam_control() {
+            ecu.cams = factory().cams;
+        }
+        ecu.model = parts.ecu;
+        ecu
     };
     car.setup.engine.build = EngineBuild {
         hardware,
@@ -284,6 +292,19 @@ fn parts(ui: &mut egui::Ui, garage: &mut Garage) {
                 .suffix(" bar"),
         );
         ui.end_row();
+        ui.label("ECU").on_hover_text(
+            "Stock: fuel, spark, rev limiter and idle. Programmable: also switches cams and \
+             drives the cam phasers",
+        );
+        egui::ComboBox::from_id_salt("ecu")
+            .width(200.0)
+            .selected_text(draft.ecu.name())
+            .show_ui(ui, |ui| {
+                for model in EcuModel::ALL {
+                    ui.selectable_value(&mut draft.ecu, model, model.name());
+                }
+            });
+        ui.end_row();
     });
 }
 
@@ -314,6 +335,13 @@ fn build(ui: &mut egui::Ui, garage: &mut Garage, car: &mut Car) {
     } else {
         "Only bolt-on parts change: it fits right away."
     });
+    if hardware.has_cam_control() && !garage.draft.ecu.cam_control() {
+        ui.colored_label(
+            egui::Color32::from_rgb(255, 170, 60),
+            "The stock ECU can't drive the switching cam or the phasers: they stay on the \
+             mild profile, at rest.",
+        );
+    }
     ui.checkbox(&mut garage.retune, "Factory tune for the new parts")
         .on_hover_text("Otherwise the ECU keeps its tune, made for the old parts");
 

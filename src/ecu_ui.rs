@@ -7,7 +7,7 @@ use bevy_egui::egui::{self, Align2, Color32, FontId, Rect, Sense, Stroke, pos2, 
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car};
-use crate::physics::engine::ecu::Ecu;
+use crate::physics::engine::ecu::{Ecu, EcuModel};
 use crate::physics::engine::table::Table;
 use crate::tunes;
 
@@ -54,17 +54,32 @@ enum MapKind {
     Fuel,
     Lambda,
     Spark,
+    IntakeCam,
+    ExhaustCam,
 }
 
 impl MapKind {
-    const ALL: [Self; 3] = [Self::Fuel, Self::Lambda, Self::Spark];
+    const ALL: [Self; 5] = [
+        Self::Fuel,
+        Self::Lambda,
+        Self::Spark,
+        Self::IntakeCam,
+        Self::ExhaustCam,
+    ];
 
     fn name(self) -> &'static str {
         match self {
             Self::Fuel => "Fuel (VE %)",
             Self::Lambda => "Target λ",
             Self::Spark => "Spark °",
+            Self::IntakeCam => "Intake cam °",
+            Self::ExhaustCam => "Exhaust cam °",
         }
+    }
+
+    /// The ECU has this map: the cam maps need cam control.
+    fn available(self, model: EcuModel) -> bool {
+        !matches!(self, Self::IntakeCam | Self::ExhaustCam) || model.cam_control()
     }
 
     fn table(self, ecu: &mut Ecu) -> &mut Table {
@@ -72,6 +87,8 @@ impl MapKind {
             Self::Fuel => &mut ecu.ve,
             Self::Lambda => &mut ecu.lambda,
             Self::Spark => &mut ecu.spark,
+            Self::IntakeCam => &mut ecu.cams.intake_phase,
+            Self::ExhaustCam => &mut ecu.cams.exhaust_phase,
         }
     }
 
@@ -86,6 +103,7 @@ impl MapKind {
             Self::Fuel => 1.0,
             Self::Lambda => 0.01,
             Self::Spark => 0.5,
+            Self::IntakeCam | Self::ExhaustCam => 1.0,
         }
     }
 
@@ -94,6 +112,7 @@ impl MapKind {
             Self::Fuel => 0,
             Self::Lambda => 2,
             Self::Spark => 1,
+            Self::IntakeCam | Self::ExhaustCam => 0,
         }
     }
 
@@ -103,6 +122,7 @@ impl MapKind {
             Self::Fuel => (0.05, 2.0),
             Self::Lambda => (0.6, 1.5),
             Self::Spark => (-10.0, 60.0),
+            Self::IntakeCam | Self::ExhaustCam => (0.0, 60.0),
         }
     }
 }
@@ -174,6 +194,18 @@ fn readings(ui: &mut egui::Ui, car: &Car) {
             engine.damage * 100.0,
         ));
     });
+    if build.ecu.model.cam_control() {
+        let actuators = &engine.actuators;
+        let profile = if actuators.cam_profile == 0 {
+            "first"
+        } else {
+            "second"
+        };
+        ui.label(format!(
+            "cams on the {profile} profile    intake advanced {:.0}°    exhaust retarded {:.0}°",
+            actuators.intake_phase, actuators.exhaust_phase,
+        ));
+    }
 }
 
 /// Rev limiter, idle speed, and going back to the factory tune.
@@ -218,9 +250,31 @@ fn settings(ui: &mut egui::Ui, car: &mut Car) {
             .on_hover_text("Back to the tune calibrated for this engine on 95 octane")
             .clicked()
         {
-            *ecu = Ecu::calibrated(&build.hardware, &build.maps, 95.0);
+            *ecu = Ecu::calibrated(&build.hardware, &build.maps, 95.0, ecu.model);
         }
     });
+    if ecu.model.cam_control() {
+        let cams = &mut ecu.cams;
+        ui.horizontal(|ui| {
+            ui.label("Second cam profile above");
+            ui.add(
+                egui::DragValue::new(&mut cams.switch_rpm)
+                    .range(1000.0..=9500.0)
+                    .speed(10.0)
+                    .suffix(" rpm"),
+            );
+            ui.label("and");
+            let mut map = cams.switch_map / 1000.0;
+            ui.add(
+                egui::DragValue::new(&mut map)
+                    .range(10.0..=300.0)
+                    .suffix(" kPa"),
+            );
+            cams.switch_map = map * 1000.0;
+        })
+        .response
+        .on_hover_text("Only for switching cams: with fixed cams there is no second profile");
+    }
 }
 
 /// Saving the tune under a name, and loading or deleting saved ones.
@@ -264,16 +318,22 @@ fn saved_tunes(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
                 None => format!("Couldn't read \"{chosen}\"."),
                 Some(text) => {
                     // Over this engine's factory tune: anything the file lacks comes from it.
-                    let mut ecu = Ecu::calibrated(&build.hardware, &build.maps, 95.0);
-                    let made_for = ecu.read_text(&text);
+                    let model = build.ecu.model;
+                    let mut ecu = Ecu::calibrated(&build.hardware, &build.maps, 95.0, model);
+                    let origin = ecu.read_text(&text);
                     build.ecu = ecu;
                     panel.name = chosen.clone();
-                    match made_for {
-                        Some(engine) if engine != build.hardware.name => format!(
-                            "Loaded \"{chosen}\", made for the {engine}: watch λ and knock."
-                        ),
-                        _ => format!("Loaded \"{chosen}\"."),
+                    let mut status = format!("Loaded \"{chosen}\".");
+                    if let Some(engine) = origin.engine.filter(|e| *e != build.hardware.name) {
+                        status += &format!(" Made for the {engine}: watch λ and knock.");
                     }
+                    if let Some(made) = origin.ecu.filter(|&m| m != model) {
+                        status += &format!(
+                            " Made for the {} ECU: this one takes what it can use.",
+                            made.name().to_lowercase()
+                        );
+                    }
+                    status
                 }
             };
         }
@@ -299,8 +359,15 @@ fn saved_tunes(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
 
 /// Map choice, editing tools, and the grid.
 fn map_editor(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
+    let model = car.setup.engine.build.ecu.model;
+    if !panel.map.available(model) {
+        panel.map = MapKind::Fuel;
+    }
     ui.horizontal(|ui| {
-        for kind in MapKind::ALL {
+        for kind in MapKind::ALL
+            .into_iter()
+            .filter(|kind| kind.available(model))
+        {
             ui.selectable_value(&mut panel.map, kind, kind.name());
         }
     });

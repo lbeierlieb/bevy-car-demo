@@ -86,7 +86,7 @@ impl EngineBuild {
     pub fn new(hardware: EngineHardware) -> Self {
         let octane = 95.0;
         let maps = EngineMaps::for_hardware(&hardware);
-        let ecu = Ecu::calibrated(&hardware, &maps, octane);
+        let ecu = Ecu::calibrated(&hardware, &maps, octane, ecu::EcuModel::Stock);
         Self {
             hardware,
             maps,

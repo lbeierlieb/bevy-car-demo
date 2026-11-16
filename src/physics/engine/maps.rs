@@ -52,11 +52,16 @@ fn pressure_axis() -> Vec<f32> {
     .to_vec()
 }
 
-/// Exhaust over intake manifold pressure.
-fn ratio_axis() -> Vec<f32> {
-    vec![
-        0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.6, 2.0, 3.0, 4.0, 6.0, 10.0,
-    ]
+/// Exhaust over intake manifold pressure; coarser with cam phasers, whose phase axes
+/// multiply the grid.
+fn ratio_axis(phasers: bool) -> Vec<f32> {
+    if phasers {
+        vec![0.5, 0.85, 1.15, 1.6, 3.0, 10.0]
+    } else {
+        vec![
+            0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.6, 2.0, 3.0, 4.0, 6.0, 10.0,
+        ]
+    }
 }
 
 /// Air per cycle relative to filling the displacement at ambient conditions.
@@ -67,9 +72,11 @@ fn load_axis() -> Vec<f32> {
 }
 
 /// A cam phaser's positions from 0 to `range` (crank degrees), or just 0 without one.
+/// Three points keep the bake short: with both phasers they make the VE grid 9 times
+/// bigger.
 fn phase_axis(range: f32) -> Vec<f32> {
     if range > 0.0 {
-        (0..5).map(|i| range * i as f32 / 4.0).collect()
+        vec![0.0, range / 2.0, range]
     } else {
         vec![0.0]
     }
@@ -325,7 +332,7 @@ fn ve_axes(hardware: &EngineHardware) -> Vec<Vec<f32>> {
     vec![
         rpm_axis(),
         pressure_axis(),
-        ratio_axis(),
+        ratio_axis(hardware.intake_phasing > 0.0 || hardware.exhaust_phasing > 0.0),
         phase_axis(hardware.intake_phasing),
         phase_axis(hardware.exhaust_phasing),
     ]

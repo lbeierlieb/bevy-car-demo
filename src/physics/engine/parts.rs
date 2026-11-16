@@ -2,6 +2,7 @@
 //! with a few to choose from, fitted onto the stock 2-litre four. Some slots change the
 //! cylinder side, so fitting their parts means baking the maps again; the rest act live.
 
+use super::ecu::EcuModel;
 use super::hardware::{
     CamProfile, Compressor, Diverter, EngineHardware, Intercooler, Turbine, Turbo, Wastegate,
 };
@@ -23,11 +24,11 @@ const fn part(name: &'static str, fit: fn(&mut EngineHardware)) -> Part {
 }
 
 const PISTONS: usize = 0;
-const TURBO: usize = 8;
+const TURBO: usize = 9;
 /// The intercooler's slot: it only matters with a turbo.
-pub const INTERCOOLER: usize = 9;
+pub const INTERCOOLER: usize = 10;
 
-pub const SLOTS: [Slot; 15] = [
+pub const SLOTS: [Slot; 16] = [
     Slot {
         name: "Pistons",
         about: "Compression ratio: more is more efficient, but knocks earlier",
@@ -65,7 +66,8 @@ pub const SLOTS: [Slot; 15] = [
     Slot {
         name: "Camshafts",
         about: "Longer duration and more lift breathe better high up (and rev higher), worse \
-                low down and at idle",
+                low down and at idle. A switching cam has a mild and a wild profile, and \
+                needs an ECU to switch between them",
         parts: &[
             part("Stock (240°, 9.5 mm)", |_| {}),
             part("Sport (256°, 10.5 mm)", |h| {
@@ -75,6 +77,23 @@ pub const SLOTS: [Slot; 15] = [
             part("Race (276°, 11.5 mm)", |h| {
                 h.cams = vec![cam(276.0, 106.0, 0.0115)];
                 h.redline += 1200.0;
+            }),
+            part("Switching (236° / 264°)", |h| {
+                h.cams = vec![cam(236.0, 112.0, 0.009), cam(264.0, 108.0, 0.011)];
+                h.redline += 1000.0;
+            }),
+        ],
+    },
+    Slot {
+        name: "Cam phasers",
+        about: "Turn the cams against the crank while running: more overlap and earlier \
+                intake closing where they help",
+        parts: &[
+            part("None", |_| {}),
+            part("Intake (40°)", |h| h.intake_phasing = 40.0),
+            part("Intake and exhaust (40° / 30°)", |h| {
+                h.intake_phasing = 40.0;
+                h.exhaust_phasing = 30.0;
             }),
         ],
     },
@@ -246,8 +265,8 @@ fn set_intercooler(hardware: &mut EngineHardware, effectiveness: f32, area: f32)
     }
 }
 
-/// The parts an engine is built from: one per slot, the cam gears' timing and the
-/// wastegate's spring.
+/// The parts an engine is built from: one per slot, the cam gears' timing, the wastegate's
+/// spring, and the ECU.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Parts {
     /// The part fitted in each slot of `SLOTS`, by index.
@@ -257,6 +276,7 @@ pub struct Parts {
     pub exhaust_timing: f32,
     /// Boost where the wastegate starts to open (bar).
     pub boost: f32,
+    pub ecu: EcuModel,
 }
 
 impl Parts {
@@ -267,6 +287,7 @@ impl Parts {
             intake_timing: 0.0,
             exhaust_timing: 0.0,
             boost: 0.6,
+            ecu: EcuModel::Stock,
         }
     }
 
