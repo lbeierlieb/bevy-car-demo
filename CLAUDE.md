@@ -39,10 +39,13 @@ repo, so everything worth knowing between sessions belongs here.
 - Dependency sources (no `~/.cargo/registry`): they're tarballs in the store, e.g.
   `ls -d /nix/store/*cargo-src-egui-0.36*`; unpack into the scratchpad with `tar xzf`.
 - Terrain bake tool: `cd tools/bake; nix develop /repo -c cargo build --release; ./target/release/bake …`.
-- Engine maps of the stock builds are baked into `src/physics/engine/baked/`. After
-  changing `cycle.rs`, `maps.rs` (outside their tests) or a stock build's cylinder side,
-  re-bake (about 3 s) or `stock_maps_are_current` fails:
+- Engine maps of every factory engine (22, see `families.rs`) are baked into
+  `src/physics/engine/baked/<code>.maps`. After changing `cycle.rs`, `maps.rs` (outside
+  their tests; any edit counts, their text is in the fingerprint) or a factory engine's
+  cylinder side, re-bake all of them (about 40 s, 1.5 MB of text changes) or
+  `stock_maps_are_current` and the tests that expect baked maps fail:
   `nix develop -c bash -c 'CARGO_TARGET_DIR=/repo/target/sandbox cargo test --profile release-dev bake_stock_maps -- --ignored'`.
+  A new factory version needs an (empty) file there first, for `include_str!`.
 
 ### Screenshots (`tools/dev`)
 
@@ -50,11 +53,20 @@ repo, so everything worth knowing between sessions belongs here.
 `main.rs`; `tools/dev/shot.sh out.png [frames] [keys]` renders headless and saves a
 screenshot; `tools/dev/strip.sh` removes the hook. Always run `strip.sh` and check that
 `grep -c shot src/main.rs` prints 0 before committing. Keys are pressed from a third of
-the frames until the shot (`k` opens the map, `3` the ECU window, `4` the garage, `5`
-the dyno), so
-clicks on a window must come after that. `CLICK="x,y,frame;x,y,frame…"` clicks into the
+the frames until the shot (`k` opens the map, `2` hides the panel, `3` the ECU window,
+`4` the garage, `5` the dyno, `6` the showroom, `f` the gizmos, `c` the driver's view),
+so clicks on a window must come after that. `CLICK="x,y,frame;x,y,frame…"` clicks into the
 1280×720 window, e.g. on the map. `CAM`/`CAMAT` env vars place the camera (see
 `shot.rs`). `shot.sh` fetches Mesa and Xvfb from the pinned nixpkgs on first use.
+A shot takes about 35 s.
+
+For looking at cars: `CAR="chassis[,engine]"` starts in that car (its place in
+`CHASSIS`); `LINEUP="first,count"` parks that many cars one behind the other on an open,
+flat straight (the spawn is in a village, where walls and slopes block the view);
+`CARCAM="side,height,along"` looks at them from that far to their right (negative:
+left, the sunlit side), up, and ahead. Side views of five:
+`LINEUP=0,5 CARCAM="-21,2,0" bash tools/dev/shot.sh out.png 60 f2`; one car close up:
+`LINEUP=3,1 CARCAM="-3.6,1.9,4.6"`; from the driver's seat: keys `f2c`.
 
 ### Virtual wheel (`tools/dev/fakewheel`)
 
@@ -135,6 +147,69 @@ both named "Fanatec FANATEC Wheel" (padded with spaces). NixOS config uses
 - The panel shows "Wheel base set to 540°" once the range was written, and names the
   force feedback device or what's wrong with each candidate.
 
+## Cars
+
+Agreed with the user: lots of variety; a chassis is independent of engines and the
+other components, engines are shared between cars, and a bigger (or better) engine can
+be dropped into another car. **Space is the only hard limit** for a swap. Front- and
+all-wheel drive exist. One car at a time, picked from a menu. Later this becomes a game
+with a campaign, upgrades and personal cars, so a car is an instance built from
+catalogue entries, and things like swap subframes are named so they can be priced.
+
+- **Catalogues** (statics, entries referred to by their place; engine versions also by
+  code): `chassis.rs` has `CHASSIS` (13: Minim city car, Vireo hot hatch, Linnet
+  roadster, Tarn coupé (the default), Halden saloon, Skarn rally car, Harrow muscle car,
+  Calder mid-engined, Rheon rear-engined, Vespera supercar, Wisp track-day special,
+  Drover pickup, Carrow van; names are made up, no real cars), `GEARBOXES` (8, of three
+  kinds: transverse, inline, transaxle), clutches, suspension kits, tires and paints.
+  `physics/engine/families.rs` has `FAMILIES` (12 families, 22 factory versions, codes
+  like W20T; W is today's 2-litre four, R the high-revving four with switching cams).
+- **A car** is a `CarBuild` (chassis, paint, gearbox, clutch, final drive, limited-slip,
+  suspension, tires) plus its engine's `Parts` (family, version, a part per slot, ECU).
+  `CarSetup::new` works everything the simulation needs out of them: the engine's and
+  the gearbox's masses sit where the chassis' bay has them, which gives the balance and
+  the inertia; springs and dampers come from ride frequencies and the weight on each
+  axle (`AxleSetup::tune`); brake torque is a share of the stock tires' grip (about
+  0.8, so a floored pedal doesn't lock wheels on a dry road) and its balance follows the
+  weight shift. The linkage is the same double A-arm for every car, moved to its track
+  and wheel size.
+- **What fits** (`Chassis::fit`): the engine's length, width and height against the
+  bay's (a transverse engine needs its length plus 36 cm for the gearbox across the
+  car). That's all that can stop a swap. An engine family the factory never offered in
+  the chassis "needs a swap subframe" and a gearbox no factory car pairs with the family
+  "needs an adapter plate": both are derived and only shown (nothing to buy yet).
+  A gearbox must be of the chassis' kind.
+- **Headers depend on engine and chassis**: the bay's `header_room`, less when the
+  engine fills the bay sideways, caps the exhaust primaries' length
+  (`Parts::header_room`, set by `CarBuild::install`). A swapped engine can so differ
+  from the factory's on the cylinder side and needs its maps baked. Factory offerings
+  must not be capped (a test checks), or the game would bake at startup.
+- **Parts are relative** to the engine they go onto (`parts.rs`: a stroker is +7 %
+  stroke, turbos are sized by displacement), with labels worked out from the result.
+  The cylinder head (port flow) is a slot too: the cycle simulation's valves and ports
+  scale with it, which is what lets the sporty engines breathe at high rpm.
+- **Bodies** (`body.rs`) are generated: a deck outline and a cabin outline in metres
+  from the nose and above the ground, plan taper, tumblehome, and details as boxes. The
+  lower body is a loft with wheel wells; the cabin a loft with glass, roof and pillars;
+  an open car's windscreen is a one-sided pane in a frame (two cabin points). One mesh
+  with vertex colours. The cockpit is placed by the chassis' eye point.
+- **Showroom (F6) and garage (F4)** are both in `garage.rs`; both go through `start`
+  and `fit`. A changed `CarBuild` respawns the car's entity (its meshes are children);
+  an engine-only change swaps it in while driving.
+- **Traction control** (my addition, on by default, a checkbox in the panel): without
+  it full throttle on the keyboard just spins the wheels of anything strong. It eases
+  the throttle while a driven wheel slips over 0.14.
+- **A clutch slips** when the engine makes more torque than it passes, so a swapped
+  engine may need the sport or race clutch. Gearboxes have no torque limit yet.
+- Gotchas met: engines much bigger than 2 litres on light flywheels hunt at idle (the
+  V8/V10/V12 flywheels are heavier than realistic for that); wild cams idle faster
+  (ECU idle speed follows the cam). With all-wheel drive, locked front wheels drag the
+  rear ones along through the centre differential. Unsteered test runs leave the road
+  within a few seconds in the quick cars.
+- Not done: the engine sound per layout was never listened to (no audio in the
+  sandbox); other suspension types; turbo kits limited by bay room; prices and saved
+  cars; gearbox and clutch damage; collisions of the body.
+
 ## Engine model
 
 Plan agreed with the user: a mean-value engine model that runs live, with an ECU that
@@ -196,8 +271,8 @@ phasing, VTEC-style cam switching).
   engine's factory tune and warns if the build differs. Swapping the engine build in
   the setup panel replaces the tune with the new build's factory tune.
 - Garage (F4, `src/garage.rs`): parts from a catalogue (`parts.rs`: a slot per kind of
-  part, each part a function fitting it onto the stock hardware; presets are
-  selections), cam-gear timing and wastegate spring. The car's `EngineSetup.parts` says
+  part, each part a function fitting it onto the engine's hardware, relative to it; a
+  factory version is a block and a selection), cam-gear timing and wastegate spring. The car's `EngineSetup.parts` says
   what it's built from. Building bakes the maps if the fingerprint changed (native: a
   thread; wasm: 12 ms slices per frame), with the old engine running meanwhile, and caches
   them (`storage.rs` folders: `~/.cache/car-sim/engines/<fingerprint>.maps`, local storage
@@ -244,6 +319,11 @@ phasing, VTEC-style cam switching).
   launch/anti-lag; damage to the clutch and gearbox; misfire sound for dead cylinders.
 
 ## Audio
+
+The engine's layout (`families::Layout`) sets how many pulses there are in a cycle and
+which bank's exhaust each goes down (`audio.rs`, `sound`): a cross-plane V8's banks fire
+unevenly, a flat four's pulses bunch up through unequal headers, the rest fire evenly;
+inline engines have one exhaust (no panning).
 
 The engine sound goes through bevy_audio, which can't set the output buffer size. An
 attempt to open the output with rodio/cpal directly (fixed 4096-frame buffer against

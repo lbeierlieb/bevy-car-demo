@@ -20,16 +20,26 @@ A small Bevy demo of car simulation techniques:
   slip. Wheel spin is updated implicitly, which keeps it stable.
 - **Engine and gearbox**: an engine with a torque curve, idle control, engine
   braking and a rev limiter that cuts the fuel in short bursts (so it bounces audibly
-  off the redline) drives the rear wheels through a six-speed gearbox
-  and an open differential. Once the clutch locks, the engine turns with the wheels
-  and its inertia is added to theirs, so the wheel-spin update stays implicit. The
-  clutch slips when pulling away and closes gradually after each 0.25 s shift, during
-  which the throttle is cut. Gears are shifted by hand by default; the automatic
-  shifts by rpm and throttle.
-- **Synthesised engine sound** (a cross-plane V8, whatever the engine): each
-  firing sends a pulse through its bank's exhaust resonances. Each bank fires at
-  uneven intervals, which gives the burble; the banks are panned apart, and the
-  fuel the engine gets makes the pulses louder and harsher.
+  off the redline) drives the rear wheels, the front wheels or all four through the
+  car's gearbox and open or limited-slip differentials. Once the clutch locks, the
+  engine turns with the wheels and its inertia is added to theirs, so the wheel-spin
+  update stays implicit. The clutch slips when pulling away (and under an engine too
+  strong for it) and closes gradually after each shift, during which the throttle is
+  cut. Gears are shifted by hand by default; the automatic shifts by rpm and
+  throttle. Traction control eases the throttle while a driven wheel spins.
+- **Thirteen cars, twelve engine families**: from a city car to a supercar, a
+  pickup and a van, each a chassis with a procedurally built low-poly body. Engines
+  (a 1.0 three to a 6.5 V12, 22 factory versions) are independent of the cars: the
+  showroom (F6) has every car with the engines its factory offers, and the garage
+  (F4) fits any engine the engine bay has room for, along with gearboxes, clutches,
+  final drives, differentials, suspension, tires and the engine's own parts. Weight
+  and balance follow from what's fitted where.
+- **Synthesised engine sound** that follows the cylinder layout: each firing sends a
+  pulse through its bank's exhaust resonances. A cross-plane V8's banks fire at
+  uneven intervals, which gives the burble; a flat four's unequal headers give its
+  rumble; the others fire evenly. Two banks are panned apart, and the fuel the engine
+  gets makes the pulses louder and harsher.
+- **Aerodynamic drag and downforce**, and rolling resistance.
 - **Real-world low-poly terrain**: a 9.6 × 8.4 km area of Upper Franconia,
   from Gerach (96161, Bavaria), Mauschendorf and Sendelbach in the north-west to
   Rattelsdorf and Ebing in the east and Baunach in the south, with Reckendorf,
@@ -46,8 +56,7 @@ A small Bevy demo of car simulation techniques:
 - **Streamed meshes**: ground, roads, houses and trees are meshed per 96 m chunk
   when the chunk comes within 560 m of the camera, and freed again when it's left
   behind. GPU memory therefore doesn't grow with the map size.
-- Three setups (baseline, soft, track), debug gizmos for the linkage and forces,
-  and a telemetry panel with live-tunable springs, dampers, camber, toe, arm geometry,
+- Debug gizmos for the linkage and forces, and a telemetry panel with live-tunable springs, dampers, camber, toe, arm geometry,
   tire parameters and brakes (torque and front/rear split). A HUD in the bottom
   right shows speed and gear inside a rev counter.
 - A map of the whole area (K): the ground in its land use colours, drawn once into
@@ -75,14 +84,15 @@ pull request, and every push to `main` deploys the web build to GitHub Pages.
 | Key | Action |
 | --- | --- |
 | W / S, arrows | Throttle; brake (a stopped car holds on hills) |
-| Q / E | Shift down / up (R, N, 1–6) |
+| Q / E | Shift down / up (R, N, 1 and up) |
 | G | Toggle automatic gearbox (S at a stop then selects reverse) |
 | I | Start the engine after a stall (only with a clutch pedal) |
 | A / D | Steer |
 | Space | Handbrake |
-| Tab | Switch car |
 | R | Reset car |
 | F1 / F2 | Toggle gizmos / telemetry panel |
+| F3 / F4 / F5 | ECU tuning / garage (rebuild the car) / engine dyno |
+| F6 | Showroom: pick a car |
 | M | Mute engine sound |
 | C | Switch between chase and driver's view |
 | K | Map of the whole area (drag to move, scroll to zoom, click to put the car on the nearest road there; K or Esc closes) |
@@ -150,9 +160,13 @@ tire grip force, cyan for roll centres.
 | `src/physics/rigid_body.rs` | Chassis rigid body |
 | `src/physics/suspension.rs` | A-arm linkage, corner dynamics, wheel spin |
 | `src/physics/tire.rs` | Magic Formula tire |
-| `src/physics/drivetrain.rs` | Engine, clutch and gearbox |
+| `src/physics/drivetrain.rs` | Clutch, gearbox, drive layouts and differentials |
+| `src/physics/engine/` | Engine model, ECU, engine families and their parts, baked maps |
+| `src/chassis.rs` | The cars: chassis, gearboxes, and which engine fits where |
+| `src/body.rs` | Procedural low-poly car bodies |
+| `src/garage.rs` | Showroom and garage |
 | `src/sim.rs` | Multi-rate loop, controls to wheel torques, driving tests |
-| `src/car.rs` | Setups, spawning, keyboard and wheel to controls |
+| `src/car.rs` | A car's setup from what it's built of, spawning, keyboard and wheel to controls |
 | `src/input.rs` | Wheel, pedal and shifter bindings, config file |
 | `src/wheel_base.rs` | Wheel base rotation range and force feedback (Linux) |
 | `src/terrain.rs` | Baked map loading, terrain and road meshes, raycast, spawns |
@@ -160,7 +174,7 @@ tire grip force, cyan for roll centres.
 | `src/trees.rs` | Trees in forest areas and bushes on scrub (visual only) |
 | `src/scenery.rs` | Loads and unloads chunk meshes around the camera |
 | `tools/bake` | Separate crate that bakes `assets/*.terrain` from online data |
-| `src/visuals.rs` | Procedural meshes posed from the simulation |
+| `src/visuals.rs` | Bodies, wheels and suspension posed from the simulation |
 | `src/debug.rs`, `src/ui.rs`, `src/camera.rs` | Gizmos, telemetry panel, chase and driver cameras |
 | `src/hud.rs` | Speed, gear and rev counter HUD |
 | `src/map.rs` | Map of the whole area with roads, houses and the cars |
@@ -208,9 +222,9 @@ with the current mix of resolutions).
 
 ## Deliberate simplifications
 
-Massless arms with a point unsprung mass. No anti-roll bars, aerodynamics or tire
-relaxation length (so in top gear the car runs to the rev limiter). The clutch is
-automatic, and the engine stays coupled to both rear wheels' average speed. No render interpolation between chassis steps. At very
+Massless arms with a point unsprung mass. No anti-roll bars or tire relaxation
+length. Every car has double A-arms all round. Without a clutch pedal the clutch is
+automatic, and the engine stays coupled to the driven wheels' average speed. No render interpolation between chassis steps. At very
 low speed, slips are computed against a 3 m/s floor, so a parked car can creep
 slowly down steep slopes. Bridges become plain embankments. Land use is coloured
 per cell (2–8 m), so area edges are stepped, most visibly in coarse chunks.
