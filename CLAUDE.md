@@ -155,7 +155,7 @@ phasing, VTEC-style cam switching).
 - **Live components (no re-bake):** throttle (orifice flow), idle valve, filter,
   intercooler, cat, silencer, pipes (pressure drop ∝ ṁ²/ρ), compressor and turbine maps,
   wastegate, turbo shaft inertia, manifold volumes, mechanical limits (valve float,
-  rod/piston limits).
+  rod loads; done, see damage below).
 - **Live states:** intake (and boost) pressure, exhaust manifold pressure, turbo speed,
   temperatures, knock/damage accumulators.
 - The maps come from a cycle simulation in the game crate (`cycle.rs`), not in
@@ -182,7 +182,7 @@ phasing, VTEC-style cam switching).
   overrun fuel cut and an intake temperature sensor, runtime model); the drivetrain
   calls it. Default build is tuned to the old torque curve (about 200 N·m at 4200 rpm).
   Coolant/oil lumps with thermostat, radiator and fan (`thermal.rs`); knock limit and
-  damage (blown at 1, until the car is reset); turbo (`turbo.rs`: parametric compressor
+  damage (see below); turbo (`turbo.rs`: parametric compressor
   and turbine, spring wastegate, intercooler, diverter valve). The setup panel swaps
   between the NA and turbo builds (about 310 N·m on 0.7 bar) and sets the octane.
   No exhaust thermal mass yet: the exhaust temperature is that of the gas leaving the
@@ -201,9 +201,26 @@ phasing, VTEC-style cam switching).
   thread; wasm: 12 ms slices per frame), with the old engine running meanwhile, and caches
   them (`storage.rs` folders: `~/.cache/car-sim/engines/<fingerprint>.maps`, local storage
   on the web); bolt-on parts fit at once. The new engine is new (no damage) and gets a
-  factory tune unless unticked. The redline is hardware (cams and crank change it); the
-  factory tune's rev limit and the rev counter follow it. No valve float or other
-  mechanical limits yet.
+  factory tune unless unticked. The redline follows from the hardware (`safe_rpm`: 95 %
+  of the valve float speed, rods' pull under 70 % of their strength); the factory tune's
+  rev limit (first cam profile's with the stock ECU) and the rev counter follow it.
+- Damage (`damage.rs`, agreed: interference engine, engine and turbo only for now):
+  wear 0..1 per part. Per cylinder (with a fixed spread so they fail one by one):
+  pistons (knock, divided by `piston_toughness`; holed = dead cylinder), valves (float
+  past 6 %: they meet the pistons; bent = dead cylinder), rods (fatigue above 75 % of
+  their strength, `load^40` per cycle; broken = wrecked). Engine-wide: head gasket
+  (coolant overheating, and peak pressure with knock spikes over what it seals; blown =
+  less efficiency, coolant heated), bearings (oil overheating; spun = wrecked), turbo
+  (over its compressor tip speed of 520 m/s, bursting 12 % past it; turbine inlet over
+  1150 °C; failed = stops, no boost). Rod loads: pull m·r·ω²·(1+r/l) at TDC, push from
+  the baked peak pressure (raised by spark advance, saturating at +35 %; knock spikes
+  only for the gasket) against 2.5× the strength in buckling; peak pressure averaged
+  over 0.1 s so a step's transient doesn't count. Valve float speed from spring force at
+  full lift, moving mass, lift and duration (`ValveTrain::float_rpm`); floating loses VE.
+  The factory tune is knock-limited at boost and stays safe; greedy spark on race fuel
+  with big boost breaks stock rods. The garage shows the condition and repairs; R
+  (reset) also repairs. Exhaust temperatures run hot (no losses before the turbine),
+  hence the high turbine limit.
 - ECUs are switchable (agreed with the user): `EcuModel` (Stock, Programmable) is chosen
   in the garage like a part; the stock one stays. One `Ecu` struct for all models, the
   model deciding which features it uses (cam control lives in every `Ecu` but only the
@@ -217,7 +234,7 @@ phasing, VTEC-style cam switching).
   ratio axis is coarser with phasers (bake: intake phaser about 2 s, both 6 s, with the
   switching cam 13 s on 4 cores).
 - Next ideas: closed loop (wideband sensor), knock sensor/control, boost control,
-  launch/anti-lag, mechanical limits (valve float).
+  launch/anti-lag; damage to the clutch and gearbox; misfire sound for dead cylinders.
 
 ## Audio
 

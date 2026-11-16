@@ -324,11 +324,13 @@ fn build(ui: &mut egui::Ui, garage: &mut Garage, car: &mut Car) {
     let current = &car.setup.engine.build;
     let rebake = maps::fingerprint(&hardware) != maps::fingerprint(&current.hardware);
     ui.label(format!(
-        "{}: {:.0} cm³, {:.1}:1",
+        "{}: {:.0} cm³, {:.1}:1, redline {:.0} rpm",
         hardware.name,
         hardware.displacement() * 1e6,
-        hardware.compression_ratio
-    ));
+        hardware.compression_ratio,
+        hardware.redline(),
+    ))
+    .on_hover_text("Where the valves would soon float, or the rods' load near its limit");
     let changed = garage.draft != car.setup.engine.parts;
     ui.label(if !changed {
         "This is the engine in the car."
