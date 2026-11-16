@@ -206,6 +206,10 @@ catalogue entries, and things like swap subframes are named so they can be price
   it full throttle on the keyboard just spins the wheels of anything strong. It eases
   the throttle to hold the driven wheels at a slip ratio of 0.12, at a rate that follows
   the slip smoothly (no chopping; turbos still hunt a little with the boost lag).
+- **ABS** (asked for by the user, on by default, next to traction control): per wheel,
+  eases the brake share to hold a slip ratio of 0.1, the same smooth way (`ABS_*` in
+  `sim.rs`), off below 2 m/s. Without it, braking while steering locks the inside
+  front wheel of most cars and they go straight on (`abs_keeps_the_wheels_turning`).
 - **A clutch slips** when the engine makes more torque than it passes, so a swapped
   engine may need the sport or race clutch. Gearboxes have no torque limit yet.
 - Gotchas met: engines much bigger than 2 litres on light flywheels hunt at idle (the

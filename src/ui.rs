@@ -148,6 +148,8 @@ fn panel(
                 }
                 ui.checkbox(&mut car.traction_control, "Traction control")
                     .on_hover_text("Eases the throttle while a driven wheel spins");
+                ui.checkbox(&mut car.abs, "ABS")
+                    .on_hover_text("Eases the brake of a wheel that's about to lock");
             });
             engine(ui, &car);
             fuel(ui, &car);

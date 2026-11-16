@@ -302,6 +302,10 @@ pub struct Car {
     /// lets through right now.
     pub traction_control: bool,
     pub traction: f32,
+    /// ABS: whether it's on, and the share of the brake pedal it lets through to each
+    /// wheel right now.
+    pub abs: bool,
+    pub abs_pressure: [f32; 4],
     /// The fuel in the tank, and the share of the tank the driver fills it to (on a reset).
     pub fuel: Fuel,
     pub fill: f32,
@@ -340,6 +344,8 @@ impl Car {
             steering_torque: 0.0,
             traction_control: true,
             traction: 1.0,
+            abs: true,
+            abs_pressure: [1.0; 4],
             fuel,
             fill: 1.0,
         }
@@ -409,11 +415,12 @@ impl Car {
         car
     }
 
-    /// Takes the driver's settings (gearbox mode, traction control) from the car this
+    /// Takes the driver's settings (gearbox mode, traction control, ABS) from the car this
     /// one replaces.
     pub fn keep_settings(&mut self, old: &Car) {
         self.drivetrain.automatic = old.drivetrain.automatic;
         self.traction_control = old.traction_control;
+        self.abs = old.abs;
     }
 
     /// Brings every tread to its compound's best temperature, as after a few laps.

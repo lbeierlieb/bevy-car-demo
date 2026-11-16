@@ -32,6 +32,15 @@ const TRACTION_SLIP: f32 = 0.12;
 const TRACTION_CUT: f32 = 4.0;
 const TRACTION_OPEN: f32 = 2.0;
 const TRACTION_LEAST: f32 = 0.08;
+/// ABS: the slip ratio of a braked wheel it holds (about where the tires grip best), how
+/// fast it eases the wheel's brake per share of that slip it's over and gives it back per
+/// share it's under (shares of the pedal per second), and the speed below which it lets
+/// the wheels lock to stop (m/s). Like traction control it follows the slip smoothly,
+/// rather than pumping.
+const ABS_SLIP: f32 = 0.1;
+const ABS_CUT: f32 = 40.0;
+const ABS_OPEN: f32 = 10.0;
+const ABS_SPEED: f32 = 2.0;
 
 pub struct SimPlugin;
 
@@ -146,9 +155,11 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
 }
 
 /// Engine torque to the driven wheels through the differentials (less what traction
-/// control holds back), biased brakes, rear handbrake, and steering.
+/// control holds back), biased brakes (less what ABS holds back), rear handbrake, and
+/// steering.
 fn apply_controls(car: &mut Car, dt: f32) {
-    car.drivetrain.engine.airspeed = car.forward_speed();
+    let speed = car.forward_speed();
+    car.drivetrain.engine.airspeed = speed;
     car.drivetrain.engine.fuel_supply = car.fuel.supply;
     let Car {
         setup,
@@ -157,6 +168,8 @@ fn apply_controls(car: &mut Car, dt: f32) {
         controls: c,
         traction_control,
         traction,
+        abs,
+        abs_pressure,
         ..
     } = car;
 
@@ -200,8 +213,25 @@ fn apply_controls(car: &mut Car, dt: f32) {
             *torque += if i < 2 { -moved } else { moved };
         }
     }
+    // ABS eases each wheel's brake while the wheel turns slower than the tire grips best at
+    // (the slip ratio is negative braking forwards, positive braking backwards).
+    for (pressure, corner) in abs_pressure.iter_mut().zip(corners.iter()) {
+        let slip = corner.contact.map_or(0.0, |c| -c.tire.slip_ratio * speed.signum());
+        let off = (slip - ABS_SLIP) / ABS_SLIP;
+        let rate = if off > 0.0 {
+            -ABS_CUT * off
+        } else {
+            -ABS_OPEN * off
+        };
+        *pressure = if *abs && speed.abs() > ABS_SPEED {
+            (*pressure + rate * dt).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+    }
     let steer = c.steer * setup.max_steer;
     for (i, corner) in corners.iter_mut().enumerate() {
+        let brake = c.brake * abs_pressure[i];
         // Rolling resistance holds each wheel back like a light brake.
         let tire = &setup.axle(corner.front).tire;
         let rolling = ROLLING_RESISTANCE * corner.contact.map_or(0.0, |c| c.load) * tire.radius;
@@ -209,10 +239,10 @@ fn apply_controls(car: &mut Car, dt: f32) {
         corner.drive_inertia = shares[i] * drive.inertia;
         if corner.front {
             corner.steer = steer;
-            corner.brake_torque = rolling + c.brake * setup.brake_torque * setup.brake_bias / 2.0;
+            corner.brake_torque = rolling + brake * setup.brake_torque * setup.brake_bias / 2.0;
         } else {
             corner.brake_torque = rolling
-                + c.brake * setup.brake_torque * (1.0 - setup.brake_bias) / 2.0
+                + brake * setup.brake_torque * (1.0 - setup.brake_bias) / 2.0
                 + c.handbrake * setup.handbrake_torque;
         }
     }
@@ -223,6 +253,7 @@ mod tests {
     use super::*;
     use crate::car::{CarSetup, Controls, heading};
     use crate::chassis::{CHASSIS, CarBuild, SUSPENSIONS};
+    use std::f32::consts::{PI, TAU};
 
     fn run(car: &mut Car, terrain: &Terrain, seconds: f32) {
         let dt = 1.0 / CHASSIS_HZ as f32;
@@ -466,6 +497,66 @@ mod tests {
         assert!(gears.len() >= 3, "gears {gears:?}");
     }
 
+    /// Full brakes from 90 km/h in the car as it starts (cold tires), with ABS on or off:
+    /// the distance to stop, the least share of the road speed a wheel turned at, and how
+    /// far steering turned the car on the way (rad).
+    fn emergency_stop(chassis: usize, abs: bool, steer: f32) -> (f32, f32, f32) {
+        let terrain = Terrain::flat();
+        let mut car = Car::spawn_at(0, CarSetup::factory(chassis, 0), &terrain, 0.0, 0.0, 0.0);
+        car.abs = abs;
+        car.drivetrain.shift_to(&car.setup.engine, 4);
+        run(&mut car, &terrain, 1.0);
+        car.body.velocity = car.body.rotation * Vec3::NEG_Z * 25.0;
+        for corner in car.corners.iter_mut() {
+            corner.omega = 25.0 / car.setup.axle(corner.front).tire.radius;
+        }
+        car.controls = Controls {
+            brake: 1.0,
+            steer,
+            ..default()
+        };
+        let dt = 1.0 / CHASSIS_HZ as f32;
+        let (start, heading_before) = (car.body.position, heading(car.body.rotation));
+        let mut turning = f32::MAX;
+        while car.body.velocity.length() > 0.1 {
+            step_car(&mut car, &terrain, dt);
+            let speed = car.forward_speed();
+            if speed > 5.0 {
+                for corner in &car.corners {
+                    let radius = car.setup.axle(corner.front).tire.radius;
+                    turning = turning.min(corner.omega * radius / speed);
+                }
+            }
+        }
+        let turned = (heading(car.body.rotation) - heading_before + PI).rem_euclid(TAU) - PI;
+        let turned = turned.abs();
+        (car.body.position.distance(start), turning, turned)
+    }
+
+    #[test]
+    fn abs_keeps_the_wheels_turning() {
+        for (chassis, spec) in CHASSIS.iter().enumerate() {
+            let name = spec.name;
+            let (with, turning, _) = emergency_stop(chassis, true, 0.0);
+            let (without, locked, _) = emergency_stop(chassis, false, 0.0);
+            println!(
+                "{name}: {with:.1} m with ABS (wheels at least {turning:.2} of the road \
+                 speed), {without:.1} m without ({locked:.2})"
+            );
+            assert!(turning > 0.7, "{name}: a wheel at {turning:.2} of the road speed");
+            assert!(with < without * 1.03, "{name}: {with:.1} m, {without:.1} m without");
+            // Steering while braking: the wheels keep turning, and so does the car.
+            let (_, turning, turned) = emergency_stop(chassis, true, 0.1);
+            let (_, locked, straight) = emergency_stop(chassis, false, 0.1);
+            println!(
+                "    steering: turned {turned:.2} rad with ABS (wheels {turning:.2}), \
+                 {straight:.2} without ({locked:.2})"
+            );
+            assert!(turning > 0.7, "{name}: a wheel at {turning:.2} steering");
+            assert!(turned > 0.2, "{name}: turned {turned:.2} rad");
+        }
+    }
+
     #[test]
     fn brakes_without_rear_lock_or_spinning() {
         let terrain = Terrain::baked();
@@ -485,6 +576,8 @@ mod tests {
             let name = format!("{} ({})", setup.name, SUSPENSIONS[setup.build.suspension].0);
             let mut car = Car::spawn_at(0, setup, &terrain, p.x, p.y, yaw);
             car.warm_tires();
+            // The brakes' balance on its own.
+            car.abs = false;
             // In fourth, as a driver would be at this speed.
             car.drivetrain.shift_to(&car.setup.engine, 4);
             run(&mut car, &terrain, 1.0);
