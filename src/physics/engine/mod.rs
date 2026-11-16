@@ -95,12 +95,12 @@ pub struct EngineBuild {
 }
 
 impl EngineBuild {
-    /// The maps for `hardware` (baked now unless it's a stock build) and a factory tune for
-    /// 95 octane.
-    pub fn new(hardware: EngineHardware) -> Self {
+    /// The maps for `hardware` (baked now unless it's a factory engine) and a factory tune
+    /// of a `model` ECU for 95 octane.
+    pub fn new(hardware: EngineHardware, model: ecu::EcuModel) -> Self {
         let octane = 95.0;
         let maps = EngineMaps::for_hardware(&hardware);
-        let ecu = Ecu::calibrated(&hardware, &maps, octane, ecu::EcuModel::Stock);
+        let ecu = Ecu::calibrated(&hardware, &maps, octane, model);
         Self {
             hardware,
             maps,
@@ -112,7 +112,7 @@ impl EngineBuild {
 
 impl Default for EngineBuild {
     fn default() -> Self {
-        Self::new(EngineHardware::default())
+        Self::new(EngineHardware::default(), ecu::EcuModel::Stock)
     }
 }
 
@@ -543,7 +543,7 @@ mod tests {
         // Flat out at speed for two minutes, naturally aspirated and turbo.
         for build in [
             EngineBuild::default(),
-            EngineBuild::new(EngineHardware::turbo()),
+            EngineBuild::new(EngineHardware::turbo(), ecu::EcuModel::Stock),
         ] {
             let mut engine = Engine {
                 airspeed: 40.0,
@@ -565,7 +565,7 @@ mod tests {
     #[test]
     fn the_turbo_boosts_up_to_its_wastegate() {
         let na = EngineBuild::default();
-        let build = EngineBuild::new(EngineHardware::turbo());
+        let build = EngineBuild::new(EngineHardware::turbo(), ecu::EcuModel::Stock);
         let rpm = 5000.0;
         let engine = run_flat_out(&build, rpm, 6.0);
         let boost = (engine.boost_pressure - AMBIENT_PRESSURE) / 1e5;
@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn the_turbo_spools_and_vents() {
-        let build = EngineBuild::new(EngineHardware::turbo());
+        let build = EngineBuild::new(EngineHardware::turbo(), ecu::EcuModel::Stock);
         let rpm = 3500.0;
         let mut engine = Engine::default();
         let run = |engine: &mut Engine, throttle, seconds: f32| {
@@ -648,14 +648,8 @@ mod tests {
             for (v, version) in family.versions.iter().enumerate() {
                 let parts = Version::parts(f, v);
                 let hardware = parts.hardware();
-                let maps = EngineMaps::stock(&hardware).expect("baked maps");
-                let ecu = Ecu::calibrated(&hardware, &maps, 95.0, parts.ecu);
-                let build = EngineBuild {
-                    hardware,
-                    maps,
-                    ecu,
-                    octane: 95.0,
-                };
+                assert!(EngineMaps::stock(&hardware).is_some(), "baked maps");
+                let build = EngineBuild::new(hardware, parts.ecu);
                 let litres = build.hardware.displacement() * 1e3;
                 let (torque, power, at) = peaks(&build);
                 println!(
@@ -839,7 +833,7 @@ mod tests {
         // Lots of boost on race fuel, with the spark near MBT: the knock no longer holds
         // the cylinder pressure down (the factory tune on pump fuel does).
         let build = |parts: &parts::Parts| {
-            let mut build = EngineBuild::new(parts.hardware());
+            let mut build = EngineBuild::new(parts.hardware(), ecu::EcuModel::Stock);
             build.octane = 110.0;
             build.ecu = Ecu::calibrated(&build.hardware, &build.maps, 110.0, parts.ecu);
             build
@@ -864,7 +858,7 @@ mod tests {
         let mut parts = parts::Parts::turbo();
         parts.chosen[12] = 1;
         parts.boost = 1.5;
-        let build = EngineBuild::new(parts.hardware());
+        let build = EngineBuild::new(parts.hardware(), ecu::EcuModel::Stock);
         let engine = run_flat_out(&build, 6000.0, 10.0);
         assert!(engine.damage.turbo_failed(), "{:?}", engine.damage);
         assert_eq!(engine.damage.failures(4), ["turbo failed"]);

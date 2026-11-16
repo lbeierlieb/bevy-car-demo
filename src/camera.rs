@@ -21,9 +21,6 @@ impl Plugin for CameraPlugin {
     }
 }
 
-/// The driver's eyes in the chassis frame: left-hand drive, under the roof.
-pub const EYE: Vec3 = Vec3::new(-0.17, 0.33, 0.38);
-
 /// Vertical field of view in the chase and driver's views.
 const CHASE_FOV: f32 = std::f32::consts::FRAC_PI_4;
 const DRIVER_FOV: f32 = 0.95;
@@ -133,7 +130,7 @@ fn follow(
     let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return;
     };
-    let target = car.body.position + Vec3::Y * 0.8;
+    let target = car.body.position + Vec3::Y * 0.5;
     for (mut camera, mut transform) in &mut cameras {
         // Trail the car's heading with a little lag, taking the short way around.
         let delta = (heading(car.body.rotation) - camera.yaw + std::f32::consts::PI)
@@ -144,7 +141,7 @@ fn follow(
         if camera.driver {
             // Fixed to the seat: the view moves with every bump and roll of the body.
             let rotation = car.body.rotation;
-            *transform = Transform::from_translation(car.body.position + rotation * EYE)
+            *transform = Transform::from_translation(car.body.position + rotation * car.setup.eye)
                 .with_rotation(
                     rotation
                         * Quat::from_rotation_y(camera.look_yaw)

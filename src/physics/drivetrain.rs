@@ -100,7 +100,7 @@ pub struct EngineSetup {
     /// Most torque the clutch can pass while slipping (N·m).
     pub clutch_torque: f32,
     /// Forward gear ratios from first, the reverse ratio, and the final drive.
-    pub gears: [f32; 6],
+    pub gears: &'static [f32],
     pub reverse: f32,
     pub final_drive: f32,
     /// Time the clutch stays open for a gear change, and then takes to close again (s).
@@ -117,9 +117,9 @@ impl Default for EngineSetup {
     fn default() -> Self {
         Self {
             parts: Parts::stock(),
-            build: EngineBuild::new(Parts::stock().hardware()),
+            build: EngineBuild::default(),
             clutch_torque: 350.0,
-            gears: [3.3, 2.1, 1.5, 1.17, 0.95, 0.8],
+            gears: &[3.3, 2.1, 1.5, 1.17, 0.95, 0.8],
             reverse: 3.3,
             final_drive: 3.7,
             shift_time: 0.25,
@@ -132,7 +132,7 @@ impl Default for EngineSetup {
 }
 
 impl EngineSetup {
-    /// Overall ratio from engine to wheels for a gear (-1 reverse, 0 neutral, 1..=6).
+    /// Overall ratio from engine to wheels for a gear (-1 reverse, 0 neutral, 1 and up).
     pub fn ratio(&self, gear: i8) -> f32 {
         match gear {
             -1 => -self.reverse * self.final_drive,
@@ -171,7 +171,7 @@ pub struct Drivetrain {
     pub rpm: f32,
     /// False once stalled, until started again.
     pub running: bool,
-    /// -1 reverse, 0 neutral, 1..=6 forward.
+    /// -1 reverse, 0 neutral, 1 and up forward.
     pub gear: i8,
     /// Shifts by itself, based on rpm and throttle.
     pub automatic: bool,
@@ -342,8 +342,10 @@ impl Drivetrain {
             return self.step_pedal(engine, engine_torque, capacity, ratio, wheel_rpm, dt);
         }
 
-        // Lock once the wheels have caught up with the engine; slip again below idle.
-        if ratio == 0.0 || wheel_rpm < engine.idle_rpm() * 0.9 {
+        // Lock once the wheels have caught up with the engine; slip again below idle, or
+        // when the engine makes more torque than the clutch can pass.
+        let holds = engine_torque(wheel_rpm).abs() <= engine.clutch_torque;
+        if ratio == 0.0 || wheel_rpm < engine.idle_rpm() * 0.9 || !holds {
             self.locked = false;
         } else if wheel_rpm >= self.rpm - 50.0 {
             self.locked = true;
@@ -476,6 +478,24 @@ mod tests {
         let speed = drive(&mut drivetrain, &engine, 1.0, 3.0);
         assert!(speed > 8.0, "speed {speed}");
         assert!(drivetrain.locked);
+    }
+
+    #[test]
+    fn a_weak_clutch_slips_under_a_strong_engine() {
+        // A clutch that passes half of what the engine makes: the engine runs away from
+        // the wheels, and the car gets only what the clutch passes.
+        let strong = EngineSetup::default();
+        let weak = EngineSetup {
+            clutch_torque: 100.0,
+            ..strong.clone()
+        };
+        let mut held = Drivetrain::new(&strong);
+        let mut slipping = Drivetrain::new(&weak);
+        let fast = drive(&mut held, &strong, 1.0, 4.0);
+        let slow = drive(&mut slipping, &weak, 1.0, 4.0);
+        assert!(held.locked && !slipping.locked);
+        assert!(slow < 0.7 * fast, "{slow} against {fast} m/s");
+        assert!(slipping.rpm > 5000.0, "{} rpm", slipping.rpm);
     }
 
     #[test]

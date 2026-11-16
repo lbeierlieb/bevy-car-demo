@@ -85,7 +85,6 @@ pub struct Version {
 
 impl Family {
     /// The family and version with the factory code `code`.
-    #[cfg(test)]
     pub fn find(code: &str) -> Option<(usize, usize)> {
         FAMILIES.iter().enumerate().find_map(|(f, family)| {
             let version = family.versions.iter().position(|v| v.code == code)?;

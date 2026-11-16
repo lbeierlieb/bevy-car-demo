@@ -20,6 +20,13 @@ const MECHANICAL_TRAIL: f32 = 0.015;
 const AIR_DENSITY: f32 = 1.2;
 /// Rolling resistance of the tires: the share of their load that holds them back.
 const ROLLING_RESISTANCE: f32 = 0.012;
+/// Traction control: the slip ratio of a driven wheel it steps in at (a little past the
+/// tires' best), how fast it closes the throttle at that slip and opens it again (shares
+/// of the pedal per second), and the least it leaves.
+const TRACTION_SLIP: f32 = 0.14;
+const TRACTION_CUT: f32 = 5.0;
+const TRACTION_RESTORE: f32 = 2.0;
+const TRACTION_LEAST: f32 = 0.08;
 
 pub struct SimPlugin;
 
@@ -46,12 +53,11 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
         steering_torque,
         ..
     } = car;
-    let corner_mass = setup.sprung_mass / 4.0;
     let h = dt / SUBSTEPS as f32;
     let (mut force, mut torque) = (Vec3::ZERO, Vec3::ZERO);
     for corner in corners.iter_mut() {
         let axle = setup.axle(corner.front);
-        let rest_length = axle.spring_rest_length(corner_mass);
+        let rest_length = axle.spring_rest_length(setup.corner_mass(corner.front));
         for k in 0..SUBSTEPS {
             let (position, rotation) = body.extrapolate(k as f32 * h);
             let frame = ChassisFrame {
@@ -97,8 +103,8 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     body.integrate(dt);
 }
 
-/// Engine torque to the driven wheels through the differentials, biased brakes, rear
-/// handbrake, and steering.
+/// Engine torque to the driven wheels through the differentials (less what traction
+/// control holds back), biased brakes, rear handbrake, and steering.
 fn apply_controls(car: &mut Car, dt: f32) {
     car.drivetrain.engine.airspeed = car.forward_speed();
     let Car {
@@ -106,15 +112,34 @@ fn apply_controls(car: &mut Car, dt: f32) {
         corners,
         drivetrain,
         controls: c,
+        traction_control,
+        traction,
         ..
     } = car;
 
     let engine = &setup.engine;
     let shares = engine.drive.shares();
+    // Traction control eases the throttle while a driven wheel spins.
+    let slip = (0..4)
+        .filter(|&i| shares[i] > 0.0)
+        .filter_map(|i| corners[i].contact)
+        .map(|contact| contact.tire.slip_ratio)
+        .fold(0.0, f32::max);
+    let rate = if slip > TRACTION_SLIP {
+        -TRACTION_CUT * slip / TRACTION_SLIP
+    } else {
+        TRACTION_RESTORE
+    };
+    *traction = if *traction_control {
+        (*traction + rate * dt).clamp(TRACTION_LEAST, 1.0)
+    } else {
+        1.0
+    };
+    let throttle = c.throttle * *traction;
     let omega = [0, 1, 2, 3].map(|i| corners[i].omega);
     let driven_omega = (0..4).map(|i| shares[i] * omega[i]).sum();
     let grounded = (0..4).all(|i| shares[i] == 0.0 || corners[i].contact.is_some());
-    let drive = drivetrain.step(engine, c.throttle, c.clutch, driven_omega, grounded, dt);
+    let drive = drivetrain.step(engine, throttle, c.clutch, driven_omega, grounded, dt);
     let mut torque = shares.map(|share| share * drive.torque);
     // Limited-slip differentials move torque from the faster side to the slower one.
     for (left, right) in [(0, 1), (2, 3)] {
@@ -153,6 +178,7 @@ fn apply_controls(car: &mut Car, dt: f32) {
 mod tests {
     use super::*;
     use crate::car::{CarSetup, Controls, heading};
+    use crate::chassis::{CHASSIS, CarBuild, SUSPENSIONS};
 
     fn run(car: &mut Car, terrain: &Terrain, seconds: f32) {
         let dt = 1.0 / CHASSIS_HZ as f32;
@@ -164,7 +190,7 @@ mod tests {
     /// A car on the road at the first spawn point, pointing along the road.
     fn test_car(terrain: &Terrain) -> Car {
         let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
-        Car::spawn_at(0, CarSetup::baseline(), terrain, p.x, p.y, yaw)
+        Car::spawn_at(0, CarSetup::default(), terrain, p.x, p.y, yaw)
     }
 
     #[test]
@@ -186,6 +212,67 @@ mod tests {
         for corner in &car.corners {
             // Within a few cm of design height (tire compression, slope weight transfer).
             assert!(corner.travel.abs() < 0.04, "travel {}", corner.travel);
+        }
+    }
+
+    #[test]
+    fn every_car_stands_on_its_wheels_and_pulls_away() {
+        let terrain = Terrain::baked();
+        let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
+        for (index, chassis) in CHASSIS.iter().enumerate() {
+            for option in 0..chassis.engines.len() {
+                let setup = CarSetup::factory(index, option);
+                let name = format!("{} {}", chassis.name, chassis.engines[option]);
+                // The engine's place shows in the balance.
+                let front = setup.front_weight();
+                let expected = match chassis.bay.place {
+                    "middle" => 0.38..0.47,
+                    "rear" => 0.34..0.42,
+                    _ => 0.46..0.66,
+                };
+                assert!(
+                    expected.contains(&front),
+                    "{name}: {front} on the front axle"
+                );
+                let mass = setup.mass();
+                let mut car = Car::spawn_at(0, setup, &terrain, p.x, p.y, yaw);
+                car.controls = Controls {
+                    brake: 1.0,
+                    handbrake: 1.0,
+                    ..default()
+                };
+                run(&mut car, &terrain, 3.0);
+                assert!(car.body.velocity.length() < 0.05, "{name}: still moving");
+                for corner in &car.corners {
+                    assert!(
+                        corner.travel.abs() < 0.04,
+                        "{name}: travel {}",
+                        corner.travel
+                    );
+                }
+                // The body's lowest point, the floor, is clear of the road.
+                let ground = terrain.sample(car.body.position.x, car.body.position.z).0;
+                let height = car.body.position.y - ground;
+                assert!(
+                    (height - chassis.cg_height).abs() < 0.05,
+                    "{name}: centre of mass {height} m up"
+                );
+                // Flat out with the automatic gearbox.
+                car.drivetrain.automatic = true;
+                car.controls = Controls {
+                    throttle: 1.0,
+                    ..default()
+                };
+                // Unsteered, the quick ones are off the road soon after.
+                run(&mut car, &terrain, 3.0);
+                let speed = car.forward_speed();
+                println!(
+                    "{name}: {mass:.0} kg, {:.0} % front, {speed:.1} m/s after 3 s",
+                    front * 100.0
+                );
+                assert!(speed > 6.0, "{name}: {speed} m/s");
+                assert!((car.body.rotation * Vec3::Y).y > 0.9, "{name}: rolled over");
+            }
         }
     }
 
@@ -259,6 +346,37 @@ mod tests {
     }
 
     #[test]
+    fn traction_control_keeps_a_big_engine_from_spinning_its_wheels() {
+        let terrain = Terrain::baked();
+        let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
+        // The muscle car with the 6.2 V8, floored in first.
+        let launch = |traction_control: bool| {
+            let mut car = Car::spawn_at(0, CarSetup::factory(6, 1), &terrain, p.x, p.y, yaw);
+            car.traction_control = traction_control;
+            run(&mut car, &terrain, 1.0);
+            car.controls = Controls {
+                throttle: 1.0,
+                ..default()
+            };
+            run(&mut car, &terrain, 2.5);
+            let radius = car.setup.rear.tire.radius;
+            let wheels = (car.corners[2].omega + car.corners[3].omega) / 2.0 * radius;
+            (car.forward_speed(), wheels)
+        };
+        let (speed, wheels) = launch(true);
+        assert!(
+            wheels < 1.25 * speed,
+            "wheels at {wheels} m/s, car at {speed}"
+        );
+        let (spinning, wheels) = launch(false);
+        assert!(
+            wheels > 1.5 * spinning,
+            "wheels at {wheels} m/s, car at {spinning}"
+        );
+        assert!(speed > spinning + 3.0, "{speed} against {spinning} m/s");
+    }
+
+    #[test]
     fn the_air_limits_the_top_speed() {
         let terrain = Terrain::baked();
         let mut car = test_car(&terrain);
@@ -288,11 +406,11 @@ mod tests {
         };
         // Flat out from a standstill: the gears only ever go up (the clutch closing after
         // a shift spins the wheels up for a moment, which mustn't trigger another shift).
-        // Unsteered, the car leaves the road after a few seconds and crosses fields; much
-        // longer and it spins out, after which shifting down is right.
+        // Unsteered, the car leaves the road after a few seconds and crosses fields, where
+        // it slows down and shifting down is right.
         let dt = 1.0 / CHASSIS_HZ as f32;
         let mut gears = vec![car.drivetrain.selected_gear()];
-        for _ in 0..(10.0 / dt) as usize {
+        for _ in 0..(6.0 / dt) as usize {
             step_car(&mut car, &terrain, dt);
             let gear = car.drivetrain.selected_gear();
             if gear != *gears.last().unwrap() {
@@ -307,17 +425,27 @@ mod tests {
     fn brakes_without_rear_lock_or_spinning() {
         let terrain = Terrain::baked();
         let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
-        for setup in [CarSetup::baseline(), CarSetup::soft(), CarSetup::track()] {
-            let name = setup.name;
+        // Every car as it leaves the factory, and on the track suspension and tires.
+        let factory = (0..CHASSIS.len()).map(|chassis| CarSetup::factory(chassis, 0));
+        let track = (0..CHASSIS.len()).map(|chassis| {
+            let stock = CarSetup::factory(chassis, 0);
+            let build = CarBuild {
+                suspension: 2,
+                tires: 2,
+                ..stock.build
+            };
+            CarSetup::new(build, stock.engine.parts, stock.engine.build)
+        });
+        for setup in factory.chain(track) {
+            let name = format!("{} ({})", setup.name, SUSPENSIONS[setup.build.suspension].0);
             let mut car = Car::spawn_at(0, setup, &terrain, p.x, p.y, yaw);
             // In fourth, as a driver would be at this speed.
             car.drivetrain.shift_to(&car.setup.engine, 4);
             run(&mut car, &terrain, 1.0);
             // Full brakes from 90 km/h, with a touch of steering to upset the car.
             car.body.velocity = car.body.rotation * Vec3::NEG_Z * 25.0;
-            let radius = car.setup.front.tire.radius;
             for corner in car.corners.iter_mut() {
-                corner.omega = 25.0 / radius;
+                corner.omega = 25.0 / car.setup.axle(corner.front).tire.radius;
             }
             car.controls = Controls {
                 brake: 1.0,
@@ -338,9 +466,13 @@ mod tests {
                         "{name}: rear wheel locked at {time:.2} s"
                     );
                 }
+                // It turns no faster than the steering asks for at the speed it started
+                // from (and a quarter, for the weight shifting forward).
+                let wheelbase = car.setup.rear_z - car.setup.front_z;
+                let asked = 25.0 * 0.05 * car.setup.max_steer / wheelbase;
                 let yaw_rate = car.body.angular_velocity.y.abs();
                 assert!(
-                    yaw_rate < 0.3,
+                    yaw_rate < 1.25 * asked,
                     "{name}: yaw rate {yaw_rate:.2} at {time:.2} s"
                 );
             }

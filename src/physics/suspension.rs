@@ -163,6 +163,17 @@ impl AxleSetup {
         }
     }
 
+    /// Sets the spring and damper for a ride `frequency` (Hz) and damping ratio of
+    /// `corner_mass` of sprung mass on the wheel, through the linkage's motion ratio.
+    pub fn tune(&mut self, frequency: f32, damping_ratio: f32, corner_mass: f32) {
+        let d = Derivatives::at(self, self.geometry.design_angle(), 0.0, 1.0, 0.0);
+        // Spring travel per wheel travel.
+        let ratio = (d.length / d.contact.y).powi(2);
+        let wheel_rate = corner_mass * (std::f32::consts::TAU * frequency).powi(2);
+        self.spring_rate = wheel_rate / ratio;
+        self.damping = 2.0 * damping_ratio * (wheel_rate * corner_mass).sqrt() / ratio;
+    }
+
     /// Coilover free length that holds the design ride height under `corner_mass` of sprung
     /// mass: the spring's generalised force balances the tire load at the design angle.
     pub fn spring_rest_length(&self, corner_mass: f32) -> f32 {
@@ -413,6 +424,24 @@ mod tests {
         let bump = a.pose(theta + 0.1, 0.0, 1.0, 0.0);
         assert!(bump.camber < a.geometry.static_camber);
         assert!(bump.wheel_center.y > a.geometry.wheel_center.y);
+    }
+
+    #[test]
+    fn tuned_springs_hold_the_ride_frequency() {
+        // The stock four-bar: 275 kg a corner at about 1.7 Hz takes a spring a little
+        // softer than the 90 kN/m it used to have, and four times the mass needs four
+        // times the spring.
+        let mut a = axle();
+        a.tune(1.7, 0.3, 275.0);
+        assert!(
+            (55_000.0..80_000.0).contains(&a.spring_rate),
+            "{}",
+            a.spring_rate
+        );
+        assert!((2_500.0..5_000.0).contains(&a.damping), "{}", a.damping);
+        let spring = a.spring_rate;
+        a.tune(1.7, 0.3, 1100.0);
+        assert!((a.spring_rate / spring - 4.0).abs() < 1e-3);
     }
 
     #[test]

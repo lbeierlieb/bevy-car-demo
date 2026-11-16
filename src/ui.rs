@@ -9,7 +9,6 @@ use crate::camera::OrbitInput;
 use crate::car::{ActiveCar, Car};
 use crate::debug::DebugView;
 use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_value, input_name};
-use crate::physics::drivetrain::{Differential, Drive};
 use crate::physics::engine::AMBIENT_PRESSURE;
 use crate::physics::suspension::AxleSetup;
 use crate::sim::{CHASSIS_HZ, SUBSTEPS};
@@ -67,7 +66,12 @@ fn panel(
         .default_width(340.0)
         .vscroll(true)
         .show(contexts.ctx_mut()?, |ui| {
-            ui.label(format!("{:.0} km/h", car.forward_speed() * 3.6));
+            ui.label(format!(
+                "{:.0} km/h    {:.0} kg, {:.0} % on the front axle",
+                car.forward_speed() * 3.6,
+                car.setup.mass(),
+                car.setup.front_weight() * 100.0
+            ));
             let gear = match car.drivetrain.selected_gear() {
                 -1 => "R".to_string(),
                 0 => "N".to_string(),
@@ -79,6 +83,8 @@ fn panel(
                 if ui.checkbox(&mut on, "Automatic (G)").changed() {
                     automatic = Some(on);
                 }
+                ui.checkbox(&mut car.traction_control, "Traction control")
+                    .on_hover_text("Eases the throttle while a driven wheel spins");
             });
             engine(ui, &car);
             ui.label(format!(
@@ -105,7 +111,7 @@ fn panel(
                 ui.label("I: start the engine (after stalling with a clutch pedal)");
                 ui.label("(automatic: S at a stop selects reverse)");
                 ui.label("A/D: steer    Space: handbrake");
-                ui.label("Tab: next car    R: reset car");
+                ui.label("R: reset car    F6: showroom (pick a car)");
                 ui.label("F1: gizmos    F2: this panel    F3: ECU tune    F4: garage    F5: dyno    M: mute");
                 ui.label("C: chase/driver view    K: map");
                 ui.label("Wheel and pedals: bind them under \"Wheel and pedals\"");
@@ -116,7 +122,6 @@ fn panel(
                 ui.label("Elevation: DGM1 © Bayerische Vermessungsverwaltung (CC BY 4.0)");
             });
         });
-    // The gearbox mode applies to every car, so switching cars keeps it.
     if let Some(on) = automatic {
         for mut car in &mut cars {
             car.drivetrain.automatic = on;
@@ -330,23 +335,11 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
 fn engine_setup(ui: &mut egui::Ui, car: &mut Car) {
     ui.strong("Engine");
     let engine = &mut car.setup.engine;
-    ui.label(format!("{} (F4: garage)", engine.build.hardware.name));
-    egui::ComboBox::from_label("Drive")
-        .selected_text(engine.drive.name())
-        .show_ui(ui, |ui| {
-            for drive in [Drive::Rear, Drive::Front, Drive::All { front: 0.4 }] {
-                ui.selectable_value(&mut engine.drive, drive, drive.name());
-            }
-        });
-    let mut limited = engine.differential != Differential::OPEN;
-    ui.checkbox(&mut limited, "Limited-slip differentials")
-        .on_hover_text("Open differentials let a wheel without grip spin away the torque");
-    engine.differential = if limited {
-        Differential::LIMITED_SLIP
-    } else {
-        Differential::OPEN
-    };
-    engine.centre = engine.differential;
+    ui.label(format!(
+        "{}, {} (F4: garage)",
+        engine.build.hardware.name,
+        engine.drive.name()
+    ));
     let build = &mut engine.build;
     ui.add(egui::Slider::new(&mut build.octane, 89.0..=102.0).text("Fuel octane (RON)"))
         .on_hover_text("The factory tune is for 95; lower knocks");

@@ -472,7 +472,7 @@ mod tests {
         tuned.ve.scale_at(&[3300.0, 71e3], 1.07);
         let text = tuned.to_text("test engine");
         // Read into a different ECU (the turbo's, with longer maps): all of it comes over.
-        let turbo = EngineBuild::new(EngineHardware::turbo());
+        let turbo = EngineBuild::new(EngineHardware::turbo(), EcuModel::Stock);
         let mut read = turbo.ecu.clone();
         let origin = read.read_text(&text);
         assert_eq!(origin.engine.as_deref(), Some("test engine"));

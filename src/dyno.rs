@@ -439,7 +439,10 @@ mod tests {
         assert!(na.failures.is_empty());
         // The turbo makes more, and a quick pull shows less of it low down, before the
         // turbo has spooled.
-        let turbo = EngineBuild::new(EngineHardware::turbo());
+        let turbo = EngineBuild::new(
+            EngineHardware::turbo(),
+            crate::physics::engine::ecu::EcuModel::Stock,
+        );
         let slow = sweep(&turbo, 150.0);
         assert!(slow.peaks().unwrap().0.1 > torque * 1.3);
         let quick = sweep(&turbo, 1000.0);

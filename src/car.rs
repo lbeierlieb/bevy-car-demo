@@ -2,27 +2,34 @@
 
 use bevy::prelude::*;
 
+use crate::chassis::{CLUTCHES, CarBuild, DEFAULT_CHASSIS, SUSPENSIONS, TIRES};
 use crate::input::WheelInput;
-use crate::physics::drivetrain::{Drivetrain, EngineSetup};
+use crate::physics::drivetrain::{Differential, Drive, Drivetrain, EngineSetup};
+use crate::physics::engine::EngineBuild;
+use crate::physics::engine::parts::Parts;
 use crate::physics::rigid_body::RigidBody;
 use crate::physics::suspension::{ArmGeometry, AxleSetup, Corner};
 use crate::physics::tire::TireParams;
 use crate::terrain::Terrain;
 
+/// Everything the simulation needs to know about a car, worked out from what it's built
+/// of: a chassis and what's fitted to it (`build`), and an engine.
 #[derive(Clone, Debug)]
 pub struct CarSetup {
     pub name: &'static str,
     pub color: Color,
+    /// What the car is built of, apart from the engine (see `engine.parts`).
+    pub build: CarBuild,
     pub sprung_mass: f32,
-    /// Box used to approximate the chassis inertia.
-    pub inertia_box: Vec3,
-    /// Axle positions along the chassis z axis (forward is -z).
+    /// Principal moments of inertia of the sprung mass (kg·m²).
+    pub inertia: Vec3,
+    /// Axle positions along the chassis z axis (forward is -z), from the centre of mass.
     pub front_z: f32,
     pub rear_z: f32,
     pub front: AxleSetup,
     pub rear: AxleSetup,
     pub max_steer: f32,
-    /// Engine, clutch and gearbox, driving the rear wheels.
+    /// Engine, clutch, gearbox and differentials.
     pub engine: EngineSetup,
     /// Total brake torque, the front axle's share of it, and handbrake torque per rear wheel.
     pub brake_torque: f32,
@@ -32,77 +39,179 @@ pub struct CarSetup {
     pub drag_area: f32,
     /// Downforce coefficient times area (m²) over the front and the rear axle.
     pub downforce_area: [f32; 2],
+    /// Where the body's design frame (its origin on the ground, midway between the
+    /// axles) is in the chassis frame, whose origin is the centre of mass.
+    pub body_offset: Vec3,
+    /// The driver's eyes in the chassis frame.
+    pub eye: Vec3,
 }
 
 impl CarSetup {
-    pub fn baseline() -> Self {
-        let axle = AxleSetup {
-            geometry: ArmGeometry::default(),
-            spring_rate: 90_000.0,
-            damping: 5_000.0,
-            unsprung_mass: 40.0,
-            wheel_inertia: 1.2,
-            tire: TireParams::default(),
-        };
-        Self {
-            name: "Baseline",
-            color: Color::srgb(0.85, 0.20, 0.15),
-            sprung_mass: 1_100.0,
-            inertia_box: Vec3::new(1.6, 0.8, 4.0),
-            front_z: -1.3,
-            rear_z: 1.3,
-            front: axle,
-            rear: AxleSetup {
-                spring_rate: 65_000.0,
-                // Toe-in at the rear keeps the car stable, especially off throttle.
-                geometry: ArmGeometry {
-                    static_toe: 0.25f32.to_radians(),
-                    ..axle.geometry
+    /// The car that `build` and an engine of `parts` (built as `engine`) make. The
+    /// engine's and the gearbox's masses sit where the chassis has them, which sets the
+    /// balance; springs and dampers are matched to the weight on each axle, and the
+    /// brakes' balance to how it shifts forward when braking.
+    pub fn new(build: CarBuild, parts: Parts, engine: EngineBuild) -> Self {
+        let chassis = build.chassis();
+        let gearbox = build.gearbox();
+        let body = &chassis.body;
+        let engine_mass = parts.family().built_mass(&engine.hardware);
+        // Masses and where they are behind the front axle.
+        let masses = [
+            (chassis.mass, chassis.mass_at),
+            (engine_mass, chassis.bay.engine_at),
+            (gearbox.mass, chassis.bay.gearbox_at),
+        ];
+        let sprung_mass: f32 = masses.iter().map(|(mass, _)| mass).sum();
+        let centre = masses.iter().map(|(mass, at)| mass * at).sum::<f32>() / sprung_mass;
+        let (front_z, rear_z) = (-centre, chassis.wheelbase - centre);
+        // The body as a box, and each mass's distance from the common centre.
+        let size = Vec3::new(0.9 * body.width, 0.7, 0.95 * body.length);
+        let spread: f32 = masses
+            .iter()
+            .map(|(mass, at)| mass * (at - centre).powi(2))
+            .sum();
+        let inertia = RigidBody::box_inertia(chassis.mass, size) + Vec3::new(spread, spread, 0.0);
+
+        let front_share = rear_z / chassis.wheelbase;
+        let (_, ride, damping, camber) = SUSPENSIONS[build.suspension];
+        let grip = chassis.grip * TIRES[build.tires].1;
+        let axle = |i: usize| {
+            let radius = chassis.tire_radius[i];
+            let share = if i == 0 {
+                front_share
+            } else {
+                1.0 - front_share
+            };
+            let mut geometry = ArmGeometry::default();
+            // The stock linkage, moved out to the track and to the wheel's height below
+            // the centre of mass.
+            let shift = Vec2::new(chassis.track[i] / 2.0, radius - chassis.cg_height)
+                - geometry.wheel_center;
+            for point in [
+                &mut geometry.lower_pivot,
+                &mut geometry.lower_ball,
+                &mut geometry.upper_pivot,
+                &mut geometry.upper_ball,
+                &mut geometry.wheel_center,
+                &mut geometry.spring_top,
+            ] {
+                *point += shift;
+            }
+            geometry.static_camber = (chassis.camber[i] - camber).to_radians();
+            // Toe-in at the rear keeps the car stable, especially off throttle.
+            geometry.static_toe = if i == 0 { 0.0 } else { 0.25f32.to_radians() };
+            let stock = TireParams::default();
+            let unsprung_mass = chassis.unsprung[i];
+            let mut axle = AxleSetup {
+                geometry,
+                spring_rate: 0.0,
+                damping: 0.0,
+                unsprung_mass,
+                wheel_inertia: 0.45 * unsprung_mass * radius * radius,
+                tire: TireParams {
+                    radius,
+                    mu: grip,
+                    ..stock
                 },
-                ..axle
+            };
+            axle.tune(
+                chassis.ride[i] * ride,
+                chassis.damping * damping,
+                sprung_mass * share / 2.0,
+            );
+            axle
+        };
+
+        let mass = sprung_mass + 2.0 * (chassis.unsprung[0] + chassis.unsprung[1]);
+        let radius = (chassis.tire_radius[0] + chassis.tire_radius[1]) / 2.0;
+        // Braking as hard as the tires can, the weight shifts forward by the height of
+        // the centre of mass over the wheelbase; a little more to the front keeps the
+        // rear wheels from locking first.
+        // Rear-wheel drive adds the engine's braking at the back.
+        let margin = if chassis.drive == Drive::Rear {
+            0.06
+        } else {
+            0.03
+        };
+        let brake_bias = front_share + grip * chassis.cg_height / chassis.wheelbase + margin;
+        let differential = if build.limited_slip {
+            Differential::LIMITED_SLIP
+        } else {
+            Differential::OPEN
+        };
+        let body_offset = Vec3::new(0.0, -chassis.cg_height, front_z + chassis.wheelbase / 2.0);
+        let [eye_x, eye_y, eye_left] = chassis.eye;
+        Self {
+            name: chassis.name,
+            color: build.paint(),
+            sprung_mass,
+            inertia,
+            front_z,
+            rear_z,
+            front: axle(0),
+            rear: axle(1),
+            max_steer: chassis.max_steer,
+            engine: EngineSetup {
+                parts,
+                build: engine,
+                clutch_torque: gearbox.clutch_torque * CLUTCHES[build.clutch].1,
+                gears: gearbox.gears,
+                reverse: gearbox.reverse,
+                final_drive: build.final_drive,
+                shift_time: gearbox.shift_time,
+                engage_time: gearbox.engage_time,
+                drive: chassis.drive,
+                differential,
+                centre: differential,
             },
-            max_steer: 0.5,
-            engine: EngineSetup::default(),
-            brake_torque: 3_500.0,
-            brake_bias: 0.7,
-            handbrake_torque: 2_500.0,
-            drag_area: 0.62,
-            downforce_area: [0.0, 0.0],
+            brake_torque: chassis.brakes * chassis.grip * mass * 9.81 * radius,
+            brake_bias: brake_bias.min(0.9),
+            handbrake_torque: 2.0 * mass,
+            drag_area: chassis.drag_area,
+            downforce_area: chassis.downforce_area,
+            body_offset,
+            eye: body_offset + Vec3::new(-eye_left, eye_y, body.z(eye_x, &chassis.wheels())),
+            build,
         }
     }
 
-    /// Soft springs and a short upper arm: lots of roll, lots of camber gain.
-    pub(crate) fn soft() -> Self {
-        let mut setup = Self::baseline();
-        setup.name = "Soft";
-        setup.color = Color::srgb(0.20, 0.45, 0.85);
-        for axle in [&mut setup.front, &mut setup.rear] {
-            axle.spring_rate *= 0.55;
-            axle.damping *= 0.6;
-            axle.geometry.upper_pivot.x = 0.50;
-        }
-        setup
-    }
-
-    /// Stiff springs, more static camber and a long upper arm (little camber gain). The
-    /// stiff rear unloads quickly under braking, so the brakes are biased further forward.
-    pub(crate) fn track() -> Self {
-        let mut setup = Self::baseline();
-        setup.name = "Track";
-        setup.color = Color::srgb(0.95, 0.75, 0.10);
-        for axle in [&mut setup.front, &mut setup.rear] {
-            axle.spring_rate *= 1.8;
-            axle.damping *= 1.6;
-            axle.geometry.upper_pivot.x = 0.32;
-            axle.geometry.static_camber = -0.045;
-            axle.tire.mu = 1.25;
-        }
-        setup.brake_bias = 0.8;
-        setup
+    /// A chassis (in `CHASSIS`) as it leaves the factory, with the factory's engine
+    /// `option` for it.
+    pub fn factory(chassis: usize, option: usize) -> Self {
+        let build = CarBuild::factory(chassis);
+        let parts = build.factory_engine(option);
+        let engine = EngineBuild::new(parts.hardware(), parts.ecu);
+        Self::new(build, parts, engine)
     }
 
     pub fn axle(&self, front: bool) -> &AxleSetup {
         if front { &self.front } else { &self.rear }
+    }
+
+    /// Sprung mass carried by each wheel of the front or the rear axle (kg).
+    pub fn corner_mass(&self, front: bool) -> f32 {
+        let wheelbase = self.rear_z - self.front_z;
+        let share = if front { self.rear_z } else { -self.front_z } / wheelbase;
+        self.sprung_mass * share / 2.0
+    }
+
+    /// Mass of the whole car (kg).
+    pub fn mass(&self) -> f32 {
+        self.sprung_mass + 2.0 * (self.front.unsprung_mass + self.rear.unsprung_mass)
+    }
+
+    /// Share of the car's weight on the front axle.
+    pub fn front_weight(&self) -> f32 {
+        let unsprung = [self.front.unsprung_mass, self.rear.unsprung_mass];
+        (2.0 * self.corner_mass(true) + 2.0 * unsprung[0]) / self.mass()
+    }
+}
+
+impl Default for CarSetup {
+    /// The coupé with its base engine.
+    fn default() -> Self {
+        Self::factory(DEFAULT_CHASSIS, 0)
     }
 }
 
@@ -122,7 +231,7 @@ pub struct Controls {
 
 #[derive(Component)]
 pub struct Car {
-    /// Position in the Tab cycling order.
+    /// Which car it is (see `ActiveCar`).
     pub index: usize,
     pub setup: CarSetup,
     pub body: RigidBody,
@@ -132,6 +241,10 @@ pub struct Car {
     /// Torque of the front tires about the steering axes (N·m, positive turns the wheels
     /// left), for force feedback.
     pub steering_torque: f32,
+    /// Traction control: whether it's on, and the share of the driver's throttle it
+    /// lets through right now.
+    pub traction_control: bool,
+    pub traction: f32,
 }
 
 impl Car {
@@ -144,18 +257,13 @@ impl Car {
         z: f32,
         yaw: f32,
     ) -> Self {
-        let position = Vec3::new(x, terrain.sample(x, z).0 + 0.6, z);
+        let height = setup.build.chassis().cg_height + 0.15;
+        let position = Vec3::new(x, terrain.sample(x, z).0 + height, z);
         Self::new(index, setup, position, Quat::from_rotation_y(yaw))
     }
 
     fn new(index: usize, setup: CarSetup, position: Vec3, rotation: Quat) -> Self {
-        let mass = setup.sprung_mass;
-        let body = RigidBody::new(
-            position,
-            rotation,
-            mass,
-            RigidBody::box_inertia(mass, setup.inertia_box),
-        );
+        let body = RigidBody::new(position, rotation, setup.sprung_mass, setup.inertia);
         let corners =
             [(-1.0, true), (1.0, true), (-1.0, false), (1.0, false)].map(|(side, front)| {
                 let z = if front { setup.front_z } else { setup.rear_z };
@@ -169,6 +277,8 @@ impl Car {
             corners,
             controls: Controls::default(),
             steering_torque: 0.0,
+            traction_control: true,
+            traction: 1.0,
         }
     }
 
@@ -179,11 +289,36 @@ impl Car {
     }
 
     /// Puts the car at rest at (x, z) in the xz plane, facing along `yaw`, keeping its
-    /// setup and gearbox mode.
+    /// setup and the driver's settings.
     pub fn place(&mut self, terrain: &Terrain, p: Vec2, yaw: f32) {
-        let automatic = self.drivetrain.automatic;
-        *self = Self::spawn_at(self.index, self.setup.clone(), terrain, p.x, p.y, yaw);
-        self.drivetrain.automatic = automatic;
+        let mut placed = Self::spawn_at(self.index, self.setup.clone(), terrain, p.x, p.y, yaw);
+        placed.keep_settings(self);
+        *self = placed;
+    }
+
+    /// The car rebuilt as `setup` where it is and as it moves; its engine keeps its
+    /// state and wear if it's still the same engine.
+    pub fn rebuilt(&self, setup: CarSetup) -> Self {
+        let same_engine = setup.engine.parts == self.setup.engine.parts;
+        let mut car = Self::new(self.index, setup, self.body.position, self.body.rotation);
+        car.body.velocity = self.body.velocity;
+        car.body.angular_velocity = self.body.angular_velocity;
+        car.controls = self.controls;
+        car.keep_settings(self);
+        if same_engine {
+            car.drivetrain.engine = self.drivetrain.engine;
+        }
+        for (corner, old) in car.corners.iter_mut().zip(&self.corners) {
+            corner.omega = old.omega;
+        }
+        car
+    }
+
+    /// Takes the driver's settings (gearbox mode, traction control) from the car this
+    /// one replaces.
+    pub fn keep_settings(&mut self, old: &Car) {
+        self.drivetrain.automatic = old.drivetrain.automatic;
+        self.traction_control = old.traction_control;
     }
 
     pub fn forward_speed(&self) -> f32 {
@@ -207,31 +342,19 @@ impl Plugin for CarPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActiveCar>()
             .add_systems(Startup, spawn_cars)
-            .add_systems(
-                Update,
-                (switch_car, drive, reset_car, sync_transforms).chain(),
-            );
+            .add_systems(Update, (drive, reset_car, sync_transforms).chain());
     }
 }
 
 fn spawn_cars(mut commands: Commands, terrain: Res<Terrain>) {
-    // One behind the other along the road at the spawn point, the first car in front.
-    let setups = [CarSetup::baseline(), CarSetup::soft(), CarSetup::track()];
-    let spawns = terrain.road_spawns(setups.len(), 9.0);
-    for (index, (setup, (p, yaw))) in setups.into_iter().zip(spawns).enumerate() {
-        let car = Car::spawn_at(index, setup, &terrain, p.x, p.y, yaw);
-        commands.spawn((Transform::from_translation(car.body.position), car));
-    }
+    // On the road at the spawn point.
+    let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
+    let car = Car::spawn_at(0, CarSetup::default(), &terrain, p.x, p.y, yaw);
+    commands.spawn((Transform::from_translation(car.body.position), car));
 }
 
-fn switch_car(keys: Res<ButtonInput<KeyCode>>, mut active: ResMut<ActiveCar>, cars: Query<&Car>) {
-    if keys.just_pressed(KeyCode::Tab) {
-        active.0 = (active.0 + 1) % cars.iter().len().max(1);
-    }
-}
-
-/// Keyboard and wheel to controls for the active car; parked cars hold all brakes. G
-/// switches all cars between manual and automatic gearboxes, I starts a stalled engine.
+/// Keyboard and wheel to controls for the active car; any other car holds all brakes. G
+/// switches between manual and automatic gearboxes, I starts a stalled engine.
 fn drive(
     keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<WheelInput>,
@@ -296,7 +419,8 @@ fn drive(
         } else {
             // Q/E or the paddles shift down/up.
             if shift != 0 {
-                let wheel_omega = (corners[2].omega + corners[3].omega) / 2.0;
+                let shares = setup.engine.drive.shares();
+                let wheel_omega = (0..4).map(|i| shares[i] * corners[i].omega).sum();
                 drivetrain.shift_by(&setup.engine, shift, wheel_omega, speed);
             }
             (forward, back)

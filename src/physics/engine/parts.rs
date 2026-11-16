@@ -5,9 +5,7 @@
 //! their parts means baking the maps again; the rest act live.
 
 use super::ecu::EcuModel;
-#[cfg(test)]
-use super::families::Family;
-use super::families::{FAMILIES, Version, WORKHORSE, relative_size};
+use super::families::{FAMILIES, Family, Version, WORKHORSE, relative_size};
 use super::hardware::{
     CamProfile, Compressor, Diverter, EngineHardware, Intercooler, Turbine, Turbo, Wastegate,
 };
@@ -46,6 +44,8 @@ pub(super) fn round_to(value: f32, step: f32) -> f32 {
 }
 
 pub const PISTONS: usize = 0;
+/// The exhaust manifold's slot: how long its primaries can be depends on the car.
+pub const HEADERS: usize = 9;
 pub const TURBO: usize = 12;
 /// The intercooler's slot: it only matters with a turbo.
 pub const INTERCOOLER: usize = 13;
@@ -477,12 +477,11 @@ impl Parts {
     }
 
     /// The factory version with the code `code`.
-    #[cfg(test)]
     pub fn factory(code: &str) -> Option<Self> {
         Family::find(code).map(|(family, version)| Version::parts(family, version))
     }
 
-    pub fn family(&self) -> &'static super::families::Family {
+    pub fn family(&self) -> &'static Family {
         &FAMILIES[self.family]
     }
 
@@ -601,7 +600,7 @@ mod tests {
         assert_eq!(hardware.exhaust.header_length, 0.6);
         // It's still the factory's engine, in a tight car.
         assert_eq!(hardware.name, "W20 2.0 four");
-        parts.chosen[9] = 1;
+        parts.chosen[HEADERS] = 1;
         assert_eq!(parts.hardware().exhaust.header_length, 0.45);
     }
 

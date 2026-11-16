@@ -1,16 +1,15 @@
-//! Low-poly interior for the driver view: dashboard, pillars, a steering wheel that turns
-//! with the front wheels, and a rev counter and speedometer with live needles. It sits
-//! inside the opaque cabin, so it's only seen from the driver's seat.
+//! Low-poly interior for the driver view: dashboard, a steering wheel that turns with the
+//! front wheels, and a rev counter and speedometer with live needles, all placed by the
+//! driver's eyes; under a roof, its lining and a mirror. It sits inside the opaque body,
+//! so it's only seen from the driver's seat (as are the body's pillars).
 
 use std::f32::consts::{FRAC_PI_2, PI};
 
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
-use crate::camera::EYE;
 use crate::car::Car;
 use crate::input::WheelConfig;
-use crate::visuals::bar;
 
 /// Gauge faces lean back towards the driver; the speedometer reads up to 260 km/h.
 const GAUGE_TILT: f32 = 0.35;
@@ -40,22 +39,17 @@ struct DialPart {
     local: Transform,
 }
 
-fn tach_mount() -> Transform {
-    gauge_mount(-0.225)
-}
-
-fn speedo_mount() -> Transform {
-    gauge_mount(-0.115)
-}
-
-fn gauge_mount(x: f32) -> Transform {
-    Transform::from_xyz(x, 0.175, -0.012).with_rotation(Quat::from_rotation_x(-GAUGE_TILT))
+/// The rev counter and the speedometer, either side of the steering column, a little
+/// below and ahead of the driver's `eye`.
+fn gauge_mount(eye: Vec3, x: f32) -> Transform {
+    Transform::from_translation(eye + Vec3::new(x, -0.155, -0.392))
+        .with_rotation(Quat::from_rotation_x(-GAUGE_TILT))
 }
 
 /// The steering wheel's hub; the wheel turns about its local y axis, which points at
 /// the driver, and its local +z points down.
-fn wheel_mount() -> Transform {
-    Transform::from_xyz(EYE.x, 0.17, 0.12)
+fn wheel_mount(eye: Vec3) -> Transform {
+    Transform::from_translation(eye + Vec3::new(0.0, -0.16, -0.26))
         .with_rotation(Quat::from_rotation_x(-GAUGE_TILT) * Quat::from_rotation_x(FRAC_PI_2))
 }
 
@@ -117,49 +111,68 @@ fn add_interior(
             };
             let block =
                 |center: Vec3, size: Vec3| Transform::from_translation(center).with_scale(size);
-            // Dashboard with the instrument binnacle on top, roof lining, windscreen
-            // pillars and header, rear-view mirror.
+            // Dashboard across the cabin, with the instrument binnacle on top.
+            let eye = car.setup.eye;
+            let chassis = car.setup.build.chassis();
+            let body = &chassis.body;
+            let width = 2.0 * body.cabin_half_width(chassis.eye[0]);
             fixed(
-                block(Vec3::new(0.0, 0.11, -0.225), Vec3::new(0.62, 0.1, 0.35)),
+                block(
+                    Vec3::new(0.0, eye.y - 0.22, eye.z - 0.605),
+                    Vec3::new(width, 0.1, 0.35),
+                ),
                 &cube,
                 &plastic,
             );
             fixed(
-                block(Vec3::new(-0.17, 0.175, -0.08), Vec3::new(0.24, 0.07, 0.08)),
+                block(
+                    eye + Vec3::new(0.0, -0.155, -0.46),
+                    Vec3::new(0.24, 0.07, 0.08),
+                ),
                 &cube,
                 &plastic,
             );
-            fixed(
-                block(Vec3::new(0.0, 0.395, 0.55), Vec3::new(0.6, 0.01, 0.9)),
-                &cube,
-                &headliner,
-            );
-            for x in [-0.29, 0.29] {
-                let pillar = bar(Vec3::new(x, 0.07, -0.8), Vec3::new(x, 0.395, 0.03), 0.04);
-                fixed(pillar, &cube, &trim);
+            // Under a roof (the cabin's points between the windscreen's top and the rear
+            // window's): its lining, just below the lowest of it, and the rear-view mirror.
+            if let [_, roof @ .., _] = body.cabin
+                && let [first, .., last] = roof
+            {
+                let lowest = roof.iter().map(|point| point[1]).fold(f32::MAX, f32::min);
+                let lining = car.setup.body_offset.y + lowest - 0.045;
+                let wheels = chassis.wheels();
+                let offset = car.setup.body_offset.z;
+                let (front, rear) = (
+                    offset + body.z(first[0], &wheels),
+                    offset + body.z(last[0], &wheels),
+                );
+                fixed(
+                    block(
+                        Vec3::new(0.0, lining, (front + rear) / 2.0),
+                        Vec3::new(0.95 * width * body.tumblehome, 0.01, rear - front),
+                    ),
+                    &cube,
+                    &headliner,
+                );
+                fixed(
+                    block(
+                        Vec3::new(0.0, lining - 0.05, front + 0.08),
+                        Vec3::new(0.12, 0.035, 0.012),
+                    ),
+                    &cube,
+                    &mirror,
+                );
             }
-            let header = bar(
-                Vec3::new(-0.3, 0.395, 0.04),
-                Vec3::new(0.3, 0.395, 0.04),
-                0.04,
-            );
-            fixed(header, &cube, &trim);
-            fixed(
-                block(Vec3::new(0.0, 0.36, 0.0), Vec3::new(0.12, 0.035, 0.012)),
-                &cube,
-                &mirror,
-            );
 
             // Gauge faces with a tick every thousand rpm and every 20 km/h.
             let redline = car.setup.engine.redline_rpm();
             let tach_top = car.setup.engine.rev_scale();
             for (mount, ticks, red_from) in [
                 (
-                    tach_mount(),
+                    gauge_mount(eye, -0.055),
                     (tach_top / 1000.0) as usize,
                     redline / tach_top,
                 ),
-                (speedo_mount(), (SPEEDO_TOP / 20.0) as usize, 2.0),
+                (gauge_mount(eye, 0.055), (SPEEDO_TOP / 20.0) as usize, 2.0),
             ] {
                 let on_face =
                     |z: f32, size: Vec3| mount * Transform::from_xyz(0.0, 0.0, z).with_scale(size);
@@ -198,13 +211,16 @@ fn add_interior(
                     NotShadowCaster,
                 ));
             };
-            for (kind, mount) in [(Dial::Tach, tach_mount()), (Dial::Speedo, speedo_mount())] {
+            for (kind, mount) in [
+                (Dial::Tach, gauge_mount(eye, -0.055)),
+                (Dial::Speedo, gauge_mount(eye, 0.055)),
+            ] {
                 let local = Transform::from_xyz(0.014, 0.0, 0.003)
                     .with_scale(Vec3::new(0.042, 0.003, 0.001));
                 dial(kind, mount, local, &cube, &needle);
             }
             // Steering wheel: rim, hub, and three spokes.
-            let wheel = wheel_mount();
+            let wheel = wheel_mount(eye);
             dial(Dial::Steering, wheel, Transform::IDENTITY, &rim, &trim);
             dial(Dial::Steering, wheel, Transform::IDENTITY, &hub, &plastic);
             for local in [
