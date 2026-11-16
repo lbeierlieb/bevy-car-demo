@@ -36,7 +36,7 @@ pub struct DebugView {
 impl Default for DebugView {
     fn default() -> Self {
         Self {
-            gizmos: true,
+            gizmos: false,
             ui: true,
         }
     }

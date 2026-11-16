@@ -54,7 +54,7 @@ repo, so everything worth knowing between sessions belongs here.
 screenshot; `tools/dev/strip.sh` removes the hook. Always run `strip.sh` and check that
 `grep -c shot src/main.rs` prints 0 before committing. Keys are pressed from a third of
 the frames until the shot (`k` opens the map, `2` hides the panel, `3` the ECU window,
-`4` the garage, `5` the dyno, `6` the showroom, `f` the gizmos, `c` the driver's view),
+`4` the garage, `5` the dyno, `6` the showroom, `f` shows the gizmos (off by default), `c` the driver's view),
 so clicks on a window must come after that. `CLICK="x,y,frame;x,y,frame…"` clicks into the
 1280×720 window, e.g. on the map. `CAM`/`CAMAT` env vars place the camera (see
 `shot.rs`). `shot.sh` fetches Mesa and Xvfb from the pinned nixpkgs on first use.
@@ -65,8 +65,8 @@ For looking at cars: `CAR="chassis[,engine]"` starts in that car (its place in
 flat straight (the spawn is in a village, where walls and slopes block the view);
 `CARCAM="side,height,along"` looks at them from that far to their right (negative:
 left, the sunlit side), up, and ahead. Side views of five:
-`LINEUP=0,5 CARCAM="-21,2,0" bash tools/dev/shot.sh out.png 60 f2`; one car close up:
-`LINEUP=3,1 CARCAM="-3.6,1.9,4.6"`; from the driver's seat: keys `f2c`.
+`LINEUP=0,5 CARCAM="-21,2,0" bash tools/dev/shot.sh out.png 60 2`; one car close up:
+`LINEUP=3,1 CARCAM="-3.6,1.9,4.6"`; from the driver's seat: keys `2c`.
 
 ### Virtual wheel (`tools/dev/fakewheel`)
 
