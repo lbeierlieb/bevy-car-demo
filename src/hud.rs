@@ -109,7 +109,11 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
                 painter.text(
                     center + vec2(0.0, RADIUS + 4.0),
                     Align2::CENTER_CENTER,
-                    if blown { "ENGINE BLOWN (R)" } else { "STALLED (I)" },
+                    if blown {
+                        "ENGINE BLOWN (R)"
+                    } else {
+                        "STALLED (I)"
+                    },
                     FontId::proportional(10.0),
                     RED,
                 );

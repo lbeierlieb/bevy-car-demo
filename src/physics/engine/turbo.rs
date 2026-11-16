@@ -28,7 +28,13 @@ pub struct CompressorPoint {
 /// The compressor at shaft `speed` (rad/s) between `inlet` and `outlet` pressures (Pa),
 /// drawing air at `temperature` (K). Above the head it can make there's no flow (surge,
 /// without the backflow). Standing still, it's a restriction.
-pub fn compressor(c: &Compressor, speed: f32, inlet: f32, outlet: f32, temperature: f32) -> CompressorPoint {
+pub fn compressor(
+    c: &Compressor,
+    speed: f32,
+    inlet: f32,
+    outlet: f32,
+    temperature: f32,
+) -> CompressorPoint {
     let tip = speed * c.diameter / 2.0;
     let head = AIR_HEAT * temperature * ((outlet / inlet).powf(AIR_EXPONENT) - 1.0);
     let density = inlet / (R_AIR * temperature);
@@ -109,7 +115,11 @@ mod tests {
         // to about 90 °C.
         let point = compressor(c, 13600.0, 1e5, 1.75e5, t);
         assert!((0.08..0.25).contains(&point.flow), "{} kg/s", point.flow);
-        assert!((340.0..400.0).contains(&point.temperature), "{} K", point.temperature);
+        assert!(
+            (340.0..400.0).contains(&point.temperature),
+            "{} K",
+            point.temperature
+        );
     }
 
     #[test]

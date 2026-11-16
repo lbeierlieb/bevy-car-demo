@@ -41,15 +41,22 @@ impl Thermal {
 
     /// Advances by `dt` with heat flowing into the coolant and oil (W) and the car driving
     /// at `airspeed` (m/s).
-    pub fn step(&mut self, cooling: &Cooling, to_coolant: f32, to_oil: f32, airspeed: f32, dt: f32) {
+    pub fn step(
+        &mut self,
+        cooling: &Cooling,
+        to_coolant: f32,
+        to_oil: f32,
+        airspeed: f32,
+        dt: f32,
+    ) {
         if self.coolant > cooling.fan_on {
             self.fan = true;
         } else if self.coolant < cooling.fan_off {
             self.fan = false;
         }
-        let air_speed =
-            (RAM_SHARE * airspeed.abs() + if self.fan { cooling.fan_speed } else { 0.0 })
-                .max(STILL_AIR);
+        let air_speed = (RAM_SHARE * airspeed.abs()
+            + if self.fan { cooling.fan_speed } else { 0.0 })
+        .max(STILL_AIR);
         let air = AIR_DENSITY * cooling.radiator_area * air_speed * AIR_HEAT;
         let opening = ((self.coolant - cooling.thermostat_opens)
             / (cooling.thermostat_open - cooling.thermostat_opens))
@@ -79,10 +86,16 @@ mod tests {
                 thermal.step(&cooling, heat, heat * 0.1, speed, 0.1);
             }
             let celsius = thermal.coolant - 273.15;
-            assert!((85.0..=105.0).contains(&celsius), "{celsius} °C at {heat} W");
+            assert!(
+                (85.0..=105.0).contains(&celsius),
+                "{celsius} °C at {heat} W"
+            );
             // Working hard, the oil runs hotter than the coolant; idling, a little cooler.
             let oil = thermal.oil - thermal.coolant;
-            assert!(if heat > 10e3 { oil > 0.0 } else { oil > -10.0 }, "oil {oil} K over");
+            assert!(
+                if heat > 10e3 { oil > 0.0 } else { oil > -10.0 },
+                "oil {oil} K over"
+            );
         }
     }
 

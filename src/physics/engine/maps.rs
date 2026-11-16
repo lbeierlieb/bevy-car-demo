@@ -17,8 +17,8 @@ fn rpm_axis() -> Vec<f32> {
 /// Intake manifold pressure (Pa).
 fn pressure_axis() -> Vec<f32> {
     [
-        10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 130.0, 160.0,
-        200.0, 250.0, 300.0,
+        10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 130.0, 160.0, 200.0,
+        250.0, 300.0,
     ]
     .map(|kpa| kpa * 1000.0)
     .to_vec()
@@ -26,12 +26,16 @@ fn pressure_axis() -> Vec<f32> {
 
 /// Exhaust over intake manifold pressure.
 fn ratio_axis() -> Vec<f32> {
-    vec![0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.6, 2.0, 3.0, 4.0, 6.0, 10.0]
+    vec![
+        0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.6, 2.0, 3.0, 4.0, 6.0, 10.0,
+    ]
 }
 
 /// Air per cycle relative to filling the displacement at ambient conditions.
 fn load_axis() -> Vec<f32> {
-    vec![0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0]
+    vec![
+        0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0,
+    ]
 }
 
 /// A cam phaser's positions from 0 to `range` (crank degrees), or just 0 without one.
@@ -77,7 +81,9 @@ impl EngineMaps {
                     phase_axis(hardware.intake_phasing),
                     phase_axis(hardware.exhaust_phasing),
                 ];
-                Table::bake(axes, |p| ve_placeholder(hardware, cam, p[0], p[2], p[3], p[4]))
+                Table::bake(axes, |p| {
+                    ve_placeholder(hardware, cam, p[0], p[2], p[3], p[4])
+                })
             })
             .collect();
         let by_load = |f: &dyn Fn(f32, f32) -> f32| {
@@ -93,7 +99,9 @@ impl EngineMaps {
         // earlier, high rpm leaves the end gas less time.
         let bore = hardware.bore;
         let knock_limit = by_load(&|rpm, load| {
-            30.0 + 2.0 * (rpm / 1000.0).min(7.0) - 14.0 * load - 3.0 * (cr - 10.0)
+            30.0 + 2.0 * (rpm / 1000.0).min(7.0)
+                - 14.0 * load
+                - 3.0 * (cr - 10.0)
                 - 2.0 * (bore - 0.086) / 0.01
         });
         // The ideal Otto cycle, scaled down; more heat is lost at low rpm and light load.
@@ -176,12 +184,14 @@ fn ve_placeholder(
     exhaust_phase: f32,
 ) -> f32 {
     let duration = (cam.intake_duration + cam.exhaust_duration) / 2.0;
-    let peak_rpm = (4600.0 + 60.0 * (duration - 240.0) - 25.0 * intake_phase) * 0.086
-        / hardware.stroke;
+    let peak_rpm =
+        (4600.0 + 60.0 * (duration - 240.0) - 25.0 * intake_phase) * 0.086 / hardware.stroke;
     let width = if rpm < peak_rpm { 3200.0 } else { 3000.0 };
     let x = (rpm - peak_rpm) / width;
     // Flow through the valve stops growing at a lift of about a quarter of its diameter.
-    let lift = (cam.lift / (0.4 * hardware.bore) / 0.25).min(1.2).powf(0.25);
+    let lift = (cam.lift / (0.4 * hardware.bore) / 0.25)
+        .min(1.2)
+        .powf(0.25);
     let breathing = 0.9 * lift * (1.0 - 0.18 * x * x).max(0.2);
 
     let bump = |tuned: f32, width: f32| (-((rpm - tuned) / width).powi(2)).exp();

@@ -330,7 +330,13 @@ fn engine_setup(ui: &mut egui::Ui, car: &mut Car) {
     let build = &mut car.setup.engine.build;
     let turbo = build.hardware.turbo.is_some();
     let mut choice = turbo;
-    let name = |turbo| if turbo { "2.0 turbo" } else { "2.0 naturally aspirated" };
+    let name = |turbo| {
+        if turbo {
+            "2.0 turbo"
+        } else {
+            "2.0 naturally aspirated"
+        }
+    };
     egui::ComboBox::from_label("Build")
         .selected_text(name(turbo))
         .show_ui(ui, |ui| {

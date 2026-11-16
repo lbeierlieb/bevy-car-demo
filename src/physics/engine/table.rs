@@ -37,7 +37,10 @@ impl Table {
         // one above.
         let mut cells = [(0, 0, 0.0); MAX_AXES];
         for (cell, (axis, &x)) in cells.iter_mut().zip(self.axes.iter().zip(point)) {
-            let i = axis.partition_point(|&a| a <= x).clamp(1, axis.len().max(2) - 1) - 1;
+            let i = axis
+                .partition_point(|&a| a <= x)
+                .clamp(1, axis.len().max(2) - 1)
+                - 1;
             *cell = match axis.get(i + 1) {
                 Some(&next) => (i, i + 1, ((x - axis[i]) / (next - axis[i])).clamp(0.0, 1.0)),
                 None => (0, 0, 0.0),

@@ -101,7 +101,9 @@ impl Ecu {
             hardware
                 .turbo
                 .as_ref()
-                .map_or(AMBIENT_TEMPERATURE, |turbo| turbo::expected_charge(turbo, map))
+                .map_or(AMBIENT_TEMPERATURE, |turbo| {
+                    turbo::expected_charge(turbo, map)
+                })
         };
         let wastegate = |map: f32| {
             hardware.turbo.as_ref().map_or(0.0, |turbo| {

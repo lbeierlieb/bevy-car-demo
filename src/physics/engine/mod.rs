@@ -284,7 +284,8 @@ impl Engine {
         turbo: &hardware::Turbo,
         pressure: f32,
     ) -> (f32, f32) {
-        let drop = |area: f32| self.compressor_flow.powi(2) / (2.0 * ambient_density() * area * area);
+        let drop =
+            |area: f32| self.compressor_flow.powi(2) / (2.0 * ambient_density() * area * area);
         let inlet = AMBIENT_PRESSURE - drop(hardware.intake.filter_area);
         (inlet, pressure + drop(turbo.intercooler.area))
     }
@@ -308,7 +309,8 @@ impl Engine {
         let net = drive - compressor.torque - BEARING_DRAG * speed;
         self.turbo_speed = (speed + net / turbo.inertia * dt).clamp(0.0, TURBO_LIMIT);
 
-        let target = turbo::wastegate_opening(&turbo.wastegate, self.boost_pressure - AMBIENT_PRESSURE);
+        let target =
+            turbo::wastegate_opening(&turbo.wastegate, self.boost_pressure - AMBIENT_PRESSURE);
         self.wastegate += (target - self.wastegate) * (dt / WASTEGATE_LAG).min(1.0);
         let cooled = turbo::intercooled(turbo, compressor.temperature);
         let rate = (compressor.flow / INTERCOOLER_FLOW).min(1.0) * dt / INTERCOOLER_LAG;
@@ -338,9 +340,7 @@ impl Engine {
             a.intake_phase,
             a.exhaust_phase,
         );
-        ve * intake / (R_AIR * self.charge_temperature)
-            * build.hardware.displacement()
-            * rpm.abs()
+        ve * intake / (R_AIR * self.charge_temperature) * build.hardware.displacement() * rpm.abs()
             / 120.0
     }
 
@@ -477,7 +477,10 @@ mod tests {
     #[test]
     fn sustained_full_load_stays_in_the_safe_range() {
         // Flat out at speed for two minutes, naturally aspirated and turbo.
-        for build in [EngineBuild::default(), EngineBuild::new(EngineHardware::turbo())] {
+        for build in [
+            EngineBuild::default(),
+            EngineBuild::new(EngineHardware::turbo()),
+        ] {
             let mut engine = Engine {
                 airspeed: 40.0,
                 ..Engine::default()
@@ -486,7 +489,10 @@ mod tests {
                 engine.step(&build, 1.0, 6000.0, true, 1.0 / 120.0);
             }
             let (coolant, oil) = (engine.thermal.coolant - 273.15, engine.thermal.oil - 273.15);
-            assert!(coolant < 105.0 && oil < 135.0, "coolant {coolant} °C, oil {oil} °C");
+            assert!(
+                coolant < 105.0 && oil < 135.0,
+                "coolant {coolant} °C, oil {oil} °C"
+            );
             assert!(engine.damage < 1e-3, "damage {}", engine.damage);
         }
     }
@@ -529,7 +535,10 @@ mod tests {
         // and a half.
         let early = run(&mut engine, 1.0, 0.2);
         let later = run(&mut engine, 1.0, 1.3);
-        assert!(early < later * 0.5 && later > 0.4, "{early} then {later} bar");
+        assert!(
+            early < later * 0.5 && later > 0.4,
+            "{early} then {later} bar"
+        );
         // Lifting: the diverter vents the boost, and the shaft spins down.
         let speed = engine.turbo_speed;
         assert!(run(&mut engine, 0.0, 0.5) < 0.15);
@@ -616,7 +625,9 @@ mod tests {
             octane: 91.0,
             ..build.clone()
         };
-        let knock = run_flat_out(&cheap, 2000.0, 2.0).cycle(&cheap, 2000.0).knock;
+        let knock = run_flat_out(&cheap, 2000.0, 2.0)
+            .cycle(&cheap, 2000.0)
+            .knock;
         assert!((1.0..8.0).contains(&knock), "knock {knock}°");
     }
 
@@ -627,7 +638,11 @@ mod tests {
         let rpm = 2500.0;
         let engine = run_flat_out(&build, rpm, 5.0);
         assert!(engine.cycle(&build, rpm).knock > 10.0);
-        assert!(engine.damage > 0.05 && !engine.blown(), "damage {}", engine.damage);
+        assert!(
+            engine.damage > 0.05 && !engine.blown(),
+            "damage {}",
+            engine.damage
+        );
         let engine = run_flat_out(&build, rpm, 120.0);
         assert!(engine.blown());
         assert!(engine.torque(&build, rpm) < 0.0);
