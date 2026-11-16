@@ -15,6 +15,10 @@ pub const SUBSTEPS: usize = 10;
 const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
 /// Distance the front tires' contact points trail the steering axes (from caster, m).
 const MECHANICAL_TRAIL: f32 = 0.015;
+/// Density of the air (kg/m³).
+const AIR_DENSITY: f32 = 1.2;
+/// Rolling resistance of the tires: the share of their load that holds them back.
+const ROLLING_RESISTANCE: f32 = 0.012;
 
 pub struct SimPlugin;
 
@@ -74,7 +78,20 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
         .filter_map(|corner| corner.contact)
         .map(|contact| (setup.front.tire.trail(&contact.tire) + MECHANICAL_TRAIL) * contact.tire.fy)
         .sum();
-    body.add_force(force / SUBSTEPS as f32 + GRAVITY * body.mass);
+    // The air: drag against the motion, and downforce over each axle, both with the
+    // square of the speed.
+    let pressure = 0.5 * AIR_DENSITY * body.velocity.length_squared();
+    let drag = -body.velocity.normalize_or_zero() * pressure * setup.drag_area;
+    let down = body.rotation * Vec3::NEG_Y;
+    for (area, z) in [
+        (setup.downforce_area[0], setup.front_z),
+        (setup.downforce_area[1], setup.rear_z),
+    ] {
+        let push = down * pressure * area;
+        force += push * SUBSTEPS as f32;
+        torque += (body.rotation * Vec3::new(0.0, 0.0, z)).cross(push) * SUBSTEPS as f32;
+    }
+    body.add_force(force / SUBSTEPS as f32 + GRAVITY * body.mass + drag);
     body.add_torque(torque / SUBSTEPS as f32);
     body.integrate(dt);
 }
@@ -103,13 +120,17 @@ fn apply_controls(car: &mut Car, dt: f32) {
     );
     let steer = c.steer * setup.max_steer;
     for corner in corners.iter_mut() {
+        // Rolling resistance holds each wheel back like a light brake.
+        let tire = &setup.axle(corner.front).tire;
+        let rolling = ROLLING_RESISTANCE * corner.contact.map_or(0.0, |c| c.load) * tire.radius;
         if corner.front {
             corner.steer = steer;
-            corner.brake_torque = c.brake * setup.brake_torque * setup.brake_bias / 2.0;
+            corner.brake_torque = rolling + c.brake * setup.brake_torque * setup.brake_bias / 2.0;
         } else {
             corner.drive_torque = drive.torque / 2.0;
             corner.drive_inertia = drive.inertia / 2.0;
-            corner.brake_torque = c.brake * setup.brake_torque * (1.0 - setup.brake_bias) / 2.0
+            corner.brake_torque = rolling
+                + c.brake * setup.brake_torque * (1.0 - setup.brake_bias) / 2.0
                 + c.handbrake * setup.handbrake_torque;
         }
     }
@@ -189,6 +210,24 @@ mod tests {
         assert!(turned > 0.3, "turned {turned}");
         let up = car.body.rotation * Vec3::Y;
         assert!(up.y > 0.9, "rolled over");
+    }
+
+    #[test]
+    fn the_air_limits_the_top_speed() {
+        let terrain = Terrain::baked();
+        let mut car = test_car(&terrain);
+        run(&mut car, &terrain, 1.0);
+        // Coasting in neutral from 180 km/h: drag and the tires slow the car by about
+        // 1 m/s² (0.62 m² of drag area on 1260 kg), and so does the climbing road.
+        car.drivetrain.shift_to(&car.setup.engine, 0);
+        car.body.velocity = car.body.rotation * Vec3::NEG_Z * 50.0;
+        let radius = car.setup.front.tire.radius;
+        for corner in car.corners.iter_mut() {
+            corner.omega = 50.0 / radius;
+        }
+        run(&mut car, &terrain, 0.5);
+        let lost = 50.0 - car.body.velocity.length();
+        assert!((0.3..1.2).contains(&lost), "lost {lost} m/s");
     }
 
     #[test]

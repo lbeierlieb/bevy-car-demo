@@ -28,6 +28,10 @@ pub struct CarSetup {
     pub brake_torque: f32,
     pub brake_bias: f32,
     pub handbrake_torque: f32,
+    /// Drag coefficient times frontal area (m²).
+    pub drag_area: f32,
+    /// Downforce coefficient times area (m²) over the front and the rear axle.
+    pub downforce_area: [f32; 2],
 }
 
 impl CarSetup {
@@ -62,6 +66,8 @@ impl CarSetup {
             brake_torque: 3_500.0,
             brake_bias: 0.7,
             handbrake_torque: 2_500.0,
+            drag_area: 0.62,
+            downforce_area: [0.0, 0.0],
         }
     }
 
