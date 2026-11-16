@@ -275,11 +275,13 @@ fn engine(ui: &mut egui::Ui, car: &Car) {
         engine.actuators.spark,
         engine.torque(build, drivetrain.rpm),
     ));
-    if build.hardware.turbo.is_some() {
+    if let Some(turbo) = &build.hardware.turbo {
         ui.label(format!(
-            "boost {:.2} bar    turbo {:.0}k rpm    wastegate {:.0} %    charge {:.0} °C",
+            "boost {:.2} bar    turbo {:.0}k rpm ({:.0} % of its limit)    wastegate {:.0} %    \
+             charge {:.0} °C",
             (engine.boost_pressure - AMBIENT_PRESSURE) / 1e5,
             engine.turbo_speed * 60.0 / std::f32::consts::TAU / 1000.0,
+            engine.turbo_speed / turbo.max_speed() * 100.0,
             engine.wastegate * 100.0,
             engine.charge_temperature - 273.15,
         ));

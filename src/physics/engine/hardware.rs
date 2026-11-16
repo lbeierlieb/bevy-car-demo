@@ -2,6 +2,8 @@
 
 use std::f32::consts::PI;
 
+/// Compressor wheel tip speed it's made for (m/s).
+const TIP_SPEED_LIMIT: f32 = 520.0;
 /// Share of the rods' strength their pull at the redline stays below.
 const ROD_MARGIN: f32 = 0.7;
 /// A rod buckles pushing at this many times the pull that breaks it.
@@ -129,6 +131,13 @@ pub struct Turbo {
     /// A valve venting the boost when the throttle shuts on it, so the compressor doesn't
     /// surge against it.
     pub diverter: Option<Diverter>,
+}
+
+impl Turbo {
+    /// Fastest the shaft is made to spin (rad/s): the compressor wheel's tip speed limit.
+    pub fn max_speed(&self) -> f32 {
+        2.0 * TIP_SPEED_LIMIT / self.compressor.diameter
+    }
 }
 
 /// A centrifugal compressor. Along each speed line its isentropic head falls with the

@@ -48,9 +48,10 @@ const THROTTLE_LEAK: f32 = 8e-6;
 const SUBSTEPS: usize = 4;
 /// Pressure step for the flows' slopes in the implicit intake step (Pa).
 const SLOPE_STEP: f32 = 50.0;
-/// Turbo shaft: bearing drag per rad/s (N·m·s) and the fastest it may spin (rad/s).
+/// Turbo shaft: bearing drag per rad/s (N·m·s), and the fastest it may spin relative to
+/// its limit (its wheel bursts before).
 const BEARING_DRAG: f32 = 5e-7;
-const TURBO_LIMIT: f32 = 25000.0;
+const TURBO_LIMIT: f32 = 1.2;
 /// Time constants of the wastegate actuator and of the intercooler's heat soak (s), and
 /// the air flow at which the intercooler follows at its full rate (kg/s).
 const WASTEGATE_LAG: f32 = 0.05;
@@ -276,6 +277,10 @@ impl Engine {
             float: self.valve_float(hardware, rpm.abs()),
             rod: hardware.rod_load(rpm.abs(), self.peak_pressure),
             gasket: self.peak_pressure * (1.0 + KNOCK_PEAK * cycle.knock) / hardware.head_gasket,
+            turbo_speed: hardware
+                .turbo
+                .map_or(0.0, |turbo| self.turbo_speed / turbo.max_speed()),
+            turbine_temperature: gas,
             knock: cycle.knock,
             load: cycle.load,
             coolant: self.thermal.coolant,
@@ -336,7 +341,12 @@ impl Engine {
         let after = restricted(hardware, exhaust_flow, gas);
         let (_, drive) = turbo::turbine(&turbo.turbine, speed, self.exhaust_pressure, after, gas);
         let net = drive - compressor.torque - BEARING_DRAG * speed;
-        self.turbo_speed = (speed + net / turbo.inertia * dt).clamp(0.0, TURBO_LIMIT);
+        let limit = TURBO_LIMIT * turbo.max_speed();
+        self.turbo_speed = if self.damage.turbo_failed() {
+            0.0
+        } else {
+            (speed + net / turbo.inertia * dt).clamp(0.0, limit)
+        };
 
         let target =
             turbo::wastegate_opening(&turbo.wastegate, self.boost_pressure - AMBIENT_PRESSURE);
@@ -764,6 +774,22 @@ mod tests {
         let strong = build(&parts);
         let engine = run_flat_out(&strong, 5500.0, 20.0);
         assert!(engine.damage.worst(4) < 0.05, "{:?}", engine.damage);
+    }
+
+    #[test]
+    fn an_overspun_turbo_bursts() {
+        // The small turbo with its wastegate held shut to 1.5 bar: its compressor runs out
+        // of breath at high rpm and spins past its limit.
+        let mut parts = parts::Parts::turbo();
+        parts.chosen[12] = 1;
+        parts.boost = 1.5;
+        let build = EngineBuild::new(parts.hardware());
+        let engine = run_flat_out(&build, 6000.0, 10.0);
+        assert!(engine.damage.turbo_failed(), "{:?}", engine.damage);
+        assert_eq!(engine.damage.failures(4), ["turbo failed"]);
+        // It no longer boosts, but the engine runs on.
+        assert!(engine.boost_pressure < AMBIENT_PRESSURE);
+        assert!(engine.torque(&build, 6000.0) > 50.0);
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! What wears and breaks in the engine. Each part has a wear from 0 (new) to 1 (failed).
 //! Pistons, valves and rods wear per cylinder: a holed piston or bent valves kill the
 //! cylinder, and the others run on. A blown head gasket costs compression and heats the
-//! coolant. A broken rod or a spun bearing wrecks the engine for good.
+//! coolant. A broken rod or a spun bearing wrecks the engine for good. A failed turbo
+//! stops spinning: no boost, and its wheels are in the way.
 
 use super::hardware::EngineHardware;
 
@@ -27,6 +28,14 @@ const ROD_ENDURANCE: f32 = 0.75;
 const ROD_FATIGUE: i32 = 40;
 /// Head gasket wear per cycle per unit of peak pressure over what it seals (relative).
 const GASKET_WEAR: f32 = 0.02;
+/// Turbo: overspeed (relative to its limit) where the compressor wheel bursts at once,
+/// and the wear per second at the burst speed (rising with the square of the overspeed
+/// below it); the turbine inlet temperature it takes for good (K), and the wear per
+/// second per kelvin over it.
+const TURBO_BURST: f32 = 0.12;
+const TURBO_OVERSPEED_WEAR: f32 = 1.0;
+const TURBINE_LIMIT: f32 = 1423.0;
+const TURBINE_WEAR: f32 = 5e-4;
 /// Efficiency lost with the pistons and rings worn out (blow-by), and with the head
 /// gasket blown (leaking compression).
 const PISTON_EFFICIENCY: f32 = 0.3;
@@ -69,6 +78,10 @@ pub struct Strain {
     /// relative to what the head gasket seals.
     pub rod: f32,
     pub gasket: f32,
+    /// Turbo shaft speed relative to its limit, and the exhaust temperature at the turbine
+    /// (K).
+    pub turbo_speed: f32,
+    pub turbine_temperature: f32,
     /// Spark advance past the knock limit (degrees) and load (air relative to filling the
     /// displacement at ambient).
     pub knock: f32,
@@ -83,6 +96,7 @@ pub struct Damage {
     pub cylinders: [CylinderWear; MAX_CYLINDERS],
     pub head_gasket: f32,
     pub bearings: f32,
+    pub turbo: f32,
 }
 
 impl Damage {
@@ -116,6 +130,16 @@ impl Damage {
             &mut self.bearings,
             HEAT_WEAR * (strain.oil - OIL_LIMIT).max(0.0),
         );
+        if hardware.turbo.is_some() {
+            let over = (strain.turbo_speed - 1.0).max(0.0) / TURBO_BURST;
+            let overspeed = if over >= 1.0 {
+                1e9
+            } else {
+                TURBO_OVERSPEED_WEAR * over * over
+            };
+            let heat = TURBINE_WEAR * (strain.turbine_temperature - TURBINE_LIMIT).max(0.0);
+            wear(&mut self.turbo, overspeed + heat);
+        }
     }
 
     /// Share of the `cylinders` cylinders that still fire.
@@ -132,6 +156,10 @@ impl Damage {
     pub fn wrecked(&self, cylinders: usize) -> bool {
         let rods = self.cylinders.iter().any(|cylinder| cylinder.rod >= 1.0);
         self.bearings >= 1.0 || rods || self.firing(cylinders) == 0.0
+    }
+
+    pub fn turbo_failed(&self) -> bool {
+        self.turbo >= 1.0
     }
 
     pub fn gasket_blown(&self) -> bool {
@@ -177,6 +205,7 @@ impl Damage {
             .collect();
         parts.push(("Head gasket".to_string(), self.head_gasket));
         parts.push(("Bearings".to_string(), self.bearings));
+        parts.push(("Turbo".to_string(), self.turbo));
         parts.sort_by(|a, b| b.1.total_cmp(&a.1));
         parts
     }
@@ -193,6 +222,9 @@ impl Damage {
         }
         if self.bearings >= 1.0 {
             failures.push("spun bearing".to_string());
+        }
+        if self.turbo_failed() {
+            failures.push("turbo failed".to_string());
         }
         failures
     }
@@ -213,6 +245,8 @@ mod tests {
             float: 0.0,
             rod: 0.5,
             gasket: 0.6,
+            turbo_speed: 0.8,
+            turbine_temperature: 1100.0,
             knock,
             load: 1.0,
             coolant: 360.0,
