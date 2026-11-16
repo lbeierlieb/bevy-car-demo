@@ -10,8 +10,13 @@ pub struct TireParams {
     /// Vertical stiffness (N/m) and damping (N·s/m) of the tire carcass.
     pub stiffness: f32,
     pub damping: f32,
-    /// Peak friction coefficient: the Magic Formula `D = mu · Fz`.
+    /// Peak friction coefficient at the nominal load: the Magic Formula `D = mu · Fz`.
     pub mu: f32,
+    /// Load (N) at which the friction is `mu` (the corner's static load), and how it falls
+    /// off with more: `mu · (Fz / nominal)^-load_sensitivity`. A loaded tire grips harder,
+    /// but less than in proportion, so weight shifting across an axle costs it grip.
+    pub nominal_load: f32,
+    pub load_sensitivity: f32,
     /// Magic Formula stiffness `B` and shape `C`, longitudinal (per unit slip ratio).
     pub b_long: f32,
     pub c_long: f32,
@@ -29,6 +34,8 @@ impl Default for TireParams {
             stiffness: 200_000.0,
             damping: 1_500.0,
             mu: 1.1,
+            nominal_load: 3500.0,
+            load_sensitivity: 0.1,
             b_long: 14.0,
             c_long: 1.6,
             b_lat: 12.0,
@@ -59,6 +66,13 @@ fn peak_slip(b: f32, c: f32) -> f32 {
 }
 
 impl TireParams {
+    /// Peak friction coefficient under a load of `fz` (N).
+    pub fn friction(&self, fz: f32) -> f32 {
+        // Light loads (a wheel lifting) don't grip without bound.
+        let relative = (fz / self.nominal_load).max(0.25);
+        self.mu * relative.powf(-self.load_sensitivity)
+    }
+
     /// Pneumatic trail at a slip: it shrinks as more of the contact patch slides and is
     /// gone at the peak slip angle, so the self-aligning torque (lateral force times trail)
     /// fades before the grip does. That's what makes the steering go light near the limit.
@@ -88,7 +102,7 @@ impl TireParams {
                 ..Default::default()
             };
         }
-        let d = self.mu * fz;
+        let d = self.friction(fz) * fz;
         let fx = sx / rho * magic_formula(rho * peak_long, self.b_long, self.c_long, d);
         // Lateral force opposes sideways sliding.
         let fy = -sy / rho * magic_formula(rho * peak_lat, self.b_lat, self.c_lat, d);
@@ -110,7 +124,7 @@ mod tests {
         let tire = TireParams::default();
         let peak = peak_slip(tire.b_long, tire.c_long);
         let f = tire.force(20.0, 0.0, 20.0 * (1.0 + peak) / tire.radius, 4000.0);
-        assert!((f.fx - tire.mu * 4000.0).abs() < 1.0);
+        assert!((f.fx - tire.friction(4000.0) * 4000.0).abs() < 1.0);
         assert!(f.fy.abs() < 1e-3);
     }
 
@@ -119,6 +133,18 @@ mod tests {
         let tire = TireParams::default();
         let f = tire.force(20.0, 5.0, 30.0 / tire.radius, 4000.0);
         assert!(f.fx > 0.0 && f.fy < 0.0);
-        assert!(f.fx.hypot(f.fy) <= tire.mu * 4000.0 + 1.0);
+        assert!(f.fx.hypot(f.fy) <= tire.friction(4000.0) * 4000.0 + 1.0);
+    }
+
+    #[test]
+    fn more_load_grips_harder_but_less_than_in_proportion() {
+        let tire = TireParams::default();
+        assert_eq!(tire.friction(tire.nominal_load), tire.mu);
+        let (light, heavy) = (tire.nominal_load * 0.5, tire.nominal_load * 1.5);
+        assert!(tire.friction(light) > tire.mu && tire.friction(heavy) < tire.mu);
+        // Weight moving from one side of an axle to the other costs it grip.
+        let axle = |left: f32, right: f32| left * tire.friction(left) + right * tire.friction(right);
+        let level = axle(tire.nominal_load, tire.nominal_load);
+        assert!(axle(light, heavy) < 0.99 * level);
     }
 }

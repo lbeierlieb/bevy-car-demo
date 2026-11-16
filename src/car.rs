@@ -112,6 +112,8 @@ impl CarSetup {
                 tire: TireParams {
                     radius,
                     mu: grip,
+                    // The tires are sized for the car: their friction is `grip` at rest.
+                    nominal_load: (sprung_mass * share / 2.0 + unsprung_mass) * 9.81,
                     ..stock
                 },
             };
