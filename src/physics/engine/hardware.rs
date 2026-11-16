@@ -6,9 +6,9 @@ use std::f32::consts::PI;
 /// cams, runners, headers) shapes the baked maps, so changing it means baking them again;
 /// the parts between the manifolds and the outside (filter, throttle, idle valve, exhaust
 /// restrictions) act live.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EngineHardware {
-    pub name: &'static str,
+    pub name: String,
     pub cylinders: u32,
     /// Bore and stroke (m).
     pub bore: f32,
@@ -22,6 +22,10 @@ pub struct EngineHardware {
     /// (crank degrees; zero without phasers).
     pub intake_phasing: f32,
     pub exhaust_phasing: f32,
+    /// Fixed cam timing, as set with adjustable cam gears (crank degrees; intake advanced,
+    /// exhaust retarded), on top of the phasers.
+    pub intake_timing: f32,
+    pub exhaust_timing: f32,
     pub intake: Intake,
     /// A turbocharger between the air filter and the throttle, and in the exhaust.
     pub turbo: Option<Turbo>,
@@ -29,9 +33,12 @@ pub struct EngineHardware {
     pub cooling: Cooling,
     /// Flywheel and crank inertia (kg·m²).
     pub inertia: f32,
+    /// Highest speed the bottom end and valvetrain are made for (rpm): the redline, and
+    /// where the factory tune limits the revs.
+    pub redline: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CamProfile {
     /// Valve open durations (crank degrees).
     pub intake_duration: f32,
@@ -42,7 +49,7 @@ pub struct CamProfile {
     pub lift: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Intake {
     /// Effective flow area of the air filter (m²).
     pub filter_area: f32,
@@ -58,7 +65,7 @@ pub struct Intake {
     pub tract_volume: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Turbo {
     pub compressor: Compressor,
     pub turbine: Turbine,
@@ -73,7 +80,7 @@ pub struct Turbo {
 
 /// A centrifugal compressor. Along each speed line its isentropic head falls with the
 /// square of the flow: from `head` × tip speed² with no flow to nothing at the choke flow.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Compressor {
     /// Wheel diameter at the tip (m).
     pub diameter: f32,
@@ -87,7 +94,7 @@ pub struct Compressor {
 
 /// A radial turbine: a nozzle of effective `area`, its efficiency best at a blade speed
 /// ratio of 0.65.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Turbine {
     /// Wheel diameter (m), effective flow area (m²) and best efficiency.
     pub diameter: f32,
@@ -96,7 +103,7 @@ pub struct Turbine {
 }
 
 /// A valve letting exhaust past the turbine, pushed open by the boost against a spring.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Wastegate {
     /// Effective flow area fully open (m²).
     pub area: f32,
@@ -105,7 +112,7 @@ pub struct Wastegate {
     pub span: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Diverter {
     /// Effective flow area fully open (m²).
     pub area: f32,
@@ -115,7 +122,7 @@ pub struct Diverter {
     pub span: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Intercooler {
     /// Share of the charge's heat above ambient it takes out.
     pub effectiveness: f32,
@@ -123,7 +130,7 @@ pub struct Intercooler {
     pub area: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Exhaust {
     /// Header primary length from valve to collector (m).
     pub header_length: f32,
@@ -133,7 +140,7 @@ pub struct Exhaust {
     pub silencer_area: Option<f32>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Cooling {
     /// Radiator frontal area (m²), and the share of the coolant-to-air temperature
     /// difference it can use.
@@ -188,44 +195,7 @@ impl EngineHardware {
     /// The 2-litre four with lower compression and a mid-sized turbo, wastegated at about
     /// 0.7 bar of boost, with an intercooler and a diverter valve.
     pub fn turbo() -> Self {
-        let stock = Self::default();
-        Self {
-            name: "2.0 turbo",
-            compression_ratio: 8.8,
-            intake: Intake {
-                tract_volume: 6.0e-3,
-                ..stock.intake
-            },
-            turbo: Some(Turbo {
-                compressor: Compressor {
-                    diameter: 0.05,
-                    head: 0.7,
-                    choke: 0.29,
-                    efficiency: 0.75,
-                },
-                turbine: Turbine {
-                    diameter: 0.054,
-                    area: 6e-4,
-                    efficiency: 0.7,
-                },
-                inertia: 2.5e-5,
-                wastegate: Wastegate {
-                    area: 3e-4,
-                    spring: 0.6e5,
-                    span: 0.12e5,
-                },
-                intercooler: Intercooler {
-                    effectiveness: 0.7,
-                    area: 3e-3,
-                },
-                diverter: Some(Diverter {
-                    area: 5e-4,
-                    opens: 0.3e5,
-                    span: 0.2e5,
-                }),
-            }),
-            ..stock
-        }
+        super::parts::Parts::turbo().hardware()
     }
 }
 
@@ -233,7 +203,7 @@ impl Default for EngineHardware {
     /// A 2-litre petrol four with fixed cams and a stock exhaust.
     fn default() -> Self {
         Self {
-            name: "2.0 naturally aspirated",
+            name: "2.0 naturally aspirated".to_string(),
             cylinders: 4,
             bore: 0.086,
             stroke: 0.086,
@@ -247,6 +217,8 @@ impl Default for EngineHardware {
             }],
             intake_phasing: 0.0,
             exhaust_phasing: 0.0,
+            intake_timing: 0.0,
+            exhaust_timing: 0.0,
             intake: Intake {
                 filter_area: 2.5e-3,
                 throttle_diameter: 0.055,
@@ -264,6 +236,7 @@ impl Default for EngineHardware {
             },
             cooling: Cooling::default(),
             inertia: 0.18,
+            redline: 6800.0,
         }
     }
 }

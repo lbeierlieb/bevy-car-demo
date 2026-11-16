@@ -99,119 +99,30 @@ pub struct EngineMaps {
 impl EngineMaps {
     /// The maps for `hardware`: baked with the game for the stock builds, or baked now.
     pub fn for_hardware(hardware: &EngineHardware) -> Self {
+        Self::stock(hardware).unwrap_or_else(|| Self::bake(hardware))
+    }
+
+    /// The maps baked with the game, if `hardware` is (on the cylinder side) a stock build.
+    pub fn stock(hardware: &EngineHardware) -> Option<Self> {
         let fingerprint = fingerprint(hardware);
         stock()
             .into_iter()
             .find_map(|(_, _, text)| Self::from_text(text, fingerprint))
-            .unwrap_or_else(|| Self::bake(hardware))
     }
 
     /// Bakes the maps by simulating cycles all over the grid (on all cores, where there
     /// are threads).
     pub fn bake(hardware: &EngineHardware) -> Self {
-        let turbo = hardware.turbo.is_some();
-        let conditions = |rpm: f32, intake: f64, exhaust: f64| Conditions {
-            rpm: f64::from(rpm),
-            intake_pressure: intake,
-            exhaust_pressure: exhaust.clamp(EXHAUST_RANGE.0, EXHAUST_RANGE.1),
-            intake_temperature: REFERENCE_CHARGE,
-            coolant_temperature: REFERENCE_COOLANT,
-            octane: REFERENCE_OCTANE,
-        };
-        let ve: Vec<Table> = hardware
-            .cams
-            .iter()
-            .map(|cam| {
-                let axes = vec![
-                    rpm_axis(),
-                    pressure_axis(),
-                    ratio_axis(),
-                    phase_axis(hardware.intake_phasing),
-                    phase_axis(hardware.exhaust_phasing),
-                ];
-                bake_parallel(axes, |p| {
-                    let cylinder = Cylinder::new(hardware, cam, p[3], p[4]);
-                    let intake = f64::from(p[1]);
-                    let conditions = conditions(p[0], intake, intake * f64::from(p[2]));
-                    let result = cylinder.run(&conditions, None);
-                    result.volumetric_efficiency(&cylinder, &conditions) as f32
-                })
-            })
-            .collect();
-
-        // By load, on the first cam profile, unphased, at the exhaust pressure the engine
-        // would about have there: a little over ambient, or over the boost.
-        let exhaust = |intake: f64| {
-            let over = if turbo { 1.3 } else { 1.1 };
-            (1.05 * f64::from(AMBIENT_PRESSURE)).max(over * intake)
-        };
-        let reference = AMBIENT_PRESSURE / (R_AIR * AMBIENT_TEMPERATURE);
-        let load_at = |rpm: f32, intake: f32| {
-            let ratio = exhaust(f64::from(intake)) as f32 / intake;
-            let ve = ve[0].get(&[rpm, intake, ratio, 0.0, 0.0]);
-            ve * intake / (R_AIR * REFERENCE_CHARGE as f32) / reference
-        };
-        let cylinder = Cylinder::new(hardware, &hardware.cams[0], 0.0, 0.0);
-        let swept = f64::from(hardware.displacement()) / f64::from(hardware.cylinders);
-        let axes = vec![rpm_axis(), load_axis()];
-        let points = grid(&axes);
-        let by_load = parallel(&points, |p| {
-            let (rpm, load) = (p[0], p[1]);
-            // The intake pressure that traps this much air.
-            let (mut low, mut high) = (2e3f32, 1e6f32);
-            for _ in 0..40 {
-                let mid = (low + high) / 2.0;
-                if load_at(rpm, mid) < load {
-                    low = mid;
-                } else {
-                    high = mid;
-                }
+        let mut bake = Bake::new(hardware);
+        loop {
+            if let Some(maps) = bake.advance(usize::MAX) {
+                return maps;
             }
-            let intake = f64::from(low + high) / 2.0;
-            let conditions = conditions(rpm, intake, exhaust(intake));
-            let result = cylinder.run(&conditions, None);
-            let mbt = cylinder.mbt(&result.trapped, &conditions);
-            let knock_limit = cylinder.knock_limit(&result.trapped, &conditions);
-            // The work at MBT: the closed part at MBT, the gas exchange as it ran. The
-            // runtime model takes the pumping as (exhaust − intake pressure) × the swept
-            // volume, so the efficiency is of the work before that.
-            let closed = cylinder.burn(&result.trapped, &conditions, mbt).work;
-            let pumping = (conditions.exhaust_pressure - intake) * swept;
-            let work = result.work - result.closed_work + closed + pumping;
-            [
-                mbt,
-                work / result.fuel_energy,
-                knock_limit,
-                result.exhaust_temperature,
-                result.heat / result.fuel_energy,
-            ]
-            .map(|value| value as f32)
-        });
-        let column = |i: usize| {
-            let values = by_load.iter().map(|values| values[i]).collect();
-            Table::from_parts(axes.clone(), values).expect("finite maps")
-        };
-
-        // Rings and skirts by mean piston speed, more side thrust with shorter rods.
-        let rod = 1.0 + 0.5 * (hardware.stroke / (2.0 * hardware.rod_length) - 0.3);
-        let friction = Table::bake(vec![rpm_axis()], |p| {
-            let speed = 2.0 * hardware.stroke * p[0] / 60.0;
-            (60e3 + 4.2e3 * speed + 0.4e3 * speed * speed) * rod
-        });
-        Self {
-            ve,
-            mbt: column(0),
-            efficiency: column(1),
-            knock_limit: column(2),
-            exhaust_temperature: column(3),
-            heat_to_coolant: column(4),
-            friction,
         }
     }
 
     /// The maps as text: the hardware's fingerprint, then the tables (see
-    /// `table::write_table`). Only for baking the stock maps so far.
-    #[cfg(test)]
+    /// `table::write_table`).
     pub fn to_text(&self, hardware: &EngineHardware) -> String {
         let mut text = format!(
             "# car-sim engine maps: {}\nfingerprint {:016x}\n",
@@ -263,7 +174,6 @@ impl EngineMaps {
         })
     }
 
-    #[cfg(test)]
     fn named(&self) -> [(&'static str, &Table); 6] {
         [
             ("mbt", &self.mbt),
@@ -315,12 +225,202 @@ impl EngineMaps {
     }
 }
 
+/// Baking the maps a batch of grid points at a time, so it can be spread over frames and
+/// show its progress: first the volumetric efficiency, then the maps by load (which find
+/// their intake pressures in it).
+pub struct Bake {
+    hardware: EngineHardware,
+    /// Grid points of the VE tables (cam profile and point), and their values so far.
+    ve_points: Vec<(usize, Vec<f32>)>,
+    ve_values: Vec<f32>,
+    /// The VE tables once they're done.
+    ve: Vec<Table>,
+    /// Grid points of the maps by load, and their values so far (MBT, efficiency, knock
+    /// limit, exhaust temperature, heat to coolant).
+    load_points: Vec<Vec<f32>>,
+    load_values: Vec<[f32; 5]>,
+}
+
+impl Bake {
+    pub fn new(hardware: &EngineHardware) -> Self {
+        let axes = ve_axes(hardware);
+        let ve_points = (0..hardware.cams.len())
+            .flat_map(|profile| grid(&axes).into_iter().map(move |point| (profile, point)))
+            .collect();
+        Self {
+            hardware: hardware.clone(),
+            ve_points,
+            ve_values: Vec::new(),
+            ve: Vec::new(),
+            load_points: grid(&load_axes()),
+            load_values: Vec::new(),
+        }
+    }
+
+    /// Share of the work done (0..1).
+    pub fn progress(&self) -> f32 {
+        let done = self.ve_values.len() + self.load_values.len();
+        done as f32 / (self.ve_points.len() + self.load_points.len()) as f32
+    }
+
+    /// Bakes up to `count` more grid points (on all cores, where there are threads), and
+    /// returns the maps when it has done the last.
+    pub fn advance(&mut self, count: usize) -> Option<EngineMaps> {
+        let hardware = &self.hardware;
+        let done = self.ve_values.len();
+        if done < self.ve_points.len() {
+            let batch = &self.ve_points[done..self.ve_points.len().min(done.saturating_add(count))];
+            let values = parallel(batch, |(profile, point)| {
+                ve_point(hardware, *profile, point)
+            });
+            self.ve_values.extend(values);
+            if self.ve_values.len() == self.ve_points.len() {
+                let size = self.ve_points.len() / hardware.cams.len();
+                self.ve = self
+                    .ve_values
+                    .chunks(size)
+                    .map(|values| {
+                        let axes = ve_axes(hardware);
+                        Table::from_parts(axes, values.to_vec()).expect("finite maps")
+                    })
+                    .collect();
+            }
+            return None;
+        }
+        let done = self.load_values.len();
+        let end = self.load_points.len().min(done.saturating_add(count));
+        let ve = &self.ve[0];
+        let values = parallel(&self.load_points[done..end], |point| {
+            load_point(hardware, ve, point)
+        });
+        self.load_values.extend(values);
+        (self.load_values.len() == self.load_points.len()).then(|| self.finish())
+    }
+
+    fn finish(&mut self) -> EngineMaps {
+        let hardware = &self.hardware;
+        let column = |i: usize| {
+            let values = self.load_values.iter().map(|values| values[i]).collect();
+            Table::from_parts(load_axes(), values).expect("finite maps")
+        };
+        // Rings and skirts by mean piston speed, more side thrust with shorter rods.
+        let rod = 1.0 + 0.5 * (hardware.stroke / (2.0 * hardware.rod_length) - 0.3);
+        let friction = Table::bake(vec![rpm_axis()], |p| {
+            let speed = 2.0 * hardware.stroke * p[0] / 60.0;
+            (60e3 + 4.2e3 * speed + 0.4e3 * speed * speed) * rod
+        });
+        EngineMaps {
+            ve: std::mem::take(&mut self.ve),
+            mbt: column(0),
+            efficiency: column(1),
+            knock_limit: column(2),
+            exhaust_temperature: column(3),
+            heat_to_coolant: column(4),
+            friction,
+        }
+    }
+}
+
+fn ve_axes(hardware: &EngineHardware) -> Vec<Vec<f32>> {
+    vec![
+        rpm_axis(),
+        pressure_axis(),
+        ratio_axis(),
+        phase_axis(hardware.intake_phasing),
+        phase_axis(hardware.exhaust_phasing),
+    ]
+}
+
+fn load_axes() -> Vec<Vec<f32>> {
+    vec![rpm_axis(), load_axis()]
+}
+
+/// The cycle simulation's conditions at the reference temperatures and fuel.
+fn conditions(rpm: f32, intake: f64, exhaust: f64) -> Conditions {
+    Conditions {
+        rpm: f64::from(rpm),
+        intake_pressure: intake,
+        exhaust_pressure: exhaust.clamp(EXHAUST_RANGE.0, EXHAUST_RANGE.1),
+        intake_temperature: REFERENCE_CHARGE,
+        coolant_temperature: REFERENCE_COOLANT,
+        octane: REFERENCE_OCTANE,
+    }
+}
+
+/// Volumetric efficiency on cam profile `profile` at a point of `ve_axes`.
+fn ve_point(hardware: &EngineHardware, profile: usize, point: &[f32]) -> f32 {
+    let cam = &hardware.cams[profile];
+    let cylinder = Cylinder::new(hardware, cam, point[3], point[4]);
+    let intake = f64::from(point[1]);
+    let conditions = conditions(point[0], intake, intake * f64::from(point[2]));
+    let result = cylinder.run(&conditions, None);
+    result.volumetric_efficiency(&cylinder, &conditions) as f32
+}
+
+/// The maps by load at a point of `load_axes` (MBT, efficiency, knock limit, exhaust
+/// temperature, heat to coolant), on the first cam profile, unphased, finding the intake
+/// pressure for the load in `ve`, the first profile's VE.
+fn load_point(hardware: &EngineHardware, ve: &Table, point: &[f32]) -> [f32; 5] {
+    let (rpm, load) = (point[0], point[1]);
+    // The exhaust pressure the engine would about have: a little over ambient, or over
+    // the boost.
+    let exhaust = |intake: f64| {
+        let over = if hardware.turbo.is_some() { 1.3 } else { 1.1 };
+        (1.05 * f64::from(AMBIENT_PRESSURE)).max(over * intake)
+    };
+    let reference = AMBIENT_PRESSURE / (R_AIR * AMBIENT_TEMPERATURE);
+    let load_at = |intake: f32| {
+        let ratio = exhaust(f64::from(intake)) as f32 / intake;
+        let ve = ve.get(&[rpm, intake, ratio, 0.0, 0.0]);
+        ve * intake / (R_AIR * REFERENCE_CHARGE as f32) / reference
+    };
+    // The intake pressure that traps this much air.
+    let (mut low, mut high) = (2e3f32, 1e6f32);
+    for _ in 0..40 {
+        let mid = (low + high) / 2.0;
+        if load_at(mid) < load {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    let intake = f64::from(low + high) / 2.0;
+    let conditions = conditions(rpm, intake, exhaust(intake));
+    let cylinder = Cylinder::new(hardware, &hardware.cams[0], 0.0, 0.0);
+    let result = cylinder.run(&conditions, None);
+    let mbt = cylinder.mbt(&result.trapped, &conditions);
+    let knock_limit = cylinder.knock_limit(&result.trapped, &conditions);
+    // The work at MBT: the closed part at MBT, the gas exchange as it ran. The runtime
+    // model takes the pumping as (exhaust − intake pressure) × the swept volume, so the
+    // efficiency is of the work before that.
+    let closed = cylinder.burn(&result.trapped, &conditions, mbt).work;
+    let swept = f64::from(hardware.displacement()) / f64::from(hardware.cylinders);
+    let pumping = (conditions.exhaust_pressure - intake) * swept;
+    let work = result.work - result.closed_work + closed + pumping;
+    // Without any fresh charge trapped, there's nothing to burn.
+    let per_fuel = |energy: f64| {
+        if result.fuel_energy > 0.0 {
+            energy / result.fuel_energy
+        } else {
+            0.0
+        }
+    };
+    [
+        mbt,
+        per_fuel(work),
+        knock_limit,
+        result.exhaust_temperature,
+        per_fuel(result.heat),
+    ]
+    .map(|value| value as f32)
+}
+
 /// A fingerprint of what the maps depend on: the cylinder side of the hardware, whether
 /// it has a turbo (for the exhaust pressures by load), and the code that bakes them.
 pub fn fingerprint(hardware: &EngineHardware) -> u64 {
     let h = hardware;
     let key = format!(
-        "{} {} {} {} {} {:?} {} {} {} {} {}",
+        "{} {} {} {} {} {:?} {} {} {} {} {} {} {}",
         h.cylinders,
         h.bore,
         h.stroke,
@@ -329,6 +429,8 @@ pub fn fingerprint(hardware: &EngineHardware) -> u64 {
         h.cams,
         h.intake_phasing,
         h.exhaust_phasing,
+        h.intake_timing,
+        h.exhaust_timing,
         h.intake.runner_length,
         h.exhaust.header_length,
         h.turbo.is_some(),
@@ -362,12 +464,6 @@ fn grid(axes: &[Vec<f32>]) -> Vec<Vec<f32>> {
             .collect();
     }
     points
-}
-
-/// A table of `f` over `axes`, evaluated on all cores.
-fn bake_parallel(axes: Vec<Vec<f32>>, f: impl Fn(&[f32]) -> f32 + Sync) -> Table {
-    let values = parallel(&grid(&axes), |point| f(point));
-    Table::from_parts(axes, values).expect("finite maps")
 }
 
 /// `f` of each item, in order: spread over the cores, or on this thread on the web.

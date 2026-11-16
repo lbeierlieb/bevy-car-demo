@@ -87,7 +87,7 @@ impl Ecu {
     pub fn calibrated(hardware: &EngineHardware, maps: &EngineMaps, octane: f32) -> Self {
         let top = if hardware.turbo.is_some() { 30 } else { 11 };
         let axes = || {
-            let rpm = (0..17).map(|i| i as f32 * 500.0).collect();
+            let rpm = (0..19).map(|i| i as f32 * 500.0).collect();
             let map = (1..=top).map(|i| i as f32 * 10e3).collect();
             vec![rpm, map]
         };
@@ -139,7 +139,7 @@ impl Ecu {
             ve,
             spark,
             idle_rpm: 850.0,
-            rev_limit: 6800.0,
+            rev_limit: hardware.redline,
             limiter_cut: 0.08,
             limiter_fuel: 0.04,
         }

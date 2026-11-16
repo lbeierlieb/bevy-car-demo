@@ -8,8 +8,8 @@
 //! reflect inverted off the plenum or the collector, and come back after twice the pipe's
 //! length at the speed of sound. That is what tunes them: a wave arriving at the right
 //! moment packs more charge in before the intake valve closes, or pulls exhaust out
-//! during the overlap. Gas pushed back into the intake comes back first when the flow
-//! turns. Each cylinder sees a plenum and a collector at constant pressure; the other
+//! during the overlap. Gas pushed back into the intake mixes into the runner, which
+//! fills from the plenum with fresh air as the cylinder draws on it. Each cylinder sees a plenum and a collector at constant pressure; the other
 //! cylinders' pulses are left out.
 
 use std::f64::consts::PI;
@@ -120,9 +120,10 @@ fn wrap(angle: f64) -> f64 {
 }
 
 impl Cylinder {
-    /// One cylinder of `hardware` on cam profile `cam`, the intake cam advanced and the
-    /// exhaust cam retarded by the given phases (crank degrees). Valves, runner and header
-    /// diameters scale with the bore (four valves per cylinder).
+    /// One cylinder of `hardware` on cam profile `cam`, the phasers advancing the intake cam
+    /// and retarding the exhaust cam by the given phases (crank degrees), on top of the
+    /// hardware's cam timing. Valves, runner and header diameters scale with the bore (four
+    /// valves per cylinder).
     pub fn new(hardware: &EngineHardware, cam: &CamProfile, intake: f32, exhaust: f32) -> Self {
         let bore = f64::from(hardware.bore);
         let stroke = f64::from(hardware.stroke);
@@ -143,14 +144,14 @@ impl Cylinder {
             clearance: swept / (cr - 1.0),
             swept,
             intake: Valve {
-                centre: -360.0 + separation - f64::from(intake),
+                centre: -360.0 + separation - f64::from(intake + hardware.intake_timing),
                 half_duration: f64::from(cam.intake_duration) / 2.0,
                 lift,
                 diameter: 0.36 * bore,
                 count: 2.0,
             },
             exhaust: Valve {
-                centre: 360.0 - separation + f64::from(exhaust),
+                centre: 360.0 - separation + f64::from(exhaust + hardware.exhaust_timing),
                 half_duration: f64::from(cam.exhaust_duration) / 2.0,
                 lift,
                 diameter: 0.3 * bore,
@@ -612,8 +613,10 @@ impl Cylinder {
         };
         let mut intake = Waves::new();
         let mut header = Waves::new();
-        // Gas pushed back into the intake runner: its mass, burnt share and temperature.
-        let (mut back, mut back_burnt, mut back_t) = (0.0, 0.0, t_in);
+        // The gas in the intake runner, mixed: its mass, burnt share and temperature.
+        let runner_mass =
+            p_in * self.runner.area * self.runner.length / (R * conditions.intake_temperature);
+        let (mut runner_burnt, mut runner_t) = (0.0, t_in);
         let mut header_t = 1000.0;
         let mut last = None;
         for _ in 0..MAX_CYCLES {
@@ -647,7 +650,7 @@ impl Cylinder {
                     area: self.intake.area(mid),
                     pressure: (p_in + 2.0 * wave_in).max(0.1 * p_in),
                     impedance: a_in / self.runner.area,
-                    outside: if back > 0.0 { back_t } else { t_in },
+                    outside: runner_t,
                     inside: t,
                 };
                 let exhaust_port = Port {
@@ -678,18 +681,21 @@ impl Cylinder {
                 let mut d_energy = -dw - loss * dt;
                 let burnt_share = charge.burnt / charge.mass;
                 let h = enthalpy(t);
-                // Intake: in from the gas pushed back first, then fresh; or back out.
+                // Intake: in from the runner, which fresh air from the plenum replaces; or
+                // back out into it, pushing as much into the plenum (big enough to count as
+                // fresh air still).
                 let dm = m_in * dt;
                 if dm > 0.0 {
-                    let from_back = dm.min(back);
-                    d_energy += from_back * enthalpy(back_t) + (dm - from_back) * enthalpy(t_in);
-                    charge.burnt += from_back * back_burnt;
-                    back -= from_back;
+                    d_energy += dm * enthalpy(runner_t);
+                    charge.burnt += dm * runner_burnt;
+                    let share = (dm / runner_mass).min(1.0);
+                    runner_burnt *= 1.0 - share;
+                    runner_t += (t_in - runner_t) * share;
                 } else if dm < 0.0 {
                     let out = -dm;
-                    back_burnt = (back * back_burnt + out * burnt_share) / (back + out);
-                    back_t = (back * back_t + out * t) / (back + out);
-                    back += out;
+                    let share = out / (runner_mass + out);
+                    runner_burnt += (burnt_share - runner_burnt) * share;
+                    runner_t += (t - runner_t) * share;
                     d_energy -= out * h;
                     charge.burnt -= out * burnt_share;
                 }

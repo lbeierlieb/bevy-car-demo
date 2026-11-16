@@ -50,7 +50,8 @@ repo, so everything worth knowing between sessions belongs here.
 `main.rs`; `tools/dev/shot.sh out.png [frames] [keys]` renders headless and saves a
 screenshot; `tools/dev/strip.sh` removes the hook. Always run `strip.sh` and check that
 `grep -c shot src/main.rs` prints 0 before committing. Keys are pressed from a third of
-the frames until the shot (`k` opens the map, `3` the ECU window). `CLICK="x,y,frame"` clicks into the
+the frames until the shot (`k` opens the map, `3` the ECU window, `4` the garage), so
+clicks on a window must come after that. `CLICK="x,y,frame;x,y,frame…"` clicks into the
 1280×720 window, e.g. on the map. `CAM`/`CAMAT` env vars place the camera (see
 `shot.rs`). `shot.sh` fetches Mesa and Xvfb from the pinned nixpkgs on first use.
 
@@ -168,7 +169,8 @@ phasing, VTEC-style cam switching).
   (`maps.rs` spreads it over threads, none on wasm). Friction is still a correlation.
   Calibration knobs are the constants at the top of `cycle.rs`.
 - `EngineMaps::for_hardware` takes embedded maps when the fingerprint (cylinder-side
-  hardware plus the bake code) matches, else bakes synchronously.
+  hardware plus the bake code) matches, else bakes synchronously. `maps::Bake` bakes a
+  batch of grid points at a time, for the garage.
 - **ECUs:** each has its own idea of the engine (e.g. its own VE table for fuelling), so
   changed hardware needs a retune. The first ECU is speed-density (rpm, MAP, throttle
   position), with fuel (VE table × target λ), spark map, rev limiter and idle valve.
@@ -192,9 +194,19 @@ phasing, VTEC-style cam switching).
   local storage on the web) with the build they were made for; loading reads over the
   engine's factory tune and warns if the build differs. Swapping the engine build in
   the setup panel replaces the tune with the new build's factory tune.
-- Next in the plan: hardware parts in the game. Changed hardware then needs baking off
-  the main thread (native: a thread; wasm: in slices per frame, or a coarser grid), maybe
-  cached on disk, with the old engine running until it's done.
+- Garage (F4, `src/garage.rs`): parts from a catalogue (`parts.rs`: a slot per kind of
+  part, each part a function fitting it onto the stock hardware; presets are
+  selections), cam-gear timing and wastegate spring. The car's `EngineSetup.parts` says
+  what it's built from. Building bakes the maps if the fingerprint changed (native: a
+  thread; wasm: 12 ms slices per frame), with the old engine running meanwhile, and caches
+  them (`storage.rs` folders: `~/.cache/car-sim/engines/<fingerprint>.maps`, local storage
+  on the web); bolt-on parts fit at once. The new engine is new (no damage) and gets a
+  factory tune unless unticked. The redline is hardware (cams and crank change it); the
+  factory tune's rev limit and the rev counter follow it. No valve float or other
+  mechanical limits yet. Cam switching (VTEC) and phasers exist in the hardware and maps,
+  but no ECU drives them yet, so there are no such parts.
+- Next ideas: an ECU with cam switching/phasing (then VTEC and VVT parts; phasers make
+  the VE grid 25× bigger, so thin it), closed loop, boost control, mechanical limits.
 
 ## Audio
 

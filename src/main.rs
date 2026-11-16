@@ -5,12 +5,14 @@ mod car;
 mod cockpit;
 mod debug;
 mod ecu_ui;
+mod garage;
 mod hud;
 mod input;
 mod map;
 mod physics;
 mod scenery;
 mod sim;
+mod storage;
 mod terrain;
 mod trees;
 mod tunes;
@@ -56,6 +58,7 @@ fn main() {
             map::MapPlugin,
             audio::AudioPlugin,
         ))
+        .add_plugins(garage::GaragePlugin)
         .add_systems(Startup, setup)
         .run();
 }

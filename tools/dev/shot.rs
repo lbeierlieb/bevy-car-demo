@@ -27,8 +27,8 @@ fn shot(mut commands: Commands, mut frame: Local<u32>, mut exit: MessageWriter<A
     if *frame == at + 20 { exit.write(AppExit::Success); }
 }
 
-/// CLICK="x,y,frame": move the mouse to (x, y) in the window and click there at that frame
-/// (as window events, which is what bevy_egui reads).
+/// CLICK="x,y,frame[;x,y,frame…]": move the mouse to (x, y) in the window and click there
+/// at that frame (as window events, which is what bevy_egui reads).
 fn click(
     mut frame: Local<u32>,
     windows: Query<Entity, With<Window>>,
@@ -36,23 +36,26 @@ fn click(
 ) {
     *frame += 1;
     let Ok(spec) = std::env::var("CLICK") else { return };
-    let v: Vec<f32> = spec.split(',').map(|s| s.parse().unwrap()).collect();
-    let (at, window) = (v[2] as u32, windows.single().unwrap());
-    if (at..at + 6).contains(&*frame) {
-        events.write(CursorMoved { window, position: Vec2::new(v[0], v[1]), delta: None }.into());
+    let window = windows.single().unwrap();
+    for one in spec.split(';') {
+        let v: Vec<f32> = one.split(',').map(|s| s.parse().unwrap()).collect();
+        let at = v[2] as u32;
+        if (at..at + 6).contains(&*frame) {
+            events.write(CursorMoved { window, position: Vec2::new(v[0], v[1]), delta: None }.into());
+        }
+        let state = if *frame == at + 2 {
+            bevy::input::ButtonState::Pressed
+        } else if *frame == at + 3 {
+            bevy::input::ButtonState::Released
+        } else {
+            continue;
+        };
+        events.write(bevy::input::mouse::MouseButtonInput { button: MouseButton::Left, state, window }.into());
     }
-    let state = if *frame == at + 2 {
-        bevy::input::ButtonState::Pressed
-    } else if *frame == at + 3 {
-        bevy::input::ButtonState::Released
-    } else {
-        return;
-    };
-    events.write(bevy::input::mouse::MouseButtonInput { button: MouseButton::Left, state, window }.into());
 }
 
 fn key(c: char) -> KeyCode {
-    match c { 'w' => KeyCode::KeyW, 'a' => KeyCode::KeyA, 'd' => KeyCode::KeyD, 's' => KeyCode::KeyS, 't' => KeyCode::Tab, 'f' => KeyCode::F1, 'c' => KeyCode::KeyC, 'k' => KeyCode::KeyK, '3' => KeyCode::F3, _ => KeyCode::Space }
+    match c { 'w' => KeyCode::KeyW, 'a' => KeyCode::KeyA, 'd' => KeyCode::KeyD, 's' => KeyCode::KeyS, 't' => KeyCode::Tab, 'f' => KeyCode::F1, 'c' => KeyCode::KeyC, 'k' => KeyCode::KeyK, '3' => KeyCode::F3, '4' => KeyCode::F4, _ => KeyCode::Space }
 }
 
 /// CAM="distance,height": look at the forest edge nearest the spawn from that offset.

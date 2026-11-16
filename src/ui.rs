@@ -9,8 +9,7 @@ use crate::camera::OrbitInput;
 use crate::car::{ActiveCar, Car};
 use crate::debug::DebugView;
 use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_value, input_name};
-use crate::physics::engine::hardware::EngineHardware;
-use crate::physics::engine::{AMBIENT_PRESSURE, Engine, EngineBuild};
+use crate::physics::engine::AMBIENT_PRESSURE;
 use crate::physics::suspension::AxleSetup;
 use crate::sim::{CHASSIS_HZ, SUBSTEPS};
 use crate::wheel_base::{ForceFeedback, WheelBase};
@@ -106,7 +105,7 @@ fn panel(
                 ui.label("(automatic: S at a stop selects reverse)");
                 ui.label("A/D: steer    Space: handbrake");
                 ui.label("Tab: next car    R: reset car");
-                ui.label("F1: gizmos    F2: this panel    F3: ECU tune    M: mute");
+                ui.label("F1: gizmos    F2: this panel    F3: ECU tune    F4: garage    M: mute");
                 ui.label("C: chase/driver view    K: map");
                 ui.label("Wheel and pedals: bind them under \"Wheel and pedals\"");
                 ui.label("Left-drag: orbit or look around    Scroll: zoom");
@@ -324,34 +323,11 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
     });
 }
 
-/// Engine builds to choose from.
-const BUILDS: [fn() -> EngineHardware; 2] = [EngineHardware::default, EngineHardware::turbo];
-
-/// The engine build (swapping it bakes its maps and gives it a factory tune) and the fuel.
+/// The engine (built in the garage) and the fuel.
 fn engine_setup(ui: &mut egui::Ui, car: &mut Car) {
     ui.strong("Engine");
     let build = &mut car.setup.engine.build;
-    let current = build.hardware.name;
-    let mut choice = current;
-    egui::ComboBox::from_label("Build")
-        .selected_text(current)
-        .show_ui(ui, |ui| {
-            for make in BUILDS {
-                let name = make().name;
-                ui.selectable_value(&mut choice, name, name);
-            }
-        });
-    if let Some(hardware) = BUILDS
-        .iter()
-        .map(|make| make())
-        .find(|h| h.name != current && h.name == choice)
-    {
-        let octane = build.octane;
-        *build = EngineBuild::new(hardware);
-        build.octane = octane;
-        car.drivetrain.engine = Engine::default();
-    }
-    let build = &mut car.setup.engine.build;
+    ui.label(format!("{} (F4: garage)", build.hardware.name));
     ui.add(egui::Slider::new(&mut build.octane, 89.0..=102.0).text("Fuel octane (RON)"))
         .on_hover_text("The factory tune is for 95; lower knocks");
 }

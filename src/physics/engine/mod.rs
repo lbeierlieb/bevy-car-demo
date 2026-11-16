@@ -16,6 +16,7 @@ pub mod cycle;
 pub mod ecu;
 pub mod hardware;
 pub mod maps;
+pub mod parts;
 pub mod table;
 pub mod thermal;
 pub mod turbo;

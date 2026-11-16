@@ -129,7 +129,7 @@ fn window(
     egui::Window::new("ECU tune")
         .open(&mut open)
         .default_pos([360.0, 10.0])
-        .default_width(LABEL_WIDTH + 17.0 * CELL.x + 20.0)
+        .default_width(LABEL_WIDTH + 19.0 * CELL.x + 20.0)
         .show(contexts.ctx_mut()?, |ui| {
             readings(ui, &car);
             ui.separator();
@@ -235,7 +235,7 @@ fn saved_tunes(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
         if ui.button("Save").clicked() {
             panel.status = match tunes::clean_name(&panel.name) {
                 None => "Give the tune a name first.".to_string(),
-                Some(name) => match tunes::save(&name, &build.ecu.to_text(build.hardware.name)) {
+                Some(name) => match tunes::save(&name, &build.ecu.to_text(&build.hardware.name)) {
                     Ok(()) => {
                         panel.saved = tunes::list();
                         panel.chosen = Some(name.clone());

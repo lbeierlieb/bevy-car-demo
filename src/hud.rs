@@ -64,13 +64,17 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
 
             painter.circle_filled(center, RADIUS + 16.0, BACKGROUND);
             painter.add(arc(0.0, top, RADIUS, 10.0, TRACK));
-            painter.add(arc(engine.redline_rpm, top, RADIUS + 7.0, 3.0, RED));
-            let bar = if rpm >= engine.redline_rpm { RED } else { BAR };
+            painter.add(arc(engine.redline_rpm(), top, RADIUS + 7.0, 3.0, RED));
+            let bar = if rpm >= engine.redline_rpm() {
+                RED
+            } else {
+                BAR
+            };
             painter.add(arc(0.0, rpm.min(top), RADIUS, 10.0, bar));
             // A tick and a number every thousand rpm.
             for k in 0..=(top / 1000.0) as usize {
                 let r = k as f32 * 1000.0;
-                let color = if r >= engine.redline_rpm { RED } else { DIM };
+                let color = if r >= engine.redline_rpm() { RED } else { DIM };
                 painter.line_segment([at(r, RADIUS - 8.0), at(r, RADIUS - 14.0)], (2.0, color));
                 painter.text(
                     at(r, RADIUS - 23.0),

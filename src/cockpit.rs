@@ -151,7 +151,7 @@ fn add_interior(
             );
 
             // Gauge faces with a tick every thousand rpm and every 20 km/h.
-            let redline = car.setup.engine.redline_rpm;
+            let redline = car.setup.engine.redline_rpm();
             let tach_top = car.setup.engine.rev_scale();
             for (mount, ticks, red_from) in [
                 (

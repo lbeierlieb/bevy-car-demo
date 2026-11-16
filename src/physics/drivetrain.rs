@@ -14,6 +14,7 @@
 
 use std::f32::consts::PI;
 
+use super::engine::parts::Parts;
 use super::engine::{Engine, EngineBuild};
 
 /// Engine speed to rpm.
@@ -28,11 +29,11 @@ const AUTO_DWELL: f32 = 1.0;
 
 #[derive(Clone, Debug)]
 pub struct EngineSetup {
-    /// The engine: its parts, maps and ECU.
+    /// The parts the engine is built from, and the engine: its hardware, maps and ECU.
+    pub parts: Parts,
     pub build: EngineBuild,
-    /// Idle speed (where the clutch starts to bite) and the redline on the rev counter.
+    /// Idle speed (where the clutch starts to bite).
     pub idle_rpm: f32,
-    pub redline_rpm: f32,
     /// Most torque the clutch can pass while slipping (N·m).
     pub clutch_torque: f32,
     /// Forward gear ratios from first, the reverse ratio, and the final drive.
@@ -48,9 +49,9 @@ impl Default for EngineSetup {
     /// A 2-litre petrol four with a six-speed gearbox.
     fn default() -> Self {
         Self {
-            build: EngineBuild::default(),
+            parts: Parts::stock(),
+            build: EngineBuild::new(Parts::stock().hardware()),
             idle_rpm: 850.0,
-            redline_rpm: 6800.0,
             clutch_torque: 350.0,
             gears: [3.3, 2.1, 1.5, 1.17, 0.95, 0.8],
             reverse: 3.3,
@@ -80,9 +81,14 @@ impl EngineSetup {
         self.gears.len() as i8
     }
 
+    /// The engine's redline, for the rev counter and the gearbox.
+    pub fn redline_rpm(&self) -> f32 {
+        self.build.hardware.redline
+    }
+
     /// End of a rev counter's scale: a whole thousand above the redline.
     pub fn rev_scale(&self) -> f32 {
-        (self.redline_rpm / 1000.0).ceil() * 1000.0 + 1000.0
+        (self.redline_rpm() / 1000.0).ceil() * 1000.0 + 1000.0
     }
 }
 
@@ -156,7 +162,7 @@ impl Drivetrain {
     pub fn shift_by(&mut self, engine: &EngineSetup, steps: i8, wheel_omega: f32, speed: f32) {
         let gear = self.selected_gear();
         let target = (gear + steps).clamp(-1, engine.top_gear());
-        let over_rev = target > 0 && engine.rpm_in(target, wheel_omega) > engine.redline_rpm;
+        let over_rev = target > 0 && engine.rpm_in(target, wheel_omega) > engine.redline_rpm();
         if target != gear && !over_rev && (target >= 0 || speed.abs() < 2.0) {
             self.shift_to(engine, target);
         }
@@ -350,7 +356,7 @@ impl Drivetrain {
             return;
         }
         let rpm_in = |gear: i8| engine.rpm_in(gear, wheel_omega);
-        let up = 3000.0 + (engine.redline_rpm - 300.0 - 3000.0) * throttle;
+        let up = 3000.0 + (engine.redline_rpm() - 300.0 - 3000.0) * throttle;
         let down = 1300.0 + 2200.0 * throttle;
         let rpm = rpm_in(self.gear);
         if rpm > up && self.gear < engine.top_gear() {
@@ -414,7 +420,7 @@ mod tests {
         }
         let gear = drivetrain.selected_gear();
         assert!(
-            gear >= 2 && engine.rpm_in(gear, omega) <= engine.redline_rpm,
+            gear >= 2 && engine.rpm_in(gear, omega) <= engine.redline_rpm(),
             "gear {gear}"
         );
         // Stopped: down through first and neutral to reverse, and no further.
@@ -571,7 +577,7 @@ mod tests {
         // dropping the revs noticeably.
         assert!((6..=14).contains(&cuts), "{cuts} cuts");
         assert!(high - low > 150.0, "rpm {low}..{high}");
-        assert!(high < engine.redline_rpm + 300.0, "rpm {high}");
+        assert!(high < engine.redline_rpm() + 300.0, "rpm {high}");
     }
 
     #[test]
@@ -580,12 +586,12 @@ mod tests {
         let mut drivetrain = Drivetrain::new(&engine);
         drive(&mut drivetrain, &engine, 1.0, 20.0);
         assert!(
-            drivetrain.rpm < engine.redline_rpm + 300.0,
+            drivetrain.rpm < engine.redline_rpm() + 300.0,
             "rpm {}",
             drivetrain.rpm
         );
         assert!(
-            drivetrain.rpm > engine.redline_rpm - 300.0,
+            drivetrain.rpm > engine.redline_rpm() - 300.0,
             "rpm {}",
             drivetrain.rpm
         );
