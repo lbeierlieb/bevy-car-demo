@@ -19,6 +19,7 @@ mod sim;
 mod storage;
 mod terrain;
 mod trees;
+mod traffic;
 mod tunes;
 mod ui;
 mod visuals;
@@ -50,6 +51,7 @@ fn main() {
                 terrain::TerrainPlugin,
                 scenery::SceneryPlugin,
                 obstacles::ObstaclesPlugin,
+                traffic::TrafficPlugin,
             ),
             sim::SimPlugin,
             input::InputPlugin,
