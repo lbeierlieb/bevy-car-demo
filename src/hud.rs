@@ -1,5 +1,5 @@
 //! Driving HUD in the bottom right corner: speed and gear in the middle, with a rev counter
-//! arc around them.
+//! arc around them, and the tires' temperatures and wear left of it.
 
 use std::f32::consts::PI;
 
@@ -8,6 +8,7 @@ use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Shape, Stroke, vec2};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car};
+use crate::physics::tire::{AMBIENT, Compound};
 
 /// Gauge radius (to the middle of the rev arc) and the arc's sweep: 270°, open at the
 /// bottom, from 0 rpm at the lower left clockwise to the top of the scale at the lower right.
@@ -142,5 +143,61 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
                 );
             }
         });
+
+    tires(contexts.ctx_mut()?, car);
     Ok(())
+}
+
+/// Tire size in the tire display, and the gap between them.
+const TIRE: egui::Vec2 = vec2(22.0, 34.0);
+const TIRE_GAP: egui::Vec2 = vec2(14.0, 10.0);
+
+/// The four tires left of the gauge, seen from above: coloured by how warm the tread is
+/// against its compound's window (blue cold, green right, red overheated), its temperature
+/// in it, and the worn share darkened from the top.
+fn tires(ctx: &egui::Context, car: &Car) {
+    let size = 2.0 * TIRE + TIRE_GAP + vec2(16.0, 16.0);
+    egui::Area::new(egui::Id::new("tires"))
+        .anchor(
+            Align2::RIGHT_BOTTOM,
+            vec2(-16.0 - 2.0 * (RADIUS + 18.0) - 10.0, -16.0),
+        )
+        .interactable(false)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            let painter = ui.painter();
+            painter.rect_filled(rect, 8.0, BACKGROUND);
+            for (i, corner) in car.corners.iter().enumerate() {
+                let (column, row) = ((i % 2) as f32, (i / 2) as f32);
+                let min = rect.min + vec2(8.0, 8.0) + vec2(column, row) * (TIRE + TIRE_GAP);
+                let tire = egui::Rect::from_min_size(min, TIRE);
+                let compound = &car.setup.axle(corner.front).tire.compound;
+                let tread = corner.tread;
+                painter.rect_filled(tire, 4.0, warmth_color(compound, tread.temperature));
+                let worn = egui::Rect::from_min_size(min, vec2(TIRE.x, TIRE.y * tread.wear));
+                painter.rect_filled(worn, 4.0, Color32::from_black_alpha(150));
+                painter.text(
+                    tire.center(),
+                    Align2::CENTER_CENTER,
+                    format!("{:.0}", tread.temperature),
+                    FontId::proportional(11.0),
+                    Color32::BLACK,
+                );
+            }
+        });
+}
+
+/// Blue for a cold tread, green at the compound's best temperature, red once it's well
+/// overheated.
+fn warmth_color(compound: &Compound, temperature: f32) -> Color32 {
+    let blue = Color32::from_rgb(90, 150, 240);
+    let green = Color32::from_rgb(90, 210, 110);
+    let red = Color32::from_rgb(240, 70, 50);
+    if temperature < compound.best {
+        let cold = (compound.best - temperature) / (compound.best - AMBIENT);
+        green.lerp_to_gamma(blue, cold.clamp(0.0, 1.0))
+    } else {
+        let hot = (temperature - compound.best) / (2.0 * compound.overheat);
+        green.lerp_to_gamma(red, hot.clamp(0.0, 1.0))
+    }
 }
