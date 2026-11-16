@@ -153,6 +153,30 @@ impl Terrain {
         }
     }
 
+    /// A flat, empty square 1 km across at height 0, for driving tests.
+    #[cfg(test)]
+    pub fn flat() -> Self {
+        let (cells, chunk_cells) = (256, 32);
+        let chunks = (cells / chunk_cells) * (cells / chunk_cells);
+        Self {
+            cells_x: cells,
+            cells_z: cells,
+            cell: 4.0,
+            heights: vec![0.0; (cells + 1) * (cells + 1)],
+            chunk_cells,
+            chunks: (0..chunks)
+                .map(|_| Chunk {
+                    step: chunk_cells,
+                    classes: vec![0],
+                })
+                .collect(),
+            spawn: Vec2::ZERO,
+            spawn_heading: Vec2::NEG_Y,
+            roads: Vec::new(),
+            buildings: Vec::new(),
+        }
+    }
+
     /// Half the map's extent along x and z; the map is centred on the origin.
     pub fn half_size(&self) -> Vec2 {
         Vec2::new(self.cells_x as f32, self.cells_z as f32) * self.cell / 2.0
