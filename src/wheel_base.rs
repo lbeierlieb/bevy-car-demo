@@ -19,14 +19,14 @@ use crate::input::{Action, WheelConfig, WheelInput};
 /// Where hid-fanatecff lists its devices; each has a `range` file in degrees.
 const DRIVER_DIR: &str = "/sys/module/hid_fanatec/drivers/hid:fanatec";
 /// Steering torque (N·m about the steering axes) that drives the wheel at full force with
-/// the strength at 1. Near the limit the tires reach about 260 N·m.
-const FULL_SCALE: f32 = 300.0;
+/// the strength at 1. Near the limit the tires reach about 300 N·m (the 2-litre coupé).
+const FULL_SCALE: f32 = 400.0;
 /// Seconds for the force to ramp up after the wheel connects, the window gets focus or
 /// the car changes, so the wheel never jerks.
 const FADE_IN: f32 = 1.0;
 /// Fastest the force may change (full scale per second): kerbs, landings and crashes spike
 /// the tire forces, and a direct-drive base would pass that on as a hard jolt.
-const MAX_SLEW: f32 = 5.0;
+const MAX_SLEW: f32 = 15.0;
 /// Speed (m/s) above which the tires' torque comes through in full: at a standstill their
 /// slips are just noise.
 const ROLLING: f32 = 3.0;

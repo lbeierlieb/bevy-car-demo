@@ -138,11 +138,12 @@ fn print_state(car: &Car, t: f32) {
         })
         .collect();
     println!(
-        "{t:5.2} s  slip {:5.1}°  yaw {:6.1}°/s  {:4.1} m/s  steer {:5.2}  throttle {:.1} | {}",
+        "{t:5.2} s  slip {:5.1}°  yaw {:6.1}°/s  {:4.1} m/s  steer {:5.2} ({:4.0} N·m)  throttle {:.1} | {}",
         slip.to_degrees(),
         yaw.to_degrees(),
         car.body.velocity.length(),
         car.controls.steer,
+        car.steering_torque,
         car.controls.throttle,
         tires.join(" | "),
     );

@@ -120,8 +120,8 @@ and plays force feedback, both through hid-fanatecff on Linux.
 
 - "Test: push left" in the panel: tick "Reverse direction" if it pushes right (the sign
   convention of hid-fanatecff couldn't be verified without hardware).
-- Tune the default force strength (0.5, with 300 N·m of steering torque as full scale;
-  tires peak around 260 N·m).
+- Tune the default force strength (0.5, with 400 N·m of steering torque as full scale;
+  tires peak around 300 N·m in the coupé, with 30 mm of caster trail).
 - That the game can set the rotation range (see below; last seen failing), and the soft
   lock where it can't (strength and feel on a direct drive base; may need damping).
 

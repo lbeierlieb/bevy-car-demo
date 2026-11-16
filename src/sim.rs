@@ -15,7 +15,9 @@ pub const CHASSIS_HZ: f64 = 120.0;
 pub const SUBSTEPS: usize = 10;
 const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
 /// Distance the front tires' contact points trail the steering axes (from caster, m).
-const MECHANICAL_TRAIL: f32 = 0.015;
+/// Past the peak slip angle the pneumatic trail is gone and this is all that keeps
+/// the wheel pulling towards where the front tires roll: into countersteer in a slide.
+const MECHANICAL_TRAIL: f32 = 0.03;
 /// Density of the air (kg/m³).
 const AIR_DENSITY: f32 = 1.2;
 /// Rolling resistance of the tires: the share of their load that holds them back.
