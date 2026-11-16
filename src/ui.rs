@@ -286,12 +286,12 @@ fn engine(ui: &mut egui::Ui, car: &Car) {
     }
     let thermal = &engine.thermal;
     ui.label(format!(
-        "coolant {:.0} °C    oil {:.0} °C{}    knock {:.1}°    damage {:.0} %",
+        "coolant {:.0} °C    oil {:.0} °C{}    knock {:.1}°    wear {:.0} %",
         thermal.coolant - 273.15,
         thermal.oil - 273.15,
         if thermal.fan { "    fan" } else { "" },
         cycle.knock,
-        engine.damage * 100.0,
+        engine.damage.worst(build.hardware.cylinders as usize) * 100.0,
     ));
 }
 

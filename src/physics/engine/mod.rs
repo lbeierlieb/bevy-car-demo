@@ -13,6 +13,7 @@
 //! build (`maps`); the parts between the manifolds and the outside act live.
 
 pub mod cycle;
+pub mod damage;
 pub mod ecu;
 pub mod hardware;
 pub mod maps;
@@ -23,6 +24,7 @@ pub mod turbo;
 
 use std::f32::consts::PI;
 
+use damage::{Damage, Strain};
 use ecu::{Actuators, Ecu, EcuState, Sensors};
 use hardware::EngineHardware;
 use maps::EngineMaps;
@@ -56,14 +58,6 @@ const INTERCOOLER_LAG: f32 = 2.0;
 const INTERCOOLER_FLOW: f32 = 0.05;
 /// Intake manifold pressure after the starter has cranked the engine (Pa).
 const CRANKED_PRESSURE: f32 = 30e3;
-/// Damage per second: per degree² of spark past the knock limit at full load, and per
-/// kelvin of coolant or oil over its limit (K).
-const KNOCK_DAMAGE: f32 = 2e-4;
-const HEAT_DAMAGE: f32 = 2e-3;
-const COOLANT_LIMIT: f32 = 393.0;
-const OIL_LIMIT: f32 = 423.0;
-/// Efficiency lost at full damage (rings and pistons worn, blow-by).
-const DAMAGE_EFFICIENCY: f32 = 0.3;
 
 fn ambient_density() -> f32 {
     AMBIENT_PRESSURE / (R_AIR * AMBIENT_TEMPERATURE)
@@ -126,8 +120,8 @@ pub struct Engine {
     pub thermal: Thermal,
     /// Speed of the air the car drives through (m/s), for the radiator; set by the car.
     pub airspeed: f32,
-    /// Wear from knock and overheating (0 new, 1 blown).
-    pub damage: f32,
+    /// Wear and failures of the parts.
+    pub damage: Damage,
 }
 
 /// One cycle (two revolutions) of all cylinders.
@@ -165,15 +159,15 @@ impl Default for Engine {
             firing: true,
             thermal: Thermal::warm(),
             airspeed: 0.0,
-            damage: 0.0,
+            damage: Damage::default(),
         }
     }
 }
 
 impl Engine {
-    /// Wrecked by knock or overheating: it won't fire again.
-    pub fn blown(&self) -> bool {
-        self.damage >= 1.0
+    /// Wrecked: it won't fire again until it's repaired.
+    pub fn blown(&self, hardware: &EngineHardware) -> bool {
+        self.damage.wrecked(hardware.cylinders as usize)
     }
 
     /// Cranking with the starter pumps the intake manifold down before the engine fires.
@@ -192,7 +186,7 @@ impl Engine {
             intake_temperature: self.charge_temperature,
         };
         self.actuators = build.ecu.step(&mut self.ecu, &sensors, dt);
-        self.firing = firing && !self.blown();
+        self.firing = firing && !self.blown(hardware);
 
         // The ducts fill through the filter (or the compressor) and empty through the
         // throttle into the manifold, which the cylinders empty. All flows are linearised
@@ -243,19 +237,23 @@ impl Engine {
         // The cylinder walls heat the coolant; friction heats the coolant (mostly through
         // the liners) and the oil (through the bearings), and the oil also cools the
         // pistons.
-        let fuel_power = cycle.fuel * FUEL_ENERGY * cycles;
+        let cylinders = hardware.cylinders as usize;
+        let fuel_power = cycle.fuel * FUEL_ENERGY * cycles * self.damage.firing(cylinders);
         let friction_power = cycle.friction * cycles;
         let walls = build.maps.heat_to_coolant(rpm.abs(), cycle.load);
-        let to_coolant = walls * fuel_power + 0.7 * friction_power;
+        let to_coolant =
+            (walls + self.damage.extra_coolant_heat()) * fuel_power + 0.7 * friction_power;
         let to_oil = 0.3 * friction_power + 0.02 * fuel_power;
         let (cooling, airspeed) = (&hardware.cooling, self.airspeed);
         self.thermal.step(cooling, to_coolant, to_oil, airspeed, dt);
 
-        let thermal = &self.thermal;
-        let wear = KNOCK_DAMAGE * cycle.knock.powi(2) * cycle.load
-            + HEAT_DAMAGE * (thermal.coolant - COOLANT_LIMIT).max(0.0)
-            + HEAT_DAMAGE * (thermal.oil - OIL_LIMIT).max(0.0);
-        self.damage = (self.damage + wear * dt).min(1.0);
+        let strain = Strain {
+            knock: cycle.knock,
+            load: cycle.load,
+            coolant: self.thermal.coolant,
+            oil: self.thermal.oil,
+        };
+        self.damage.step(cylinders, &strain, dt);
     }
 
     /// Air into the ducts ahead of the throttle with them at `pressure` (Pa): through the
@@ -369,7 +367,9 @@ impl Engine {
         } else {
             0.0
         };
-        let (lambda, indicated, exhaust_temperature, knock) = if fuel > 0.0 {
+        let cylinders = hardware.cylinders as usize;
+        let firing = self.damage.firing(cylinders);
+        let (lambda, indicated, exhaust_temperature, knock) = if fuel > 0.0 && firing > 0.0 {
             let lambda = air / (fuel * STOICHIOMETRIC);
             let offset = a.spark - maps.mbt(rpm, load);
             let indicated = air / STOICHIOMETRIC
@@ -377,9 +377,12 @@ impl Engine {
                 * maps.efficiency(rpm, load)
                 * maps::spark_efficiency(offset)
                 * maps::lambda_efficiency(lambda)
-                * (1.0 - DAMAGE_EFFICIENCY * self.damage);
-            let temperature = maps.exhaust_temperature(rpm, load)
+                * self.damage.efficiency(cylinders)
+                * firing;
+            // The dead cylinders pump their charge through unburnt.
+            let burnt = maps.exhaust_temperature(rpm, load)
                 + maps::exhaust_temperature_shift(offset, lambda);
+            let temperature = firing * burnt + (1.0 - firing) * self.charge_temperature;
             let (charge, coolant) = (self.charge_temperature, self.thermal.coolant);
             let shift = maps::knock_limit_shift(charge, coolant, build.octane);
             let knock = (a.spark - maps.knock_limit(rpm, load) - shift).max(0.0);
@@ -496,7 +499,8 @@ mod tests {
                 coolant < 105.0 && oil < 135.0,
                 "coolant {coolant} °C, oil {oil} °C"
             );
-            assert!(engine.damage < 1e-3, "damage {}", engine.damage);
+            let wear = engine.damage.worst(4);
+            assert!(wear < 1e-3, "wear {wear}");
         }
     }
 
@@ -621,7 +625,8 @@ mod tests {
             let engine = run_flat_out(&build, rpm, 2.0);
             assert_eq!(engine.cycle(&build, rpm).knock, 0.0, "at {rpm} rpm");
             // At most a trace from the moment of tip-in.
-            assert!(engine.damage < 1e-3, "damage {}", engine.damage);
+            let wear = engine.damage.worst(4);
+            assert!(wear < 1e-3, "wear {wear}");
         }
         // Cheaper fuel than it was tuned for: it knocks lightly at low rpm.
         let cheap = EngineBuild {
@@ -641,13 +646,10 @@ mod tests {
         let rpm = 2500.0;
         let engine = run_flat_out(&build, rpm, 5.0);
         assert!(engine.cycle(&build, rpm).knock > 10.0);
-        assert!(
-            engine.damage > 0.05 && !engine.blown(),
-            "damage {}",
-            engine.damage
-        );
+        let wear = engine.damage.worst(4);
+        assert!(wear > 0.05 && !engine.blown(&build.hardware), "wear {wear}");
         let engine = run_flat_out(&build, rpm, 120.0);
-        assert!(engine.blown());
+        assert!(engine.blown(&build.hardware));
         assert!(engine.torque(&build, rpm) < 0.0);
     }
 

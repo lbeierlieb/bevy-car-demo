@@ -19,6 +19,7 @@ const BACKGROUND: Color32 = Color32::from_rgba_premultiplied(10, 12, 16, 190);
 const TRACK: Color32 = Color32::from_rgba_premultiplied(70, 74, 82, 255);
 const BAR: Color32 = Color32::from_rgb(240, 240, 235);
 const RED: Color32 = Color32::from_rgb(230, 50, 40);
+const ORANGE: Color32 = Color32::from_rgb(255, 150, 50);
 const DIM: Color32 = Color32::from_rgb(150, 154, 162);
 
 pub struct HudPlugin;
@@ -108,8 +109,10 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
                 FontId::proportional(26.0),
                 Color32::from_rgb(255, 196, 60),
             );
+            let cylinders = engine.build.hardware.cylinders as usize;
+            let failure = car.drivetrain.engine.damage.failures(cylinders).pop();
             if !car.drivetrain.running {
-                let blown = car.drivetrain.engine.blown();
+                let blown = car.drivetrain.engine.blown(&engine.build.hardware);
                 painter.text(
                     center + vec2(0.0, RADIUS + 4.0),
                     Align2::CENTER_CENTER,
@@ -120,6 +123,14 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
                     },
                     FontId::proportional(10.0),
                     RED,
+                );
+            } else if let Some(failure) = failure {
+                painter.text(
+                    center + vec2(0.0, RADIUS + 4.0),
+                    Align2::CENTER_CENTER,
+                    failure.to_uppercase(),
+                    FontId::proportional(10.0),
+                    ORANGE,
                 );
             } else if car.drivetrain.automatic {
                 painter.text(

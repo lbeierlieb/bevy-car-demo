@@ -188,10 +188,10 @@ fn readings(ui: &mut egui::Ui, car: &Car) {
             ui.label("λ - (no fuel)");
         }
         ui.label(format!(
-            "    spark {:.1}°    knock {:.1}°    damage {:.0} %",
+            "    spark {:.1}°    knock {:.1}°    wear {:.0} %",
             engine.actuators.spark,
             cycle.knock,
-            engine.damage * 100.0,
+            engine.damage.worst(build.hardware.cylinders as usize) * 100.0,
         ));
     });
     if build.ecu.model.cam_control() {

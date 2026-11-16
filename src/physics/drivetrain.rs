@@ -144,7 +144,7 @@ impl Drivetrain {
 
     /// Starts a stalled engine (the starter spins it up to idle at once), unless it's blown.
     pub fn start(&mut self, engine: &EngineSetup) {
-        if !self.running && !self.engine.blown() {
+        if !self.running && !self.engine.blown(&engine.build.hardware) {
             self.running = true;
             self.rpm = self.rpm.max(engine.idle_rpm);
             self.engine.start();
@@ -228,7 +228,7 @@ impl Drivetrain {
         if clutch.is_none() {
             self.running = true;
         }
-        if self.engine.blown() {
+        if self.engine.blown(&engine.build.hardware) {
             self.running = false;
         }
         self.in_gear += dt;

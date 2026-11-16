@@ -241,6 +241,8 @@ fn window(
             parts(ui, &mut garage);
             ui.separator();
             build(ui, &mut garage, &mut car);
+            ui.separator();
+            condition(ui, &mut car);
         });
     garage.open = open;
     Ok(())
@@ -375,6 +377,37 @@ fn build(ui: &mut egui::Ui, garage: &mut Garage, car: &mut Car) {
     }
     if !garage.status.is_empty() {
         ui.label(&garage.status);
+    }
+}
+
+/// How worn the engine's parts are, what has failed, and repairing it.
+fn condition(ui: &mut egui::Ui, car: &mut Car) {
+    let cylinders = car.setup.engine.build.hardware.cylinders as usize;
+    let damage = &car.drivetrain.engine.damage;
+    ui.horizontal(|ui| {
+        ui.label("Condition:");
+        let worn: Vec<String> = damage
+            .parts(cylinders)
+            .into_iter()
+            .filter(|(_, wear)| *wear >= 0.005)
+            .take(4)
+            .map(|(name, wear)| format!("{name} {:.0} %", wear * 100.0))
+            .collect();
+        ui.label(if worn.is_empty() {
+            "like new".to_string()
+        } else {
+            worn.join(", ")
+        });
+    });
+    for failure in damage.failures(cylinders) {
+        ui.colored_label(egui::Color32::from_rgb(255, 90, 70), failure);
+    }
+    let repair = egui::Button::new("Repair");
+    if ui
+        .add_enabled(damage.worst(cylinders) > 0.0, repair)
+        .clicked()
+    {
+        car.drivetrain.engine.damage = Default::default();
     }
 }
 
