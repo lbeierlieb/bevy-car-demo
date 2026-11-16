@@ -142,9 +142,9 @@ const TURBINE_LEVEL: f32 = 0.75;
 /// Turbo whistle, a band of noise rather than a tone: its centre per shaft revolution per
 /// second, its Q (lower is airier, higher more of a pitch), and its root mean square level
 /// at the shaft's speed limit (at full load; `WHISTLE_IDLE` of it off throttle).
-const WHISTLE_PITCH: f32 = 0.7;
+const WHISTLE_PITCH: f32 = 1.0;
 const WHISTLE_Q: f32 = 4.0;
-const WHISTLE: f32 = 0.012;
+const WHISTLE: f32 = 0.007;
 const WHISTLE_IDLE: f32 = 0.3;
 /// Lowest and highest centre of the whistle (Hz).
 const WHISTLE_MIN: f32 = 100.0;
