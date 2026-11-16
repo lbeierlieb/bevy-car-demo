@@ -55,7 +55,10 @@ screenshot; `tools/dev/strip.sh` removes the hook. Always run `strip.sh` and che
 `grep -c shot src/main.rs` prints 0 before committing. Keys are pressed from a third of
 the frames until the shot (`k` opens the map, `2` hides the panel, `3` the ECU window,
 `4` the garage, `5` the dyno, `6` the showroom, `f` shows the gizmos (off by default), `c` the driver's view),
-so clicks on a window must come after that. `CLICK="x,y,frame;x,y,frame…"` clicks into the
+so clicks on a window must come after that. The F3–F6 windows are always there,
+collapsed to title bars stacked in the top right (`ui::tool_window`, agreed with the user
+so they can be found); their keys (or a click) expand them, and the bars hide with the
+panel (`2`). `CLICK="x,y,frame;x,y,frame…"` clicks into the
 1280×720 window, e.g. on the map. `CAM`/`CAMAT` env vars place the camera (see
 `shot.rs`). `shot.sh` fetches Mesa and Xvfb from the pinned nixpkgs on first use.
 A shot takes about 35 s.

@@ -10,6 +10,7 @@ use crate::car::{ActiveCar, Car};
 use crate::physics::engine::ecu::{Ecu, EcuModel};
 use crate::physics::engine::table::Table;
 use crate::tunes;
+use crate::ui::{ToolInput, tool_window};
 
 /// Grid cell size and the width of the row labels (points).
 const CELL: egui::Vec2 = egui::Vec2::new(40.0, 18.0);
@@ -22,17 +23,13 @@ pub struct EcuUiPlugin;
 impl Plugin for EcuUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EcuPanel>()
-            .add_systems(Update, toggle)
-            .add_systems(
-                EguiPrimaryContextPass,
-                window.run_if(|panel: Res<EcuPanel>| panel.open),
-            );
+            .add_systems(EguiPrimaryContextPass, window);
     }
 }
 
 #[derive(Resource, Default)]
 struct EcuPanel {
-    open: bool,
+    expanded: bool,
     map: MapKind,
     /// Selected cells: the first clicked and the last (shift-)clicked, as (rpm, manifold
     /// pressure) indices.
@@ -127,17 +124,9 @@ impl MapKind {
     }
 }
 
-fn toggle(keys: Res<ButtonInput<KeyCode>>, mut panel: ResMut<EcuPanel>) {
-    if keys.just_pressed(KeyCode::F3) {
-        panel.open = !panel.open;
-        if panel.open {
-            panel.saved = tunes::list();
-        }
-    }
-}
-
 fn window(
     mut contexts: EguiContexts,
+    input: ToolInput,
     active: Res<ActiveCar>,
     mut cars: Query<&mut Car>,
     mut panel: ResMut<EcuPanel>,
@@ -145,12 +134,17 @@ fn window(
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
         return Ok(());
     };
-    let mut open = panel.open;
-    egui::Window::new("ECU tune")
-        .open(&mut open)
-        .default_pos([360.0, 10.0])
+    let ctx = contexts.ctx_mut()?;
+    let tool = ("ECU tune", KeyCode::F3);
+    let Some((window, opened)) = tool_window(ctx, tool, 0, &input, &mut panel.expanded) else {
+        return Ok(());
+    };
+    if opened {
+        panel.saved = tunes::list();
+    }
+    window
         .default_width(LABEL_WIDTH + 19.0 * CELL.x + 20.0)
-        .show(contexts.ctx_mut()?, |ui| {
+        .show(ctx, |ui| {
             readings(ui, &car);
             ui.separator();
             settings(ui, &mut car);
@@ -158,7 +152,6 @@ fn window(
             ui.separator();
             map_editor(ui, &mut panel, &mut car);
         });
-    panel.open = open;
     Ok(())
 }
 

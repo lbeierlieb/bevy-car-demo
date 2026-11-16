@@ -26,6 +26,7 @@ use crate::physics::engine::parts::{HEADERS, INTERCOOLER, Parts, SLOTS};
 use crate::physics::tire::COMPOUNDS;
 use crate::storage::Folder;
 use crate::terrain::Terrain;
+use crate::ui::{ToolInput, collapse_tool, tool_window};
 
 const MAPS: Folder = Folder {
     cache: true,
@@ -47,23 +48,18 @@ pub struct GaragePlugin;
 impl Plugin for GaragePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Garage>()
-            .add_systems(Update, (toggle, bake))
-            .add_systems(
-                EguiPrimaryContextPass,
-                (
-                    window.run_if(|garage: Res<Garage>| garage.open),
-                    showroom.run_if(|garage: Res<Garage>| garage.showroom.is_some()),
-                ),
-            );
+            .add_systems(Update, bake)
+            .add_systems(EguiPrimaryContextPass, (window, showroom));
     }
 }
 
 #[derive(Resource)]
 struct Garage {
-    open: bool,
-    /// The showroom, if it's open: the chassis looked at, and the engine option and paint
-    /// picked for it.
-    showroom: Option<Showroom>,
+    /// Whether the garage and the showroom were expanded last frame.
+    expanded: bool,
+    showroom_expanded: bool,
+    /// The showroom: the chassis looked at, and the engine option and paint picked for it.
+    showroom: Showroom,
     /// The car the draft was taken from, and what's picked so far: the car's build and
     /// its engine's parts.
     car: Option<usize>,
@@ -74,6 +70,7 @@ struct Garage {
     status: String,
 }
 
+#[derive(Clone, Copy)]
 struct Showroom {
     chassis: usize,
     engine: usize,
@@ -84,8 +81,13 @@ impl Default for Garage {
     fn default() -> Self {
         let stock = CarSetup::default();
         Self {
-            open: false,
-            showroom: None,
+            expanded: false,
+            showroom_expanded: false,
+            showroom: Showroom {
+                chassis: stock.build.chassis,
+                engine: 0,
+                paint: stock.build.paint,
+            },
             car: None,
             draft: (stock.build, stock.engine.parts),
             retune: true,
@@ -187,24 +189,6 @@ impl Work {
     fn cancel(self) {}
 }
 
-fn toggle(keys: Res<ButtonInput<KeyCode>>, mut garage: ResMut<Garage>) {
-    if keys.just_pressed(KeyCode::F4) {
-        garage.open = !garage.open;
-        // Take the parts from the car again when it opens.
-        garage.car = None;
-    }
-    if keys.just_pressed(KeyCode::F6) {
-        garage.showroom = match garage.showroom {
-            Some(_) => None,
-            None => Some(Showroom {
-                chassis: garage.draft.0.chassis,
-                engine: 0,
-                paint: garage.draft.0.paint,
-            }),
-        };
-    }
-}
-
 /// The active car and its entity.
 fn active<'a>(
     cars: &'a mut Query<(Entity, &mut Car)>,
@@ -304,6 +288,7 @@ fn fit(
 fn window(
     mut commands: Commands,
     mut contexts: EguiContexts,
+    input: ToolInput,
     terrain: Res<Terrain>,
     active_car: Res<ActiveCar>,
     mut cars: Query<(Entity, &mut Car)>,
@@ -312,29 +297,31 @@ fn window(
     let Some((entity, mut car)) = active(&mut cars, active_car.0) else {
         return Ok(());
     };
+    let ctx = contexts.ctx_mut()?;
+    let tool = ("Garage", KeyCode::F4);
+    let Some((window, opened)) = tool_window(ctx, tool, 1, &input, &mut garage.expanded) else {
+        return Ok(());
+    };
+    if opened {
+        // Take the parts from the car again when it opens.
+        garage.car = None;
+    }
     if garage.car != Some(car.index) || garage.draft.0.chassis != car.setup.build.chassis {
         garage.car = Some(car.index);
         garage.draft = (car.setup.build.clone(), car.setup.engine.parts.clone());
     }
-    let mut open = garage.open;
     let mut build_now = false;
-    egui::Window::new("Garage")
-        .open(&mut open)
-        .default_pos([360.0, 10.0])
-        .default_height(680.0)
-        .vscroll(true)
-        .show(contexts.ctx_mut()?, |ui| {
-            car_parts(ui, &mut garage.draft.0);
-            ui.separator();
-            engine(ui, &mut garage);
-            build_now = build(ui, &mut garage, &car);
-            condition(ui, &mut car);
-            ui.separator();
-            egui::CollapsingHeader::new("Engine parts")
-                .default_open(true)
-                .show(ui, |ui| parts(ui, &mut garage));
-        });
-    garage.open = open;
+    window.default_height(680.0).vscroll(true).show(ctx, |ui| {
+        car_parts(ui, &mut garage.draft.0);
+        ui.separator();
+        engine(ui, &mut garage);
+        build_now = build(ui, &mut garage, &car);
+        condition(ui, &mut car);
+        ui.separator();
+        egui::CollapsingHeader::new("Engine parts")
+            .default_open(true)
+            .show(ui, |ui| parts(ui, &mut garage));
+    });
     if build_now {
         start(&mut commands, &terrain, &mut garage, entity, &mut car);
     }
@@ -736,6 +723,7 @@ fn start(
 fn showroom(
     mut commands: Commands,
     mut contexts: EguiContexts,
+    input: ToolInput,
     terrain: Res<Terrain>,
     active_car: Res<ActiveCar>,
     mut cars: Query<(Entity, &mut Car)>,
@@ -744,35 +732,43 @@ fn showroom(
     let Some((entity, mut car)) = active(&mut cars, active_car.0) else {
         return Ok(());
     };
-    let Some(mut shown) = garage.showroom.take() else {
+    let ctx = contexts.ctx_mut()?;
+    let tool = ("Showroom", KeyCode::F6);
+    let expanded = &mut garage.showroom_expanded;
+    let Some((window, opened)) = tool_window(ctx, tool, 3, &input, expanded) else {
         return Ok(());
     };
-    let (mut open, mut drive) = (true, false);
-    egui::Window::new("Showroom")
-        .open(&mut open)
-        .default_pos([200.0, 60.0])
-        .default_width(560.0)
-        .show(contexts.ctx_mut()?, |ui| {
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    for (i, chassis) in CHASSIS.iter().enumerate() {
-                        let label = format!("{}  ·  {}", chassis.name, chassis.class);
-                        if ui.selectable_label(shown.chassis == i, label).clicked() {
-                            shown = Showroom {
-                                chassis: i,
-                                engine: 0,
-                                paint: chassis.paint,
-                            };
-                        }
+    if opened {
+        // Start at the car being driven.
+        garage.showroom = Showroom {
+            chassis: car.setup.build.chassis,
+            engine: 0,
+            paint: car.setup.build.paint,
+        };
+    }
+    let mut shown = garage.showroom;
+    let mut drive = false;
+    window.default_width(560.0).show(ctx, |ui| {
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                for (i, chassis) in CHASSIS.iter().enumerate() {
+                    let label = format!("{}  ·  {}", chassis.name, chassis.class);
+                    if ui.selectable_label(shown.chassis == i, label).clicked() {
+                        shown = Showroom {
+                            chassis: i,
+                            engine: 0,
+                            paint: chassis.paint,
+                        };
                     }
-                });
-                ui.separator();
-                ui.vertical(|ui| {
-                    ui.set_width(330.0);
-                    drive = brochure(ui, &mut shown);
-                });
+                }
+            });
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.set_width(330.0);
+                drive = brochure(ui, &mut shown);
             });
         });
+    });
     if drive {
         let mut build = CarBuild::factory(shown.chassis);
         build.paint = shown.paint;
@@ -782,7 +778,10 @@ fn showroom(
         garage.retune = true;
         start(&mut commands, &terrain, &mut garage, entity, &mut car);
     }
-    garage.showroom = (open && !drive).then_some(shown);
+    garage.showroom = shown;
+    if drive {
+        collapse_tool(ctx, tool.0);
+    }
     Ok(())
 }
 

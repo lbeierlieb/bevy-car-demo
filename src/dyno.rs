@@ -9,6 +9,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car};
 use crate::physics::engine::{Engine, EngineBuild};
+use crate::ui::{ToolInput, tool_window};
 
 /// The dyno's physics step (s), and the simulated time run per frame (s).
 const STEP: f32 = 1.0 / 120.0;
@@ -37,17 +38,14 @@ pub struct DynoPlugin;
 impl Plugin for DynoPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Dyno>()
-            .add_systems(Update, (toggle, run))
-            .add_systems(
-                EguiPrimaryContextPass,
-                window.run_if(|dyno: Res<Dyno>| dyno.open),
-            );
+            .add_systems(Update, run)
+            .add_systems(EguiPrimaryContextPass, window);
     }
 }
 
 #[derive(Resource)]
 struct Dyno {
-    open: bool,
+    expanded: bool,
     /// How fast the sweep rises (rpm/s): slower is closer to steady state (a turbo has
     /// time to spool), faster is like a quick pull.
     rate: f32,
@@ -59,7 +57,7 @@ struct Dyno {
 impl Default for Dyno {
     fn default() -> Self {
         Self {
-            open: false,
+            expanded: false,
             rate: 250.0,
             sweep: None,
             runs: Vec::new(),
@@ -165,12 +163,6 @@ impl Sweep {
     }
 }
 
-fn toggle(keys: Res<ButtonInput<KeyCode>>, mut dyno: ResMut<Dyno>) {
-    if keys.just_pressed(KeyCode::F5) {
-        dyno.open = !dyno.open;
-    }
-}
-
 fn run(mut dyno: ResMut<Dyno>) {
     let Some(sweep) = &mut dyno.sweep else {
         return;
@@ -184,6 +176,7 @@ fn run(mut dyno: ResMut<Dyno>) {
 
 fn window(
     mut contexts: EguiContexts,
+    input: ToolInput,
     active: Res<ActiveCar>,
     cars: Query<&Car>,
     mut dyno: ResMut<Dyno>,
@@ -191,19 +184,18 @@ fn window(
     let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return Ok(());
     };
-    let mut open = dyno.open;
-    egui::Window::new("Engine dyno")
-        .open(&mut open)
-        .default_pos([360.0, 10.0])
-        .default_width(620.0)
-        .show(contexts.ctx_mut()?, |ui| {
-            controls(ui, &mut dyno, car);
-            ui.separator();
-            plot(ui, &dyno);
-            ui.separator();
-            legend(ui, &dyno);
-        });
-    dyno.open = open;
+    let ctx = contexts.ctx_mut()?;
+    let tool = ("Engine dyno", KeyCode::F5);
+    let Some((window, _)) = tool_window(ctx, tool, 2, &input, &mut dyno.expanded) else {
+        return Ok(());
+    };
+    window.default_width(620.0).show(ctx, |ui| {
+        controls(ui, &mut dyno, car);
+        ui.separator();
+        plot(ui, &dyno);
+        ui.separator();
+        legend(ui, &dyno);
+    });
     Ok(())
 }
 

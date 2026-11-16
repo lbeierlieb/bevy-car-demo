@@ -2,6 +2,7 @@
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy_egui::egui::collapsing_header::CollapsingState;
 use bevy_egui::input::EguiWantsInput;
 use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
 
@@ -36,6 +37,65 @@ impl Plugin for UiPlugin {
 /// uses the keyboard or pointer, the game doesn't see them.
 fn absorb_input(mut settings: ResMut<EguiGlobalSettings>) {
     settings.enable_absorb_bevy_input_system = true;
+}
+
+/// How far the stack of collapsed tool windows is from the top right corner, and how far
+/// apart their title bars are.
+const TOOL_MARGIN: f32 = 10.0;
+const TOOL_SPACING: f32 = 30.0;
+
+/// What a tool window needs to know: its key, and whether the car's panel is shown.
+#[derive(SystemParam)]
+pub struct ToolInput<'w> {
+    keys: Res<'w, ButtonInput<KeyCode>>,
+    view: Res<'w, DebugView>,
+}
+
+/// A tool window (F3 to F6): always there, but collapsed to its title bar until its key
+/// or a click on the bar expands it, so it can be found without knowing the key.
+/// Collapsed, it hides with the car's panel (F2). The bars stack up in the top right
+/// corner (expanded, a window grows to the left and down), `slot` is the place in the
+/// stack. `expanded` keeps whether it was expanded last frame. Gives the window to
+/// show and whether it was just expanded, or nothing while it's hidden.
+pub fn tool_window(
+    ctx: &egui::Context,
+    (name, key): (&str, KeyCode),
+    slot: usize,
+    input: &ToolInput,
+    expanded: &mut bool,
+) -> Option<(egui::Window<'static>, bool)> {
+    let id = egui::Id::new(name);
+    let mut state = CollapsingState::load_with_default_open(ctx, id.with("collapsing"), false);
+    if input.keys.just_pressed(key) {
+        state.set_open(!state.is_open());
+        state.store(ctx);
+    }
+    let opened = state.is_open() && !*expanded;
+    *expanded = state.is_open();
+    if opened {
+        // Over the other windows and the bars below it.
+        ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, id));
+    }
+    if !*expanded && !input.view.ui {
+        return None;
+    }
+    let window = egui::Window::new(format!("{name}  ({key:?})"))
+        .id(id)
+        .default_open(false)
+        .pivot(egui::Align2::RIGHT_TOP)
+        .default_pos(
+            ctx.content_rect().right_top()
+                + egui::vec2(-TOOL_MARGIN, TOOL_MARGIN + slot as f32 * TOOL_SPACING),
+        );
+    Some((window, opened))
+}
+
+/// Collapses the tool window `name` to its title bar.
+pub fn collapse_tool(ctx: &egui::Context, name: &str) {
+    let id = egui::Id::new(name).with("collapsing");
+    let mut state = CollapsingState::load_with_default_open(ctx, id, false);
+    state.set_open(false);
+    state.store(ctx);
 }
 
 /// Mouse input over the panel shouldn't orbit or zoom the camera.
