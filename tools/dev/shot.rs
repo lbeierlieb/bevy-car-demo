@@ -55,7 +55,7 @@ fn click(
 }
 
 fn key(c: char) -> KeyCode {
-    match c { 'w' => KeyCode::KeyW, 'a' => KeyCode::KeyA, 'd' => KeyCode::KeyD, 's' => KeyCode::KeyS, 't' => KeyCode::Tab, 'f' => KeyCode::F1, 'c' => KeyCode::KeyC, 'k' => KeyCode::KeyK, '3' => KeyCode::F3, '4' => KeyCode::F4, _ => KeyCode::Space }
+    match c { 'w' => KeyCode::KeyW, 'a' => KeyCode::KeyA, 'd' => KeyCode::KeyD, 's' => KeyCode::KeyS, 't' => KeyCode::Tab, 'f' => KeyCode::F1, 'c' => KeyCode::KeyC, 'k' => KeyCode::KeyK, '3' => KeyCode::F3, '4' => KeyCode::F4, '5' => KeyCode::F5, _ => KeyCode::Space }
 }
 
 /// CAM="distance,height": look at the forest edge nearest the spawn from that offset.

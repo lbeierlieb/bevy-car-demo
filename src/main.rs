@@ -4,6 +4,7 @@ mod camera;
 mod car;
 mod cockpit;
 mod debug;
+mod dyno;
 mod ecu_ui;
 mod garage;
 mod hud;
@@ -58,7 +59,7 @@ fn main() {
             map::MapPlugin,
             audio::AudioPlugin,
         ))
-        .add_plugins(garage::GaragePlugin)
+        .add_plugins((garage::GaragePlugin, dyno::DynoPlugin))
         .add_systems(Startup, setup)
         .run();
 }

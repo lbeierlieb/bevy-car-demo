@@ -50,7 +50,8 @@ repo, so everything worth knowing between sessions belongs here.
 `main.rs`; `tools/dev/shot.sh out.png [frames] [keys]` renders headless and saves a
 screenshot; `tools/dev/strip.sh` removes the hook. Always run `strip.sh` and check that
 `grep -c shot src/main.rs` prints 0 before committing. Keys are pressed from a third of
-the frames until the shot (`k` opens the map, `3` the ECU window, `4` the garage), so
+the frames until the shot (`k` opens the map, `3` the ECU window, `4` the garage, `5`
+the dyno), so
 clicks on a window must come after that. `CLICK="x,y,frame;x,y,frame…"` clicks into the
 1280×720 window, e.g. on the map. `CAM`/`CAMAT` env vars place the camera (see
 `shot.rs`). `shot.sh` fetches Mesa and Xvfb from the pinned nixpkgs on first use.
@@ -204,6 +205,12 @@ phasing, VTEC-style cam switching).
   factory tune unless unticked. The redline follows from the hardware (`safe_rpm`: 95 %
   of the valve float speed, rods' pull under 70 % of their strength); the factory tune's
   rev limit (first cam profile's with the stock ECU) and the rev counter follow it.
+- Engine dyno (F5, `src/dyno.rs`): a copy of the active car's engine (as built, tuned
+  and worn; a run doesn't wear the car's) held at rpm by the brake, full throttle,
+  settling 3 s at 1000 rpm, then swept at a set rate (100–1000 rpm/s, slow lets a turbo
+  spool) to 50 rpm below the rev limit, sampling crank torque every 100 rpm (1 s
+  simulated per frame). Plots N·m (solid) and hp (dashed); keeps the last 4 runs. The
+  curves are piecewise linear between the maps' 500 rpm grid points.
 - Damage (`damage.rs`, agreed: interference engine, engine and turbo only for now):
   wear 0..1 per part. Per cylinder (with a fixed spread so they fail one by one):
   pistons (knock, divided by `piston_toughness`; holed = dead cylinder), valves (float
