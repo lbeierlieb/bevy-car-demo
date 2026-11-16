@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 
-use crate::chassis::{CLUTCHES, CarBuild, DEFAULT_CHASSIS, SUSPENSIONS};
+use crate::chassis::{CLUTCHES, CarBuild, Chassis, DEFAULT_CHASSIS, SUSPENSIONS};
 use crate::input::WheelInput;
 use crate::physics::collision::Obb;
 use crate::physics::drivetrain::{Differential, Drive, Drivetrain, EngineSetup};
@@ -162,18 +162,8 @@ impl CarSetup {
         let body_offset = Vec3::new(0.0, -chassis.cg_height, front_z + chassis.wheelbase / 2.0);
         let [eye_x, eye_y, eye_left] = chassis.eye;
         let wheels = chassis.wheels();
-        let top = (body.deck.iter().map(|p| p[1]))
-            .chain(body.cabin.iter().map(|p| p[1]))
-            .fold(0.0, f32::max);
-        let (nose, tail) = (body.z(0.0, &wheels), body.z(body.length, &wheels));
-        let half_width = (0..2)
-            .map(|i| (chassis.track[i] + chassis.tire_width[i]) / 2.0)
-            .fold(body.width / 2.0, f32::max);
-        let hull = Obb {
-            center: body_offset + Vec3::new(0.0, (body.floor + top) / 2.0, (nose + tail) / 2.0),
-            axes: [Vec3::X, Vec3::Y, Vec3::Z],
-            half: Vec3::new(half_width, (top - body.floor) / 2.0, (tail - nose) / 2.0),
-        };
+        let mut hull = body_box(chassis);
+        hull.center += body_offset;
         Self {
             name: chassis.name,
             color: build.paint(),
@@ -253,6 +243,25 @@ impl CarSetup {
     pub fn front_weight_with(&self, litres: f32) -> f32 {
         let unsprung = self.front.unsprung_mass;
         (2.0 * self.corner_mass_with(true, litres) + 2.0 * unsprung) / self.mass_with(litres)
+    }
+}
+
+/// The box around a chassis' body (and its wheels, where they stand out), in the body's
+/// design frame: its origin on the ground midway between the axles, forward -z.
+pub fn body_box(chassis: &Chassis) -> Obb {
+    let body = &chassis.body;
+    let wheels = chassis.wheels();
+    let top = (body.deck.iter().map(|p| p[1]))
+        .chain(body.cabin.iter().map(|p| p[1]))
+        .fold(0.0, f32::max);
+    let (nose, tail) = (body.z(0.0, &wheels), body.z(body.length, &wheels));
+    let half_width = (0..2)
+        .map(|i| (chassis.track[i] + chassis.tire_width[i]) / 2.0)
+        .fold(body.width / 2.0, f32::max);
+    Obb {
+        center: Vec3::new(0.0, (body.floor + top) / 2.0, (nose + tail) / 2.0),
+        axes: [Vec3::X, Vec3::Y, Vec3::Z],
+        half: Vec3::new(half_width, (top - body.floor) / 2.0, (tail - nose) / 2.0),
     }
 }
 
