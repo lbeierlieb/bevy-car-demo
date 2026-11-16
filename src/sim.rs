@@ -202,9 +202,11 @@ mod tests {
         };
         // Flat out from a standstill: the gears only ever go up (the clutch closing after
         // a shift spins the wheels up for a moment, which mustn't trigger another shift).
+        // Unsteered, the car leaves the road after a few seconds and crosses fields; much
+        // longer and it spins out, after which shifting down is right.
         let dt = 1.0 / CHASSIS_HZ as f32;
         let mut gears = vec![car.drivetrain.selected_gear()];
-        for _ in 0..(12.0 / dt) as usize {
+        for _ in 0..(10.0 / dt) as usize {
             step_car(&mut car, &terrain, dt);
             let gear = car.drivetrain.selected_gear();
             if gear != *gears.last().unwrap() {
