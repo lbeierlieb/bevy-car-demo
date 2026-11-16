@@ -5,13 +5,13 @@ use std::f32::consts::PI;
 /// Compressor wheel tip speed it's made for (m/s).
 const TIP_SPEED_LIMIT: f32 = 520.0;
 /// Share of the rods' strength their pull at the redline stays below.
-const ROD_MARGIN: f32 = 0.7;
+pub(super) const ROD_MARGIN: f32 = 0.7;
 /// A rod buckles pushing at this many times the pull that breaks it.
 pub const BUCKLING: f32 = 2.5;
 /// Crank angle of the highest cylinder pressure, about (rad after top dead centre).
 const PEAK_ANGLE: f32 = 12.0 * PI / 180.0;
 /// Share of the valve float speed the redline stays below.
-const FLOAT_MARGIN: f32 = 0.95;
+pub(super) const FLOAT_MARGIN: f32 = 0.95;
 
 /// Everything about the engine that is hardware. The cylinder side (bottom end, head,
 /// cams, runners, headers) shapes the baked maps, so changing it means baking them again;
@@ -41,6 +41,9 @@ pub struct EngineHardware {
     pub intake_timing: f32,
     pub exhaust_timing: f32,
     pub valves: ValveTrain,
+    /// How much the head's ports and valves flow, relative to the stock 2-litre four's
+    /// (for its bore): bigger valves and ported runners flow more.
+    pub port_flow: f32,
     pub intake: Intake,
     /// A turbocharger between the air filter and the throttle, and in the exhaust.
     pub turbo: Option<Turbo>,
@@ -275,7 +278,7 @@ impl EngineHardware {
 
     /// Inertia force on a rod at top dead centre at crank speed `omega` (rad/s; N),
     /// m·r·ω²·(1 + r/l).
-    fn rod_pull(&self, omega: f32) -> f32 {
+    pub(super) fn rod_pull(&self, omega: f32) -> f32 {
         let r = self.stroke / 2.0;
         self.reciprocating_mass() * r * omega * omega * (1.0 + r / self.rod_length)
     }
@@ -312,16 +315,18 @@ impl EngineHardware {
 
     /// The 2-litre four with lower compression and a mid-sized turbo, wastegated at about
     /// 0.7 bar of boost, with an intercooler and a diverter valve.
+    #[cfg(test)]
     pub fn turbo() -> Self {
         super::parts::Parts::turbo().hardware()
     }
 }
 
 impl Default for EngineHardware {
-    /// A 2-litre petrol four with fixed cams and a stock exhaust.
+    /// A 2-litre petrol four with fixed cams and a stock exhaust: the W20, which the other
+    /// engines are scaled from.
     fn default() -> Self {
         Self {
-            name: "2.0 naturally aspirated".to_string(),
+            name: "W20 2.0 four".to_string(),
             cylinders: 4,
             bore: 0.086,
             stroke: 0.086,
@@ -349,6 +354,7 @@ impl Default for EngineHardware {
                 rate: 20e3,
                 mass: 0.1,
             },
+            port_flow: 1.0,
             intake: Intake {
                 filter_area: 2.5e-3,
                 throttle_diameter: 0.055,

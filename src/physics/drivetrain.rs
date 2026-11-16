@@ -97,8 +97,6 @@ pub struct EngineSetup {
     /// The parts the engine is built from, and the engine: its hardware, maps and ECU.
     pub parts: Parts,
     pub build: EngineBuild,
-    /// Idle speed (where the clutch starts to bite).
-    pub idle_rpm: f32,
     /// Most torque the clutch can pass while slipping (N·m).
     pub clutch_torque: f32,
     /// Forward gear ratios from first, the reverse ratio, and the final drive.
@@ -120,7 +118,6 @@ impl Default for EngineSetup {
         Self {
             parts: Parts::stock(),
             build: EngineBuild::new(Parts::stock().hardware()),
-            idle_rpm: 850.0,
             clutch_torque: 350.0,
             gears: [3.3, 2.1, 1.5, 1.17, 0.95, 0.8],
             reverse: 3.3,
@@ -151,6 +148,11 @@ impl EngineSetup {
 
     pub fn top_gear(&self) -> i8 {
         self.gears.len() as i8
+    }
+
+    /// The idle speed the ECU holds, above which the automatic clutch starts to bite.
+    pub fn idle_rpm(&self) -> f32 {
+        self.build.ecu.idle_rpm
     }
 
     /// The engine's redline, for the rev counter and the gearbox.
@@ -199,7 +201,7 @@ pub struct WheelDrive {
 impl Drivetrain {
     pub fn new(engine: &EngineSetup) -> Self {
         Self {
-            rpm: engine.idle_rpm,
+            rpm: engine.idle_rpm(),
             running: true,
             gear: 1,
             automatic: false,
@@ -218,7 +220,7 @@ impl Drivetrain {
     pub fn start(&mut self, engine: &EngineSetup) {
         if !self.running && !self.engine.blown(&engine.build.hardware) {
             self.running = true;
-            self.rpm = self.rpm.max(engine.idle_rpm);
+            self.rpm = self.rpm.max(engine.idle_rpm());
             self.engine.start();
         }
     }
@@ -341,7 +343,7 @@ impl Drivetrain {
         }
 
         // Lock once the wheels have caught up with the engine; slip again below idle.
-        if ratio == 0.0 || wheel_rpm < engine.idle_rpm * 0.9 {
+        if ratio == 0.0 || wheel_rpm < engine.idle_rpm() * 0.9 {
             self.locked = false;
         } else if wheel_rpm >= self.rpm - 50.0 {
             self.locked = true;
@@ -357,7 +359,7 @@ impl Drivetrain {
             // Slipping clutch: it bites from 700 rpm above idle and passes its full torque
             // 1500 rpm higher, so the engine pulls away at about 2500 rpm on full throttle.
             // While shifting or in neutral it's open, and after a shift it closes gradually.
-            let bite = ((self.rpm - engine.idle_rpm - 700.0) / 1500.0).clamp(0.0, 1.0);
+            let bite = ((self.rpm - engine.idle_rpm() - 700.0) / 1500.0).clamp(0.0, 1.0);
             let clutch = if ratio == 0.0 {
                 0.0
             } else {
@@ -466,7 +468,7 @@ mod tests {
         // In gear without throttle the clutch stays open and the engine idles.
         assert!(drive(&mut drivetrain, &engine, 0.0, 2.0) < 0.01);
         assert!(
-            (drivetrain.rpm - engine.idle_rpm).abs() < 100.0,
+            (drivetrain.rpm - engine.idle_rpm()).abs() < 100.0,
             "rpm {}",
             drivetrain.rpm
         );
@@ -555,7 +557,7 @@ mod tests {
         drive_with_clutch(&mut drivetrain, &engine, 0.0, |_| 1.0, 1.0);
         assert!(drivetrain.running);
         assert!(
-            (drivetrain.rpm - engine.idle_rpm).abs() < 100.0,
+            (drivetrain.rpm - engine.idle_rpm()).abs() < 100.0,
             "rpm {}",
             drivetrain.rpm
         );

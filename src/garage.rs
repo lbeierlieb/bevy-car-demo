@@ -11,6 +11,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::car::{ActiveCar, Car};
 use crate::physics::engine::ecu::{Ecu, EcuModel};
+use crate::physics::engine::families::{FAMILIES, Version};
 use crate::physics::engine::hardware::EngineHardware;
 use crate::physics::engine::maps::{self, Bake, EngineMaps};
 use crate::physics::engine::parts::{INTERCOOLER, Parts, SLOTS};
@@ -251,12 +252,34 @@ fn window(
 /// The parts to choose from, a row per slot.
 fn parts(ui: &mut egui::Ui, garage: &mut Garage) {
     ui.horizontal(|ui| {
-        ui.label("Start from:");
-        if ui.button("Stock").clicked() {
-            garage.draft = Parts::stock();
-        }
-        if ui.button("Stock turbo").clicked() {
-            garage.draft = Parts::turbo();
+        ui.label("Engine:")
+            .on_hover_text(garage.draft.family().about);
+        let name = |version: &Version| format!("{} {}", version.code, version.name);
+        let current = &garage.draft.family().versions[garage.draft.version];
+        egui::ComboBox::from_id_salt("engine")
+            .width(220.0)
+            .height(500.0)
+            .selected_text(name(current))
+            .show_ui(ui, |ui| {
+                for (f, family) in FAMILIES.iter().enumerate() {
+                    for (v, version) in family.versions.iter().enumerate() {
+                        let chosen = (garage.draft.family, garage.draft.version) == (f, v);
+                        let pick = ui.selectable_label(chosen, name(version));
+                        if pick.on_hover_text(family.about).clicked() {
+                            // As the factory builds it.
+                            garage.draft = Parts {
+                                header_room: garage.draft.header_room,
+                                ..Version::parts(f, v)
+                            };
+                        }
+                    }
+                }
+            });
+        if ui.button("Factory parts").clicked() {
+            garage.draft = Parts {
+                header_room: garage.draft.header_room,
+                ..Version::parts(garage.draft.family, garage.draft.version)
+            };
         }
     });
     let draft = &mut garage.draft;
@@ -264,14 +287,17 @@ fn parts(ui: &mut egui::Ui, garage: &mut Garage) {
         for (i, slot) in SLOTS.iter().enumerate() {
             ui.label(slot.name).on_hover_text(slot.about);
             let enabled = i != INTERCOOLER || draft.has_turbo();
+            let labels: Vec<String> = (0..slot.parts.len())
+                .map(|part| draft.label(i, part))
+                .collect();
             let chosen = &mut draft.chosen[i];
             ui.add_enabled_ui(enabled, |ui| {
                 egui::ComboBox::from_id_salt(slot.name)
-                    .width(200.0)
-                    .selected_text(slot.parts[*chosen].name)
+                    .width(220.0)
+                    .selected_text(&labels[*chosen])
                     .show_ui(ui, |ui| {
-                        for (j, part) in slot.parts.iter().enumerate() {
-                            ui.selectable_value(chosen, j, part.name);
+                        for (j, label) in labels.iter().enumerate() {
+                            ui.selectable_value(chosen, j, label);
                         }
                     });
             });
@@ -331,6 +357,17 @@ fn build(ui: &mut egui::Ui, garage: &mut Garage, car: &mut Car) {
         hardware.redline(),
     ))
     .on_hover_text("Where the valves would soon float, or the rods' load near its limit");
+    let family = garage.draft.family();
+    ui.label(format!(
+        "{}: {}, {:.0} × {:.0} × {:.0} cm, {:.0} kg",
+        family.name,
+        family.layout.name(),
+        family.length * 100.0,
+        family.width * 100.0,
+        family.height * 100.0,
+        family.built_mass(&hardware),
+    ))
+    .on_hover_text("Length along the crank, width and height: what it takes to fit it");
     let changed = garage.draft != car.setup.engine.parts;
     ui.label(if !changed {
         "This is the engine in the car."

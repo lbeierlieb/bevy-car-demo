@@ -123,7 +123,7 @@ impl Cylinder {
     /// One cylinder of `hardware` on cam profile `cam`, the phasers advancing the intake cam
     /// and retarding the exhaust cam by the given phases (crank degrees), on top of the
     /// hardware's cam timing. Valves, runner and header diameters scale with the bore (four
-    /// valves per cylinder).
+    /// valves per cylinder), and their flow areas with the head's port flow.
     pub fn new(hardware: &EngineHardware, cam: &CamProfile, intake: f32, exhaust: f32) -> Self {
         let bore = f64::from(hardware.bore);
         let stroke = f64::from(hardware.stroke);
@@ -132,9 +132,10 @@ impl Cylinder {
         let cr = f64::from(hardware.compression_ratio);
         let separation = f64::from(cam.lobe_separation);
         let lift = f64::from(cam.lift);
+        let flow = f64::from(hardware.port_flow);
         let pipe = |length: f32, diameter: f64| Pipe {
             length: f64::from(length),
-            area: PI / 4.0 * diameter * diameter,
+            area: flow * PI / 4.0 * diameter * diameter,
         };
         Self {
             bore,
@@ -148,14 +149,14 @@ impl Cylinder {
                 half_duration: f64::from(cam.intake_duration) / 2.0,
                 lift,
                 diameter: 0.36 * bore,
-                count: 2.0,
+                count: 2.0 * flow,
             },
             exhaust: Valve {
                 centre: 360.0 - separation + f64::from(exhaust + hardware.exhaust_timing),
                 half_duration: f64::from(cam.exhaust_duration) / 2.0,
                 lift,
                 diameter: 0.3 * bore,
-                count: 2.0,
+                count: 2.0 * flow,
             },
             runner: pipe(hardware.intake.runner_length, 0.45 * bore),
             header: pipe(hardware.exhaust.header_length, 0.42 * bore),

@@ -15,6 +15,7 @@
 pub mod cycle;
 pub mod damage;
 pub mod ecu;
+pub mod families;
 pub mod hardware;
 pub mod maps;
 pub mod parts;
@@ -39,11 +40,11 @@ const GAMMA: f32 = 1.4;
 const STOICHIOMETRIC: f32 = 14.7;
 /// Lower heating value of petrol (J/kg).
 const FUEL_ENERGY: f32 = 44e6;
-/// Discharge coefficient of the throttle and idle valve, and the throttle plate's angle
-/// when closed (it still leaks a little).
+/// Discharge coefficient of the throttle and idle valve, the throttle plate's angle when
+/// closed, and the share of the bore's area it still leaks then.
 const THROTTLE_DISCHARGE: f32 = 0.8;
 const THROTTLE_CLOSED: f32 = 7.0 * PI / 180.0;
-const THROTTLE_LEAK: f32 = 8e-6;
+const THROTTLE_LEAK: f32 = 0.0025;
 /// Steps of the intake per call (its filling is stiff at high rpm).
 const SUBSTEPS: usize = 4;
 /// Pressure step for the flows' slopes in the implicit intake step (Pa).
@@ -220,7 +221,7 @@ impl Engine {
         let area = THROTTLE_DISCHARGE
             * (throttle_area(intake.throttle_diameter, throttle)
                 + intake.idle_valve_area * self.actuators.idle_valve
-                + THROTTLE_LEAK);
+                + THROTTLE_LEAK * PI / 4.0 * intake.throttle_diameter.powi(2));
         let tract_fill = R_AIR * temperature / intake.tract_volume;
         let manifold_fill = R_AIR * temperature / intake.plenum_volume;
         let h = dt / SUBSTEPS as f32;
@@ -620,6 +621,86 @@ mod tests {
         assert!((3000.0..=5500.0).contains(&peak.0), "{curve:?}");
         assert!((180.0..=230.0).contains(&peak.1), "{curve:?}");
         assert!(curve.iter().all(|&(_, t)| t > 120.0), "{curve:?}");
+    }
+
+    /// Peak torque (N·m), peak power (kW) and the speed it's made at (rpm) flat out, with
+    /// a turbo given time to spool.
+    fn peaks(build: &EngineBuild) -> (f32, f32, f32) {
+        let (mut torque, mut power) = (0.0f32, (0.0f32, 0.0));
+        let mut rpm = 1500.0;
+        while rpm <= build.ecu.rev_limit - 100.0 {
+            let engine = run_flat_out(build, rpm, 4.0);
+            let at = engine.torque(build, rpm);
+            let kilowatts = at * rpm * 2.0 * PI / 60.0 / 1000.0;
+            torque = torque.max(at);
+            if kilowatts > power.0 {
+                power = (kilowatts, rpm);
+            }
+            rpm += 500.0;
+        }
+        (torque, power.0, power.1)
+    }
+
+    #[test]
+    fn every_factory_engine_idles_and_pulls() {
+        use families::{FAMILIES, Version};
+        for (f, family) in FAMILIES.iter().enumerate() {
+            for (v, version) in family.versions.iter().enumerate() {
+                let parts = Version::parts(f, v);
+                let hardware = parts.hardware();
+                let maps = EngineMaps::stock(&hardware).expect("baked maps");
+                let ecu = Ecu::calibrated(&hardware, &maps, 95.0, parts.ecu);
+                let build = EngineBuild {
+                    hardware,
+                    maps,
+                    ecu,
+                    octane: 95.0,
+                };
+                let litres = build.hardware.displacement() * 1e3;
+                let (torque, power, at) = peaks(&build);
+                println!(
+                    "{:5} {:24} {torque:4.0} N·m {power:4.0} kW at {at} rpm, redline {}, \
+                     {:.0} N·m/l {:.0} kW/l",
+                    version.code,
+                    version.name,
+                    build.hardware.redline(),
+                    torque / litres,
+                    power / litres,
+                );
+                // Naturally aspirated engines make 85 to 125 N·m a litre, turbo engines
+                // on their stock boost a good deal more; power peaks in the upper half.
+                let per_litre = torque / litres;
+                let expected = if build.hardware.turbo.is_some() {
+                    125.0..200.0
+                } else {
+                    85.0..125.0
+                };
+                assert!(
+                    expected.contains(&per_litre),
+                    "{}: {per_litre} N·m/l",
+                    version.code
+                );
+                assert!(
+                    at >= 0.6 * build.hardware.redline(),
+                    "{}: {at} rpm",
+                    version.code
+                );
+                // It idles with the throttle closed.
+                let mut engine = Engine::default();
+                let mut rpm = 1200.0;
+                for _ in 0..(6.0 * 120.0) as usize {
+                    engine.step(&build, 0.0, rpm, true, 1.0 / 120.0);
+                    let torque = engine.torque(&build, rpm);
+                    rpm += torque / build.hardware.inertia / 120.0 * 60.0 / (2.0 * PI);
+                }
+                let idle = build.ecu.idle_rpm;
+                assert!(
+                    (rpm - idle).abs() < 60.0,
+                    "{}: idles at {rpm}",
+                    version.code
+                );
+            }
+        }
     }
 
     #[test]

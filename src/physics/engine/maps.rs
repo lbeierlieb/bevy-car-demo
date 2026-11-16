@@ -2,13 +2,15 @@
 //! hardware by the cycle simulation (`cycle`), and curves that are the same for every
 //! engine.
 //!
-//! Baking takes a few seconds, so the stock builds' maps come baked with the game
-//! (`baked/`), each with a fingerprint of the hardware and of the simulation's code; any
-//! other build is baked when it's needed. After changing the simulation or a stock build,
+//! Baking takes a few seconds, so the factory engines' maps (every version of every family
+//! in `families`) come baked with the game (`baked/`), each with a fingerprint of the
+//! hardware and of the simulation's code; any other build is baked when it's needed. After
+//! changing the simulation or a factory engine,
 //! bake them again with `cargo test --profile release-dev bake_stock_maps -- --ignored`
 //! (a test checks they're current).
 
 use super::cycle::{Conditions, Cylinder};
+use super::families::FAMILIES;
 use super::hardware::EngineHardware;
 use super::table::{self, Table, curve};
 use super::{AMBIENT_PRESSURE, AMBIENT_TEMPERATURE, R_AIR};
@@ -21,20 +23,18 @@ const REFERENCE_OCTANE: f64 = 95.0;
 /// Exhaust pressures simulated (Pa): the ratio axis reaches pressures no engine sees.
 const EXHAUST_RANGE: (f64, f64) = (10e3, 800e3);
 
-/// The stock builds' maps, baked: the hardware, the file the maps are in, and its text.
-fn stock() -> [(EngineHardware, &'static str, &'static str); 2] {
-    [
-        (
-            EngineHardware::default(),
-            "na.maps",
-            include_str!("baked/na.maps"),
-        ),
-        (
-            EngineHardware::turbo(),
-            "turbo.maps",
-            include_str!("baked/turbo.maps"),
-        ),
-    ]
+/// The factory engines' maps, baked: the hardware, the file the maps are in, and its text.
+#[cfg(test)]
+fn stock() -> Vec<(EngineHardware, String, &'static str)> {
+    let mut stock = Vec::new();
+    for (f, family) in FAMILIES.iter().enumerate() {
+        for (v, version) in family.versions.iter().enumerate() {
+            let hardware = super::families::Version::parts(f, v).hardware();
+            let file = format!("{}.maps", version.code.to_lowercase());
+            stock.push((hardware, file, version.maps));
+        }
+    }
+    stock
 }
 
 /// Grid of the baked maps, in rpm.
@@ -111,12 +111,12 @@ impl EngineMaps {
         Self::stock(hardware).unwrap_or_else(|| Self::bake(hardware))
     }
 
-    /// The maps baked with the game, if `hardware` is (on the cylinder side) a stock build.
+    /// The maps baked with the game, if `hardware` is (on the cylinder side) a factory
+    /// engine.
     pub fn stock(hardware: &EngineHardware) -> Option<Self> {
         let fingerprint = fingerprint(hardware);
-        stock()
-            .into_iter()
-            .find_map(|(_, _, text)| Self::from_text(text, fingerprint))
+        let mut versions = FAMILIES.iter().flat_map(|family| family.versions);
+        versions.find_map(|version| Self::from_text(version.maps, fingerprint))
     }
 
     /// Bakes the maps by simulating cycles all over the grid (on all cores, where there
@@ -439,7 +439,7 @@ fn load_point(hardware: &EngineHardware, ve: &Table, point: &[f32]) -> [f32; 6] 
 pub fn fingerprint(hardware: &EngineHardware) -> u64 {
     let h = hardware;
     let key = format!(
-        "{} {} {} {} {} {:?} {} {} {} {} {} {} {}",
+        "{} {} {} {} {} {:?} {} {} {} {} {} {} {} {}",
         h.cylinders,
         h.bore,
         h.stroke,
@@ -453,6 +453,7 @@ pub fn fingerprint(hardware: &EngineHardware) -> u64 {
         h.intake.runner_length,
         h.exhaust.header_length,
         h.turbo.is_some(),
+        h.port_flow,
     );
     // FNV-1a over the code without its tests, and without line ends so a checkout's
     // don't matter.

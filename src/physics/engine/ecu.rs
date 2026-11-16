@@ -225,7 +225,8 @@ impl Ecu {
             lambda: Table::bake(axes(), |p| lambda(p[1])),
             ve,
             spark,
-            idle_rpm: 850.0,
+            // Wild cams (on the profile it idles on) run too roughly for a low idle.
+            idle_rpm: 850.0 + 12.5 * (hardware.cams[0].intake_duration - 240.0).max(0.0),
             // Without cam control, the valvetrain stays on the first profile.
             rev_limit: hardware.safe_rpm(if model.cam_control() { usize::MAX } else { 0 }),
             limiter_cut: 0.08,
