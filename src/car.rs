@@ -2,14 +2,14 @@
 
 use bevy::prelude::*;
 
-use crate::chassis::{CLUTCHES, CarBuild, DEFAULT_CHASSIS, SUSPENSIONS, TIRES};
+use crate::chassis::{CLUTCHES, CarBuild, DEFAULT_CHASSIS, SUSPENSIONS};
 use crate::input::WheelInput;
 use crate::physics::drivetrain::{Differential, Drive, Drivetrain, EngineSetup};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::parts::Parts;
 use crate::physics::rigid_body::RigidBody;
 use crate::physics::suspension::{ArmGeometry, AxleSetup, Corner};
-use crate::physics::tire::TireParams;
+use crate::physics::tire::{COMPOUNDS, TireParams};
 use crate::terrain::Terrain;
 
 /// Everything the simulation needs to know about a car, worked out from what it's built
@@ -75,7 +75,8 @@ impl CarSetup {
 
         let front_share = rear_z / chassis.wheelbase;
         let (_, ride, damping, camber) = SUSPENSIONS[build.suspension];
-        let grip = chassis.grip * TIRES[build.tires].1;
+        let compound = COMPOUNDS[build.tires];
+        let grip = chassis.grip * compound.grip;
         let axle = |i: usize| {
             let radius = chassis.tire_radius[i];
             let share = if i == 0 {
@@ -111,8 +112,10 @@ impl CarSetup {
                 wheel_inertia: 0.45 * unsprung_mass * radius * radius,
                 tire: TireParams {
                     radius,
+                    compound,
                     mu: grip,
-                    // The tires are sized for the car: their friction is `grip` at rest.
+                    // The tires are sized for the car: their friction is `grip` at rest
+                    // (warm and new).
                     nominal_load: (sprung_mass * share / 2.0 + unsprung_mass) * 9.81,
                     ..stock
                 },
@@ -310,8 +313,13 @@ impl Car {
         if same_engine {
             car.drivetrain.engine = self.drivetrain.engine;
         }
+        let (new, old) = (&car.setup.build, &self.setup.build);
+        let same_tires = new.chassis == old.chassis && new.tires == old.tires;
         for (corner, old) in car.corners.iter_mut().zip(&self.corners) {
             corner.omega = old.omega;
+            if same_tires {
+                corner.tread = old.tread;
+            }
         }
         car
     }
@@ -321,6 +329,14 @@ impl Car {
     pub fn keep_settings(&mut self, old: &Car) {
         self.drivetrain.automatic = old.drivetrain.automatic;
         self.traction_control = old.traction_control;
+    }
+
+    /// Brings every tread to its compound's best temperature, as after a few laps.
+    #[cfg(test)]
+    pub fn warm_tires(&mut self) {
+        for corner in &mut self.corners {
+            corner.tread.temperature = self.setup.axle(corner.front).tire.compound.best;
+        }
     }
 
     pub fn forward_speed(&self) -> f32 {

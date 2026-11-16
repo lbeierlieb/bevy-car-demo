@@ -49,13 +49,16 @@ impl Slide {
     }
 }
 
-/// A driver going round a left-hand circle in second gear, then flooring it until the rear
-/// steps out, and catching the slide a human's reaction time later by pointing the front
-/// wheels where the front axle goes, at a human's steering speed, easing the throttle.
+/// A driver going round a left-hand circle in second gear on warm tires, then flooring it
+/// until the rear steps out, and catching the slide a human's reaction time later by
+/// pointing the front wheels where the front axle goes, at a human's steering speed,
+/// easing the throttle.
 fn power_slide(setup: CarSetup, traction_control: bool) -> Slide {
     let terrain = Terrain::flat();
     let mut car = Car::spawn_at(0, setup, &terrain, 0.0, 0.0, 0.0);
-    car.traction_control = traction_control;
+    car.warm_tires();
+    // Getting up to speed with traction control, so the strong ones don't do a burnout.
+    car.traction_control = true;
     car.drivetrain.gear = 2;
     let dt = 1.0 / CHASSIS_HZ as f32;
     let max_steer = car.setup.max_steer;
@@ -84,6 +87,9 @@ fn power_slide(setup: CarSetup, traction_control: bool) -> Slide {
         let (slip, yaw) = slip_and_yaw(&car);
         let forward = car.forward_speed();
         seen.push((front_axle_direction(&car), yaw));
+        if t >= 6.0 {
+            car.traction_control = traction_control;
+        }
         let c = &mut car.controls;
         if t < 6.0 {
             // Round the circle at a steady speed.
@@ -160,8 +166,8 @@ fn print_state(car: &Car, t: f32) {
 /// spinning or snapping round the other way.
 #[test]
 fn a_power_slide_can_be_caught() {
-    // Tarn W20, Halden S30, Harrow M62.
-    for (chassis, option) in [(3, 0), (4, 1), (6, 1)] {
+    // Tarn W20, Halden S30, Harrow V35.
+    for (chassis, option) in [(3, 0), (4, 1), (6, 2)] {
         let slide = power_slide(CarSetup::factory(chassis, option), false);
         assert!(slide.deepest > 8.0, "{chassis}: no slide: {slide:?}");
         assert!(!slide.spun() && slide.snap_back < 30.0, "{chassis}: {slide:?}");
@@ -205,4 +211,66 @@ fn trace_power_slide() {
     let spec = std::env::var("SLIDE_CAR").unwrap_or("3,0".into());
     let [chassis, option] = [0, 1].map(|i| spec.split(',').nth(i).unwrap().parse().unwrap());
     println!("{:?}", power_slide(CarSetup::factory(chassis, option), false));
+}
+
+/// A car going round the left-hand circle at `speed` (m/s) for `seconds`, calling `each`
+/// every simulated second.
+fn circle(setup: CarSetup, speed: f32, seconds: usize, mut each: impl FnMut(usize, &Car)) {
+    let terrain = Terrain::flat();
+    let mut car = Car::spawn_at(0, setup, &terrain, 0.0, 0.0, 0.0);
+    car.drivetrain.gear = 2;
+    let dt = 1.0 / CHASSIS_HZ as f32;
+    for second in 1..=seconds {
+        for _ in 0..CHASSIS_HZ as usize {
+            let forward = car.forward_speed();
+            car.controls.steer = 0.15;
+            car.controls.throttle = (0.3 + 0.5 * (speed - forward)).clamp(0.0, 1.0);
+            step_car(&mut car, &terrain, dt);
+        }
+        each(second, &car);
+    }
+}
+
+/// Prints how warm and worn the tires get going round a circle at three speeds, for each
+/// compound: `cargo test --profile release-dev tire_temperatures -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn tire_temperatures() {
+    use crate::chassis::CarBuild;
+    use crate::physics::tire::COMPOUNDS;
+    for (tires, compound) in COMPOUNDS.iter().enumerate() {
+        for speed in [8.0, 14.0, 17.0, 19.0] {
+            let factory = CarSetup::factory(3, 0);
+            let build = CarBuild {
+                tires,
+                ..factory.build.clone()
+            };
+            let setup = CarSetup::new(build, factory.engine.parts, factory.engine.build);
+            circle(setup, speed, 120, |second, car| {
+                if [10, 30, 60, 120].contains(&second) {
+                    let corners: Vec<String> = car
+                        .corners
+                        .iter()
+                        .map(|corner| {
+                            let tire = &car.setup.axle(corner.front).tire;
+                            format!(
+                                "{:4.0}°C {:4.1}% {:3.0}%",
+                                corner.tread.temperature,
+                                corner.tread.wear * 100.0,
+                                tire.condition(&corner.tread) * 100.0,
+                            )
+                        })
+                        .collect();
+                    let (slip, _) = slip_and_yaw(car);
+                    println!(
+                        "{:<6} {speed:4.1} m/s {second:3} s  slip {:5.1}°  {:4.1} m/s | {}",
+                        compound.name,
+                        slip.to_degrees(),
+                        car.forward_speed(),
+                        corners.join(" | ")
+                    );
+                }
+            });
+        }
+    }
 }

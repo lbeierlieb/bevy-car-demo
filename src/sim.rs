@@ -357,6 +357,7 @@ mod tests {
         // The muscle car with the 6.2 V8, floored in first.
         let launch = |traction_control: bool| {
             let mut car = Car::spawn_at(0, CarSetup::factory(6, 1), &terrain, p.x, p.y, yaw);
+            car.warm_tires();
             car.traction_control = traction_control;
             run(&mut car, &terrain, 1.0);
             car.controls = Controls {
@@ -444,6 +445,7 @@ mod tests {
         for setup in factory.chain(track) {
             let name = format!("{} ({})", setup.name, SUSPENSIONS[setup.build.suspension].0);
             let mut car = Car::spawn_at(0, setup, &terrain, p.x, p.y, yaw);
+            car.warm_tires();
             // In fourth, as a driver would be at this speed.
             car.drivetrain.shift_to(&car.setup.engine, 4);
             run(&mut car, &terrain, 1.0);
@@ -472,12 +474,13 @@ mod tests {
                     );
                 }
                 // It turns no faster than the steering asks for at the speed it started
-                // from (and a quarter, for the weight shifting forward).
+                // from, and a third: the weight shifts forward, and short cars on grippy
+                // tires turn in for a moment before settling (it's spinning that's wrong).
                 let wheelbase = car.setup.rear_z - car.setup.front_z;
                 let asked = 25.0 * 0.05 * car.setup.max_steer / wheelbase;
                 let yaw_rate = car.body.angular_velocity.y.abs();
                 assert!(
-                    yaw_rate < 1.25 * asked,
+                    yaw_rate < 1.35 * asked,
                     "{name}: yaw rate {yaw_rate:.2} at {time:.2} s"
                 );
             }

@@ -15,7 +15,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::car::{ActiveCar, Car, CarSetup, heading};
 use crate::chassis::{
-    CHASSIS, CLUTCHES, CarBuild, GEARBOXES, PAINTS, SUSPENSIONS, TIRES, needs_adapter,
+    CHASSIS, CLUTCHES, CarBuild, GEARBOXES, PAINTS, SUSPENSIONS, needs_adapter,
 };
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::ecu::{Ecu, EcuModel};
@@ -23,6 +23,7 @@ use crate::physics::engine::families::{FAMILIES, Version};
 use crate::physics::engine::hardware::EngineHardware;
 use crate::physics::engine::maps::{self, Bake, EngineMaps};
 use crate::physics::engine::parts::{HEADERS, INTERCOOLER, Parts, SLOTS};
+use crate::physics::tire::COMPOUNDS;
 use crate::storage::Folder;
 use crate::terrain::Terrain;
 
@@ -415,8 +416,9 @@ fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
             &SUSPENSIONS.map(|kit| kit.0),
         );
         ui.end_row();
-        ui.label("Tires");
-        combo(ui, "tires", &mut draft.tires, &TIRES.map(|(name, _)| name));
+        ui.label("Tires")
+            .on_hover_text(COMPOUNDS[draft.tires].about);
+        combo(ui, "tires", &mut draft.tires, &COMPOUNDS.map(|compound| compound.name));
         ui.end_row();
     });
 }

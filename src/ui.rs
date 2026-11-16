@@ -313,6 +313,9 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
             "Camber °",
             "Travel mm",
             "ω rad/s",
+            "Tread °C",
+            "Wear %",
+            "Grip %",
         ] {
             ui.label(header);
         }
@@ -326,6 +329,10 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
             ui.label(format!("{:.2}", corner.pose.camber.to_degrees()));
             ui.label(format!("{:.0}", corner.travel * 1000.0));
             ui.label(format!("{:.0}", corner.omega));
+            let tire = &car.setup.axle(corner.front).tire;
+            ui.label(format!("{:.0}", corner.tread.temperature));
+            ui.label(format!("{:.1}", corner.tread.wear * 100.0));
+            ui.label(format!("{:.0}", tire.condition(&corner.tread) * 100.0));
             ui.end_row();
         }
     });
@@ -353,12 +360,12 @@ fn setup(ui: &mut egui::Ui, car: &mut Car) {
         axle_sliders(ui, axle);
     }
     ui.strong("Tires");
-    let mut tire = setup.front.tire;
-    ui.add(egui::Slider::new(&mut tire.mu, 0.5..=1.8).text("Peak μ"));
-    ui.add(egui::Slider::new(&mut tire.b_long, 5.0..=25.0).text("B longitudinal"));
-    ui.add(egui::Slider::new(&mut tire.b_lat, 5.0..=25.0).text("B lateral"));
-    setup.front.tire = tire;
-    setup.rear.tire = tire;
+    ui.label(setup.front.tire.compound.name)
+        .on_hover_text(setup.front.tire.compound.about);
+    let mut mu = setup.front.tire.mu;
+    ui.add(egui::Slider::new(&mut mu, 0.5..=1.8).text("Peak μ (warm, new)"));
+    setup.front.tire.mu = mu;
+    setup.rear.tire.mu = mu;
     ui.strong("Brakes");
     ui.add(egui::Slider::new(&mut setup.brake_torque, 1_000.0..=6_000.0).text("Torque N·m"));
     ui.add(egui::Slider::new(&mut setup.brake_bias, 0.4..=0.9).text("Front share"));

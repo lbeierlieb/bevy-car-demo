@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 
-use super::tire::{TireForce, TireParams};
+use super::tire::{TireForce, TireParams, Tread};
 use crate::terrain::Terrain;
 
 const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
@@ -248,6 +248,8 @@ pub struct Corner {
     /// Wheel spin rate (rad/s, positive rolls forward) and accumulated angle for rendering.
     pub omega: f32,
     pub spin: f32,
+    /// The tire's tread: temperature and wear.
+    pub tread: Tread,
     // Inputs, set by the car before each step.
     pub steer: f32,
     pub drive_torque: f32,
@@ -271,6 +273,7 @@ impl Corner {
             theta_dot: 0.0,
             omega: 0.0,
             spin: 0.0,
+            tread: Tread::default(),
             steer: 0.0,
             drive_torque: 0.0,
             drive_inertia: 0.0,
@@ -312,6 +315,7 @@ impl Corner {
         // Without ground contact the wheel just spins up under drive torque.
         let inertia = axle.wheel_inertia + self.drive_inertia;
         let mut omega = self.omega + self.drive_torque / inertia * dt;
+        let condition = tire.condition(&self.tread);
         let patch = hit.map(|hit| {
             let n = hit.normal;
             let penetration = tire.radius - hit.distance;
@@ -322,8 +326,9 @@ impl Corner {
 
             // Wheel spin is the stiffest part of the system: update it implicitly by
             // linearising the longitudinal force around the current spin rate.
-            let f0 = tire.force(vx, vy, self.omega, load);
-            let df_domega = (tire.force(vx, vy, self.omega + 0.01, load).fx - f0.fx) / 0.01;
+            let f0 = tire.force(vx, vy, self.omega, load, condition);
+            let nudged = tire.force(vx, vy, self.omega + 0.01, load, condition);
+            let df_domega = (nudged.fx - f0.fx) / 0.01;
             omega = self.omega
                 + dt * (self.drive_torque - tire.radius * f0.fx)
                     / (inertia + dt * tire.radius * df_domega.max(0.0));
@@ -332,8 +337,18 @@ impl Corner {
         self.omega = apply_brake(omega, self.brake_torque, inertia, dt);
         self.spin += self.omega * dt;
 
+        let tread = &mut self.tread;
+        let omega = self.omega;
+        if patch.is_none() {
+            tire.cool(tread, hub_velocity.length(), dt);
+        }
         self.contact = patch.map(|(point, normal, load, forward, right, vx, vy)| {
-            let tire = tire.force(vx, vy, self.omega, load);
+            let params = tire;
+            let tire = params.force(vx, vy, omega, load, condition);
+            // The rubber slides at the difference between the wheel's rim and the road
+            // along, and at the sideways speed across.
+            let slide_x = omega * params.radius - vx;
+            params.heat(tread, &tire, slide_x, vy, load, vx, dt);
             let force = normal * load + forward * tire.fx + right * tire.fy;
             Contact {
                 point,

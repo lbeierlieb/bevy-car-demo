@@ -163,8 +163,6 @@ pub const SUSPENSIONS: [(&str, f32, f32, f32); 3] = [
     ("Track", 1.45, 1.3, 1.8),
 ];
 
-/// Tires: the name and the grip relative to the chassis' stock ones.
-pub const TIRES: [(&str, f32); 3] = [("Stock", 1.0), ("Sport", 1.08), ("Semi-slick", 1.18)];
 
 /// Paints every car comes in.
 pub const PAINTS: [(&str, [f32; 3]); 10] = [
