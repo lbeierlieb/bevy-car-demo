@@ -192,3 +192,151 @@ impl Ecu {
         }
     }
 }
+
+/// Tunes as text: a comment, `engine <name>` (the build it was made for), the settings as
+/// `<key> <value>`, and each map as `table <name>`, an `axis` line per axis, and `values`
+/// lines (one per point of the first axis).
+impl Ecu {
+    pub fn to_text(&self, engine: &str) -> String {
+        let join = |values: &[f32]| {
+            values
+                .iter()
+                .map(f32::to_string)
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let mut text = format!("# car-sim ECU tune\nengine {engine}\n");
+        text += &format!("cylinders {}\n", self.cylinders);
+        for (key, value) in self.settings() {
+            text += &format!("{key} {value}\n");
+        }
+        for (name, table) in [
+            ("ve", &self.ve),
+            ("lambda", &self.lambda),
+            ("spark", &self.spark),
+        ] {
+            text += &format!("table {name}\n");
+            for axis in table.axes() {
+                text += &format!("axis {}\n", join(axis));
+            }
+            let row = table.values().len() / table.axes()[0].len();
+            for values in table.values().chunks(row) {
+                text += &format!("values {}\n", join(values));
+            }
+        }
+        text
+    }
+
+    /// Reads a tune written by `to_text` into this ECU; whatever is missing or broken keeps
+    /// its value. Returns the engine the tune was made for.
+    pub fn read_text(&mut self, text: &str) -> Option<String> {
+        let mut engine = None;
+        // The table being read: its name, axes and values so far.
+        let mut table: Option<(String, Vec<Vec<f32>>, Vec<f32>)> = None;
+        let numbers = |rest: &str| {
+            rest.split_whitespace()
+                .map(str::parse)
+                .collect::<Result<Vec<f32>, _>>()
+                .ok()
+        };
+        for line in text.lines().chain(["end"]) {
+            let (key, rest) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
+            match (key, &mut table) {
+                ("axis", Some((_, axes, _))) => axes.extend(numbers(rest)),
+                ("values", Some((_, _, values))) => {
+                    values.extend(numbers(rest).into_iter().flatten())
+                }
+                _ => {
+                    if let Some((name, axes, values)) = table.take() {
+                        self.set_table(&name, axes, values);
+                    }
+                    match key {
+                        "engine" => engine = Some(rest.trim().to_string()),
+                        "table" => table = Some((rest.trim().to_string(), Vec::new(), Vec::new())),
+                        "cylinders" => {
+                            self.cylinders = rest.trim().parse().unwrap_or(self.cylinders)
+                        }
+                        _ => {
+                            let value = rest.trim().parse::<f32>().ok().filter(|v| v.is_finite());
+                            if let (Some(field), Some(value)) = (self.setting(key), value) {
+                                *field = value;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        engine
+    }
+
+    fn settings(&self) -> [(&'static str, f32); 5] {
+        [
+            ("displacement", self.displacement),
+            ("idle_rpm", self.idle_rpm),
+            ("rev_limit", self.rev_limit),
+            ("limiter_cut", self.limiter_cut),
+            ("limiter_fuel", self.limiter_fuel),
+        ]
+    }
+
+    fn setting(&mut self, key: &str) -> Option<&mut f32> {
+        match key {
+            "displacement" => Some(&mut self.displacement),
+            "idle_rpm" => Some(&mut self.idle_rpm),
+            "rev_limit" => Some(&mut self.rev_limit),
+            "limiter_cut" => Some(&mut self.limiter_cut),
+            "limiter_fuel" => Some(&mut self.limiter_fuel),
+            _ => None,
+        }
+    }
+
+    /// Replaces a map, if the tune's version of it fits together.
+    fn set_table(&mut self, name: &str, axes: Vec<Vec<f32>>, values: Vec<f32>) {
+        let target = match name {
+            "ve" => &mut self.ve,
+            "lambda" => &mut self.lambda,
+            "spark" => &mut self.spark,
+            _ => return,
+        };
+        if let Some(table) = Table::from_parts(axes, values) {
+            *target = table;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::physics::engine::EngineBuild;
+    use crate::physics::engine::hardware::EngineHardware;
+
+    #[test]
+    fn tunes_survive_text() {
+        let build = EngineBuild::default();
+        let mut tuned = build.ecu.clone();
+        tuned.rev_limit = 7234.5;
+        tuned.spark.set_cell(&[10, 8], 31.25);
+        tuned.ve.scale_at(&[3300.0, 71e3], 1.07);
+        let text = tuned.to_text("test engine");
+        // Read into a different ECU (the turbo's, with longer maps): all of it comes over.
+        let turbo = EngineBuild::new(EngineHardware::turbo());
+        let mut read = turbo.ecu.clone();
+        assert_eq!(read.read_text(&text).as_deref(), Some("test engine"));
+        assert_eq!(read.to_text("test engine"), text);
+        assert_eq!(read.spark.cell(&[10, 8]), 31.25);
+        assert_eq!(read.ve.values(), tuned.ve.values());
+    }
+
+    #[test]
+    fn broken_tunes_keep_what_they_cannot_replace() {
+        let factory = EngineBuild::default().ecu;
+        let mut ecu = factory.clone();
+        let text = "rev_limit lots\nidle_rpm 900\ntable spark\naxis 0 1000\naxis 1 2\nvalues 1 2\n\
+                    table lambda\naxis 0 500\nvalues 1 1\nvalues 1 1\n";
+        assert_eq!(ecu.read_text(text), None);
+        assert_eq!(ecu.rev_limit, factory.rev_limit);
+        assert_eq!(ecu.idle_rpm, 900.0);
+        // A spark map short of values and a λ map with the wrong axes stay as they were.
+        assert_eq!(ecu.spark.values(), factory.spark.values());
+        assert_eq!(ecu.lambda.values(), factory.lambda.values());
+    }
+}

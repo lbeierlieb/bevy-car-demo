@@ -13,6 +13,7 @@ mod scenery;
 mod sim;
 mod terrain;
 mod trees;
+mod tunes;
 mod ui;
 mod visuals;
 mod wheel_base;

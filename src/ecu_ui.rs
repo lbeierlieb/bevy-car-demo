@@ -1,6 +1,6 @@
 //! The ECU tuning window (F3) for the active car: its fuel, target λ and spark maps as
 //! grids to edit, with the engine's operating point on them, live readings to tune by,
-//! and the rev limiter and idle settings.
+//! the rev limiter and idle settings, and saving and loading tunes.
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, Rect, Sense, Stroke, pos2, vec2};
@@ -9,6 +9,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use crate::car::{ActiveCar, Car};
 use crate::physics::engine::ecu::Ecu;
 use crate::physics::engine::table::Table;
+use crate::tunes;
 
 /// Grid cell size and the width of the row labels (points).
 const CELL: egui::Vec2 = egui::Vec2::new(40.0, 18.0);
@@ -38,6 +39,13 @@ struct EcuPanel {
     selection: Option<[(usize, usize); 2]>,
     /// Value for "Set", as shown.
     value: f32,
+    /// Name to save the tune under, the saved tunes, the one picked from them, whether
+    /// "Delete" was clicked once already, and what the last save or load did.
+    name: String,
+    saved: Vec<String>,
+    chosen: Option<String>,
+    deleting: bool,
+    status: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -102,6 +110,9 @@ impl MapKind {
 fn toggle(keys: Res<ButtonInput<KeyCode>>, mut panel: ResMut<EcuPanel>) {
     if keys.just_pressed(KeyCode::F3) {
         panel.open = !panel.open;
+        if panel.open {
+            panel.saved = tunes::list();
+        }
     }
 }
 
@@ -123,6 +134,7 @@ fn window(
             readings(ui, &car);
             ui.separator();
             settings(ui, &mut car);
+            saved_tunes(ui, &mut panel, &mut car);
             ui.separator();
             map_editor(ui, &mut panel, &mut car);
         });
@@ -209,6 +221,80 @@ fn settings(ui: &mut egui::Ui, car: &mut Car) {
             *ecu = Ecu::calibrated(&build.hardware, &build.maps, 95.0);
         }
     });
+}
+
+/// Saving the tune under a name, and loading or deleting saved ones.
+fn saved_tunes(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
+    let build = &mut car.setup.engine.build;
+    ui.horizontal(|ui| {
+        ui.label("Tune");
+        let name = egui::TextEdit::singleline(&mut panel.name)
+            .hint_text("name")
+            .desired_width(140.0);
+        ui.add(name);
+        if ui.button("Save").clicked() {
+            panel.status = match tunes::clean_name(&panel.name) {
+                None => "Give the tune a name first.".to_string(),
+                Some(name) => match tunes::save(&name, &build.ecu.to_text(build.hardware.name)) {
+                    Ok(()) => {
+                        panel.saved = tunes::list();
+                        panel.chosen = Some(name.clone());
+                        panel.name = name.clone();
+                        format!("Saved \"{name}\".")
+                    }
+                    Err(err) => format!("Couldn't save: {err}"),
+                },
+            };
+        }
+        ui.separator();
+        let shown = panel.chosen.as_deref().unwrap_or("Saved tunes");
+        egui::ComboBox::from_id_salt("saved tunes")
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                for name in &panel.saved {
+                    ui.selectable_value(&mut panel.chosen, Some(name.clone()), name);
+                }
+            });
+        let Some(chosen) = panel.chosen.clone() else {
+            return;
+        };
+        if ui.button("Load").clicked() {
+            panel.deleting = false;
+            panel.status = match tunes::load(&chosen) {
+                None => format!("Couldn't read \"{chosen}\"."),
+                Some(text) => {
+                    // Over this engine's factory tune: anything the file lacks comes from it.
+                    let mut ecu = Ecu::calibrated(&build.hardware, &build.maps, 95.0);
+                    let made_for = ecu.read_text(&text);
+                    build.ecu = ecu;
+                    panel.name = chosen.clone();
+                    match made_for {
+                        Some(engine) if engine != build.hardware.name => format!(
+                            "Loaded \"{chosen}\", made for the {engine}: watch λ and knock."
+                        ),
+                        _ => format!("Loaded \"{chosen}\"."),
+                    }
+                }
+            };
+        }
+        let delete = if panel.deleting {
+            "Really delete?"
+        } else {
+            "Delete"
+        };
+        if ui.button(delete).clicked() {
+            if panel.deleting {
+                tunes::delete(&chosen);
+                panel.saved = tunes::list();
+                panel.chosen = None;
+                panel.status = format!("Deleted \"{chosen}\".");
+            }
+            panel.deleting = !panel.deleting;
+        }
+    });
+    if !panel.status.is_empty() {
+        ui.label(&panel.status);
+    }
 }
 
 /// Map choice, editing tools, and the grid.

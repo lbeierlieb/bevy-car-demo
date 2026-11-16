@@ -174,8 +174,10 @@ phasing, VTEC-style cam switching).
 - ECU tuning window (F3, `src/ecu_ui.rs`): VE, target λ and spark grids with the
   operating point, block selection and +/-/set, "Correct VE here" (scales the cells
   around the operating point by measured/target λ), rev limiter, idle, factory tune.
-  Tunes aren't saved yet, and swapping the engine build in the setup panel replaces
-  the tune with the new build's factory tune.
+  Tunes are saved by name as text (`src/tunes.rs`: `~/.config/car-sim/tunes/*.tune`,
+  local storage on the web) with the build they were made for; loading reads over the
+  engine's factory tune and warns if the build differs. Swapping the engine build in
+  the setup panel replaces the tune with the new build's factory tune.
 - Next in the plan: the offline cycle sim in `tools/bake` and hardware parts.
 
 ## Audio

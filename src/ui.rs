@@ -324,33 +324,30 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
     });
 }
 
+/// Engine builds to choose from.
+const BUILDS: [fn() -> EngineHardware; 2] = [EngineHardware::default, EngineHardware::turbo];
+
 /// The engine build (swapping it bakes its maps and gives it a factory tune) and the fuel.
 fn engine_setup(ui: &mut egui::Ui, car: &mut Car) {
     ui.strong("Engine");
     let build = &mut car.setup.engine.build;
-    let turbo = build.hardware.turbo.is_some();
-    let mut choice = turbo;
-    let name = |turbo| {
-        if turbo {
-            "2.0 turbo"
-        } else {
-            "2.0 naturally aspirated"
-        }
-    };
+    let current = build.hardware.name;
+    let mut choice = current;
     egui::ComboBox::from_label("Build")
-        .selected_text(name(turbo))
+        .selected_text(current)
         .show_ui(ui, |ui| {
-            for option in [false, true] {
-                ui.selectable_value(&mut choice, option, name(option));
+            for make in BUILDS {
+                let name = make().name;
+                ui.selectable_value(&mut choice, name, name);
             }
         });
-    if choice != turbo {
+    if let Some(hardware) = BUILDS
+        .iter()
+        .map(|make| make())
+        .find(|h| h.name != current && h.name == choice)
+    {
         let octane = build.octane;
-        *build = EngineBuild::new(if choice {
-            EngineHardware::turbo()
-        } else {
-            EngineHardware::default()
-        });
+        *build = EngineBuild::new(hardware);
         build.octane = octane;
         car.drivetrain.engine = Engine::default();
     }

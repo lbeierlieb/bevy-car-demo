@@ -31,6 +31,27 @@ impl Table {
         Self { axes, values }
     }
 
+    /// A table from its axes and its values (row-major, the last axis fastest), if they
+    /// fit together and the axes ascend.
+    pub fn from_parts(axes: Vec<Vec<f32>>, values: Vec<f32>) -> Option<Self> {
+        let fits = !axes.is_empty()
+            && axes.len() <= MAX_AXES
+            && axes
+                .iter()
+                .all(|axis| !axis.is_empty() && axis.windows(2).all(|pair| pair[0] < pair[1]))
+            && axes.iter().map(Vec::len).product::<usize>() == values.len()
+            && values.iter().all(|value| value.is_finite());
+        fits.then_some(Self { axes, values })
+    }
+
+    pub fn axes(&self) -> &[Vec<f32>] {
+        &self.axes
+    }
+
+    pub fn values(&self) -> &[f32] {
+        &self.values
+    }
+
     pub fn get(&self, point: &[f32]) -> f32 {
         self.corners(point)
             .map(|(index, weight)| weight * self.values[index])

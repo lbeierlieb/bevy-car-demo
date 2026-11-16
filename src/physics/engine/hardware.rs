@@ -8,6 +8,7 @@ use std::f32::consts::PI;
 /// restrictions) act live.
 #[derive(Clone, Debug)]
 pub struct EngineHardware {
+    pub name: &'static str,
     pub cylinders: u32,
     /// Bore and stroke (m).
     pub bore: f32,
@@ -201,6 +202,7 @@ impl EngineHardware {
     pub fn turbo() -> Self {
         let stock = Self::default();
         Self {
+            name: "2.0 turbo",
             compression_ratio: 8.8,
             intake: Intake {
                 tract_volume: 6.0e-3,
@@ -243,6 +245,7 @@ impl Default for EngineHardware {
     /// A 2-litre petrol four with fixed cams and a stock exhaust.
     fn default() -> Self {
         Self {
+            name: "2.0 naturally aspirated",
             cylinders: 4,
             bore: 0.086,
             stroke: 0.086,
