@@ -208,6 +208,21 @@ catalogue entries, and things like swap subframes are named so they can be price
   (ECU idle speed follows the cam). With all-wheel drive, locked front wheels drag the
   rear ones along through the centre differential. Unsteered test runs leave the road
   within a few seconds in the quick cars.
+- **Fuel** (`physics/fuel.rs`, agreed with the user: R and the panel's fuel load slider
+  refill, no stations; with starvation): each chassis has a `Tank` (litres, centre
+  behind the front axle and height; mid-engined Calder and rear-engined Rheon up front).
+  The engine reports what it injects (`Engine::fuel_flow`) and gets `fuel_supply`, a
+  share of it. Level kept in f64 (a step's burn vanishes against a full tank in f32).
+  The fuel is a point mass at the tank: `RigidBody` has a centre-of-mass offset from its
+  reference point (`center`, `load`, `add_force_at_center` for gravity and drag), reset
+  and reloaded each step from the empty car (`Car::load_fuel`). Springs, tires and
+  brakes are matched to half a tank (`corner_mass`). Starvation: the fuel needs 1 % of
+  the tank plus 12 % per g (sideways and lengthwise, against the floor, so slopes
+  count) to cover the pickup, sloshing over 0.4 s, the lines bridging 0.25 s. Nearly
+  empty in a long corner it leans out until the car slows enough. Empty, the engine
+  stops; with the automatic clutch it restarts by itself once fuel comes back. Cars
+  start full. `consumption` (ignored) prints every car at 100 and 150 km/h; the coupé's
+  2-litre does about 7 L/100 km at 100, idling 0.7 L/h.
 - Not done: the engine sound per layout was never listened to (no audio in the
   sandbox); other suspension types; turbo kits limited by bay room; prices and saved
   cars; gearbox and clutch damage; collisions of the body.
