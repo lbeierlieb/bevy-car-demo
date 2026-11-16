@@ -232,8 +232,8 @@ and without traction control; `trace_power_slide` prints one step by step
 - Load sensitivity (`TireParams::load_sensitivity`, 0.1) made slides slightly deeper,
   not easier, but makes axle balance matter. Relaxation length wasn't added: at speed it
   lags by only ~20 ms, so it matters only at low speed.
-- Mid- and rear-engined cars still spin with the bot (plausible), and so do the 6.2 V8
-  Harrow and the 5-litre V8s snap back; the other front-engined ones
+- With the bot, mid- and rear-engined cars still spin (plausible), as does the 6.2 V8
+  Harrow floored in second, and the 5-litre V8s snap back; the other front-engined cars
   are caught (asserted by `a_power_slide_can_be_caught`).
 - Tire compounds (`tire::COMPOUNDS`, agreed with the user): street (grips from cold,
   best at 65 °C, lets go gently past the peak, overheats when driven hard), sport, race
