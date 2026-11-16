@@ -223,6 +223,19 @@ catalogue entries, and things like swap subframes are named so they can be price
   stops; with the automatic clutch it restarts by itself once fuel comes back. Cars
   start full. `consumption` (ignored) prints every car at 100 and 150 km/h; the coupé's
   2-litre does about 7 L/100 km at 100, idling 0.7 L/h.
+- **Collisions** (`physics/collision.rs`, `obstacles.rs`): a car's body is one box
+  (`CarSetup::hull`, from the body's outline, widened to open wheels). 26 points on it
+  (corners, edge and face middles) push against the ground; houses (`buildings::Shell`,
+  up to the ridge) and tree trunks (`trees::Tree::trunk`, squares; bushes none) are
+  `Upright` boxes in a CSR grid of 8 m cells in `Terrain::obstacles` (610k, ~17 MB,
+  built by a startup system in ~0.15 s; empty in tests unless set). Box against box by
+  separating axes (edge axes need a 5 % better overlap to win), the contact point by
+  projecting back and forth between the boxes. Impulses (sequential, accumulated, with
+  friction, restitution above 1 m/s, 40 % of the overlap pushed out per step) between
+  `RigidBody::integrate_velocity` and `integrate_position`. Car against car is
+  `sim::collide_cars`, run over all pairs in `simulate` after the steps (not yet seen in
+  the game with only one car). No damage, sounds or wheel collisions yet; a crash at speed
+  just stops the body (wheel spin is left as it was).
 - Not done: the engine sound per layout was never listened to (no audio in the
   sandbox); other suspension types; turbo kits limited by bay room; prices and saved
   cars; gearbox and clutch damage; collisions of the body.
