@@ -12,6 +12,7 @@ impl Plugin for ShotPlugin {
             // Before the car gets its meshes, which would be added to a despawned car.
             app.add_systems(PreUpdate, (pick_car, line_up));
             app.add_systems(PostUpdate, car_cam.after(forest_cam).before(bevy::transform::TransformSystems::Propagate));
+            app.add_systems(PostUpdate, traffic_cam.after(car_cam).before(bevy::transform::TransformSystems::Propagate));
         }
     }
 }
@@ -175,4 +176,22 @@ fn wheel_log(time: Res<Time<Real>>, wheel: Res<crate::input::WheelInput>, cars: 
     eprintln!("WHEEL t {t:6.1} steer {:?} thr {:?} clutch {:?} shifter {:?} | gear {} rpm {:5.0} running {} speed {:5.2} | torque {:7.1} ffb {:.3} {:?}",
         wheel.steer, wheel.throttle, wheel.clutch, wheel.shifter, car.drivetrain.gear, car.drivetrain.rpm, car.drivetrain.running,
         car.forward_speed(), car.steering_torque, ffb.level, ffb.problem);
+}
+
+/// TRAFFICCAM="back,height[,nth]": follow the nth (default 0) nearest traffic car to the
+/// player from `back` m behind it and `height` m up.
+fn traffic_cam(
+    mut cams: Query<&mut Transform, With<Camera3d>>,
+    cars: Query<&crate::car::Car>,
+    traffic: Query<&crate::traffic::TrafficCar>,
+) {
+    let Ok(spec) = std::env::var("TRAFFICCAM") else { return };
+    let v: Vec<f32> = spec.split(',').map(|s| s.parse().unwrap()).collect();
+    let Some(player) = cars.iter().next() else { return };
+    let mut near: Vec<_> = traffic.iter().map(|t| &t.body).collect();
+    near.sort_by(|a, b| a.position.distance(player.body.position).total_cmp(&b.position.distance(player.body.position)));
+    let Some(body) = near.get(v.get(2).copied().unwrap_or(0.0) as usize) else { return };
+    let forward = body.rotation * Vec3::NEG_Z;
+    let eye = body.position - forward * v[0] + Vec3::Y * v[1];
+    for mut t in &mut cams { *t = Transform::from_translation(eye).looking_at(body.position + forward * 6.0, Vec3::Y); }
 }

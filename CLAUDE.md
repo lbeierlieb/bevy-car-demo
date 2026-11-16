@@ -67,6 +67,8 @@ flat straight (the spawn is in a village, where walls and slopes block the view)
 left, the sunlit side), up, and ahead. Side views of five:
 `LINEUP=0,5 CARCAM="-21,2,0" bash tools/dev/shot.sh out.png 60 2`; one car close up:
 `LINEUP=3,1 CARCAM="-3.6,1.9,4.6"`; from the driver's seat: keys `2c`.
+`TRAFFICCAM="back,height[,nth]"` follows the nth nearest traffic car from behind, e.g.
+`TRAFFICCAM="9,2.2,1" bash tools/dev/shot.sh out.png 200 2`.
 
 ### Virtual wheel (`tools/dev/fakewheel`)
 
@@ -233,9 +235,28 @@ catalogue entries, and things like swap subframes are named so they can be price
   projecting back and forth between the boxes. Impulses (sequential, accumulated, with
   friction, restitution above 1 m/s, 40 % of the overlap pushed out per step) between
   `RigidBody::integrate_velocity` and `integrate_position`. Car against car is
-  `sim::collide_cars`, run over all pairs in `simulate` after the steps (not yet seen in
-  the game with only one car). No damage, sounds or wheel collisions yet; a crash at speed
+  `sim::collide_cars`, run over all pairs in `simulate` after the steps (only one
+  player car in the game; traffic has its own, see below). No damage, sounds or wheel collisions yet; a crash at speed
   just stops the body (wheel spin is left as it was).
+- **Traffic** (`traffic.rs`, `traffic/network.rs`; agreed with the user: no real
+  physics needed, following the roads matters, crashes at junctions are fine, a
+  "Traffic density" slider in the panel, 0–60 cars, default 20; no HUD or map changes).
+  The network: roads 4 m and wider (not water) split into edges at shared OSM points,
+  a lane each way a quarter of the width right of the centreline (1.05–2.6 m), 1781
+  edges / 151 km, built in ~5 ms. Speed limits every 20 m, German defaults from what the
+  map has: open road 100 (6 m+), 80 (4.5 m+), 60; unpaved ≤ 50; 8 houses within 90 m =
+  built-up, 50, or 30 under 5.5 m wide. Drivers: front axle on rails along the path
+  (lanes joined by quadratic corners towards where the lanes' directions meet), rear axle
+  dragged, body set on the ground under the axles. Speed: intelligent driver model
+  towards the lowest of limit × keenness (0.88–1.1) and bend speeds (2.5 m/s² sideways)
+  ahead, braking at 2 m/s² for them; leaders are anything reaching into the lane ahead
+  (oncoming cars only with their middle within 1 m). Random way at junctions (wide roads
+  likelier), U-turn at dead ends. Any box contact with another car crashes it: a loose
+  `RigidBody` on its box (down to the ground) with ground and obstacle contacts, asleep
+  once still. Spawn 260–550 m from the player (50 m at the start), despawn past 700 m
+  (crashed 350 m). `drivers_follow_the_roads` runs 30 cars for a minute (~1 crash at a
+  merge, about 0.1 ms per step for all). Not done: right of way, overtaking, sounds,
+  wrecks blocking a lane hold the queue behind them until they despawn.
 - Not done: the engine sound per layout was never listened to (no audio in the
   sandbox); other suspension types; turbo kits limited by bay room; prices and saved
   cars; gearbox and clutch damage; collisions of the body.
