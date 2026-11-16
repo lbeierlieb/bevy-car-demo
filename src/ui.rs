@@ -3,7 +3,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::input::EguiWantsInput;
-use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
+use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
 
 use crate::camera::OrbitInput;
 use crate::car::{ActiveCar, Car};
@@ -22,12 +22,19 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
+            .add_systems(Startup, absorb_input)
             .add_systems(PreUpdate, block_orbit)
             .add_systems(
                 EguiPrimaryContextPass,
                 panel.run_if(|view: Res<DebugView>| view.ui),
             );
     }
+}
+
+/// Typing into a field (or clicking on the panels) shouldn't drive the car: while egui
+/// uses the keyboard or pointer, the game doesn't see them.
+fn absorb_input(mut settings: ResMut<EguiGlobalSettings>) {
+    settings.enable_absorb_bevy_input_system = true;
 }
 
 /// Mouse input over the panel shouldn't orbit or zoom the camera.
