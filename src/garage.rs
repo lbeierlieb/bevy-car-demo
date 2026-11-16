@@ -320,16 +320,18 @@ fn window(
     egui::Window::new("Garage")
         .open(&mut open)
         .default_pos([360.0, 10.0])
+        .default_height(680.0)
         .vscroll(true)
         .show(contexts.ctx_mut()?, |ui| {
             car_parts(ui, &mut garage.draft.0);
             ui.separator();
             engine(ui, &mut garage);
-            parts(ui, &mut garage);
-            ui.separator();
             build_now = build(ui, &mut garage, &car);
-            ui.separator();
             condition(ui, &mut car);
+            ui.separator();
+            egui::CollapsingHeader::new("Engine parts")
+                .default_open(true)
+                .show(ui, |ui| parts(ui, &mut garage));
         });
     garage.open = open;
     if build_now {
@@ -598,8 +600,11 @@ fn build(ui: &mut egui::Ui, garage: &mut Garage, car: &Car) -> bool {
         "This is the car as it's built."
     } else if !new_engine {
         "The engine stays as it is."
+    } else if rebake && maps::is_stock(&hardware) {
+        "A factory engine: it fits right away."
     } else if rebake {
-        "The cylinder side changes: its maps need baking (a few seconds)."
+        "The cylinder side changes: its maps need baking (a few seconds), unless it was \
+         built before."
     } else {
         "Only bolt-on parts change: it fits right away."
     });

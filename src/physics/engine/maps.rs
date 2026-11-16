@@ -37,6 +37,21 @@ fn stock() -> Vec<(EngineHardware, String, &'static str)> {
     stock
 }
 
+/// The text of the maps baked with the game for the hardware with `fingerprint`, if it's
+/// a factory engine's: found by the fingerprint in the text's first lines.
+fn stock_text(fingerprint: u64) -> Option<&'static str> {
+    let tag = format!("fingerprint {fingerprint:016x}");
+    let mut versions = FAMILIES.iter().flat_map(|family| family.versions);
+    versions
+        .find(|version| version.maps.lines().take(3).any(|line| line == tag))
+        .map(|version| version.maps)
+}
+
+/// Whether the maps for `hardware` come baked with the game.
+pub fn is_stock(hardware: &EngineHardware) -> bool {
+    stock_text(fingerprint(hardware)).is_some()
+}
+
 /// Grid of the baked maps, in rpm.
 fn rpm_axis() -> Vec<f32> {
     (0..20).map(|i| i as f32 * 500.0).collect()
@@ -115,8 +130,7 @@ impl EngineMaps {
     /// engine.
     pub fn stock(hardware: &EngineHardware) -> Option<Self> {
         let fingerprint = fingerprint(hardware);
-        let mut versions = FAMILIES.iter().flat_map(|family| family.versions);
-        versions.find_map(|version| Self::from_text(version.maps, fingerprint))
+        Self::from_text(stock_text(fingerprint)?, fingerprint)
     }
 
     /// Bakes the maps by simulating cycles all over the grid (on all cores, where there
