@@ -38,7 +38,11 @@ repo, so everything worth knowing between sessions belongs here.
   `sudo sh -c 'echo 2 > /proc/sys/vm/drop_caches'`.
 - Dependency sources (no `~/.cargo/registry`): they're tarballs in the store, e.g.
   `ls -d /nix/store/*cargo-src-egui-0.36*`; unpack into the scratchpad with `tar xzf`.
-- Bake tool: `cd tools/bake; nix develop /repo -c cargo build --release; ./target/release/bake …`.
+- Terrain bake tool: `cd tools/bake; nix develop /repo -c cargo build --release; ./target/release/bake …`.
+- Engine maps of the stock builds are baked into `src/physics/engine/baked/`. After
+  changing `cycle.rs`, `maps.rs` (outside their tests) or a stock build's cylinder side,
+  re-bake (about 3 s) or `stock_maps_are_current` fails:
+  `nix develop -c bash -c 'CARGO_TARGET_DIR=/repo/target/sandbox cargo test --profile release-dev bake_stock_maps -- --ignored'`.
 
 ### Screenshots (`tools/dev`)
 
@@ -153,8 +157,18 @@ phasing, VTEC-style cam switching).
   rod/piston limits).
 - **Live states:** intake (and boost) pressure, exhaust manifold pressure, turbo speed,
   temperatures, knock/damage accumulators.
-- Placeholders are formulas over the hardware parameters, so part swaps work before the
-  cycle sim in `tools/bake` exists; that sim will fill the same tables later.
+- The maps come from a cycle simulation in the game crate (`cycle.rs`), not in
+  `tools/bake`: parts are swapped in the game, so any build may need baking. It is
+  one cylinder, crank degree by crank degree: single-zone gas with fresh/burnt mixture,
+  cam lift curves through orifice valves, Wiebe burn, Woschni heat transfer, Douaud-Eyzat
+  knock integral (its constant calibrated so the stock NA engine is knock-limited a few
+  degrees at low rpm), intake runner and header primary as acoustic delay lines (wave
+  reflected inverted from the plenum/collector after 2L/a), which is what tunes them.
+  About 1 ms per converged operating point; a whole build bakes in about 5 s on one core
+  (`maps.rs` spreads it over threads, none on wasm). Friction is still a correlation.
+  Calibration knobs are the constants at the top of `cycle.rs`.
+- `EngineMaps::for_hardware` takes embedded maps when the fingerprint (cylinder-side
+  hardware plus the bake code) matches, else bakes synchronously.
 - **ECUs:** each has its own idea of the engine (e.g. its own VE table for fuelling), so
   changed hardware needs a retune. The first ECU is speed-density (rpm, MAP, throttle
   position), with fuel (VE table × target λ), spark map, rev limiter and idle valve.
@@ -178,7 +192,9 @@ phasing, VTEC-style cam switching).
   local storage on the web) with the build they were made for; loading reads over the
   engine's factory tune and warns if the build differs. Swapping the engine build in
   the setup panel replaces the tune with the new build's factory tune.
-- Next in the plan: the offline cycle sim in `tools/bake` and hardware parts.
+- Next in the plan: hardware parts in the game. Changed hardware then needs baking off
+  the main thread (native: a thread; wasm: in slices per frame, or a coarser grid), maybe
+  cached on disk, with the old engine running until it's done.
 
 ## Audio
 

@@ -12,6 +12,7 @@
 //! and friction. What depends on the cylinder's insides comes from maps baked per engine
 //! build (`maps`); the parts between the manifolds and the outside act live.
 
+pub mod cycle;
 pub mod ecu;
 pub mod hardware;
 pub mod maps;
@@ -79,10 +80,11 @@ pub struct EngineBuild {
 }
 
 impl EngineBuild {
-    /// Bakes the maps for `hardware` and gives it a factory tune for 95 octane.
+    /// The maps for `hardware` (baked now unless it's a stock build) and a factory tune for
+    /// 95 octane.
     pub fn new(hardware: EngineHardware) -> Self {
         let octane = 95.0;
-        let maps = EngineMaps::bake(&hardware);
+        let maps = EngineMaps::for_hardware(&hardware);
         let ecu = Ecu::calibrated(&hardware, &maps, octane);
         Self {
             hardware,
@@ -553,7 +555,7 @@ mod tests {
             .map(|rpm| (rpm, torque(rpm).round()))
             .to_vec();
         let peak = curve.iter().max_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
-        assert!((3500.0..=5500.0).contains(&peak.0), "{curve:?}");
+        assert!((3000.0..=5500.0).contains(&peak.0), "{curve:?}");
         assert!((180.0..=230.0).contains(&peak.1), "{curve:?}");
         assert!(curve.iter().all(|&(_, t)| t > 120.0), "{curve:?}");
     }

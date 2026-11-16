@@ -42,18 +42,6 @@ pub struct CamProfile {
     pub lift: f32,
 }
 
-impl CamProfile {
-    /// Crank degrees both valves are open around top dead centre, with the cams phased
-    /// (intake advanced, exhaust retarded, crank degrees).
-    pub fn overlap(&self, intake_phase: f32, exhaust_phase: f32) -> f32 {
-        let overlap = (self.intake_duration + self.exhaust_duration) / 2.0
-            - 2.0 * self.lobe_separation
-            + intake_phase
-            + exhaust_phase;
-        overlap.max(0.0)
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct Intake {
     /// Effective flow area of the air filter (m²).
