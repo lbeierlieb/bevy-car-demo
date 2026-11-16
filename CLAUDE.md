@@ -325,6 +325,13 @@ which bank's exhaust each goes down (`audio.rs`, `sound`): a cross-plane V8's ba
 unevenly, a flat four's pulses bunch up through unequal headers, the rest fire evenly;
 inline engines have one exhaust (no panning).
 
+The exhaust hardware colours it (`ExhaustSound::of`, parts compared with the stock ones
+for the engine's size): silencer and cat muffle (level, upper resonances; straight pipe
+loud and rasping), bore (deeper, louder), header length (a quarter-wave resonance), a
+turbine (smeared, quieter pulses). The turbo whistles at its shaft speed (1 Hz per rev/s,
+level ∝ share of its limit², more under load). All constants at the top of `audio.rs`,
+none tuned by ear yet. No diverter "pssh" or overrun pops (fuel cut leaves nothing to burn).
+
 The engine sound goes through bevy_audio, which can't set the output buffer size. An
 attempt to open the output with rodio/cpal directly (fixed 4096-frame buffer against
 underruns) gave no sound at all in the wasm build and was dropped. If it's tried

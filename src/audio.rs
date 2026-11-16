@@ -7,8 +7,14 @@
 //! rather than just its pitch, with a little combustion noise on top. Two banks with an
 //! exhaust each are panned apart.
 //!
-//! The game only publishes targets (engine speed, load, volume); the synth glides towards
-//! them every sample, so nothing steps audibly.
+//! The exhaust hardware colours it: the silencer and the catalyst take out level and the
+//! higher resonances (a straight pipe is loud and rasping), a bigger bore rings a little
+//! deeper and louder, the header primaries add a resonance of their own (short ones ring
+//! higher), and a turbine in the way smears the pulses and quietens them. A turbo whistles
+//! with its shaft speed, louder as it spools under load.
+//!
+//! The game only publishes targets (engine speed, load, volume, the exhaust, turbo speed);
+//! the synth glides towards them every sample, so nothing steps audibly.
 
 use std::f32::consts::{PI, TAU};
 use std::num::NonZero;
@@ -20,7 +26,8 @@ use bevy::audio::{AddAudioSource, ChannelCount, Decodable, SampleRate, Source};
 use bevy::prelude::*;
 
 use crate::car::{ActiveCar, Car};
-use crate::physics::engine::families::Layout;
+use crate::physics::engine::families::{Layout, relative_size};
+use crate::physics::engine::hardware::EngineHardware;
 
 const SAMPLE_RATE: u32 = 44_100;
 /// A cross-plane V8's firing order 1-8-4-3-6-5-7-2, 90° of crank apart, with the odd
@@ -106,7 +113,87 @@ const CROSSFEED: f32 = 0.5;
 /// Strength of a firing off throttle, relative to full throttle.
 const IDLE_STRENGTH: f32 = 0.45;
 /// Overall level before the soft limiter.
-const GAIN: f32 = 1.2;
+const GAIN: f32 = 1.5;
+
+/// How much a stock silencer and a stock catalyst muffle (0..1); less restrictive ones
+/// muffle less, with the power of their relative restriction.
+const SILENCER: f32 = 0.85;
+const CATALYST: f32 = 0.25;
+const MUFFLER_POWER: f32 = 1.5;
+/// Share of each resonance (lowest first) and of the header's that full muffling takes out.
+const MUFFLED: [f32; 5] = [0.1, 0.4, 0.75, 0.9, 0.5];
+/// Level fully muffled and open, and the combustion noise's level open (relative to its
+/// level fully muffled).
+const MUFFLED_LEVEL: f32 = 0.7;
+const OPEN_LEVEL: f32 = 1.3;
+const OPEN_NOISE: f32 = 2.0;
+/// The header primaries' quarter-wave resonance: speed of sound in the hot exhaust (m/s),
+/// Q, and gain off and at full throttle.
+const EXHAUST_SOUND_SPEED: f32 = 500.0;
+const HEADER: (f32, f32, f32) = (3.0, 0.25, 0.5);
+/// How much louder a bigger pipe is per relative diameter, and how its resonances move
+/// (frequency ∝ diameter^-this).
+const BORE_LEVEL: f32 = 0.3;
+const BORE_PITCH: f32 = 0.25;
+/// A turbine in the exhaust: the time constant its smearing of the pulses adds (seconds),
+/// and the level that gets through.
+const TURBINE_SMEAR: f32 = 0.0012;
+const TURBINE_LEVEL: f32 = 0.75;
+/// Turbo whistle: its pitch per shaft revolution per second, level at the shaft's speed
+/// limit (at full load; `WHISTLE_IDLE` of it off throttle), its second harmonic, and how
+/// much its breathiness wobbles it.
+const WHISTLE_PITCH: f32 = 1.0;
+const WHISTLE: f32 = 0.12;
+const WHISTLE_IDLE: f32 = 0.3;
+const WHISTLE_HARMONIC: f32 = 0.3;
+const WHISTLE_BREATH: f32 = 0.4;
+/// Highest whistle pitch (Hz), well below the Nyquist frequency.
+const WHISTLE_MAX: f32 = 8000.0;
+
+/// What the exhaust hardware does to the sound.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ExhaustSound {
+    /// How much the silencer and the catalyst take out (0 open, 1 fully muffled).
+    muffle: f32,
+    /// Pipe diameter relative to the stock one for the engine's size.
+    bore: f32,
+    /// The header primaries' quarter-wave resonance (Hz).
+    header: f32,
+    /// 1 with a turbine in the exhaust, 0 without.
+    turbine: f32,
+}
+
+impl ExhaustSound {
+    fn of(hardware: &EngineHardware) -> Self {
+        // The parts are sized with the engine: compare them with the stock ones for its
+        // size.
+        let size = relative_size(hardware);
+        let stock = EngineHardware::default().exhaust;
+        let exhaust = &hardware.exhaust;
+        let muffling = |area: Option<f32>, stock: Option<f32>, stock_muffling: f32| match (
+            area, stock,
+        ) {
+            (Some(area), Some(stock)) => {
+                stock_muffling * (stock * size / area).powf(MUFFLER_POWER).min(1.0 / stock_muffling)
+            }
+            _ => 0.0,
+        };
+        let silencer = muffling(exhaust.silencer_area, stock.silencer_area, SILENCER);
+        let catalyst = muffling(exhaust.cat_area, stock.cat_area, CATALYST);
+        Self {
+            muffle: 1.0 - (1.0 - silencer) * (1.0 - catalyst),
+            bore: (exhaust.pipe_area / (stock.pipe_area * size)).sqrt(),
+            header: EXHAUST_SOUND_SPEED / (4.0 * exhaust.header_length.max(0.05)),
+            turbine: if hardware.turbo.is_some() { 1.0 } else { 0.0 },
+        }
+    }
+}
+
+impl Default for ExhaustSound {
+    fn default() -> Self {
+        Self::of(&EngineHardware::default())
+    }
+}
 
 pub struct AudioPlugin;
 
@@ -126,13 +213,57 @@ struct Targets {
     volume: AtomicU32,
     /// The engine's layout, as its place in `LAYOUTS`.
     layout: AtomicU32,
+    /// `ExhaustSound`'s fields.
+    exhaust: [AtomicU32; 4],
+    /// Turbo shaft speed (revolutions per second), and that relative to its limit.
+    turbo: [AtomicU32; 2],
+}
+
+fn store(atomic: &AtomicU32, value: f32) {
+    atomic.store(value.to_bits(), Ordering::Relaxed);
+}
+
+fn read(atomic: &AtomicU32) -> f32 {
+    f32::from_bits(atomic.load(Ordering::Relaxed))
 }
 
 impl Targets {
+    fn new() -> Self {
+        let targets = Self::default();
+        targets.set_exhaust(ExhaustSound::default());
+        targets
+    }
+
     fn set(&self, rpm: f32, load: f32, volume: f32) {
-        self.rpm.store(rpm.to_bits(), Ordering::Relaxed);
-        self.load.store(load.to_bits(), Ordering::Relaxed);
-        self.volume.store(volume.to_bits(), Ordering::Relaxed);
+        store(&self.rpm, rpm);
+        store(&self.load, load);
+        store(&self.volume, volume);
+    }
+
+    fn set_exhaust(&self, sound: ExhaustSound) {
+        let values = [sound.muffle, sound.bore, sound.header, sound.turbine];
+        for (atomic, value) in self.exhaust.iter().zip(values) {
+            store(atomic, value);
+        }
+    }
+
+    fn exhaust(&self) -> ExhaustSound {
+        let [muffle, bore, header, turbine] = self.exhaust.each_ref().map(read);
+        ExhaustSound {
+            muffle,
+            bore,
+            header,
+            turbine,
+        }
+    }
+
+    fn set_turbo(&self, revolutions: f32, share: f32) {
+        store(&self.turbo[0], revolutions);
+        store(&self.turbo[1], share);
+    }
+
+    fn turbo(&self) -> (f32, f32) {
+        (read(&self.turbo[0]), read(&self.turbo[1]))
     }
 
     fn set_layout(&self, layout: Layout) {
@@ -145,8 +276,7 @@ impl Targets {
     }
 
     fn get(&self) -> (f32, f32, f32) {
-        let load = |a: &AtomicU32| f32::from_bits(a.load(Ordering::Relaxed));
-        (load(&self.rpm), load(&self.load), load(&self.volume))
+        (read(&self.rpm), read(&self.load), read(&self.volume))
     }
 }
 
@@ -174,16 +304,14 @@ struct Resonator {
 }
 
 impl Resonator {
-    fn new(frequency: f32, q: f32) -> Self {
+    /// Moves the resonance, keeping what's ringing.
+    fn tune(&mut self, frequency: f32, q: f32) {
         let w = TAU * frequency / SAMPLE_RATE as f32;
         let alpha = w.sin() / (2.0 * q);
         let a0 = 1.0 + alpha;
-        Self {
-            b0: alpha / a0,
-            a1: -2.0 * w.cos() / a0,
-            a2: (1.0 - alpha) / a0,
-            ..default()
-        }
+        self.b0 = alpha / a0;
+        self.a1 = -2.0 * w.cos() / a0;
+        self.a2 = (1.0 - alpha) / a0;
     }
 
     fn process(&mut self, x: f32) -> f32 {
@@ -192,6 +320,17 @@ impl Resonator {
         self.y = [y, self.y[0]];
         y
     }
+}
+
+/// How the exhaust shapes a bank's sound in this sample.
+struct Shape {
+    /// Gains of the resonances, the header's last.
+    gains: [f32; 5],
+    /// Level of the combustion noise, relative to fully muffled.
+    noise: f32,
+    /// Share of the way the smeared pulse moves towards the bare one each sample (1 without
+    /// a turbine).
+    smoothing: f32,
 }
 
 /// One bank's exhaust: the last pulse and the resonances it rings.
@@ -203,24 +342,52 @@ struct Bank {
     strength: f32,
     /// How long a pulse takes to arrive.
     delay: f32,
-    resonators: [Resonator; 4],
+    /// Resonances relative to the big V8's: from the layout's pipes, and this bank's side.
+    pipes: f32,
+    side: f32,
+    /// The pipe pitch and header resonance the resonators are tuned to.
+    tuned: (f32, f32),
+    /// The exhaust's resonances, then the header primaries'.
+    resonators: [Resonator; 5],
+    /// The pulse after the turbine.
+    smeared: f32,
     /// Last input and output of the DC blocker.
     dc: (f32, f32),
 }
 
 impl Bank {
-    /// A bank with its resonances `pipes` times the base frequencies.
-    fn new(pipes: f32, delay: f32) -> Self {
-        Self {
+    fn new(pipes: f32, side: f32, delay: f32, exhaust: &ExhaustSound) -> Self {
+        let mut bank = Self {
             since: 1.0,
             strength: 0.0,
             delay,
-            resonators: RESONANCES.map(|(frequency, q, _, _)| Resonator::new(frequency * pipes, q)),
+            pipes,
+            side,
+            tuned: (0.0, 0.0),
+            resonators: [Resonator::default(); 5],
+            smeared: 0.0,
             dc: (0.0, 0.0),
-        }
+        };
+        bank.tune(exhaust.bore.powf(-BORE_PITCH), exhaust.header);
+        bank
     }
 
-    fn next(&mut self, noise: f32, load: f32) -> f32 {
+    /// Tunes the resonances to the pipes' pitch (relative to stock) and the header's
+    /// resonance (Hz), if they moved.
+    fn tune(&mut self, pitch: f32, header: f32) {
+        let (tuned_pitch, tuned_header) = self.tuned;
+        if (pitch - tuned_pitch).abs() < 1e-3 && (header - tuned_header).abs() < 0.5 {
+            return;
+        }
+        self.tuned = (pitch, header);
+        let scale = self.pipes * self.side * pitch;
+        for (resonator, &(frequency, q, _, _)) in self.resonators.iter_mut().zip(&RESONANCES) {
+            resonator.tune(frequency * scale, q);
+        }
+        self.resonators[4].tune(header * self.side, HEADER.0);
+    }
+
+    fn next(&mut self, noise: f32, shape: &Shape) -> f32 {
         let dt = 1.0 / SAMPLE_RATE as f32;
         let excitation = if self.since < 0.0 {
             0.0
@@ -230,12 +397,14 @@ impl Bank {
             } else {
                 0.0
             };
-            self.strength * (pulse + 0.3 * noise * (-self.since / NOISE_DECAY).exp())
+            let combustion = 0.3 * shape.noise * noise * (-self.since / NOISE_DECAY).exp();
+            self.strength * (pulse + combustion)
         };
         self.since += dt;
+        self.smeared += shape.smoothing * (excitation - self.smeared);
         let mut out = 0.0;
-        for (resonator, &(_, _, off, full)) in self.resonators.iter_mut().zip(&RESONANCES) {
-            out += (off + (full - off) * load) * resonator.process(excitation);
+        for (resonator, gain) in self.resonators.iter_mut().zip(shape.gains) {
+            out += gain * resonator.process(self.smeared);
         }
         // Block any DC offset, which the pulses (all positive pressure) would leave.
         let y = out - self.dc.0 + 0.995 * self.dc.1;
@@ -253,9 +422,17 @@ struct EngineVoice {
     /// The layout the banks are set up for, and how it sounds.
     layout: Layout,
     sound: Sound,
+    /// The exhaust, gliding towards the target.
+    exhaust: ExhaustSound,
     /// Position in the four-stroke cycle, in firings.
     cycle: f32,
     banks: [Bank; 2],
+    /// Turbo shaft speed (revolutions per second) and its share of the limit, the
+    /// whistle's phase (0..1), and the slow noise that makes it breathe.
+    turbo_speed: f32,
+    turbo_share: f32,
+    whistle: f32,
+    breath: f32,
     /// State of the noise generator.
     seed: u32,
     /// The right sample, waiting for its turn after the left one.
@@ -266,15 +443,21 @@ impl EngineVoice {
     fn new(targets: Arc<Targets>) -> Self {
         let layout = targets.layout();
         let sound = sound(layout);
+        let exhaust = targets.exhaust();
         Self {
             targets,
             rpm: 0.0,
             load: 0.0,
             volume: 0.0,
             layout,
-            banks: banks(&sound),
+            banks: banks(&sound, &exhaust),
             sound,
+            exhaust,
             cycle: 0.0,
+            turbo_speed: 0.0,
+            turbo_share: 0.0,
+            whistle: 0.0,
+            breath: 0.0,
             seed: 0x2545_f491,
             right: None,
         }
@@ -291,17 +474,28 @@ impl EngineVoice {
     /// Advances by one sample, returning the left and right outputs.
     fn frame(&mut self) -> (f32, f32) {
         let rate = SAMPLE_RATE as f32;
+        let glide = |value: &mut f32, target: f32, time: f32| {
+            *value += (target - *value) / (time * rate);
+        };
         let (rpm, load, volume) = self.targets.get();
-        self.rpm += (rpm.max(0.0) - self.rpm) / (GLIDE * rate);
-        self.load += (load.clamp(0.0, 1.0) - self.load) / (LOAD_GLIDE * rate);
-        self.volume += (volume - self.volume) / (GLIDE * rate);
+        glide(&mut self.rpm, rpm.max(0.0), GLIDE);
+        glide(&mut self.load, load.clamp(0.0, 1.0), LOAD_GLIDE);
+        glide(&mut self.volume, volume, GLIDE);
+        let exhaust = self.targets.exhaust();
+        glide(&mut self.exhaust.muffle, exhaust.muffle.clamp(0.0, 1.0), GLIDE);
+        glide(&mut self.exhaust.bore, exhaust.bore.clamp(0.5, 2.0), GLIDE);
+        glide(&mut self.exhaust.header, exhaust.header.clamp(50.0, 1000.0), GLIDE);
+        glide(&mut self.exhaust.turbine, exhaust.turbine.clamp(0.0, 1.0), GLIDE);
+        let (revolutions, share) = self.targets.turbo();
+        glide(&mut self.turbo_speed, revolutions.max(0.0), GLIDE);
+        glide(&mut self.turbo_share, share.clamp(0.0, 1.5), GLIDE);
 
         // Another engine: its exhaust rings differently.
         let layout = self.targets.layout();
         if layout != self.layout {
             self.layout = layout;
             self.sound = sound(layout);
-            self.banks = banks(&self.sound);
+            self.banks = banks(&self.sound, &self.exhaust);
             self.cycle = 0.0;
         }
 
@@ -319,17 +513,57 @@ impl EngineVoice {
         }
 
         let load = self.load;
+        let ExhaustSound {
+            muffle,
+            bore,
+            header,
+            turbine,
+        } = self.exhaust;
+        let open = 1.0 - muffle;
+        let shape = Shape {
+            gains: std::array::from_fn(|i| {
+                let (off, full) = match RESONANCES.get(i) {
+                    Some(&(_, _, off, full)) => (off, full),
+                    None => (HEADER.1, HEADER.2),
+                };
+                (off + (full - off) * load) * (1.0 - muffle * MUFFLED[i])
+            }),
+            noise: 1.0 + (OPEN_NOISE - 1.0) * open,
+            smoothing: 1.0 / (1.0 + TURBINE_SMEAR * turbine * rate),
+        };
+        let pitch = bore.powf(-BORE_PITCH);
+        for bank in &mut self.banks {
+            bank.tune(pitch, header);
+        }
         let left = self.noise();
         let right = self.noise();
-        let left = self.banks[0].next(left, load);
-        let right = self.banks[1].next(right, load);
+        let left = self.banks[0].next(left, &shape);
+        let right = self.banks[1].next(right, &shape);
+
+        // The turbo whistles at its shaft speed, louder spooled up and under load.
+        let frequency = (self.turbo_speed * WHISTLE_PITCH).min(WHISTLE_MAX / 2.0);
+        self.whistle = (self.whistle + frequency / rate).fract();
+        let breath = self.noise();
+        self.breath += 0.01 * (breath - self.breath);
+        let wobble = (1.0 + WHISTLE_BREATH * 10.0 * self.breath).max(0.0);
+        let phase = TAU * self.whistle;
+        let whistle = WHISTLE
+            * self.turbo_share.powi(2)
+            * (WHISTLE_IDLE + (1.0 - WHISTLE_IDLE) * load)
+            * wobble
+            * (phase.sin() + WHISTLE_HARMONIC * (2.0 * phase).sin());
+
         // Fewer cylinders pulse less often: level them out somewhat.
-        let level = GAIN * self.volume * (8.0 / firings as f32).sqrt();
-        let mix = |near: f32, far: f32| (level * (near + CROSSFEED * far)).tanh();
+        let exhaust_level = (MUFFLED_LEVEL + (OPEN_LEVEL - MUFFLED_LEVEL) * open)
+            * (1.0 + BORE_LEVEL * (bore - 1.0))
+            * (1.0 - (1.0 - TURBINE_LEVEL) * turbine);
+        let level = GAIN * self.volume * exhaust_level * (8.0 / firings as f32).sqrt();
+        let whistle = GAIN * self.volume * whistle;
+        let mix = |near: f32, far: f32| (level * (near + CROSSFEED * far) + whistle).tanh();
         if self.sound.dual {
             (mix(left, right), mix(right, left))
         } else {
-            let both = (level * (1.0 + CROSSFEED) / 2.0 * (left + right)).tanh();
+            let both = (level * (1.0 + CROSSFEED) / 2.0 * (left + right) + whistle).tanh();
             (both, both)
         }
     }
@@ -337,10 +571,10 @@ impl EngineVoice {
 
 /// The two banks' exhausts for a layout. Engines with a single bank only ever fire the
 /// first.
-fn banks(sound: &Sound) -> [Bank; 2] {
+fn banks(sound: &Sound, exhaust: &ExhaustSound) -> [Bank; 2] {
     [
-        Bank::new(sound.pipes, 0.0),
-        Bank::new(sound.pipes * RIGHT_PIPES, sound.delay),
+        Bank::new(sound.pipes, 1.0, 0.0, exhaust),
+        Bank::new(sound.pipes, RIGHT_PIPES, sound.delay, exhaust),
     ]
 }
 
@@ -382,7 +616,7 @@ struct Engine {
 }
 
 fn start_engine(mut commands: Commands, mut synths: ResMut<Assets<EngineSynth>>) {
-    let targets = Arc::new(Targets::default());
+    let targets = Arc::new(Targets::new());
     commands.spawn(AudioPlayer(synths.add(EngineSynth {
         targets: targets.clone(),
     })));
@@ -413,6 +647,11 @@ fn update_engine(
     engine.targets.set(drivetrain.rpm, drivetrain.load, volume);
     let layout = car.setup.engine.parts.family().layout;
     engine.targets.set_layout(layout);
+    let hardware = &car.setup.engine.build.hardware;
+    engine.targets.set_exhaust(ExhaustSound::of(hardware));
+    let speed = drivetrain.engine.turbo_speed;
+    let share = hardware.turbo.map_or(0.0, |turbo| speed / turbo.max_speed());
+    engine.targets.set_turbo(speed / TAU, share);
 }
 
 #[cfg(test)]
@@ -452,11 +691,25 @@ mod tests {
 
     #[test]
     fn stays_in_range_and_glides() {
-        let targets = Arc::new(Targets::default());
+        let targets = Arc::new(Targets::new());
         let mut voice = EngineVoice::new(targets.clone());
-        // Every engine in turn, swapped while running.
-        for layout in LAYOUTS {
+        // Every engine in turn, swapped while running, every other one with straight
+        // pipes, short headers, a big bore and a turbo whistling past its limit.
+        let wild = ExhaustSound {
+            muffle: 0.0,
+            bore: 1.4,
+            header: 400.0,
+            turbine: 1.0,
+        };
+        for (i, layout) in LAYOUTS.into_iter().enumerate() {
             targets.set_layout(layout);
+            if i % 2 == 1 {
+                targets.set_exhaust(wild);
+                targets.set_turbo(3500.0, 1.1);
+            } else {
+                targets.set_exhaust(ExhaustSound::default());
+                targets.set_turbo(0.0, 0.0);
+            }
             // Idle, then a jump to near the redline at full throttle, then lifting off.
             for (rpm, load) in [(850.0, 0.1), (6800.0, 1.0), (6000.0, 0.0)] {
                 targets.set(rpm, load, 1.0);
@@ -479,9 +732,85 @@ mod tests {
         }
     }
 
+    /// The stock 2-litre four with `part` in the slot called `slot`.
+    fn with(slot: &str, part: usize) -> EngineHardware {
+        use crate::physics::engine::parts::{Parts, SLOTS};
+        let mut parts = Parts::stock();
+        let slot = SLOTS.iter().position(|s| s.name == slot).unwrap();
+        parts.chosen[slot] = part;
+        parts.hardware()
+    }
+
+    #[test]
+    fn the_exhaust_parts_change_the_sound() {
+        use crate::physics::engine::parts::Parts;
+        let stock = ExhaustSound::of(&Parts::stock().hardware());
+        assert!((stock.bore - 1.0).abs() < 0.01, "{stock:?}");
+        assert!(stock.muffle > 0.85, "{stock:?}");
+        assert_eq!(stock.turbine, 0.0);
+        // Less restrictive silencers and catalysts muffle less; straight pipes don't.
+        let [sport, straight] = [1, 2].map(|part| ExhaustSound::of(&with("Silencer", part)));
+        assert!(straight.muffle < sport.muffle && sport.muffle < stock.muffle - 0.2);
+        let [high_flow, no_cat] = [1, 2].map(|part| ExhaustSound::of(&with("Catalyst", part)));
+        assert!(no_cat.muffle < high_flow.muffle && high_flow.muffle < stock.muffle);
+        let big_bore = ExhaustSound::of(&with("Exhaust pipe", 1));
+        assert!(big_bore.bore > 1.1);
+        let [short, long] = [1, 2].map(|part| ExhaustSound::of(&with("Exhaust manifold", part)));
+        assert!(short.header > stock.header && stock.header > long.header);
+        assert_eq!(ExhaustSound::of(&with("Turbocharger", 2)).turbine, 1.0);
+        // Every factory engine has a silencer and its pipes sized for it.
+        for family in 0..crate::physics::engine::families::FAMILIES.len() {
+            let versions = crate::physics::engine::families::FAMILIES[family].versions;
+            for version in 0..versions.len() {
+                let hardware = Parts::all_stock(family, version).hardware();
+                let sound = ExhaustSound::of(&hardware);
+                assert!((sound.bore - 1.0).abs() < 0.05, "{}: {sound:?}", hardware.name);
+                assert!(sound.muffle > 0.85, "{}: {sound:?}", hardware.name);
+            }
+        }
+    }
+
+    /// Root mean square of both channels over a second at `rpm` and full throttle, after
+    /// a second to settle.
+    fn loudness(exhaust: ExhaustSound, turbo: f32) -> f32 {
+        let targets = Arc::new(Targets::new());
+        targets.set_layout(Layout::Inline4);
+        targets.set_exhaust(exhaust);
+        targets.set_turbo(turbo * 3000.0, turbo);
+        targets.set(4000.0, 1.0, 1.0);
+        let mut voice = EngineVoice::new(targets);
+        let mut sum = 0.0;
+        for i in 0..2 * SAMPLE_RATE {
+            let (left, right) = voice.frame();
+            assert!(left.abs() <= 1.0 && right.abs() <= 1.0);
+            if i >= SAMPLE_RATE {
+                sum += left * left + right * right;
+            }
+        }
+        (sum / (2 * SAMPLE_RATE) as f32).sqrt()
+    }
+
+    #[test]
+    fn straight_pipes_are_louder_and_turbos_quieter_but_whistling() {
+        let stock = ExhaustSound::default();
+        let straight = ExhaustSound {
+            muffle: 0.0,
+            ..stock
+        };
+        let turbo = ExhaustSound {
+            turbine: 1.0,
+            ..stock
+        };
+        let quiet = loudness(stock, 0.0);
+        assert!(loudness(straight, 0.0) > 1.3 * quiet);
+        let turbo_quiet = loudness(turbo, 0.0);
+        assert!(turbo_quiet < quiet);
+        assert!(loudness(turbo, 1.0) > turbo_quiet * 1.05);
+    }
+
     #[test]
     fn silent_when_off() {
-        let targets = Arc::new(Targets::default());
+        let targets = Arc::new(Targets::new());
         let mut voice = EngineVoice::new(targets.clone());
         targets.set(850.0, 0.0, 0.0);
         for _ in 0..SAMPLE_RATE / 10 {
