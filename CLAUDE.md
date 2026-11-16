@@ -129,6 +129,40 @@ both named "Fanatec FANATEC Wheel" (padded with spaces). NixOS config uses
 - The panel shows "Wheel base set to 540°" once the range was written, and names the
   force feedback device or what's wrong with each candidate.
 
+## Engine model
+
+Plan agreed with the user: a mean-value engine model that runs live, with an ECU that
+only sees sensors and only drives actuators, and maps baked offline per engine build.
+Hardware changes should eventually cover almost everything (cams, rods, pistons, turbo
+and compressor, NA runner lengths, header lengths, cat/silencer restrictions, cam
+phasing, VTEC-style cam switching).
+
+- **Baked per build (cylinder side; re-bake when the bottom end, head, cams, runners or
+  headers change):** volumetric efficiency by rpm, intake pressure, exhaust/intake
+  pressure ratio, cam profile (discrete slices), intake and exhaust phase (coarse axes,
+  length 1 without phasers); residual gas fraction (same axes); MBT spark, indicated
+  efficiency at MBT and λ=1, knock-limited spark at reference conditions, exhaust
+  temperature, heat to coolant, all by rpm and load; friction by rpm (and oil
+  temperature). Load is air per cycle relative to filling the displacement at ambient.
+- **Universal curves:** torque vs. spark offset from MBT, efficiency vs. λ, exhaust
+  temperature shift with spark retard and λ, knock-limit corrections (intake temp,
+  coolant temp, octane).
+- **Live components (no re-bake):** throttle (orifice flow), idle valve, filter,
+  intercooler, cat, silencer, pipes (pressure drop ∝ ṁ²/ρ), compressor and turbine maps,
+  wastegate, turbo shaft inertia, manifold volumes, mechanical limits (valve float,
+  rod/piston limits).
+- **Live states:** intake (and boost) pressure, exhaust manifold pressure, turbo speed,
+  temperatures, knock/damage accumulators.
+- Placeholders are formulas over the hardware parameters, so part swaps work before the
+  cycle sim in `tools/bake` exists; that sim will fill the same tables later.
+- **ECUs:** each has its own idea of the engine (e.g. its own VE table for fuelling), so
+  changed hardware needs a retune. The first ECU is speed-density (rpm, MAP, throttle
+  position), with fuel (VE table × target λ), spark map, rev limiter and idle valve.
+  Later ECUs differ in sensors and features: closed loop, cam switching and phasing,
+  wastegate/boost, knock, launch control, anti-lag.
+- Order: mean-value model with the simple ECU and placeholder maps; then turbo, thermal
+  model, knock; then an ECU tuning UI; then the offline cycle sim and hardware parts.
+
 ## Audio
 
 The engine sound goes through bevy_audio, which can't set the output buffer size. An
