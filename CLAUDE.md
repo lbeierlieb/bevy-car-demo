@@ -198,7 +198,8 @@ catalogue entries, and things like swap subframes are named so they can be price
   an engine-only change swaps it in while driving.
 - **Traction control** (my addition, on by default, a checkbox in the panel): without
   it full throttle on the keyboard just spins the wheels of anything strong. It eases
-  the throttle while a driven wheel slips over 0.14.
+  the throttle to hold the driven wheels at a slip ratio of 0.12, at a rate that follows
+  the slip smoothly (no chopping; turbos still hunt a little with the boost lag).
 - **A clutch slips** when the engine makes more torque than it passes, so a swapped
   engine may need the sport or race clutch. Gearboxes have no torque limit yet.
 - Gotchas met: engines much bigger than 2 litres on light flywheels hunt at idle (the

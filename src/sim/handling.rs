@@ -38,6 +38,9 @@ struct Slide {
     /// Body slip angle and yaw rate at the end (degrees, degrees per second).
     end_slip: f32,
     end_yaw: f32,
+    /// How far traction control moved the throttle in all, up and down (shares of the
+    /// pedal): the more it hunts, the more.
+    traction_travel: f32,
 }
 
 impl Slide {
@@ -49,10 +52,10 @@ impl Slide {
 /// A driver going round a left-hand circle in second gear, then flooring it until the rear
 /// steps out, and catching the slide a human's reaction time later by pointing the front
 /// wheels where the front axle goes, at a human's steering speed, easing the throttle.
-fn power_slide(setup: CarSetup) -> Slide {
+fn power_slide(setup: CarSetup, traction_control: bool) -> Slide {
     let terrain = Terrain::flat();
     let mut car = Car::spawn_at(0, setup, &terrain, 0.0, 0.0, 0.0);
-    car.traction_control = false;
+    car.traction_control = traction_control;
     car.drivetrain.gear = 2;
     let dt = 1.0 / CHASSIS_HZ as f32;
     let max_steer = car.setup.max_steer;
@@ -76,6 +79,7 @@ fn power_slide(setup: CarSetup) -> Slide {
     let mut deepest = 0.0f32;
     let mut snap_back = 0.0f32;
     let trace = std::env::var("SLIDE_TRACE").is_ok();
+    let mut traction_travel = 0.0;
     while t < 13.0 {
         let (slip, yaw) = slip_and_yaw(&car);
         let forward = car.forward_speed();
@@ -112,7 +116,9 @@ fn power_slide(setup: CarSetup) -> Slide {
         if trace && t > 5.8 && ((t * CHASSIS_HZ as f32) as usize).is_multiple_of(6) {
             print_state(&car, t);
         }
+        let traction = car.traction;
         step_car(&mut car, &terrain, dt);
+        traction_travel += (car.traction - traction).abs();
         t += dt;
     }
     let (slip, yaw) = slip_and_yaw(&car);
@@ -121,6 +127,7 @@ fn power_slide(setup: CarSetup) -> Slide {
         snap_back: snap_back.to_degrees(),
         end_slip: slip.to_degrees(),
         end_yaw: yaw.to_degrees(),
+        traction_travel,
     }
 }
 
@@ -155,32 +162,37 @@ fn print_state(car: &Car, t: f32) {
 fn a_power_slide_can_be_caught() {
     // Tarn W20, Halden S30, Harrow M62.
     for (chassis, option) in [(3, 0), (4, 1), (6, 1)] {
-        let slide = power_slide(CarSetup::factory(chassis, option));
+        let slide = power_slide(CarSetup::factory(chassis, option), false);
         assert!(slide.deepest > 8.0, "{chassis}: no slide: {slide:?}");
         assert!(!slide.spun() && slide.snap_back < 30.0, "{chassis}: {slide:?}");
         assert!(slide.end_slip.abs() < 2.0 && slide.end_yaw.abs() < 3.0, "{chassis}: {slide:?}");
     }
 }
 
-/// Prints how each car's power slide goes, for tuning the tires:
-/// `cargo test --profile release-dev power_slides -- --ignored --nocapture`.
+/// Prints how each car's power slide goes, without and with traction control, for tuning
+/// the tires: `cargo test --profile release-dev power_slides -- --ignored --nocapture`.
 #[test]
 #[ignore]
 fn power_slides() {
     use crate::chassis::CHASSIS;
     for (chassis, made) in CHASSIS.iter().enumerate() {
         for option in 0..made.engines.len() {
-            let slide = power_slide(CarSetup::factory(chassis, option));
-            println!(
-                "{:<10} {:<6} deepest {:5.1}°  snap back {:5.1}°  end {:5.1}° {:6.1}°/s{}",
-                made.name,
-                made.engines[option],
-                slide.deepest,
-                slide.snap_back,
-                slide.end_slip,
-                slide.end_yaw,
-                if slide.spun() { "  SPUN" } else { "" },
-            );
+            for traction_control in [false, true] {
+                let slide = power_slide(CarSetup::factory(chassis, option), traction_control);
+                println!(
+                    "{:<10} {:<6} {} deepest {:5.1}°  snap back {:5.1}°  end {:5.1}° {:6.1}°/s  \
+                     TC travel {:5.2}{}",
+                    made.name,
+                    made.engines[option],
+                    if traction_control { "TC" } else { "  " },
+                    slide.deepest,
+                    slide.snap_back,
+                    slide.end_slip,
+                    slide.end_yaw,
+                    slide.traction_travel,
+                    if slide.spun() { "  SPUN" } else { "" },
+                );
+            }
         }
     }
 }
@@ -192,5 +204,5 @@ fn power_slides() {
 fn trace_power_slide() {
     let spec = std::env::var("SLIDE_CAR").unwrap_or("3,0".into());
     let [chassis, option] = [0, 1].map(|i| spec.split(',').nth(i).unwrap().parse().unwrap());
-    println!("{:?}", power_slide(CarSetup::factory(chassis, option)));
+    println!("{:?}", power_slide(CarSetup::factory(chassis, option), false));
 }

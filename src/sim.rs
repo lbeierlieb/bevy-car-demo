@@ -22,12 +22,14 @@ const MECHANICAL_TRAIL: f32 = 0.03;
 const AIR_DENSITY: f32 = 1.2;
 /// Rolling resistance of the tires: the share of their load that holds them back.
 const ROLLING_RESISTANCE: f32 = 0.012;
-/// Traction control: the slip ratio of a driven wheel it steps in at (a little past the
-/// tires' best), how fast it closes the throttle at that slip and opens it again (shares
-/// of the pedal per second), and the least it leaves.
-const TRACTION_SLIP: f32 = 0.14;
-const TRACTION_CUT: f32 = 5.0;
-const TRACTION_RESTORE: f32 = 2.0;
+/// Traction control: the slip ratio of a driven wheel it holds (a little past the tires'
+/// best), how fast it closes the throttle per share of that slip it's over and opens it
+/// again per share it's under (shares of the pedal per second), and the least it leaves.
+/// The rate follows the slip smoothly through the target, so it settles rather than
+/// chopping the throttle.
+const TRACTION_SLIP: f32 = 0.12;
+const TRACTION_CUT: f32 = 4.0;
+const TRACTION_OPEN: f32 = 2.0;
 const TRACTION_LEAST: f32 = 0.08;
 
 pub struct SimPlugin;
@@ -127,10 +129,11 @@ fn apply_controls(car: &mut Car, dt: f32) {
         .filter_map(|i| corners[i].contact)
         .map(|contact| contact.tire.slip_ratio)
         .fold(0.0, f32::max);
-    let rate = if slip > TRACTION_SLIP {
-        -TRACTION_CUT * slip / TRACTION_SLIP
+    let off = (slip - TRACTION_SLIP) / TRACTION_SLIP;
+    let rate = if off > 0.0 {
+        -TRACTION_CUT * off
     } else {
-        TRACTION_RESTORE
+        -TRACTION_OPEN * off
     };
     *traction = if *traction_control {
         (*traction + rate * dt).clamp(TRACTION_LEAST, 1.0)
