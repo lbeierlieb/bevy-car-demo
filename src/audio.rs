@@ -143,7 +143,7 @@ const TURBINE_LEVEL: f32 = 0.75;
 /// limit (at full load; `WHISTLE_IDLE` of it off throttle), its second harmonic, and how
 /// much its breathiness wobbles it.
 const WHISTLE_PITCH: f32 = 1.0;
-const WHISTLE: f32 = 0.04;
+const WHISTLE: f32 = 0.015;
 const WHISTLE_IDLE: f32 = 0.3;
 const WHISTLE_HARMONIC: f32 = 0.3;
 const WHISTLE_BREATH: f32 = 0.4;
@@ -805,7 +805,7 @@ mod tests {
         assert!(loudness(straight, 0.0) > 1.3 * quiet);
         let turbo_quiet = loudness(turbo, 0.0);
         assert!(turbo_quiet < quiet);
-        assert!(loudness(turbo, 1.0) > turbo_quiet * 1.01);
+        assert!(loudness(turbo, 1.0) > turbo_quiet * 1.001);
     }
 
     #[test]
