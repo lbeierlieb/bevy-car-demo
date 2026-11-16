@@ -22,6 +22,8 @@ pub struct EngineHardware {
     pub intake_phasing: f32,
     pub exhaust_phasing: f32,
     pub intake: Intake,
+    /// A turbocharger between the air filter and the throttle, and in the exhaust.
+    pub turbo: Option<Turbo>,
     pub exhaust: Exhaust,
     pub cooling: Cooling,
     /// Flywheel and crank inertia (kg·m²).
@@ -62,6 +64,74 @@ pub struct Intake {
     pub runner_length: f32,
     /// Plenum and runner volume behind the throttle (m³).
     pub plenum_volume: f32,
+    /// Volume of the ducts ahead of the throttle (m³): after the air filter, or after the
+    /// compressor (with the intercooler) on a turbo engine.
+    pub tract_volume: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Turbo {
+    pub compressor: Compressor,
+    pub turbine: Turbine,
+    /// Inertia of the shaft with both wheels (kg·m²).
+    pub inertia: f32,
+    pub wastegate: Wastegate,
+    pub intercooler: Intercooler,
+    /// A valve venting the boost when the throttle shuts on it, so the compressor doesn't
+    /// surge against it.
+    pub diverter: Option<Diverter>,
+}
+
+/// A centrifugal compressor. Along each speed line its isentropic head falls with the
+/// square of the flow: from `head` × tip speed² with no flow to nothing at the choke flow.
+#[derive(Clone, Copy, Debug)]
+pub struct Compressor {
+    /// Wheel diameter at the tip (m).
+    pub diameter: f32,
+    /// Head coefficient at zero flow.
+    pub head: f32,
+    /// Flow coefficient (flow / (density · tip speed · diameter²)) where the head is gone.
+    pub choke: f32,
+    /// Best efficiency, reached at 60 % of the choke flow coefficient.
+    pub efficiency: f32,
+}
+
+/// A radial turbine: a nozzle of effective `area`, its efficiency best at a blade speed
+/// ratio of 0.65.
+#[derive(Clone, Copy, Debug)]
+pub struct Turbine {
+    /// Wheel diameter (m), effective flow area (m²) and best efficiency.
+    pub diameter: f32,
+    pub area: f32,
+    pub efficiency: f32,
+}
+
+/// A valve letting exhaust past the turbine, pushed open by the boost against a spring.
+#[derive(Clone, Copy, Debug)]
+pub struct Wastegate {
+    /// Effective flow area fully open (m²).
+    pub area: f32,
+    /// Boost (above ambient, Pa) where it starts to open, and how much more opens it fully.
+    pub spring: f32,
+    pub span: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Diverter {
+    /// Effective flow area fully open (m²).
+    pub area: f32,
+    /// Boost over manifold pressure (Pa) where it starts to open, and how much more opens
+    /// it fully.
+    pub opens: f32,
+    pub span: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Intercooler {
+    /// Share of the charge's heat above ambient it takes out.
+    pub effectiveness: f32,
+    /// Effective flow area (m²), for its pressure drop.
+    pub area: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -125,6 +195,48 @@ impl EngineHardware {
     pub fn displacement(&self) -> f32 {
         PI / 4.0 * self.bore * self.bore * self.stroke * self.cylinders as f32
     }
+
+    /// The 2-litre four with lower compression and a mid-sized turbo, wastegated at about
+    /// 0.7 bar of boost, with an intercooler and a diverter valve.
+    pub fn turbo() -> Self {
+        let stock = Self::default();
+        Self {
+            compression_ratio: 8.8,
+            intake: Intake {
+                tract_volume: 6.0e-3,
+                ..stock.intake
+            },
+            turbo: Some(Turbo {
+                compressor: Compressor {
+                    diameter: 0.05,
+                    head: 0.7,
+                    choke: 0.29,
+                    efficiency: 0.75,
+                },
+                turbine: Turbine {
+                    diameter: 0.054,
+                    area: 6e-4,
+                    efficiency: 0.7,
+                },
+                inertia: 2.5e-5,
+                wastegate: Wastegate {
+                    area: 3e-4,
+                    spring: 0.6e5,
+                    span: 0.12e5,
+                },
+                intercooler: Intercooler {
+                    effectiveness: 0.7,
+                    area: 3e-3,
+                },
+                diverter: Some(Diverter {
+                    area: 5e-4,
+                    opens: 0.3e5,
+                    span: 0.2e5,
+                }),
+            }),
+            ..stock
+        }
+    }
 }
 
 impl Default for EngineHardware {
@@ -150,7 +262,9 @@ impl Default for EngineHardware {
                 idle_valve_area: 1.2e-4,
                 runner_length: 0.35,
                 plenum_volume: 3.0e-3,
+                tract_volume: 2.0e-3,
             },
+            turbo: None,
             exhaust: Exhaust {
                 header_length: 0.8,
                 pipe_area: 1.9e-3,

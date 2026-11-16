@@ -4,6 +4,7 @@
 use super::hardware::EngineHardware;
 use super::maps::{self, EngineMaps};
 use super::table::Table;
+use super::turbo;
 use super::{AMBIENT_PRESSURE, AMBIENT_TEMPERATURE, R_AIR, STOICHIOMETRIC};
 
 /// Opening of the idle air valve with the engine at its idle speed, and the controller's
@@ -26,6 +27,8 @@ pub struct Sensors {
     pub map: f32,
     /// Throttle position (0 closed, 1 wide open).
     pub throttle: f32,
+    /// Air temperature in the intake manifold (K).
+    pub intake_temperature: f32,
 }
 
 /// What the ECU commands.
@@ -44,8 +47,8 @@ pub struct Actuators {
     pub exhaust_phase: f32,
 }
 
-/// The first ECU: speed-density fuelling from rpm and manifold pressure, a spark map, a
-/// rev limiter and idle control. The cams stay on the first profile, unphased.
+/// The first ECU: speed-density fuelling from rpm, manifold pressure and intake air
+/// temperature, a spark map, a rev limiter and idle control. The cams stay on the first profile, unphased.
 #[derive(Clone, Debug)]
 pub struct Ecu {
     /// Engine size as set up in the ECU: displacement (m³) and cylinders.
@@ -79,34 +82,53 @@ pub struct EcuState {
 impl Ecu {
     /// A factory tune for the hardware: its VE table matches the engine, it runs λ = 1 at
     /// part load and richer towards full load, and the spark just short of MBT or of the
-    /// knock limit on `octane` fuel, whichever comes first.
+    /// knock limit on `octane` fuel, whichever comes first. With a turbo, the maps reach
+    /// 300 kPa and go richer still on boost.
     pub fn calibrated(hardware: &EngineHardware, maps: &EngineMaps, octane: f32) -> Self {
+        let top = if hardware.turbo.is_some() { 30 } else { 11 };
         let axes = || {
             let rpm = (0..17).map(|i| i as f32 * 500.0).collect();
-            let map = (1..12).map(|i| i as f32 * 10e3).collect();
+            let map = (1..=top).map(|i| i as f32 * 10e3).collect();
             vec![rpm, map]
         };
-        let lambda = |map: f32| 1.0 - 0.12 * ((map - 60e3) / 35e3).clamp(0.0, 1.0);
+        let lambda = |map: f32| {
+            1.0 - 0.12 * ((map - 60e3) / 35e3).clamp(0.0, 1.0)
+                - 0.1 * ((map - 100e3) / 100e3).clamp(0.0, 1.0)
+        };
+        // On the dyno: the charge as warm as the intercooler leaves it, the exhaust
+        // pressure whatever the turbo and exhaust make with the wastegate on its spring.
+        let charge = |map| {
+            hardware
+                .turbo
+                .as_ref()
+                .map_or(AMBIENT_TEMPERATURE, |turbo| turbo::expected_charge(turbo, map))
+        };
+        let wastegate = |map: f32| {
+            hardware.turbo.as_ref().map_or(0.0, |turbo| {
+                turbo::wastegate_opening(&turbo.wastegate, map - AMBIENT_PRESSURE)
+            })
+        };
+        let displacement = hardware.displacement();
+        let load = |ve: f32, map: f32| ve * map / (R_AIR * charge(map)) / super::ambient_density();
         let ve = Table::bake(axes(), |p| {
             let (rpm, map) = (p[0], p[1]);
-            // On the dyno, the exhaust pressure is whatever the stock exhaust makes.
             let mut exhaust = AMBIENT_PRESSURE;
             let mut ve = 0.0;
             for _ in 0..3 {
                 ve = maps.ve(0, rpm, map, exhaust / map, 0.0, 0.0);
-                let air = ve * map / (R_AIR * AMBIENT_TEMPERATURE) * hardware.displacement();
-                let load = air / (super::ambient_density() * hardware.displacement());
+                let air = load(ve, map) * super::ambient_density() * displacement;
                 let flow = air * (1.0 + 1.0 / (STOICHIOMETRIC * lambda(map))) * rpm / 120.0;
-                let temperature = maps.exhaust_temperature(rpm, load);
-                exhaust = super::exhaust_pressure(hardware, flow, temperature);
+                let temperature = maps.exhaust_temperature(rpm, load(ve, map));
+                exhaust = super::exhaust_pressure(hardware, flow, temperature, wastegate(map));
             }
             ve
         });
-        let knock_shift = maps::knock_limit_shift(AMBIENT_TEMPERATURE, 363.0, octane);
         let spark = Table::bake(axes(), |p| {
-            let load = ve.get(p) * p[1] / AMBIENT_PRESSURE;
-            let knock = maps.knock_limit(p[0], load) + knock_shift;
-            maps.mbt(p[0], load).min(knock) - 2.0
+            let (rpm, map) = (p[0], p[1]);
+            let load = load(ve.get(p), map);
+            let shift = maps::knock_limit_shift(charge(map), 363.0, octane);
+            let knock = maps.knock_limit(rpm, load) + shift;
+            maps.mbt(rpm, load).min(knock) - 2.0
         });
         Self {
             displacement: hardware.displacement(),
@@ -122,7 +144,12 @@ impl Ecu {
     }
 
     pub fn step(&self, state: &mut EcuState, sensors: &Sensors, dt: f32) -> Actuators {
-        let Sensors { rpm, map, throttle } = *sensors;
+        let Sensors {
+            rpm,
+            map,
+            throttle,
+            intake_temperature,
+        } = *sensors;
         // Rev limiter: a cut starts at the limit; after it the fuel comes back for a moment
         // even if the revs haven't dropped (in gear they barely do), unless the engine is
         // well over the limit.
@@ -149,7 +176,7 @@ impl Ecu {
 
         let point = [rpm, map];
         let air = self.ve.get(&point) * map * self.displacement
-            / (R_AIR * AMBIENT_TEMPERATURE * self.cylinders as f32);
+            / (R_AIR * intake_temperature * self.cylinders as f32);
         let fuel = if cut {
             0.0
         } else {

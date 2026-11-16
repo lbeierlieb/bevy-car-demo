@@ -1,9 +1,12 @@
 //! A mean-value engine model: cycle-averaged flows and torque, cheap enough for every
 //! physics step.
 //!
-//! Air flows through the filter and throttle (and the idle valve) into the intake
-//! manifold, whose pressure is the model's state; the cylinders draw from it at a rate
-//! set by the volumetric efficiency. The ECU sees only the sensors and commands fuel,
+//! Air flows through the filter (and the turbo's compressor and intercooler) into the
+//! ducts ahead of the throttle, and through the throttle (and the idle valve) into the
+//! intake manifold; the pressures in both are the model's state. The cylinders draw from
+//! the manifold at a rate set by the volumetric efficiency, and push the exhaust through
+//! the turbine and wastegate and the exhaust's restrictions. The ECU sees only the
+//! sensors and commands fuel,
 //! spark and the idle valve. Torque comes from the fuel's energy that the trapped air can
 //! burn, through the indicated efficiency and the spark and mixture curves, less pumping
 //! and friction. What depends on the cylinder's insides comes from maps baked per engine
@@ -14,6 +17,7 @@ pub mod hardware;
 pub mod maps;
 mod table;
 pub mod thermal;
+pub mod turbo;
 
 use std::f32::consts::PI;
 
@@ -36,8 +40,18 @@ const FUEL_ENERGY: f32 = 44e6;
 const THROTTLE_DISCHARGE: f32 = 0.8;
 const THROTTLE_CLOSED: f32 = 7.0 * PI / 180.0;
 const THROTTLE_LEAK: f32 = 8e-6;
-/// Steps of the intake manifold per call (its filling is stiff at high rpm).
+/// Steps of the intake per call (its filling is stiff at high rpm).
 const SUBSTEPS: usize = 4;
+/// Pressure step for the flows' slopes in the implicit intake step (Pa).
+const SLOPE_STEP: f32 = 50.0;
+/// Turbo shaft: bearing drag per rad/s (N·m·s) and the fastest it may spin (rad/s).
+const BEARING_DRAG: f32 = 5e-7;
+const TURBO_LIMIT: f32 = 25000.0;
+/// Time constants of the wastegate actuator and of the intercooler's heat soak (s), and
+/// the air flow at which the intercooler follows at its full rate (kg/s).
+const WASTEGATE_LAG: f32 = 0.05;
+const INTERCOOLER_LAG: f32 = 2.0;
+const INTERCOOLER_FLOW: f32 = 0.05;
 /// Intake manifold pressure after the starter has cranked the engine (Pa).
 const CRANKED_PRESSURE: f32 = 30e3;
 /// Damage per second: per degree² of spark past the knock limit at full load, and per
@@ -88,11 +102,19 @@ impl Default for EngineBuild {
 /// The engine's state while running.
 #[derive(Clone, Copy, Debug)]
 pub struct Engine {
+    /// Pressure ahead of the throttle: boost after the intercooler, or just below ambient
+    /// without a turbo (Pa).
+    pub boost_pressure: f32,
     /// Intake and exhaust manifold pressures (Pa).
     pub intake_pressure: f32,
     pub exhaust_pressure: f32,
-    /// Air through the throttle (kg/s), for the filter's pressure drop.
-    throttle_flow: f32,
+    /// Temperature of the air ahead of and behind the throttle (K).
+    pub charge_temperature: f32,
+    /// Turbo shaft speed (rad/s), wastegate opening (0..1), and air through the compressor
+    /// (kg/s, for the pressure drops of the filter and the intercooler).
+    pub turbo_speed: f32,
+    pub wastegate: f32,
+    compressor_flow: f32,
     ecu: EcuState,
     /// What the ECU commanded in the last step.
     pub actuators: Actuators,
@@ -128,9 +150,13 @@ pub struct Cycle {
 impl Default for Engine {
     fn default() -> Self {
         Self {
+            boost_pressure: AMBIENT_PRESSURE,
             intake_pressure: CRANKED_PRESSURE,
             exhaust_pressure: AMBIENT_PRESSURE,
-            throttle_flow: 0.0,
+            charge_temperature: AMBIENT_TEMPERATURE,
+            turbo_speed: 0.0,
+            wastegate: 0.0,
+            compressor_flow: 0.0,
             ecu: EcuState::default(),
             actuators: Actuators::default(),
             firing: true,
@@ -160,34 +186,56 @@ impl Engine {
             rpm,
             map: self.intake_pressure,
             throttle,
+            intake_temperature: self.charge_temperature,
         };
         self.actuators = build.ecu.step(&mut self.ecu, &sensors, dt);
         self.firing = firing && !self.blown();
 
-        // The intake manifold fills through the throttle and empties into the cylinders.
-        // Both flows are linearised in the manifold pressure for an implicit step.
+        // The ducts fill through the filter (or the compressor) and empty through the
+        // throttle into the manifold, which the cylinders empty. All flows are linearised
+        // in both pressures for an implicit step.
         let intake = &hardware.intake;
-        let upstream = AMBIENT_PRESSURE
-            - self.throttle_flow.powi(2) / (2.0 * ambient_density() * intake.filter_area.powi(2));
-        let area = throttle_area(intake.throttle_diameter, throttle)
-            + intake.idle_valve_area * self.actuators.idle_valve
-            + THROTTLE_LEAK;
-        let fill = R_AIR * AMBIENT_TEMPERATURE / intake.plenum_volume;
+        let temperature = self.charge_temperature;
+        let area = THROTTLE_DISCHARGE
+            * (throttle_area(intake.throttle_diameter, throttle)
+                + intake.idle_valve_area * self.actuators.idle_valve
+                + THROTTLE_LEAK);
+        let tract_fill = R_AIR * temperature / intake.tract_volume;
+        let manifold_fill = R_AIR * temperature / intake.plenum_volume;
         let h = dt / SUBSTEPS as f32;
+        let d = SLOPE_STEP;
         for _ in 0..SUBSTEPS {
-            let p = self.intake_pressure;
-            let draw = self.cylinder_flow(build, rpm, p) / p;
-            let flow = orifice_flow(area, upstream, p);
-            let slope = (orifice_flow(area, upstream, p + 50.0) - flow) / 50.0;
-            let dp = h * fill * (flow - draw * p) / (1.0 + h * fill * (draw - slope));
-            self.intake_pressure = (p + dp).clamp(1e3, upstream);
-            self.throttle_flow = flow;
+            let (pt, pm) = (self.boost_pressure, self.intake_pressure);
+            let through = |pt, pm| orifice_flow(area, pt, pm, temperature);
+            let (compressed, vented) = self.tract_inflow(hardware, pt);
+            let (fill, pass, draw) = (
+                compressed - vented,
+                through(pt, pm),
+                self.cylinder_flow(build, rpm, pm),
+            );
+            let (compressed_up, vented_up) = self.tract_inflow(hardware, pt + d);
+            let fill_slope = (compressed_up - vented_up - fill) / d;
+            let pass_up = (through(pt + d, pm) - pass) / d;
+            let pass_down = (through(pt, pm + d) - pass) / d;
+            let draw_slope = (self.cylinder_flow(build, rpm, pm + d) - draw) / d;
+            let (ht, hm) = (h * tract_fill, h * manifold_fill);
+            let (a, b) = (1.0 - ht * (fill_slope - pass_up), ht * pass_down);
+            let (c, e) = (-hm * pass_up, 1.0 - hm * (pass_down - draw_slope));
+            let (rt, rm) = (ht * (fill - pass), hm * (pass - draw));
+            let det = a * e - b * c;
+            self.boost_pressure = (pt + (rt * e - b * rm) / det).clamp(1e3, 1e6);
+            self.intake_pressure = (pm + (a * rm - c * rt) / det).clamp(1e3, 1e6);
+            self.compressor_flow = compressed;
         }
 
         let cycle = self.cycle(build, rpm);
         let cycles = rpm.abs() / 120.0;
         let flow = cycle.exhaust * cycles;
-        self.exhaust_pressure = exhaust_pressure(hardware, flow, cycle.exhaust_temperature);
+        let gas = cycle.exhaust_temperature;
+        self.exhaust_pressure = exhaust_pressure(hardware, flow, gas, self.wastegate);
+        if let Some(turbo) = &hardware.turbo {
+            self.step_turbo(turbo, hardware, flow, gas, dt);
+        }
 
         // The cylinder walls heat the coolant; friction heats the coolant (mostly through
         // the liners) and the oil (through the bearings), and the oil also cools the
@@ -205,6 +253,66 @@ impl Engine {
             + HEAT_DAMAGE * (thermal.coolant - COOLANT_LIMIT).max(0.0)
             + HEAT_DAMAGE * (thermal.oil - OIL_LIMIT).max(0.0);
         self.damage = (self.damage + wear * dt).min(1.0);
+    }
+
+    /// Air into the ducts ahead of the throttle with them at `pressure` (Pa): through the
+    /// filter, or through the filter, compressor and intercooler; and air vented from them
+    /// by the diverter valve (both kg/s).
+    fn tract_inflow(&self, hardware: &EngineHardware, pressure: f32) -> (f32, f32) {
+        let filter = hardware.intake.filter_area;
+        let Some(turbo) = &hardware.turbo else {
+            let flow = orifice_flow(filter, AMBIENT_PRESSURE, pressure, AMBIENT_TEMPERATURE);
+            return (flow, 0.0);
+        };
+        let (inlet, outlet) = self.compressor_pressures(hardware, turbo, pressure);
+        let speed = self.turbo_speed;
+        let compressor = &turbo.compressor;
+        let flow = turbo::compressor(compressor, speed, inlet, outlet, AMBIENT_TEMPERATURE).flow;
+        let vented = turbo.diverter.map_or(0.0, |valve| {
+            let open = (pressure - self.intake_pressure - valve.opens) / valve.span;
+            let area = valve.area * open.clamp(0.0, 1.0);
+            orifice_flow(area, pressure, inlet, self.charge_temperature)
+        });
+        (flow, vented)
+    }
+
+    /// Pressures at the compressor's inlet and outlet with the ducts at `pressure`: less
+    /// the filter's drop ahead of it, plus the intercooler's after it.
+    fn compressor_pressures(
+        &self,
+        hardware: &EngineHardware,
+        turbo: &hardware::Turbo,
+        pressure: f32,
+    ) -> (f32, f32) {
+        let drop = |area: f32| self.compressor_flow.powi(2) / (2.0 * ambient_density() * area * area);
+        let inlet = AMBIENT_PRESSURE - drop(hardware.intake.filter_area);
+        (inlet, pressure + drop(turbo.intercooler.area))
+    }
+
+    /// The turbo shaft between turbine and compressor, the wastegate following the boost,
+    /// and the charge temperature following the intercooler (with some heat soak).
+    fn step_turbo(
+        &mut self,
+        turbo: &hardware::Turbo,
+        hardware: &EngineHardware,
+        exhaust_flow: f32,
+        gas: f32,
+        dt: f32,
+    ) {
+        let (inlet, outlet) = self.compressor_pressures(hardware, turbo, self.boost_pressure);
+        let speed = self.turbo_speed;
+        let compressor =
+            turbo::compressor(&turbo.compressor, speed, inlet, outlet, AMBIENT_TEMPERATURE);
+        let after = restricted(hardware, exhaust_flow, gas);
+        let (_, drive) = turbo::turbine(&turbo.turbine, speed, self.exhaust_pressure, after, gas);
+        let net = drive - compressor.torque - BEARING_DRAG * speed;
+        self.turbo_speed = (speed + net / turbo.inertia * dt).clamp(0.0, TURBO_LIMIT);
+
+        let target = turbo::wastegate_opening(&turbo.wastegate, self.boost_pressure - AMBIENT_PRESSURE);
+        self.wastegate += (target - self.wastegate) * (dt / WASTEGATE_LAG).min(1.0);
+        let cooled = turbo::intercooled(turbo, compressor.temperature);
+        let rate = (compressor.flow / INTERCOOLER_FLOW).min(1.0) * dt / INTERCOOLER_LAG;
+        self.charge_temperature += (cooled - self.charge_temperature) * rate.min(1.0);
     }
 
     /// Torque on the crank at `rpm`. A stopped engine only drags, against the way it's
@@ -230,7 +338,9 @@ impl Engine {
             a.intake_phase,
             a.exhaust_phase,
         );
-        ve * intake / (R_AIR * AMBIENT_TEMPERATURE) * build.hardware.displacement() * rpm.abs()
+        ve * intake / (R_AIR * self.charge_temperature)
+            * build.hardware.displacement()
+            * rpm.abs()
             / 120.0
     }
 
@@ -249,7 +359,7 @@ impl Engine {
             a.exhaust_phase,
         );
         let displacement = hardware.displacement();
-        let air = ve * p / (R_AIR * AMBIENT_TEMPERATURE) * displacement;
+        let air = ve * p / (R_AIR * self.charge_temperature) * displacement;
         let load = air / (ambient_density() * displacement);
         let fuel = if self.firing {
             a.fuel * hardware.cylinders as f32
@@ -267,8 +377,8 @@ impl Engine {
                 * (1.0 - DAMAGE_EFFICIENCY * self.damage);
             let temperature = maps.exhaust_temperature(rpm, load)
                 + maps::exhaust_temperature_shift(offset, lambda);
-            let shift =
-                maps::knock_limit_shift(AMBIENT_TEMPERATURE, self.thermal.coolant, build.octane);
+            let (charge, coolant) = (self.charge_temperature, self.thermal.coolant);
+            let shift = maps::knock_limit_shift(charge, coolant, build.octane);
             let knock = (a.spark - maps.knock_limit(rpm, load) - shift).max(0.0);
             (lambda, indicated, temperature, knock)
         } else {
@@ -297,9 +407,9 @@ fn throttle_area(diameter: f32, throttle: f32) -> f32 {
 }
 
 /// Compressible flow (kg/s) through an orifice of effective `area` from `upstream` to
-/// `downstream` pressure, with air at ambient temperature; choked below the critical
+/// `downstream` pressure, with gas at `temperature` upstream; choked below the critical
 /// ratio. Near equal pressures the flow is made linear, which keeps its slope finite.
-fn orifice_flow(area: f32, upstream: f32, downstream: f32) -> f32 {
+fn orifice_flow(area: f32, upstream: f32, downstream: f32, temperature: f32) -> f32 {
     let psi = |ratio: f32| {
         let choked = 0.528;
         let ratio = ratio.max(choked);
@@ -312,15 +422,43 @@ fn orifice_flow(area: f32, upstream: f32, downstream: f32) -> f32 {
     } else {
         psi(ratio)
     };
-    THROTTLE_DISCHARGE * area * upstream / (R_AIR * AMBIENT_TEMPERATURE).sqrt() * psi
+    area * upstream / (R_AIR * temperature).sqrt() * psi
+}
+
+/// Pressure (Pa) that pushes `flow` (kg/s) of gas at `temperature` (K) through the
+/// exhaust's restrictions to ambient.
+fn restricted(hardware: &EngineHardware, flow: f32, temperature: f32) -> f32 {
+    // The drop is ṁ²·R·T·resistance / (2p) at the pressure p: solve for p.
+    let k = flow * flow * R_AIR * temperature * hardware.exhaust.resistance() / 2.0;
+    (AMBIENT_PRESSURE + (AMBIENT_PRESSURE.powi(2) + 4.0 * k).sqrt()) / 2.0
 }
 
 /// Exhaust manifold pressure (Pa) that pushes `flow` (kg/s) of gas at `temperature` (K)
-/// through the exhaust's restrictions to ambient.
-fn exhaust_pressure(hardware: &EngineHardware, flow: f32, temperature: f32) -> f32 {
-    // The drop is ṁ²·R·T·resistance / (2p) at the manifold's pressure p: solve for p.
-    let k = flow * flow * R_AIR * temperature * hardware.exhaust.resistance() / 2.0;
-    (AMBIENT_PRESSURE + (AMBIENT_PRESSURE.powi(2) + 4.0 * k).sqrt()) / 2.0
+/// out: through the turbine and the wastegate (open by `wastegate`, 0..1), if there's a
+/// turbo, and then the restrictions.
+fn exhaust_pressure(hardware: &EngineHardware, flow: f32, temperature: f32, wastegate: f32) -> f32 {
+    let after = restricted(hardware, flow, temperature);
+    let Some(turbo) = &hardware.turbo else {
+        return after;
+    };
+    let gate = turbo.wastegate.area * wastegate;
+    let passes = |p| {
+        orifice_flow(turbo.turbine.area, p, after, temperature)
+            + orifice_flow(gate, p, after, temperature)
+    };
+    let (mut low, mut high) = (after, after + 1e5);
+    while passes(high) < flow && high < 1e7 {
+        high = after + 2.0 * (high - after);
+    }
+    for _ in 0..30 {
+        let mid = (low + high) / 2.0;
+        if passes(mid) < flow {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    (low + high) / 2.0
 }
 
 #[cfg(test)]
@@ -334,6 +472,68 @@ mod tests {
             engine.step(build, throttle, rpm, true, 1.0 / 120.0);
         }
         engine.torque(build, rpm)
+    }
+
+    #[test]
+    fn sustained_full_load_stays_in_the_safe_range() {
+        // Flat out at speed for two minutes, naturally aspirated and turbo.
+        for build in [EngineBuild::default(), EngineBuild::new(EngineHardware::turbo())] {
+            let mut engine = Engine {
+                airspeed: 40.0,
+                ..Engine::default()
+            };
+            for _ in 0..120 * 120 {
+                engine.step(&build, 1.0, 6000.0, true, 1.0 / 120.0);
+            }
+            let (coolant, oil) = (engine.thermal.coolant - 273.15, engine.thermal.oil - 273.15);
+            assert!(coolant < 105.0 && oil < 135.0, "coolant {coolant} °C, oil {oil} °C");
+            assert!(engine.damage < 1e-3, "damage {}", engine.damage);
+        }
+    }
+
+    #[test]
+    fn the_turbo_boosts_up_to_its_wastegate() {
+        let na = EngineBuild::default();
+        let build = EngineBuild::new(EngineHardware::turbo());
+        let rpm = 5000.0;
+        let engine = run_flat_out(&build, rpm, 6.0);
+        let boost = (engine.boost_pressure - AMBIENT_PRESSURE) / 1e5;
+        assert!((0.6..0.9).contains(&boost), "{boost} bar");
+        assert!(engine.wastegate > 0.2, "wastegate {}", engine.wastegate);
+        let torque = engine.torque(&build, rpm);
+        assert!(torque > 1.3 * steady_torque(&na, rpm, 1.0), "{torque} N·m");
+        // Intercooled, tuned for it: warm charge, rich mixture, no knock.
+        let cycle = engine.cycle(&build, rpm);
+        let charge = engine.charge_temperature - 273.15;
+        assert!((30.0..70.0).contains(&charge), "charge {charge} °C");
+        assert!((0.76..0.86).contains(&cycle.lambda), "λ {}", cycle.lambda);
+        assert_eq!(cycle.knock, 0.0);
+        // Low down there's little exhaust to drive it.
+        let low = run_flat_out(&build, 1500.0, 6.0);
+        assert!(low.boost_pressure - AMBIENT_PRESSURE < 0.1e5);
+    }
+
+    #[test]
+    fn the_turbo_spools_and_vents() {
+        let build = EngineBuild::new(EngineHardware::turbo());
+        let rpm = 3500.0;
+        let mut engine = Engine::default();
+        let run = |engine: &mut Engine, throttle, seconds: f32| {
+            for _ in 0..(seconds * 120.0) as usize {
+                engine.step(&build, throttle, rpm, true, 1.0 / 120.0);
+            }
+            (engine.boost_pressure - AMBIENT_PRESSURE) / 1e5
+        };
+        assert!(run(&mut engine, 0.15, 5.0) < 0.1);
+        // Floored: boost builds within a couple of tenths, most of it within a second
+        // and a half.
+        let early = run(&mut engine, 1.0, 0.2);
+        let later = run(&mut engine, 1.0, 1.3);
+        assert!(early < later * 0.5 && later > 0.4, "{early} then {later} bar");
+        // Lifting: the diverter vents the boost, and the shaft spins down.
+        let speed = engine.turbo_speed;
+        assert!(run(&mut engine, 0.0, 0.5) < 0.15);
+        assert!(engine.turbo_speed < speed * 0.8);
     }
 
     #[test]
@@ -431,22 +631,6 @@ mod tests {
         let engine = run_flat_out(&build, rpm, 120.0);
         assert!(engine.blown());
         assert!(engine.torque(&build, rpm) < 0.0);
-    }
-
-    #[test]
-    fn sustained_full_load_stays_in_the_safe_range() {
-        // Flat out at speed for two minutes.
-        let build = EngineBuild::default();
-        let mut engine = Engine {
-            airspeed: 40.0,
-            ..Engine::default()
-        };
-        for _ in 0..120 * 120 {
-            engine.step(&build, 1.0, 6000.0, true, 1.0 / 120.0);
-        }
-        let (coolant, oil) = (engine.thermal.coolant - 273.15, engine.thermal.oil - 273.15);
-        assert!(coolant < 105.0 && oil < 135.0, "coolant {coolant} °C, oil {oil} °C");
-        assert!(engine.damage < 1e-3, "damage {}", engine.damage);
     }
 
     #[test]

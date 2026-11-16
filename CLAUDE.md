@@ -163,9 +163,15 @@ phasing, VTEC-style cam switching).
 - Order: mean-value model with the simple ECU and placeholder maps; then turbo, thermal
   model, knock; then an ECU tuning UI; then the offline cycle sim and hardware parts.
 - Done so far: `src/physics/engine/` (hardware, placeholder maps, simple ECU with
-  overrun fuel cut, runtime model); the drivetrain calls it. Default build is tuned to
-  the old torque curve (about 200 N·m at 4200 rpm). No thermal mass yet: the exhaust
-  temperature is that of the gas leaving the cylinders.
+  overrun fuel cut and an intake temperature sensor, runtime model); the drivetrain
+  calls it. Default build is tuned to the old torque curve (about 200 N·m at 4200 rpm).
+  Coolant/oil lumps with thermostat, radiator and fan (`thermal.rs`); knock limit and
+  damage (blown at 1, until the car is reset); turbo (`turbo.rs`: parametric compressor
+  and turbine, spring wastegate, intercooler, diverter valve). The setup panel swaps
+  between the NA and turbo builds (about 310 N·m on 0.7 bar) and sets the octane.
+  No exhaust thermal mass yet: the exhaust temperature is that of the gas leaving the
+  cylinders, and it drives the turbine directly.
+- Next in the plan: an ECU tuning UI (fuel, spark, rev limit maps).
 
 ## Audio
 

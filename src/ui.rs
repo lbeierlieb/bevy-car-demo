@@ -9,6 +9,8 @@ use crate::camera::OrbitInput;
 use crate::car::{ActiveCar, Car};
 use crate::debug::DebugView;
 use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_value, input_name};
+use crate::physics::engine::hardware::EngineHardware;
+use crate::physics::engine::{AMBIENT_PRESSURE, Engine, EngineBuild};
 use crate::physics::suspension::AxleSetup;
 use crate::sim::{CHASSIS_HZ, SUBSTEPS};
 use crate::wheel_base::{ForceFeedback, WheelBase};
@@ -267,6 +269,15 @@ fn engine(ui: &mut egui::Ui, car: &Car) {
         engine.actuators.spark,
         engine.torque(build, drivetrain.rpm),
     ));
+    if build.hardware.turbo.is_some() {
+        ui.label(format!(
+            "boost {:.2} bar    turbo {:.0}k rpm    wastegate {:.0} %    charge {:.0} °C",
+            (engine.boost_pressure - AMBIENT_PRESSURE) / 1e5,
+            engine.turbo_speed * 60.0 / std::f32::consts::TAU / 1000.0,
+            engine.wastegate * 100.0,
+            engine.charge_temperature - 273.15,
+        ));
+    }
     let thermal = &engine.thermal;
     ui.label(format!(
         "coolant {:.0} °C    oil {:.0} °C{}    knock {:.1}°    damage {:.0} %",
@@ -306,7 +317,37 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
     });
 }
 
+/// The engine build (swapping it bakes its maps and gives it a factory tune) and the fuel.
+fn engine_setup(ui: &mut egui::Ui, car: &mut Car) {
+    ui.strong("Engine");
+    let build = &mut car.setup.engine.build;
+    let turbo = build.hardware.turbo.is_some();
+    let mut choice = turbo;
+    let name = |turbo| if turbo { "2.0 turbo" } else { "2.0 naturally aspirated" };
+    egui::ComboBox::from_label("Build")
+        .selected_text(name(turbo))
+        .show_ui(ui, |ui| {
+            for option in [false, true] {
+                ui.selectable_value(&mut choice, option, name(option));
+            }
+        });
+    if choice != turbo {
+        let octane = build.octane;
+        *build = EngineBuild::new(if choice {
+            EngineHardware::turbo()
+        } else {
+            EngineHardware::default()
+        });
+        build.octane = octane;
+        car.drivetrain.engine = Engine::default();
+    }
+    let build = &mut car.setup.engine.build;
+    ui.add(egui::Slider::new(&mut build.octane, 89.0..=102.0).text("Fuel octane (RON)"))
+        .on_hover_text("The factory tune is for 95; lower knocks");
+}
+
 fn setup(ui: &mut egui::Ui, car: &mut Car) {
+    engine_setup(ui, car);
     let setup = &mut car.setup;
     for (name, axle) in [("Front", &mut setup.front), ("Rear", &mut setup.rear)] {
         ui.strong(name);
