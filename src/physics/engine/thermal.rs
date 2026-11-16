@@ -8,7 +8,7 @@ use super::hardware::Cooling;
 
 /// Heat passed from the oil to the coolant, and lost from the block and the sump to the
 /// air around them (W/K).
-const OIL_TO_COOLANT: f32 = 150.0;
+const OIL_TO_COOLANT: f32 = 600.0;
 const BLOCK_LOSS: f32 = 15.0;
 const SUMP_LOSS: f32 = 10.0;
 /// Share of the driving speed that goes through the radiator, and the least air through

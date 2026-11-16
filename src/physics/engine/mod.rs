@@ -189,13 +189,14 @@ impl Engine {
         let flow = cycle.exhaust * cycles;
         self.exhaust_pressure = exhaust_pressure(hardware, flow, cycle.exhaust_temperature);
 
-        // The cylinder walls heat the coolant; friction heats the coolant and the oil
-        // (through the pistons and the bearings), and the oil also cools the pistons.
+        // The cylinder walls heat the coolant; friction heats the coolant (mostly through
+        // the liners) and the oil (through the bearings), and the oil also cools the
+        // pistons.
         let fuel_power = cycle.fuel * FUEL_ENERGY * cycles;
         let friction_power = cycle.friction * cycles;
         let walls = build.maps.heat_to_coolant(rpm.abs(), cycle.load);
-        let to_coolant = walls * fuel_power + 0.5 * friction_power;
-        let to_oil = 0.5 * friction_power + 0.03 * fuel_power;
+        let to_coolant = walls * fuel_power + 0.7 * friction_power;
+        let to_oil = 0.3 * friction_power + 0.02 * fuel_power;
         let (cooling, airspeed) = (&hardware.cooling, self.airspeed);
         self.thermal.step(cooling, to_coolant, to_oil, airspeed, dt);
 
@@ -430,6 +431,22 @@ mod tests {
         let engine = run_flat_out(&build, rpm, 120.0);
         assert!(engine.blown());
         assert!(engine.torque(&build, rpm) < 0.0);
+    }
+
+    #[test]
+    fn sustained_full_load_stays_in_the_safe_range() {
+        // Flat out at speed for two minutes.
+        let build = EngineBuild::default();
+        let mut engine = Engine {
+            airspeed: 40.0,
+            ..Engine::default()
+        };
+        for _ in 0..120 * 120 {
+            engine.step(&build, 1.0, 6000.0, true, 1.0 / 120.0);
+        }
+        let (coolant, oil) = (engine.thermal.coolant - 273.15, engine.thermal.oil - 273.15);
+        assert!(coolant < 105.0 && oil < 135.0, "coolant {coolant} °C, oil {oil} °C");
+        assert!(engine.damage < 1e-3, "damage {}", engine.damage);
     }
 
     #[test]
