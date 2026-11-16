@@ -1,10 +1,10 @@
 //! Driving HUD in the bottom right corner: speed and gear in the middle, with a rev counter
-//! arc around them, and the tires' temperatures and wear left of it.
+//! arc around them, and the tires' temperatures and wear and the fuel left of it.
 
 use std::f32::consts::PI;
 
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Shape, Stroke, vec2};
+use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Shape, Stroke, pos2, vec2};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car};
@@ -151,12 +151,18 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
 /// Tire size in the tire display, and the gap between them.
 const TIRE: egui::Vec2 = vec2(22.0, 34.0);
 const TIRE_GAP: egui::Vec2 = vec2(14.0, 10.0);
+/// Width of the fuel gauge right of the tires, and its gap to them.
+const FUEL_WIDTH: f32 = 8.0;
+const FUEL_GAP: f32 = 12.0;
+/// Below this share of the tank the fuel gauge turns orange.
+const FUEL_LOW: f32 = 0.15;
 
 /// The four tires left of the gauge, seen from above: coloured by how warm the tread is
 /// against its compound's window (blue cold, green right, red overheated), its temperature
-/// in it, and the worn share darkened from the top.
+/// in it, and the worn share darkened from the top. Right of them, the fuel gauge: orange
+/// when low, red while the engine starves.
 fn tires(ctx: &egui::Context, car: &Car) {
-    let size = 2.0 * TIRE + TIRE_GAP + vec2(16.0, 16.0);
+    let size = 2.0 * TIRE + TIRE_GAP + vec2(16.0 + FUEL_GAP + FUEL_WIDTH, 16.0);
     egui::Area::new(egui::Id::new("tires"))
         .anchor(
             Align2::RIGHT_BOTTOM,
@@ -184,6 +190,25 @@ fn tires(ctx: &egui::Context, car: &Car) {
                     Color32::BLACK,
                 );
             }
+
+            let gauge = egui::Rect::from_min_max(
+                rect.right_top() + vec2(-8.0 - FUEL_WIDTH, 8.0),
+                rect.right_bottom() + vec2(-8.0, -8.0),
+            );
+            painter.rect_filled(gauge, 3.0, TRACK);
+            let share = (car.fuel.litres() / car.setup.tank.litres).clamp(0.0, 1.0);
+            let level = egui::Rect::from_min_max(
+                pos2(gauge.min.x, gauge.max.y - gauge.height() * share),
+                gauge.max,
+            );
+            let color = if car.fuel.supply < 0.95 {
+                RED
+            } else if share < FUEL_LOW {
+                ORANGE
+            } else {
+                BAR
+            };
+            painter.rect_filled(level, 3.0, color);
         });
 }
 

@@ -112,6 +112,7 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     let felt = body.rotation.inverse() * ((body.velocity - velocity) / dt - GRAVITY);
     let flow = car.drivetrain.engine.fuel_flow;
     car.fuel.step(&car.setup.tank, flow, felt, dt);
+    car.fuel.distance += f64::from(car.body.velocity.length() * dt);
     car.load_fuel();
 }
 
@@ -238,7 +239,7 @@ mod tests {
                 let setup = CarSetup::factory(index, option);
                 let name = format!("{} {}", chassis.name, chassis.engines[option]);
                 // The engine's place shows in the balance.
-                let front = setup.front_weight();
+                let front = setup.front_weight_with(setup.tank.litres);
                 let expected = match chassis.bay.place {
                     "middle" => 0.38..0.47,
                     "rear" => 0.34..0.42,
@@ -248,7 +249,7 @@ mod tests {
                     expected.contains(&front),
                     "{name}: {front} on the front axle"
                 );
-                let mass = setup.mass();
+                let mass = setup.mass_with(setup.tank.litres);
                 let mut car = Car::spawn_at(0, setup, &terrain, p.x, p.y, yaw);
                 car.controls = Controls {
                     brake: 1.0,

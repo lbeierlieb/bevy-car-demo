@@ -35,6 +35,8 @@ pub struct Fuel {
     /// little to take off a full tank in single precision).
     litres: f64,
     pub burnt: f64,
+    /// Distance driven since filling up (m).
+    pub distance: f64,
     /// The acceleration the fuel has settled to, sideways and lengthwise, as a share of
     /// the acceleration pressing it into the tank's floor (a slope counts too).
     slosh: f32,
@@ -47,6 +49,7 @@ impl Fuel {
         Self {
             litres: litres.into(),
             burnt: 0.0,
+            distance: 0.0,
             slosh: 0.0,
             supply: 1.0,
         }
@@ -60,6 +63,11 @@ impl Fuel {
     /// Mass of the fuel (kg).
     pub fn mass(&self) -> f32 {
         self.litres() * DENSITY
+    }
+
+    /// Average consumption since filling up (L/100 km), once there's a kilometre to go by.
+    pub fn average(&self) -> Option<f32> {
+        (self.distance > 1000.0).then(|| (self.burnt / self.distance * 100e3) as f32)
     }
 
     /// Keeps no more than fits into `tank`.
@@ -111,7 +119,11 @@ mod tests {
         for _ in 0..60 * 120 {
             fuel.step(&TANK, 0.003, LEVEL, 1.0 / 120.0);
         }
-        assert!((fuel.litres() - (10.0 - 0.18 / DENSITY)).abs() < 1e-4, "{}", fuel.litres);
+        assert!(
+            (fuel.litres() - (10.0 - 0.18 / DENSITY)).abs() < 1e-4,
+            "{}",
+            fuel.litres
+        );
         assert!((fuel.burnt - 0.18 / f64::from(DENSITY)).abs() < 1e-6);
         assert_eq!(fuel.supply, 1.0);
     }

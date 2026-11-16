@@ -10,6 +10,7 @@ use crate::car::{ActiveCar, Car};
 use crate::debug::DebugView;
 use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_value, input_name};
 use crate::physics::engine::AMBIENT_PRESSURE;
+use crate::physics::fuel;
 use crate::physics::suspension::AxleSetup;
 use crate::sim::{CHASSIS_HZ, SUBSTEPS};
 use crate::wheel_base::{ForceFeedback, WheelBase};
@@ -69,8 +70,8 @@ fn panel(
             ui.label(format!(
                 "{:.0} km/h    {:.0} kg, {:.0} % on the front axle",
                 car.forward_speed() * 3.6,
-                car.setup.mass(),
-                car.setup.front_weight() * 100.0
+                car.setup.mass_with(car.fuel.litres()),
+                car.setup.front_weight_with(car.fuel.litres()) * 100.0
             ));
             let gear = match car.drivetrain.selected_gear() {
                 -1 => "R".to_string(),
@@ -87,6 +88,7 @@ fn panel(
                     .on_hover_text("Eases the throttle while a driven wheel spins");
             });
             engine(ui, &car);
+            fuel(ui, &car);
             ui.label(format!(
                 "Chassis {CHASSIS_HZ:.0} Hz, corners {:.0} Hz ({SUBSTEPS} substeps)",
                 CHASSIS_HZ * SUBSTEPS as f64
@@ -303,6 +305,34 @@ fn engine(ui: &mut egui::Ui, car: &Car) {
     ));
 }
 
+/// What's in the tank, what the engine burns, and how far it goes on what's left.
+fn fuel(ui: &mut egui::Ui, car: &Car) {
+    let (fuel, tank) = (&car.fuel, &car.setup.tank);
+    let per_hour = car.drivetrain.engine.fuel_flow / fuel::DENSITY * 3600.0;
+    let speed = car.body.velocity.length();
+    let now = if speed > 3.0 {
+        format!("{:.1} L/100 km", per_hour / (speed * 3.6) * 100.0)
+    } else {
+        format!("{per_hour:.1} L/h")
+    };
+    let average = fuel.average().map_or(String::new(), |average| {
+        format!(
+            "    average {average:.1} L/100 km    range {:.0} km",
+            fuel.litres() / average * 100.0
+        )
+    });
+    let starving = if fuel.supply < 0.95 {
+        "    STARVING"
+    } else {
+        ""
+    };
+    ui.label(format!(
+        "fuel {:.1} of {:.0} L    {now}{average}{starving}",
+        fuel.litres(),
+        tank.litres
+    ));
+}
+
 fn telemetry(ui: &mut egui::Ui, car: &Car) {
     egui::Grid::new("telemetry").striped(true).show(ui, |ui| {
         for header in [
@@ -354,6 +384,17 @@ fn engine_setup(ui: &mut egui::Ui, car: &mut Car) {
 
 fn setup(ui: &mut egui::Ui, car: &mut Car) {
     engine_setup(ui, car);
+    let mut fill = car.fuel.litres() / car.setup.tank.litres * 100.0;
+    let tank = car.setup.tank.litres;
+    if ui
+        .add(
+            egui::Slider::new(&mut fill, 0.0..=100.0).text(format!("Fuel load % (of {tank:.0} L)")),
+        )
+        .on_hover_text("Fills (or drains) the tank to this now and on every reset (R)")
+        .changed()
+    {
+        car.refuel(fill / 100.0);
+    }
     let setup = &mut car.setup;
     for (name, axle) in [("Front", &mut setup.front), ("Rear", &mut setup.rear)] {
         ui.strong(name);

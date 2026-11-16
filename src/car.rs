@@ -236,16 +236,6 @@ impl CarSetup {
         let unsprung = self.front.unsprung_mass;
         (2.0 * self.corner_mass_with(true, litres) + 2.0 * unsprung) / self.mass_with(litres)
     }
-
-    /// Mass of the whole car with half a tank (kg).
-    pub fn mass(&self) -> f32 {
-        self.mass_with(self.tank.litres / 2.0)
-    }
-
-    /// Share of the car's weight on the front axle with half a tank.
-    pub fn front_weight(&self) -> f32 {
-        self.front_weight_with(self.tank.litres / 2.0)
-    }
 }
 
 impl Default for CarSetup {
