@@ -161,7 +161,8 @@ catalogue entries, and things like swap subframes are named so they can be price
   roadster, Tarn coupé (the default), Halden saloon, Skarn rally car, Harrow muscle car,
   Calder mid-engined, Rheon rear-engined, Vespera supercar, Wisp track-day special,
   Drover pickup, Carrow van; names are made up, no real cars), `GEARBOXES` (8, of three
-  kinds: transverse, inline, transaxle), clutches, suspension kits, tires and paints.
+  kinds: transverse, inline, transaxle), clutches, suspension kits and paints (the tire
+  compounds are in `physics/tire.rs`).
   `physics/engine/families.rs` has `FAMILIES` (12 families, 22 factory versions, codes
   like W20T; W is today's 2-litre four, R the high-revving four with switching cams).
 - **A car** is a `CarBuild` (chassis, paint, gearbox, clutch, final drive, limited-slip,
@@ -231,11 +232,24 @@ and without traction control; `trace_power_slide` prints one step by step
 - Load sensitivity (`TireParams::load_sensitivity`, 0.1) made slides slightly deeper,
   not easier, but makes axle balance matter. Relaxation length wasn't added: at speed it
   lags by only ~20 ms, so it matters only at low speed.
-- Mid- and rear-engined cars still spin with the bot (plausible); front-engined ones
+- Mid- and rear-engined cars still spin with the bot (plausible), and so do the 6.2 V8
+  Harrow and the 5-litre V8s snap back; the other front-engined ones
   are caught (asserted by `a_power_slide_can_be_caught`).
-- Next (agreed): tire types with temperature (grip by tread temperature, heating from
-  slip power) and wear: street (works cold, overheats, no sharp drop past the peak),
-  race (needs heat, wears fast), and one in between.
+- Tire compounds (`tire::COMPOUNDS`, agreed with the user): street (grips from cold,
+  best at 65 °C, lets go gently past the peak, overheats when driven hard), sport, race
+  (needs heat, best at 95 °C, peaks early and drops off, wears fast). Each has grip,
+  peak slip angle/ratio with the Magic Formula C (stiffness B follows from the peak), a
+  temperature window and a tread life (sliding energy). One tread lump per corner
+  (`Corner::tread`): heated by 0.8 of the sliding power plus rolling hysteresis, cooled
+  by the air (time constant about a minute); wear with sliding, faster overheated, a
+  quarter less grip worn through. Cars start on cold tires; R gives fresh ones. Near the
+  limit on a circle the outside treads reach about 55 °C in 30 s and 95 °C in 2 min
+  (`tire_temperatures`, ignored, prints it). A car's tire state survives an engine swap.
+  Tests about other things call `Car::warm_tires`. A burnout overheats street tires
+  within seconds, and then they can't stop spinning.
+- Not tuned by driving yet: the heating rates, the windows, how much grip overheating
+  costs, wear rates. Possible next steps: tread and carcass as two lumps, tire pressure,
+  camber spreading heat across the tread.
 
 ## Engine model
 
