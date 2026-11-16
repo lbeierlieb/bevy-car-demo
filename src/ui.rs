@@ -9,6 +9,7 @@ use crate::camera::OrbitInput;
 use crate::car::{ActiveCar, Car};
 use crate::debug::DebugView;
 use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_value, input_name};
+use crate::physics::drivetrain::{Differential, Drive};
 use crate::physics::engine::AMBIENT_PRESSURE;
 use crate::physics::suspension::AxleSetup;
 use crate::sim::{CHASSIS_HZ, SUBSTEPS};
@@ -328,8 +329,25 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
 /// The engine (built in the garage) and the fuel.
 fn engine_setup(ui: &mut egui::Ui, car: &mut Car) {
     ui.strong("Engine");
-    let build = &mut car.setup.engine.build;
-    ui.label(format!("{} (F4: garage)", build.hardware.name));
+    let engine = &mut car.setup.engine;
+    ui.label(format!("{} (F4: garage)", engine.build.hardware.name));
+    egui::ComboBox::from_label("Drive")
+        .selected_text(engine.drive.name())
+        .show_ui(ui, |ui| {
+            for drive in [Drive::Rear, Drive::Front, Drive::All { front: 0.4 }] {
+                ui.selectable_value(&mut engine.drive, drive, drive.name());
+            }
+        });
+    let mut limited = engine.differential != Differential::OPEN;
+    ui.checkbox(&mut limited, "Limited-slip differentials")
+        .on_hover_text("Open differentials let a wheel without grip spin away the torque");
+    engine.differential = if limited {
+        Differential::LIMITED_SLIP
+    } else {
+        Differential::OPEN
+    };
+    engine.centre = engine.differential;
+    let build = &mut engine.build;
     ui.add(egui::Slider::new(&mut build.octane, 89.0..=102.0).text("Fuel octane (RON)"))
         .on_hover_text("The factory tune is for 95; lower knocks");
 }

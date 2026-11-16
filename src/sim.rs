@@ -7,6 +7,7 @@
 use bevy::prelude::*;
 
 use crate::car::Car;
+use crate::physics::drivetrain::Drive;
 use crate::physics::suspension::ChassisFrame;
 use crate::terrain::Terrain;
 
@@ -96,8 +97,8 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     body.integrate(dt);
 }
 
-/// Engine torque to the rear wheels (split evenly, like an open differential), biased
-/// brakes, rear handbrake, and steering.
+/// Engine torque to the driven wheels through the differentials, biased brakes, rear
+/// handbrake, and steering.
 fn apply_controls(car: &mut Car, dt: f32) {
     car.drivetrain.engine.airspeed = car.forward_speed();
     let Car {
@@ -108,27 +109,39 @@ fn apply_controls(car: &mut Car, dt: f32) {
         ..
     } = car;
 
-    let rear_omega = (corners[2].omega + corners[3].omega) / 2.0;
-    let grounded = corners[2].contact.is_some() && corners[3].contact.is_some();
-    let drive = drivetrain.step(
-        &setup.engine,
-        c.throttle,
-        c.clutch,
-        rear_omega,
-        grounded,
-        dt,
-    );
+    let engine = &setup.engine;
+    let shares = engine.drive.shares();
+    let omega = [0, 1, 2, 3].map(|i| corners[i].omega);
+    let driven_omega = (0..4).map(|i| shares[i] * omega[i]).sum();
+    let grounded = (0..4).all(|i| shares[i] == 0.0 || corners[i].contact.is_some());
+    let drive = drivetrain.step(engine, c.throttle, c.clutch, driven_omega, grounded, dt);
+    let mut torque = shares.map(|share| share * drive.torque);
+    // Limited-slip differentials move torque from the faster side to the slower one.
+    for (left, right) in [(0, 1), (2, 3)] {
+        if shares[left] > 0.0 {
+            let moved = engine.differential.transfer(omega[left], omega[right]);
+            torque[left] -= moved;
+            torque[right] += moved;
+        }
+    }
+    if matches!(engine.drive, Drive::All { .. }) {
+        let (front, rear) = ((omega[0] + omega[1]) / 2.0, (omega[2] + omega[3]) / 2.0);
+        let moved = engine.centre.transfer(front, rear) / 2.0;
+        for (i, torque) in torque.iter_mut().enumerate() {
+            *torque += if i < 2 { -moved } else { moved };
+        }
+    }
     let steer = c.steer * setup.max_steer;
-    for corner in corners.iter_mut() {
+    for (i, corner) in corners.iter_mut().enumerate() {
         // Rolling resistance holds each wheel back like a light brake.
         let tire = &setup.axle(corner.front).tire;
         let rolling = ROLLING_RESISTANCE * corner.contact.map_or(0.0, |c| c.load) * tire.radius;
+        corner.drive_torque = torque[i];
+        corner.drive_inertia = shares[i] * drive.inertia;
         if corner.front {
             corner.steer = steer;
             corner.brake_torque = rolling + c.brake * setup.brake_torque * setup.brake_bias / 2.0;
         } else {
-            corner.drive_torque = drive.torque / 2.0;
-            corner.drive_inertia = drive.inertia / 2.0;
             corner.brake_torque = rolling
                 + c.brake * setup.brake_torque * (1.0 - setup.brake_bias) / 2.0
                 + c.handbrake * setup.handbrake_torque;
@@ -210,6 +223,39 @@ mod tests {
         assert!(turned > 0.3, "turned {turned}");
         let up = car.body.rotation * Vec3::Y;
         assert!(up.y > 0.9, "rolled over");
+    }
+
+    #[test]
+    fn front_and_all_wheel_drive_pull_with_their_wheels() {
+        use crate::physics::drivetrain::Differential;
+        let terrain = Terrain::baked();
+        let launch = |drive: Drive, differential: Differential| {
+            let mut car = test_car(&terrain);
+            car.setup.engine.drive = drive;
+            car.setup.engine.differential = differential;
+            car.setup.engine.centre = differential;
+            run(&mut car, &terrain, 1.0);
+            car.controls = Controls {
+                throttle: 1.0,
+                ..default()
+            };
+            // Forces along the car from the front and the rear tires, while pulling away.
+            run(&mut car, &terrain, 1.0);
+            let pull = |front: bool| -> f32 {
+                let corners = car.corners.iter().filter(|c| c.front == front);
+                corners.filter_map(|c| c.contact).map(|c| c.tire.fx).sum()
+            };
+            let pulls = (pull(true), pull(false));
+            run(&mut car, &terrain, 2.0);
+            (pulls, car.forward_speed())
+        };
+        let ((front, rear), speed) = launch(Drive::Front, Differential::OPEN);
+        assert!(front > 2000.0 && rear < 0.0, "front {front}, rear {rear}");
+        assert!(speed > 8.0, "front-wheel drive: {speed} m/s");
+        let ((front, rear), all) = launch(Drive::All { front: 0.4 }, Differential::LIMITED_SLIP);
+        assert!(front > 1000.0 && rear > front, "front {front}, rear {rear}");
+        // Four wheels put more down than two.
+        assert!(all > speed, "all-wheel drive {all} m/s, front {speed} m/s");
     }
 
     #[test]

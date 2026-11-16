@@ -1,4 +1,4 @@
-//! Engine, clutch and gearbox driving the rear wheels.
+//! Engine, clutch and gearbox driving the rear wheels, the front wheels or all four.
 //!
 //! While the clutch is locked, the engine turns with the driven wheels (through the gear
 //! and final drive ratios): its torque goes to the wheels and its inertia is added to
@@ -27,6 +27,71 @@ const CLUTCH_IN: f32 = 0.6;
 /// clutch closing can spin the wheels up for a moment, and that isn't speed to shift on.
 const AUTO_DWELL: f32 = 1.0;
 
+/// The wheels the engine drives.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Drive {
+    Rear,
+    Front,
+    /// All four, through a centre differential that sends this share of the torque to the
+    /// front axle.
+    All {
+        front: f32,
+    },
+}
+
+impl Drive {
+    /// Each wheel's share of the torque (front left and right, rear left and right). The
+    /// differentials turn at the wheels' speeds weighted the same way.
+    pub fn shares(self) -> [f32; 4] {
+        let front = match self {
+            Drive::Rear => 0.0,
+            Drive::Front => 1.0,
+            Drive::All { front } => front,
+        };
+        [
+            front / 2.0,
+            front / 2.0,
+            (1.0 - front) / 2.0,
+            (1.0 - front) / 2.0,
+        ]
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Drive::Rear => "rear-wheel drive",
+            Drive::Front => "front-wheel drive",
+            Drive::All { .. } => "all-wheel drive",
+        }
+    }
+}
+
+/// A differential's resistance to its two sides turning at different speeds: none for an
+/// open one, which sends the same torque to both sides however fast either spins.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Differential {
+    /// Torque moved from the faster side to the slower one per rad/s between them
+    /// (N·m·s), and the most it moves (N·m).
+    pub coupling: f32,
+    pub limit: f32,
+}
+
+impl Differential {
+    pub const OPEN: Self = Self {
+        coupling: 0.0,
+        limit: 0.0,
+    };
+    /// A limited-slip differential for the road.
+    pub const LIMITED_SLIP: Self = Self {
+        coupling: 40.0,
+        limit: 400.0,
+    };
+
+    /// Torque it moves from a side turning at `a` to the one turning at `b` (rad/s).
+    pub fn transfer(&self, a: f32, b: f32) -> f32 {
+        (self.coupling * (a - b)).clamp(-self.limit, self.limit)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EngineSetup {
     /// The parts the engine is built from, and the engine: its hardware, maps and ECU.
@@ -43,6 +108,10 @@ pub struct EngineSetup {
     /// Time the clutch stays open for a gear change, and then takes to close again (s).
     pub shift_time: f32,
     pub engage_time: f32,
+    pub drive: Drive,
+    /// The differentials in the driven axles, and between them with all-wheel drive.
+    pub differential: Differential,
+    pub centre: Differential,
 }
 
 impl Default for EngineSetup {
@@ -58,6 +127,9 @@ impl Default for EngineSetup {
             final_drive: 3.7,
             shift_time: 0.25,
             engage_time: 0.15,
+            drive: Drive::Rear,
+            differential: Differential::OPEN,
+            centre: Differential::OPEN,
         }
     }
 }
