@@ -105,10 +105,11 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
                 Color32::from_rgb(255, 196, 60),
             );
             if !car.drivetrain.running {
+                let blown = car.drivetrain.engine.blown();
                 painter.text(
                     center + vec2(0.0, RADIUS + 4.0),
                     Align2::CENTER_CENTER,
-                    "STALLED (I)",
+                    if blown { "ENGINE BLOWN (R)" } else { "STALLED (I)" },
                     FontId::proportional(10.0),
                     RED,
                 );

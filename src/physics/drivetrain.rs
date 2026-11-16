@@ -136,9 +136,9 @@ impl Drivetrain {
         }
     }
 
-    /// Starts a stalled engine (the starter spins it up to idle at once).
+    /// Starts a stalled engine (the starter spins it up to idle at once), unless it's blown.
     pub fn start(&mut self, engine: &EngineSetup) {
-        if !self.running {
+        if !self.running && !self.engine.blown() {
             self.running = true;
             self.rpm = self.rpm.max(engine.idle_rpm);
             self.engine.start();
@@ -217,9 +217,13 @@ impl Drivetrain {
     ) -> WheelDrive {
         let clutch = clutch.filter(|_| !self.automatic);
         self.clutch_pedal = clutch;
-        // Without a pedal, the automatic clutch never lets the engine stall.
+        // Without a pedal, the automatic clutch never lets the engine stall. A blown engine
+        // stays off.
         if clutch.is_none() {
             self.running = true;
+        }
+        if self.engine.blown() {
+            self.running = false;
         }
         self.in_gear += dt;
         if self.automatic && grounded {

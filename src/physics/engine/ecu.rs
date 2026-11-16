@@ -2,7 +2,7 @@
 //! idea of the engine (their maps), which matches the real one only as well as the tune.
 
 use super::hardware::EngineHardware;
-use super::maps::EngineMaps;
+use super::maps::{self, EngineMaps};
 use super::table::Table;
 use super::{AMBIENT_PRESSURE, AMBIENT_TEMPERATURE, R_AIR, STOICHIOMETRIC};
 
@@ -78,8 +78,9 @@ pub struct EcuState {
 
 impl Ecu {
     /// A factory tune for the hardware: its VE table matches the engine, it runs λ = 1 at
-    /// part load and richer towards full load, and the spark just short of MBT.
-    pub fn calibrated(hardware: &EngineHardware, maps: &EngineMaps) -> Self {
+    /// part load and richer towards full load, and the spark just short of MBT or of the
+    /// knock limit on `octane` fuel, whichever comes first.
+    pub fn calibrated(hardware: &EngineHardware, maps: &EngineMaps, octane: f32) -> Self {
         let axes = || {
             let rpm = (0..17).map(|i| i as f32 * 500.0).collect();
             let map = (1..12).map(|i| i as f32 * 10e3).collect();
@@ -101,9 +102,11 @@ impl Ecu {
             }
             ve
         });
+        let knock_shift = maps::knock_limit_shift(AMBIENT_TEMPERATURE, 363.0, octane);
         let spark = Table::bake(axes(), |p| {
             let load = ve.get(p) * p[1] / AMBIENT_PRESSURE;
-            maps.mbt(p[0], load) - 2.0
+            let knock = maps.knock_limit(p[0], load) + knock_shift;
+            maps.mbt(p[0], load).min(knock) - 2.0
         });
         Self {
             displacement: hardware.displacement(),

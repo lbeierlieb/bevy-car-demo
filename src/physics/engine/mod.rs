@@ -40,28 +40,41 @@ const THROTTLE_LEAK: f32 = 8e-6;
 const SUBSTEPS: usize = 4;
 /// Intake manifold pressure after the starter has cranked the engine (Pa).
 const CRANKED_PRESSURE: f32 = 30e3;
+/// Damage per second: per degree² of spark past the knock limit at full load, and per
+/// kelvin of coolant or oil over its limit (K).
+const KNOCK_DAMAGE: f32 = 2e-4;
+const HEAT_DAMAGE: f32 = 2e-3;
+const COOLANT_LIMIT: f32 = 393.0;
+const OIL_LIMIT: f32 = 423.0;
+/// Efficiency lost at full damage (rings and pistons worn, blow-by).
+const DAMAGE_EFFICIENCY: f32 = 0.3;
 
 fn ambient_density() -> f32 {
     AMBIENT_PRESSURE / (R_AIR * AMBIENT_TEMPERATURE)
 }
 
-/// An engine as built and tuned: its parts, the maps baked from them, and its ECU.
+/// An engine as built and tuned: its parts, the maps baked from them, its ECU, and the
+/// fuel it runs on.
 #[derive(Clone, Debug)]
 pub struct EngineBuild {
     pub hardware: EngineHardware,
     pub maps: EngineMaps,
     pub ecu: Ecu,
+    /// Research octane number of the fuel.
+    pub octane: f32,
 }
 
 impl EngineBuild {
-    /// Bakes the maps for `hardware` and gives it a factory tune.
+    /// Bakes the maps for `hardware` and gives it a factory tune for 95 octane.
     pub fn new(hardware: EngineHardware) -> Self {
+        let octane = 95.0;
         let maps = EngineMaps::bake(&hardware);
-        let ecu = Ecu::calibrated(&hardware, &maps);
+        let ecu = Ecu::calibrated(&hardware, &maps, octane);
         Self {
             hardware,
             maps,
             ecu,
+            octane,
         }
     }
 }
@@ -88,6 +101,8 @@ pub struct Engine {
     pub thermal: Thermal,
     /// Speed of the air the car drives through (m/s), for the radiator; set by the car.
     pub airspeed: f32,
+    /// Wear from knock and overheating (0 new, 1 blown).
+    pub damage: f32,
 }
 
 /// One cycle (two revolutions) of all cylinders.
@@ -106,6 +121,8 @@ pub struct Cycle {
     /// Gas leaving through the exhaust valves (kg) and its temperature (K).
     pub exhaust: f32,
     pub exhaust_temperature: f32,
+    /// Spark advance past the knock limit (degrees; 0 without knock).
+    pub knock: f32,
 }
 
 impl Default for Engine {
@@ -119,11 +136,17 @@ impl Default for Engine {
             firing: true,
             thermal: Thermal::warm(),
             airspeed: 0.0,
+            damage: 0.0,
         }
     }
 }
 
 impl Engine {
+    /// Wrecked by knock or overheating: it won't fire again.
+    pub fn blown(&self) -> bool {
+        self.damage >= 1.0
+    }
+
     /// Cranking with the starter pumps the intake manifold down before the engine fires.
     pub fn start(&mut self) {
         self.intake_pressure = self.intake_pressure.min(CRANKED_PRESSURE);
@@ -139,7 +162,7 @@ impl Engine {
             throttle,
         };
         self.actuators = build.ecu.step(&mut self.ecu, &sensors, dt);
-        self.firing = firing;
+        self.firing = firing && !self.blown();
 
         // The intake manifold fills through the throttle and empties into the cylinders.
         // Both flows are linearised in the manifold pressure for an implicit step.
@@ -175,6 +198,12 @@ impl Engine {
         let to_oil = 0.5 * friction_power + 0.03 * fuel_power;
         let (cooling, airspeed) = (&hardware.cooling, self.airspeed);
         self.thermal.step(cooling, to_coolant, to_oil, airspeed, dt);
+
+        let thermal = &self.thermal;
+        let wear = KNOCK_DAMAGE * cycle.knock.powi(2) * cycle.load
+            + HEAT_DAMAGE * (thermal.coolant - COOLANT_LIMIT).max(0.0)
+            + HEAT_DAMAGE * (thermal.oil - OIL_LIMIT).max(0.0);
+        self.damage = (self.damage + wear * dt).min(1.0);
     }
 
     /// Torque on the crank at `rpm`. A stopped engine only drags, against the way it's
@@ -226,19 +255,23 @@ impl Engine {
         } else {
             0.0
         };
-        let (lambda, indicated, exhaust_temperature) = if fuel > 0.0 {
+        let (lambda, indicated, exhaust_temperature, knock) = if fuel > 0.0 {
             let lambda = air / (fuel * STOICHIOMETRIC);
             let offset = a.spark - maps.mbt(rpm, load);
             let indicated = air / STOICHIOMETRIC
                 * FUEL_ENERGY
                 * maps.efficiency(rpm, load)
                 * maps::spark_efficiency(offset)
-                * maps::lambda_efficiency(lambda);
+                * maps::lambda_efficiency(lambda)
+                * (1.0 - DAMAGE_EFFICIENCY * self.damage);
             let temperature = maps.exhaust_temperature(rpm, load)
                 + maps::exhaust_temperature_shift(offset, lambda);
-            (lambda, indicated, temperature)
+            let shift =
+                maps::knock_limit_shift(AMBIENT_TEMPERATURE, self.thermal.coolant, build.octane);
+            let knock = (a.spark - maps.knock_limit(rpm, load) - shift).max(0.0);
+            (lambda, indicated, temperature, knock)
         } else {
-            (f32::INFINITY, 0.0, AMBIENT_TEMPERATURE)
+            (f32::INFINITY, 0.0, AMBIENT_TEMPERATURE, 0.0)
         };
         let pumping = (self.exhaust_pressure - p) * displacement;
         let friction = maps.friction(rpm, self.thermal.oil) * displacement;
@@ -251,6 +284,7 @@ impl Engine {
             losses: pumping + friction,
             exhaust: air + fuel,
             exhaust_temperature,
+            knock,
         }
     }
 }
@@ -356,6 +390,46 @@ mod tests {
             ..stock.clone()
         };
         assert!(steady_torque(&free, 6500.0, 1.0) > steady_torque(&stock, 6500.0, 1.0) + 2.0);
+    }
+
+    /// An engine after `seconds` at a fixed `rpm` and full throttle.
+    fn run_flat_out(build: &EngineBuild, rpm: f32, seconds: f32) -> Engine {
+        let mut engine = Engine::default();
+        for _ in 0..(seconds * 120.0) as usize {
+            engine.step(build, 1.0, rpm, true, 1.0 / 120.0);
+        }
+        engine
+    }
+
+    #[test]
+    fn the_factory_tune_stays_clear_of_knock() {
+        let build = EngineBuild::default();
+        for rpm in [1500.0, 2500.0, 4000.0, 6000.0] {
+            let engine = run_flat_out(&build, rpm, 2.0);
+            assert_eq!(engine.cycle(&build, rpm).knock, 0.0, "at {rpm} rpm");
+            // At most a trace from the moment of tip-in.
+            assert!(engine.damage < 1e-3, "damage {}", engine.damage);
+        }
+        // Cheaper fuel than it was tuned for: it knocks lightly at low rpm.
+        let cheap = EngineBuild {
+            octane: 91.0,
+            ..build.clone()
+        };
+        let knock = run_flat_out(&cheap, 2000.0, 2.0).cycle(&cheap, 2000.0).knock;
+        assert!((1.0..8.0).contains(&knock), "knock {knock}°");
+    }
+
+    #[test]
+    fn heavy_knock_blows_the_engine() {
+        let mut build = EngineBuild::default();
+        build.ecu.spark = table::Table::bake(vec![vec![0.0], vec![0.0]], |_| 40.0);
+        let rpm = 2500.0;
+        let engine = run_flat_out(&build, rpm, 5.0);
+        assert!(engine.cycle(&build, rpm).knock > 10.0);
+        assert!(engine.damage > 0.05 && !engine.blown(), "damage {}", engine.damage);
+        let engine = run_flat_out(&build, rpm, 120.0);
+        assert!(engine.blown());
+        assert!(engine.torque(&build, rpm) < 0.0);
     }
 
     #[test]

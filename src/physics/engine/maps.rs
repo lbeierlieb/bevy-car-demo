@@ -53,6 +53,9 @@ pub struct EngineMaps {
     mbt: Table,
     /// Indicated efficiency at MBT spark and λ = 1 by rpm and load.
     efficiency: Table,
+    /// Spark advance where knock starts (degrees before top dead centre) by rpm and load,
+    /// at the reference conditions of `knock_limit_shift`.
+    knock_limit: Table,
     /// Exhaust gas temperature at MBT spark and λ = 1 (K) by rpm and load.
     exhaust_temperature: Table,
     /// Share of the fuel's energy that goes into the coolant, by rpm and load.
@@ -86,6 +89,13 @@ impl EngineMaps {
             10.0 + 20.0 * (1.0 - (-rpm / 2500.0).exp()) + 12.0 * (1.0 - load.min(1.2))
                 - 0.8 * (cr - 10.0)
         });
+        // Knock needs time and pressure: high load, high compression and big bores knock
+        // earlier, high rpm leaves the end gas less time.
+        let bore = hardware.bore;
+        let knock_limit = by_load(&|rpm, load| {
+            30.0 + 2.0 * (rpm / 1000.0).min(7.0) - 14.0 * load - 3.0 * (cr - 10.0)
+                - 2.0 * (bore - 0.086) / 0.01
+        });
         // The ideal Otto cycle, scaled down; more heat is lost at low rpm and light load.
         let otto = 1.0 - cr.powf(-0.3);
         let efficiency = by_load(&|rpm, load| {
@@ -106,6 +116,7 @@ impl EngineMaps {
             ve,
             mbt,
             efficiency,
+            knock_limit,
             exhaust_temperature,
             heat_to_coolant,
             friction,
@@ -131,6 +142,11 @@ impl EngineMaps {
 
     pub fn efficiency(&self, rpm: f32, load: f32) -> f32 {
         self.efficiency.get(&[rpm, load])
+    }
+
+    /// Spark advance where knock starts at the reference conditions.
+    pub fn knock_limit(&self, rpm: f32, load: f32) -> f32 {
+        self.knock_limit.get(&[rpm, load])
     }
 
     pub fn exhaust_temperature(&self, rpm: f32, load: f32) -> f32 {
@@ -179,6 +195,13 @@ fn ve_placeholder(
     let residual = ((cr - ratio.powf(1.0 / 1.3)) / (cr - 1.0)).max(0.0);
     let backflow = 0.0015 * overlap * (ratio - 1.0).max(0.0) * (2000.0 / rpm.max(600.0)).min(3.0);
     ((breathing + runner + header) * residual * (1.0 - backflow).max(0.0)).max(0.0)
+}
+
+/// Shift of the knock limit (degrees) from its reference conditions: charge at 300 K,
+/// coolant at 363 K, 95 octane (RON). Hot charge and hot coolant knock earlier, better
+/// fuel later.
+pub fn knock_limit_shift(charge: f32, coolant: f32, octane: f32) -> f32 {
+    -0.08 * (charge - 300.0) - 0.1 * (coolant - 363.0) + 1.5 * (octane - 95.0)
 }
 
 /// Friction relative to warm oil: thick cold oil almost doubles it.
@@ -270,5 +293,21 @@ mod tests {
         assert!(lambda_efficiency(1.2) < 0.9 && lambda_efficiency(2.0) == 0.0);
         assert!(exhaust_temperature_shift(-15.0, 1.0) > 100.0);
         assert!(exhaust_temperature_shift(0.0, 0.85) < 0.0);
+        assert!(knock_limit_shift(330.0, 363.0, 95.0) < -2.0);
+        assert!(knock_limit_shift(300.0, 363.0, 98.0) > 4.0);
+    }
+
+    #[test]
+    fn knock_limits_full_load_at_low_rpm() {
+        let hardware = EngineHardware::default();
+        let maps = EngineMaps::bake(&hardware);
+        let margin = |rpm, load| maps.knock_limit(rpm, load) - maps.mbt(rpm, load);
+        assert!(margin(2000.0, 1.0) < 0.0);
+        assert!(margin(3000.0, 0.4) > -2.0);
+        // More compression knocks earlier.
+        let mut high = hardware.clone();
+        high.compression_ratio = 12.0;
+        let high = EngineMaps::bake(&high);
+        assert!(high.knock_limit(2000.0, 1.0) < maps.knock_limit(2000.0, 1.0) - 3.0);
     }
 }
