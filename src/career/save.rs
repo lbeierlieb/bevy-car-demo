@@ -1,8 +1,11 @@
 //! The career as text: `<key> <values>` lines for the money, trust and counts, the ride,
-//! an `item` line per part waiting in the garage, and a block per car from `car` to
-//! `endcar` (its build, engine parts, fuel, treads, engine wear, and its ECU tune between
-//! `tune` and `endtune`, as tunes are saved).
+//! an `item` line per part waiting in the garage, a block per car from `car` to `endcar`
+//! (its build, engine parts, fuel, treads, engine wear, and its ECU tune between `tune`
+//! and `endtune`, as tunes are saved), and a block per dyno run from `run` to `endrun`
+//! (its texts with newlines and backslashes escaped, and a `point` line per sample).
 
+use super::dyno::DynoRun;
+use super::rollers::Sample;
 use super::{Career, Item, OwnedCar, Ride, Wear};
 use crate::car::CarSetup;
 use crate::chassis::{CHASSIS, CLUTCHES, CarBuild, GEARBOXES, PAINTS, SUSPENSIONS};
@@ -48,7 +51,75 @@ pub fn write(career: &Career) -> String {
     for car in &career.cars {
         write_car(&mut text, car);
     }
+    for run in &career.runs {
+        write_run(&mut text, run);
+    }
     text
+}
+
+/// A text on one line: backslashes and newlines escaped.
+fn escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('\n', "\\n")
+}
+
+fn unescape(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+        } else if let Some(next) = chars.next() {
+            out.push(if next == 'n' { '\n' } else { next });
+        }
+    }
+    out
+}
+
+fn write_run(text: &mut String, run: &DynoRun) {
+    *text += &format!("run {} {}\n", run.number, run.gear);
+    *text += &format!("name {}\n", escape(&run.name));
+    *text += &format!("about {}\n", escape(&run.car));
+    *text += &format!("notes {}\n", escape(&run.notes));
+    for broke in &run.broke {
+        *text += &format!("broke {}\n", escape(broke));
+    }
+    for s in &run.samples {
+        *text += &format!("point {} {} {}\n", s.rpm, s.crank, s.wheel);
+    }
+    *text += "endrun\n";
+}
+
+/// A run from its first line's words after `run` and the lines up to `endrun`.
+fn read_run(words: &[&str], block: &[&str]) -> Option<DynoRun> {
+    let mut run = DynoRun {
+        number: words.first()?.parse().ok()?,
+        name: String::new(),
+        notes: String::new(),
+        car: String::new(),
+        gear: words.get(1)?.parse().ok()?,
+        samples: Vec::new(),
+        broke: Vec::new(),
+    };
+    for line in block {
+        let (key, rest) = line.split_once(' ').unwrap_or((line, ""));
+        match key {
+            "name" => run.name = unescape(rest),
+            "about" => run.car = unescape(rest),
+            "notes" => run.notes = unescape(rest),
+            "broke" => run.broke.push(unescape(rest)),
+            "point" => {
+                let numbers: Vec<f32> = (rest.split_whitespace())
+                    .filter_map(|w| w.parse().ok())
+                    .filter(|n: &f32| n.is_finite())
+                    .collect();
+                if let [rpm, crank, wheel] = numbers[..] {
+                    run.samples.push(Sample { rpm, crank, wheel });
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(run)
 }
 
 fn item_words(item: &Item) -> String {
@@ -160,6 +231,13 @@ pub fn read(career: &mut Career, text: &str) {
                     .take_while(|l| l.trim() != "endcar")
                     .collect();
                 career.cars.extend(read_car(&block));
+            }
+            "run" => {
+                let block: Vec<&str> = lines
+                    .by_ref()
+                    .take_while(|l| l.trim() != "endrun")
+                    .collect();
+                career.runs.extend(read_run(rest, &block));
             }
             _ => {}
         }
@@ -338,6 +416,31 @@ mod tests {
             back.cars[1].setup.engine.parts,
             career.cars[1].setup.engine.parts
         );
+    }
+
+    #[test]
+    fn dyno_runs_read_back_with_their_texts() {
+        let mut career = Career::new();
+        let sample = |rpm: f32| Sample {
+            rpm,
+            crank: 200.5,
+            wheel: 90_000.25,
+        };
+        career.runs.push(DynoRun {
+            number: 7,
+            name: "Before the cams \\o/".to_string(),
+            notes: "Hot day.\nSecond line, with a \\n in it.".to_string(),
+            car: "Tarn · W20 2.0".to_string(),
+            gear: 4,
+            samples: vec![sample(2000.0), sample(2100.0)],
+            broke: vec!["Cylinder 2's piston is holed".to_string()],
+        });
+        let mut back = Career::new();
+        read(&mut back, &write(&career));
+        assert_eq!(back.runs, career.runs);
+        // A run line without its number is left out.
+        read(&mut back, "run\nname x\nendrun\nmoney 3\n");
+        assert_eq!((back.runs.len(), back.money), (1, 3.0));
     }
 
     #[test]

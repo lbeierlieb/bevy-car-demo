@@ -1,11 +1,12 @@
 //! The window of the place the car is stopped at: home (into the garage), the gas station
-//! (fill up), the pizzeria and the car dealer (jobs, cars), the parts shop.
+//! (fill up), the pizzeria and the car dealer (jobs, cars), the parts shop, the dyno.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, RichText};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
+use super::dyno::{DynoBooked, RUN_PRICE, cannot_run};
 use super::hud::News;
 use super::jobs::{JobKind, Jobs, TIERS, start_delivery, take_offer};
 use super::lot::{self, Lot};
@@ -47,6 +48,7 @@ pub struct Visit<'w, 's> {
     pub commands: Commands<'w, 's>,
     pub meshes: ResMut<'w, Assets<Mesh>>,
     pub materials: ResMut<'w, Assets<StandardMaterial>>,
+    pub booked: ResMut<'w, DynoBooked>,
 }
 
 impl Visit<'_, '_> {
@@ -99,6 +101,7 @@ fn place_window(
             PlaceKind::Pizzeria => pizzeria(ui, &mut visit, place),
             PlaceKind::Dealer => dealer(ui, &mut visit, &places),
             PlaceKind::PartsShop => parts_shop(ui, &mut visit),
+            PlaceKind::Dyno => dyno(ui, &mut visit),
         });
     Ok(())
 }
@@ -381,4 +384,46 @@ fn parts_shop(ui: &mut egui::Ui, visit: &mut Visit) {
             euros(price)
         ));
     }
+}
+
+/// The dyno: a paid run, or a look at the runs on file.
+fn dyno(ui: &mut egui::Ui, visit: &mut Visit) {
+    ui.label(format!(
+        "An all-wheel chassis dyno: {} a run. Through the gears, then a pull in fourth to \
+         the rev limiter, measuring the power at the wheels.",
+        euros(RUN_PRICE)
+    ));
+    if visit.active.0 != PLAYER {
+        ui.label("Not with the dealer's car: deliver it first.");
+        return;
+    }
+    if visit.jobs.current.is_some() {
+        ui.label("Finish the job you're on first.");
+        return;
+    }
+    let money = visit.career.money;
+    let why_not = visit.car().and_then(|car| cannot_run(&car, money));
+    if let Some(why) = why_not {
+        ui.colored_label(WARNING, why);
+    }
+    let runs = visit.career.runs.len();
+    let mut go = None;
+    ui.horizontal(|ui| {
+        let text = format!("Onto the rollers: {}", euros(RUN_PRICE));
+        let button = egui::Button::new(RichText::new(text).strong());
+        if ui.add_enabled(why_not.is_none(), button).clicked() {
+            go = Some(true);
+        }
+        if runs > 0 && ui.button(format!("The runs on file ({runs})")).clicked() {
+            go = Some(false);
+        }
+    });
+    let Some(run) = go else {
+        return;
+    };
+    if run && !visit.career.pay(RUN_PRICE) {
+        return;
+    }
+    visit.booked.0 = run;
+    visit.scene.set(Scene::Dyno);
 }

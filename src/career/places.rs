@@ -28,6 +28,7 @@ pub enum PlaceKind {
     Pizzeria,
     Dealer,
     PartsShop,
+    Dyno,
 }
 
 impl PlaceKind {
@@ -38,12 +39,13 @@ impl PlaceKind {
             Self::Pizzeria => [255, 90, 60],
             Self::Dealer => [80, 230, 120],
             Self::PartsShop => [200, 120, 255],
+            Self::Dyno => [255, 120, 30],
         }
     }
 }
 
 /// The places, by the middle of the building (map x and z, from OSM).
-const PLACES: [(PlaceKind, &str, [f32; 2]); 5] = [
+const PLACES: [(PlaceKind, &str, [f32; 2]); 6] = [
     (PlaceKind::Home, "Home", [-2996.0, -2013.0]),
     (PlaceKind::GasStation, "Gas station", [-2603.0, -1736.0]),
     (
@@ -57,6 +59,7 @@ const PLACES: [(PlaceKind, &str, [f32; 2]); 5] = [
         "Motor Parts Thiel",
         [-1950.0, -3160.0],
     ),
+    (PlaceKind::Dyno, "Rollwerk Dyno", [-2601.0, -3784.0]),
 ];
 
 pub struct Place {

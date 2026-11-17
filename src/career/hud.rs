@@ -94,6 +94,7 @@ fn hud(
                     let keys = match scene.get() {
                         Scene::Driving => "K map   T tow home   C view   F2 settings",
                         Scene::Garage => "F2 settings",
+                        Scene::Dyno => "Drag: look around   M mute   F2 settings",
                     };
                     ui.label(RichText::new(keys).small().color(DIM));
                 });

@@ -1,11 +1,12 @@
 //! The career: start with nothing but mom's car, earn money with deliveries, buy cars and
-//! parts. Its places (home, gas station, pizzeria, car dealer, parts shop) are on the map;
-//! drive onto one's marker and stop to go in.
+//! parts. Its places (home, gas station, pizzeria, car dealer, parts shop, dyno) are on the
+//! map; drive onto one's marker and stop to go in.
 //!
 //! Everything the player has is in `Career`, saved as text (`~/.config/car-sim/career/`,
 //! local storage on the web) whenever something changes hands and in the garage.
 
 pub mod catalog;
+mod dyno;
 mod fitting;
 mod garage;
 mod hud;
@@ -13,6 +14,7 @@ mod jobs;
 mod lot;
 mod menus;
 mod places;
+mod rollers;
 mod save;
 mod tow;
 
@@ -53,9 +55,22 @@ impl Plugin for CareerPlugin {
                 garage::GaragePlugin,
                 tow::TowPlugin,
                 jobs::JobsPlugin,
+                dyno::DynoPlugin,
             ))
-            .add_systems(OnEnter(Scene::Driving), drive_out)
-            .add_systems(OnExit(Scene::Driving), park);
+            .add_systems(
+                OnTransition {
+                    exited: Scene::Garage,
+                    entered: Scene::Driving,
+                },
+                drive_out,
+            )
+            .add_systems(
+                OnTransition {
+                    exited: Scene::Driving,
+                    entered: Scene::Garage,
+                },
+                park,
+            );
     }
 }
 
@@ -84,12 +99,14 @@ fn park(mut commands: Commands, mut career: ResMut<Career>, cars: Query<(Entity,
     career.save();
 }
 
-/// Where the player is: in the garage at home (where a career starts), or out driving.
+/// Where the player is: in the garage at home (where a career starts), out driving, or
+/// with the car on the dyno (which it leaves for the road in front of the dyno shop).
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum Scene {
     #[default]
     Garage,
     Driving,
+    Dyno,
 }
 
 /// Which car the player takes out of the garage.
@@ -175,6 +192,8 @@ pub struct Career {
     pub deliveries: u32,
     /// Mom's car as it always is: full and in one piece.
     pub mom: CarSetup,
+    /// The dyno runs on file, oldest first.
+    pub runs: Vec<dyno::DynoRun>,
 }
 
 impl Career {
@@ -188,6 +207,7 @@ impl Career {
             pizzas: 0,
             deliveries: 0,
             mom: mom_car(),
+            runs: Vec::new(),
         }
     }
 
