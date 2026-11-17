@@ -25,9 +25,10 @@ career`). Keep it that way: no mode flags; something only one app has is a plugi
 own (e.g. `car::ResetPlugin`, `map::TeleportPlugin`, `ui::PanelPlugin`), and shared
 pieces are public functions (e.g. `ui::WheelPanel::show`, `workshop`).
 
-- rustfmt: the repo wasn't rustfmt-clean before the split (the flake's fmt check fails
-  on old code). Format only files you create (`rustfmt --edition 2024 <file>`); running
-  it on `lib.rs` or a `mod.rs` follows the `mod` lines into every child file.
+- rustfmt (asked for by the user): the whole repo is rustfmt-clean since 2026-11-17.
+  Always run `nix develop -c cargo fmt --all` before every commit (and `cargo fmt` in
+  `tools/bake` and `tools/dev/fakewheel`, `rustfmt --edition 2024 tools/dev/shot.rs`
+  if touched). Mind that a format change in `cycle.rs` or `maps.rs` needs a re-bake.
 
 ## Sandbox workflow
 
