@@ -59,7 +59,7 @@ fn click(
 }
 
 fn key(c: char) -> KeyCode {
-    match c { 'w' => KeyCode::KeyW, 'a' => KeyCode::KeyA, 'd' => KeyCode::KeyD, 's' => KeyCode::KeyS, 't' => KeyCode::Tab, 'f' => KeyCode::F1, 'c' => KeyCode::KeyC, 'k' => KeyCode::KeyK, '3' => KeyCode::F3, '4' => KeyCode::F4, '2' => KeyCode::F2, '5' => KeyCode::F5, '6' => KeyCode::F6, _ => KeyCode::Space }
+    match c { 'w' => KeyCode::KeyW, 'a' => KeyCode::KeyA, 'd' => KeyCode::KeyD, 's' => KeyCode::KeyS, 't' => KeyCode::Tab, 'f' => KeyCode::F1, 'c' => KeyCode::KeyC, 'k' => KeyCode::KeyK, '3' => KeyCode::F3, '4' => KeyCode::F4, '2' => KeyCode::F2, '5' => KeyCode::F5, '6' => KeyCode::F6, 'T' => KeyCode::KeyT, 'E' => KeyCode::Enter, _ => KeyCode::Space }
 }
 
 /// CAR="chassis[,engine]": start in that car of the catalogue (its place in `CHASSIS`, and
