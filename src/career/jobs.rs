@@ -218,7 +218,7 @@ impl Jobs {
 }
 
 /// xorshift64*: dice for jobs and cars on offer.
-pub struct Rng(u64);
+pub struct Rng(pub u64);
 
 impl Rng {
     /// From 0 up to 1.

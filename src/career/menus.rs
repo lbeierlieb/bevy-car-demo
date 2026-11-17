@@ -8,6 +8,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::hud::News;
 use super::jobs::{JobKind, Jobs, TIERS, start_delivery, take_offer};
+use super::lot::{self, Lot};
 use super::places::{AtPlace, Place, PlaceKind, Places};
 use super::{Career, PLAYER, Scene, euros};
 use crate::car::{ActiveCar, Car};
@@ -23,10 +24,12 @@ pub struct MenusPlugin;
 
 impl Plugin for MenusPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, forget_offers).add_systems(
-            EguiPrimaryContextPass,
-            place_window.run_if(in_state(Scene::Driving)),
-        );
+        app.init_resource::<Lot>()
+            .add_systems(Update, forget_offers)
+            .add_systems(
+                EguiPrimaryContextPass,
+                place_window.run_if(in_state(Scene::Driving)),
+            );
     }
 }
 
@@ -36,7 +39,8 @@ pub struct Visit<'w, 's> {
     pub career: ResMut<'w, Career>,
     pub news: ResMut<'w, News>,
     pub active: ResMut<'w, ActiveCar>,
-    pub cars: Query<'w, 's, &'static mut Car>,
+    pub cars: Query<'w, 's, (Entity, &'static mut Car)>,
+    pub lot: ResMut<'w, Lot>,
     pub scene: ResMut<'w, NextState<Scene>>,
     pub jobs: ResMut<'w, Jobs>,
     pub terrain: Res<'w, Terrain>,
@@ -49,7 +53,9 @@ impl Visit<'_, '_> {
     /// The car being driven.
     pub fn car(&mut self) -> Option<Mut<'_, Car>> {
         let active = self.active.0;
-        self.cars.iter_mut().find(|car| car.index == active)
+        (self.cars.iter_mut())
+            .find(|(_, car)| car.index == active)
+            .map(|(_, car)| car)
     }
 
     /// Starts the job on offer at `index`.
@@ -188,13 +194,28 @@ fn pizzeria(ui: &mut egui::Ui, visit: &mut Visit, place: &Place) {
     });
 }
 
-/// The car dealer: cars to deliver.
+/// The car dealer: cars to deliver, cars for sale, and buying the player's.
 fn dealer(ui: &mut egui::Ui, visit: &mut Visit, places: &Places) {
     if visit.jobs.current.is_some() {
         ui.label("Finish the job you're on first.");
         return;
     }
-    ui.strong("Cars to deliver");
+    ui.horizontal(|ui| {
+        for (page, name) in [(false, "Cars to deliver"), (true, "Cars for sale")] {
+            let shown = ui.memory(|m| m.data.get_temp::<bool>(egui::Id::new("lot")));
+            if ui
+                .selectable_label(shown.unwrap_or(false) == page, name)
+                .clicked()
+            {
+                ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("lot"), page));
+            }
+        }
+    });
+    ui.separator();
+    if ui.memory(|m| m.data.get_temp::<bool>(egui::Id::new("lot"))) == Some(true) {
+        for_sale(ui, visit);
+        return;
+    }
     let trust = visit.career.trust;
     let next = TIERS.iter().find(|tier| tier.0 > trust);
     ui.label(match next {
@@ -242,5 +263,86 @@ fn dealer(ui: &mut egui::Ui, visit: &mut Visit, places: &Places) {
         visit
             .news
             .say("Here are the keys. It's waiting in front; the address is on the map (K).");
+    }
+}
+
+/// The lot: cars to buy, and what the dealer gives for the player's.
+fn for_sale(ui: &mut egui::Ui, visit: &mut Visit) {
+    let Visit {
+        career, lot, jobs, ..
+    } = visit;
+    lot.restock(career, jobs.rng());
+    if !career.has_room() {
+        ui.colored_label(WARNING, "The garage at home is full: sell a car first.");
+    }
+    let mut bought = None;
+    egui::Grid::new("lot").striped(true).show(ui, |ui| {
+        for (i, sale) in lot.cars.iter().enumerate() {
+            let setup = &sale.car.setup;
+            ui.label(format!(
+                "{} {}",
+                setup.name, setup.engine.build.hardware.name
+            ))
+            .on_hover_text(setup.build.chassis().about);
+            ui.label(if sale.used() {
+                let cylinders = setup.engine.build.hardware.cylinders as usize;
+                let worn = sale.car.wear.damage.worst(cylinders) * 100.0;
+                format!("used, engine {worn:.0} % worn")
+            } else {
+                "new".to_string()
+            });
+            ui.label(euros(sale.price));
+            let can = career.money >= sale.price && career.has_room();
+            if ui.add_enabled(can, egui::Button::new("Buy")).clicked() {
+                bought = Some(i);
+            }
+            ui.end_row();
+        }
+    });
+    let ride = career.ride;
+    let mut sold = false;
+    if let super::Ride::Own(i) = ride
+        && let Some(car) = career.cars.get(i)
+    {
+        ui.separator();
+        let price = lot::trade_in(car);
+        let text = format!("Sell your {} for {}", car.setup.name, euros(price));
+        sold = ui
+            .button(text)
+            .on_hover_text("Mom will lend you her car to get home")
+            .clicked();
+    }
+    let active = visit.active.0;
+    let Some((entity, car)) = visit.cars.iter().find(|(_, car)| car.index == active) else {
+        return;
+    };
+    if let Some(i) = bought {
+        let came_in = visit.career.ride_car().0.name;
+        if let Some(name) = lot::buy(
+            &mut visit.lot,
+            i,
+            &mut visit.career,
+            (entity, car),
+            &mut visit.commands,
+            &visit.terrain,
+            &mut visit.active,
+        ) {
+            visit.news.say(format!(
+                "The {name} is yours! The {came_in} you came in is back in the garage at home."
+            ));
+        }
+    } else if sold
+        && let Some(price) = lot::sell(
+            &mut visit.career,
+            (entity, car),
+            &mut visit.commands,
+            &visit.terrain,
+            &mut visit.active,
+        )
+    {
+        visit.news.say(format!(
+            "Sold for {}. Mom dropped off her car for you.",
+            euros(price)
+        ));
     }
 }

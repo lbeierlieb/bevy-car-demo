@@ -434,7 +434,7 @@ fn window(
 /// status line when something was done.
 fn condition(ui: &mut egui::Ui, career: &mut Career, i: usize, news: &mut News) -> Option<String> {
     let money = career.money;
-    let OwnedCar { setup, wear } = &mut career.cars[i];
+    let OwnedCar { setup, wear, .. } = &mut career.cars[i];
     let cylinders = setup.engine.build.hardware.cylinders as usize;
     ui.label(format!(
         "{:.0} of {:.0} L in the tank",

@@ -113,6 +113,7 @@ fn write_car(text: &mut String, car: &OwnedCar) {
         p.header_room
     );
     *text += &format!("octane {}\n", engine.build.octane);
+    *text += &format!("age {}\n", car.age);
     let wear = &car.wear;
     *text += &format!("fuel {}\n", wear.fuel);
     let treads: Vec<String> = (wear.treads.iter())
@@ -171,7 +172,7 @@ pub fn read(career: &mut Career, text: &str) {
 }
 
 fn read_car(block: &[&str]) -> Option<OwnedCar> {
-    let (mut build, mut parts, mut octane) = (None, None, 95.0);
+    let (mut build, mut parts, mut octane, mut age) = (None, None, 95.0, 0.0);
     let (mut fuel, mut treads, mut damage) = (0.0, [Tread::default(); 4], Damage::default());
     let mut tune = String::new();
     let mut lines = block.iter();
@@ -185,6 +186,11 @@ fn read_car(block: &[&str]) -> Option<OwnedCar> {
             "build" => build = read_build(rest),
             "parts" => parts = read_parts(rest),
             "octane" => octane = numbers.first().copied().unwrap_or(octane),
+            "age" => {
+                age = numbers
+                    .first()
+                    .map_or(0.0, |&a| f64::from(a).clamp(0.0, 1.0))
+            }
             "fuel" => fuel = numbers.first().copied().unwrap_or(0.0),
             "treads" if numbers.len() == 8 => {
                 for (tread, pair) in treads.iter_mut().zip(numbers.chunks(2)) {
@@ -231,6 +237,7 @@ fn read_car(block: &[&str]) -> Option<OwnedCar> {
     let fuel = fuel.clamp(0.0, setup.tank.litres);
     Some(OwnedCar {
         setup,
+        age,
         wear: Wear {
             damage,
             fuel,
@@ -296,10 +303,18 @@ mod tests {
         wear.damage.cylinders[2].piston = 0.25;
         wear.damage.turbo = 0.5;
         wear.treads[3].wear = 0.4;
-        career.cars.push(OwnedCar { setup: minim, wear });
+        career.cars.push(OwnedCar {
+            setup: minim,
+            wear,
+            age: 0.5,
+        });
         let coupe = CarSetup::factory(3, 0);
         let wear = Wear::new(&coupe);
-        career.cars.push(OwnedCar { setup: coupe, wear });
+        career.cars.push(OwnedCar {
+            setup: coupe,
+            wear,
+            age: 0.0,
+        });
         career.ride = Ride::Own(1);
 
         let text = write(&career);
@@ -318,6 +333,7 @@ mod tests {
         assert_eq!(b.wear.fuel, 7.5);
         assert_eq!(b.wear.damage, a.wear.damage);
         assert_eq!(b.wear.treads[3].wear, 0.4);
+        assert_eq!(b.age, 0.5);
         assert_eq!(
             back.cars[1].setup.engine.parts,
             career.cars[1].setup.engine.parts

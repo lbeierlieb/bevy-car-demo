@@ -9,6 +9,7 @@ pub mod catalog;
 mod garage;
 mod hud;
 mod jobs;
+mod lot;
 mod menus;
 mod places;
 mod save;
@@ -66,7 +67,7 @@ fn drive_out(
     mut active: ResMut<ActiveCar>,
 ) {
     let home = places.of(PlaceKind::Home);
-    spawn_ride(&mut commands, &career, &terrain, home.at, home.yaw);
+    spawn_ride(&mut commands, &career, &terrain, home.at, home.yaw, true);
     active.0 = PLAYER;
 }
 
@@ -133,11 +134,13 @@ impl Wear {
     }
 }
 
-/// One of the player's cars: how it's built (with its engine's tune) and its wear.
+/// One of the player's cars: how it's built (with its engine's tune), its wear, and how
+/// old it is (0 new, 1 old; see `catalog::worth`).
 #[derive(Clone)]
 pub struct OwnedCar {
     pub setup: CarSetup,
     pub wear: Wear,
+    pub age: f64,
 }
 
 /// A part bought at the parts shop, waiting in the garage to be fitted (or taken off a car).
@@ -248,11 +251,18 @@ fn mom_car() -> CarSetup {
 }
 
 /// The player's car, as it comes out, put on the road at `at` facing along `yaw`.
-pub fn spawn_ride(commands: &mut Commands, career: &Career, terrain: &Terrain, at: Vec2, yaw: f32) {
+pub fn spawn_ride(
+    commands: &mut Commands,
+    career: &Career,
+    terrain: &Terrain,
+    at: Vec2,
+    yaw: f32,
+    automatic: bool,
+) {
     let (setup, wear) = career.ride_car();
     let mut car = Car::spawn_at(PLAYER, setup, terrain, at.x, at.y, yaw);
     wear.put_on(&mut car);
-    car.drivetrain.automatic = true;
+    car.drivetrain.automatic = automatic;
     commands.spawn((Transform::from_translation(car.body.position), car));
 }
 
