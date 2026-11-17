@@ -59,6 +59,15 @@ impl ChaseCamera {
     pub fn driver(&self) -> bool {
         self.driver
     }
+
+    /// The field of view and near plane for the view it's in.
+    pub fn lens(&self) -> (f32, f32) {
+        if self.driver {
+            (DRIVER_FOV, 0.02)
+        } else {
+            (CHASE_FOV, 0.1)
+        }
+    }
 }
 
 /// Whether mouse input may drive the camera (the UI clears this while it uses the pointer).
@@ -85,11 +94,7 @@ fn switch_view(
         camera.look_pitch = DRIVER_PITCH;
         if let Projection::Perspective(perspective) = &mut *projection {
             // The roof lining is only a few centimetres above the driver's eyes.
-            (perspective.fov, perspective.near) = if camera.driver {
-                (DRIVER_FOV, 0.02)
-            } else {
-                (CHASE_FOV, 0.1)
-            };
+            (perspective.fov, perspective.near) = camera.lens();
         }
     }
 }

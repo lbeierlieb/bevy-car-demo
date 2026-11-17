@@ -6,6 +6,7 @@ use std::f32::consts::FRAC_PI_2;
 use bevy::prelude::*;
 
 use crate::car::Car;
+use crate::chassis::CarBuild;
 use crate::physics::suspension::CornerPose;
 
 /// Fore-aft spacing of each A-arm's two inner mounts.
@@ -103,6 +104,54 @@ fn add_car_meshes(
                 }
             });
     }
+}
+
+/// A car's looks without a simulation, standing still: the body of `build` and its wheels,
+/// as children of `root`, in the body's design frame (origin on the ground midway between
+/// the axles, forward -z).
+pub fn spawn_model(
+    commands: &mut Commands,
+    root: Entity,
+    build: &CarBuild,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    let mut flat = |color: Color, roughness: f32| {
+        materials.add(StandardMaterial {
+            base_color: color,
+            perceptual_roughness: roughness,
+            ..default()
+        })
+    };
+    let paint = flat(Color::WHITE, 0.45);
+    let rubber = flat(Color::srgb(0.06, 0.06, 0.06), 0.9);
+    let alloy = flat(Color::srgb(0.62, 0.64, 0.67), 0.4);
+    let chassis = build.chassis();
+    let body = meshes.add(chassis.body.mesh(&chassis.wheels(), build.paint()));
+    let wheel = meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(18).build());
+    commands.entity(root).with_children(|parent| {
+        parent.spawn((Mesh3d(body), MeshMaterial3d(paint)));
+        for corner in 0..4 {
+            let axle = corner / 2;
+            let side = if corner % 2 == 0 { -1.0 } else { 1.0 };
+            let (radius, width) = (chassis.tire_radius[axle], chassis.tire_width[axle]);
+            let z = if axle == 0 { -0.5 } else { 0.5 } * chassis.wheelbase;
+            let at = Vec3::new(side * chassis.track[axle] / 2.0, radius, z);
+            let turned = Quat::from_rotation_z(FRAC_PI_2);
+            for (material, scale) in [
+                (&rubber, Vec3::new(radius, width, radius)),
+                (&alloy, Vec3::new(RIM * radius, width + 0.01, RIM * radius)),
+            ] {
+                parent.spawn((
+                    Mesh3d(wheel.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform::from_translation(at)
+                        .with_rotation(turned)
+                        .with_scale(scale),
+                ));
+            }
+        }
+    });
 }
 
 /// Parts are children of the car, so they're posed directly in the chassis frame.

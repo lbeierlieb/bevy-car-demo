@@ -70,7 +70,7 @@ fn place_window(
 }
 
 fn home(ui: &mut egui::Ui, visit: &mut Visit) {
-    ui.label("Home. Mom's car is in the garage, as always.");
+    ui.label("Home: the garage, with mom's car and yours.");
     if ui.button("Into the garage").clicked() {
         visit.scene.set(Scene::Garage);
     }

@@ -5,6 +5,8 @@
 //! Everything the player has is in `Career`, saved as text (`~/.config/car-sim/career/`,
 //! local storage on the web) whenever something changes hands and in the garage.
 
+pub mod catalog;
+mod garage;
 mod hud;
 mod menus;
 mod places;
@@ -40,7 +42,12 @@ impl Plugin for CareerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Career::load())
             .init_state::<Scene>()
-            .add_plugins((places::PlacesPlugin, menus::MenusPlugin, hud::HudPlugin))
+            .add_plugins((
+                places::PlacesPlugin,
+                menus::MenusPlugin,
+                hud::HudPlugin,
+                garage::GaragePlugin,
+            ))
             .add_systems(OnEnter(Scene::Driving), drive_out)
             .add_systems(OnExit(Scene::Driving), park);
     }
@@ -71,12 +78,11 @@ fn park(mut commands: Commands, mut career: ResMut<Career>, cars: Query<(Entity,
     career.save();
 }
 
-/// Where the player is: in the garage at home, or out driving (where a career starts, in
-/// front of home).
+/// Where the player is: in the garage at home (where a career starts), or out driving.
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum Scene {
-    Garage,
     #[default]
+    Garage,
     Driving,
 }
 
