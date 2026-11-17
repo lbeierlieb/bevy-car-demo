@@ -274,11 +274,7 @@ impl Drivetrain {
     /// in neutral until it is. Reverse only goes in when (nearly) stopped (`speed` in m/s).
     pub fn select_gate(&mut self, engine: &EngineSetup, gate: i8, speed: f32) {
         // Reverse is refused while rolling forward (backing up quickly must keep it).
-        let gate = if gate < 0 && speed > 2.0 {
-            0
-        } else {
-            gate
-        };
+        let gate = if gate < 0 && speed > 2.0 { 0 } else { gate };
         if gate == self.selected_gear() {
             return;
         }

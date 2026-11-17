@@ -583,9 +583,12 @@ impl TrafficCar {
             height(middle - right * track / 2.0),
             height(middle + right * track / 2.0),
         );
-        let ahead =
-            Vec3::new(forward.x * self.wheels.wheelbase, hf - hr, forward.y * self.wheels.wheelbase)
-                .normalize();
+        let ahead = Vec3::new(
+            forward.x * self.wheels.wheelbase,
+            hf - hr,
+            forward.y * self.wheels.wheelbase,
+        )
+        .normalize();
         let side = Vec3::new(right.x * track, hrt - hl, right.y * track).normalize();
         let up = side.cross(ahead).normalize();
         let side = ahead.cross(up);
@@ -635,7 +638,10 @@ fn step(
 ) {
     let dt = time.delta_secs();
     let vehicles: Vec<Vehicle> = (traffic.iter().map(|car| Vehicle::of(&car.body, &car.hull)))
-        .chain(cars.iter().map(|car| Vehicle::of(&car.body, &car.setup.hull)))
+        .chain(
+            cars.iter()
+                .map(|car| Vehicle::of(&car.body, &car.setup.hull)),
+        )
         .collect();
     let mut path = Path::default();
     let mut contacts = Vec::new();
@@ -657,7 +663,10 @@ fn step(
         }
     }
     for mut player in &mut cars {
-        let hull = player.setup.hull.placed(player.body.position, player.body.rotation);
+        let hull = player
+            .setup
+            .hull
+            .placed(player.body.position, player.body.rotation);
         for mut car in &mut traffic {
             if let Some(contact) = touch(&hull, &car.placed_hull()) {
                 crash(&mut car);
@@ -856,7 +865,10 @@ fn pose(
             * Quat::from_rotation_z(FRAC_PI_2);
         let (rotation, scale) = match part.kind {
             WheelKind::Tire => (rotation, Vec3::new(radius, width, radius)),
-            WheelKind::Rim => (rotation, Vec3::new(RIM * radius, width + 0.01, RIM * radius)),
+            WheelKind::Rim => (
+                rotation,
+                Vec3::new(RIM * radius, width + 0.01, RIM * radius),
+            ),
             WheelKind::Spoke => (
                 rotation,
                 Vec3::new(1.9 * RIM * radius, width + 0.02, 0.22 * radius),
@@ -897,10 +909,15 @@ mod tests {
             if cars.len() == 30 {
                 break;
             }
-            if cars.iter().all(|car| car.body.position.xz().distance(p) > SPAWN_GAP) {
+            if cars
+                .iter()
+                .all(|car| car.body.position.xz().distance(p) > SPAWN_GAP)
+            {
                 let chassis = rng.pick(COMMON.iter().copied());
                 let keen = rng.range(KEEN);
-                cars.push(TrafficCar::new(&network, &terrain, chassis, leg, s, keen, rng.0));
+                cars.push(TrafficCar::new(
+                    &network, &terrain, chassis, leg, s, keen, rng.0,
+                ));
             }
         }
         let dt = 1.0 / 120.0;
@@ -910,8 +927,10 @@ mod tests {
         let mut too_fast = 0;
         let start = std::time::Instant::now();
         for _ in 0..60 * 120 {
-            let vehicles: Vec<Vehicle> =
-                cars.iter().map(|car| Vehicle::of(&car.body, &car.hull)).collect();
+            let vehicles: Vec<Vehicle> = cars
+                .iter()
+                .map(|car| Vehicle::of(&car.body, &car.hull))
+                .collect();
             for (i, car) in cars.iter_mut().enumerate() {
                 if car.driver.is_some() {
                     drive(car, i, &vehicles, &network, &terrain, &mut path, dt);
@@ -932,7 +951,13 @@ mod tests {
                     if let Some(contact) = touch(&a.placed_hull(), &b.placed_hull()) {
                         crash(a);
                         crash(b);
-                        collision::resolve(&mut a.body, Some(&mut b.body), &[contact], OBSTACLE, dt);
+                        collision::resolve(
+                            &mut a.body,
+                            Some(&mut b.body),
+                            &[contact],
+                            OBSTACLE,
+                            dt,
+                        );
                     }
                 }
             }
@@ -955,7 +980,8 @@ mod tests {
             path.build(&network, &driver.route, driver.start);
             let (front, _) = path.point(driver.along);
             let forward = car.body.rotation * Vec3::NEG_Z;
-            let axle = car.body.position.xz() + forward.xz().normalize() * car.wheels.wheelbase / 2.0;
+            let axle =
+                car.body.position.xz() + forward.xz().normalize() * car.wheels.wheelbase / 2.0;
             assert!(axle.distance(front) < 0.3, "{axle} {front}");
         }
     }

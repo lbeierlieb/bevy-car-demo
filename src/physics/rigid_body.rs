@@ -174,7 +174,11 @@ mod tests {
             body.add_force_at_center(Vec3::new(0.0, -9810.0, 0.0));
             body.integrate(0.01);
         }
-        assert!(body.angular_velocity.length() < 1e-5, "{}", body.angular_velocity);
+        assert!(
+            body.angular_velocity.length() < 1e-5,
+            "{}",
+            body.angular_velocity
+        );
         assert!((body.velocity.y + 9.81).abs() < 1e-3);
         // Pushed at the reference point instead, it turns.
         body.add_force(Vec3::new(1000.0, 0.0, 0.0));

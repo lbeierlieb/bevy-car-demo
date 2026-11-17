@@ -272,13 +272,7 @@ fn mom_car() -> CarSetup {
 }
 
 /// The player's car, as it comes out, put on the road at `at` facing along `yaw`.
-pub fn spawn_ride(
-    commands: &mut Commands,
-    career: &Career,
-    terrain: &Terrain,
-    at: Vec2,
-    yaw: f32,
-) {
+pub fn spawn_ride(commands: &mut Commands, career: &Career, terrain: &Terrain, at: Vec2, yaw: f32) {
     let (setup, wear) = career.ride_car();
     let mut car = Car::spawn_at(PLAYER, setup, terrain, at.x, at.y, yaw);
     wear.put_on(&mut car);

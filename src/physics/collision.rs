@@ -55,11 +55,22 @@ const ITERATIONS: usize = 6;
 impl Obb {
     /// An upright box: `footprint` centre and length axis in the xz plane, half its length
     /// and width, from `bottom` to `top`.
-    pub fn upright(center: Vec2, axis: Vec2, half_length: f32, half_width: f32, bottom: f32, top: f32) -> Self {
+    pub fn upright(
+        center: Vec2,
+        axis: Vec2,
+        half_length: f32,
+        half_width: f32,
+        bottom: f32,
+        top: f32,
+    ) -> Self {
         let axis = axis.normalize_or(Vec2::X);
         Self {
             center: Vec3::new(center.x, (bottom + top) / 2.0, center.y),
-            axes: [Vec3::new(axis.x, 0.0, axis.y), Vec3::Y, Vec3::new(-axis.y, 0.0, axis.x)],
+            axes: [
+                Vec3::new(axis.x, 0.0, axis.y),
+                Vec3::Y,
+                Vec3::new(-axis.y, 0.0, axis.x),
+            ],
             half: Vec3::new(half_length, (top - bottom) / 2.0, half_width),
         }
     }
@@ -124,7 +135,9 @@ impl Obb {
 
     /// Half the box's extent along `axis` (unit).
     fn reach(&self, axis: Vec3) -> f32 {
-        (0..3).map(|i| self.half[i] * self.axes[i].dot(axis).abs()).sum()
+        (0..3)
+            .map(|i| self.half[i] * self.axes[i].dot(axis).abs())
+            .sum()
     }
 
     /// How this box overlaps `other`, if it does: the contact pushes this one out.
@@ -215,7 +228,13 @@ struct Pending {
 /// Resolves `contacts` between `body` and something that doesn't move (the ground, a
 /// house), or `other` body, whose contacts point out of `other` into `body`. Gives the
 /// impulse it took along the normals (N·s).
-pub fn resolve(body: &mut RigidBody, mut other: Option<&mut RigidBody>, contacts: &[Contact], surface: Surface, dt: f32) -> f32 {
+pub fn resolve(
+    body: &mut RigidBody,
+    mut other: Option<&mut RigidBody>,
+    contacts: &[Contact],
+    surface: Surface,
+    dt: f32,
+) -> f32 {
     if contacts.is_empty() {
         return 0.0;
     }
@@ -296,7 +315,14 @@ pub struct Upright {
 impl Upright {
     pub fn obb(&self) -> Obb {
         let axis = Vec2::from_angle(self.angle);
-        Obb::upright(self.center, axis, self.half.x, self.half.y, self.bottom, self.top)
+        Obb::upright(
+            self.center,
+            axis,
+            self.half.x,
+            self.half.y,
+            self.bottom,
+            self.top,
+        )
     }
 
     /// Lower and upper corners of its shadow on the xz plane.
@@ -438,7 +464,11 @@ mod tests {
         assert!((contact.depth - 0.1).abs() < 1e-5, "{contact:?}");
         assert!(contact.normal.abs_diff_eq(Vec3::X, 1e-5), "{contact:?}");
         assert!((contact.point.x - 0.45).abs() < 0.06, "{contact:?}");
-        assert!(cube(Vec3::new(1.01, 0.0, 0.0)).contact(&cube(Vec3::ZERO)).is_none());
+        assert!(
+            cube(Vec3::new(1.01, 0.0, 0.0))
+                .contact(&cube(Vec3::ZERO))
+                .is_none()
+        );
         // Turned 45° about y, the corner reaches further.
         let turned = Obb {
             axes: [Vec3::X, Vec3::Y, Vec3::Z].map(|a| Quat::from_rotation_y(0.785) * a),
@@ -459,7 +489,10 @@ mod tests {
         let contact = car.contact(&trunk).unwrap();
         assert!(contact.normal.abs_diff_eq(Vec3::Z, 1e-4), "{contact:?}");
         assert!((contact.depth - 0.05).abs() < 1e-4, "{contact:?}");
-        assert!(contact.point.x.abs() < 0.21 && (contact.point.z + 2.2).abs() < 0.1, "{contact:?}");
+        assert!(
+            contact.point.x.abs() < 0.21 && (contact.point.z + 2.2).abs() < 0.1,
+            "{contact:?}"
+        );
     }
 
     #[test]
@@ -471,8 +504,9 @@ mod tests {
             top: 6.0,
             angle,
         };
-        let mut boxes: Vec<Upright> =
-            (0..100).map(|i| upright(i as f32 * 10.0, 0.0, 0.3, 0.3, 0.0)).collect();
+        let mut boxes: Vec<Upright> = (0..100)
+            .map(|i| upright(i as f32 * 10.0, 0.0, 0.3, 0.3, 0.0))
+            .collect();
         // One long house across many cells, and one turned a quarter.
         boxes.push(upright(500.0, 30.0, 200.0, 5.0, 0.0));
         boxes.push(upright(-50.0, 0.0, 30.0, 2.0, std::f32::consts::FRAC_PI_2));
@@ -492,7 +526,12 @@ mod tests {
 
     #[test]
     fn a_box_dropped_on_the_ground_comes_to_rest() {
-        let mut body = RigidBody::new(Vec3::new(0.0, 2.0, 0.0), Quat::from_rotation_z(0.3), 1000.0, Vec3::new(400.0, 500.0, 200.0));
+        let mut body = RigidBody::new(
+            Vec3::new(0.0, 2.0, 0.0),
+            Quat::from_rotation_z(0.3),
+            1000.0,
+            Vec3::new(400.0, 500.0, 200.0),
+        );
         let shape = Obb {
             center: Vec3::ZERO,
             axes: [Vec3::X, Vec3::Y, Vec3::Z],
@@ -504,11 +543,18 @@ mod tests {
             body.add_force_at_center(Vec3::new(0.0, -9.81 * body.mass, 0.0));
             body.integrate_velocity(dt);
             contacts.clear();
-            ground_contacts(&shape.placed(body.position, body.rotation), |_, _| (0.0, Vec3::Y), &mut contacts);
+            ground_contacts(
+                &shape.placed(body.position, body.rotation),
+                |_, _| (0.0, Vec3::Y),
+                &mut contacts,
+            );
             resolve(&mut body, None, &contacts, GROUND, dt);
             body.integrate_position(dt);
         }
-        assert!(body.velocity.length() < 0.05 && body.angular_velocity.length() < 0.05, "{body:?}");
+        assert!(
+            body.velocity.length() < 0.05 && body.angular_velocity.length() < 0.05,
+            "{body:?}"
+        );
         // Flat on its bottom, at its half height.
         assert!((body.position.y - 0.6).abs() < 0.03, "{}", body.position);
     }
@@ -520,17 +566,26 @@ mod tests {
         let mut b = RigidBody::new(Vec3::new(1.0, 0.0, 0.0), Quat::IDENTITY, 1500.0, inertia);
         a.velocity = Vec3::new(10.0, 0.0, 0.0);
         let shape = cube(Vec3::ZERO);
-        let shape = Obb { half: Vec3::new(1.0, 0.5, 0.8), ..shape };
+        let shape = Obb {
+            half: Vec3::new(1.0, 0.5, 0.8),
+            ..shape
+        };
         let dt = 1.0 / 120.0;
         for _ in 0..120 {
-            if let Some(contact) = shape.placed(a.position, a.rotation).contact(&shape.placed(b.position, b.rotation)) {
+            if let Some(contact) = shape
+                .placed(a.position, a.rotation)
+                .contact(&shape.placed(b.position, b.rotation))
+            {
                 resolve(&mut a, Some(&mut b), &[contact], OBSTACLE, dt);
             }
             a.integrate(dt);
             b.integrate(dt);
         }
         let momentum = a.velocity * a.mass + b.velocity * b.mass;
-        assert!(momentum.abs_diff_eq(Vec3::new(10_000.0, 0.0, 0.0), 1.0), "{momentum}");
+        assert!(
+            momentum.abs_diff_eq(Vec3::new(10_000.0, 0.0, 0.0), 1.0),
+            "{momentum}"
+        );
         assert!(b.velocity.x > a.velocity.x, "{} {}", a.velocity, b.velocity);
         assert!(b.position.x - a.position.x > 1.99);
     }

@@ -219,7 +219,9 @@ fn apply_controls(car: &mut Car, dt: f32) {
     // ABS eases each wheel's brake while the wheel turns slower than the tire grips best at
     // (the slip ratio is negative braking forwards, positive braking backwards).
     for (pressure, corner) in abs_pressure.iter_mut().zip(corners.iter()) {
-        let slip = corner.contact.map_or(0.0, |c| -c.tire.slip_ratio * speed.signum());
+        let slip = corner
+            .contact
+            .map_or(0.0, |c| -c.tire.slip_ratio * speed.signum());
         let off = (slip - ABS_SLIP) / ABS_SLIP;
         let rate = if off > 0.0 {
             -ABS_CUT * off
@@ -546,8 +548,14 @@ mod tests {
                 "{name}: {with:.1} m with ABS (wheels at least {turning:.2} of the road \
                  speed), {without:.1} m without ({locked:.2})"
             );
-            assert!(turning > 0.7, "{name}: a wheel at {turning:.2} of the road speed");
-            assert!(with < without * 1.03, "{name}: {with:.1} m, {without:.1} m without");
+            assert!(
+                turning > 0.7,
+                "{name}: a wheel at {turning:.2} of the road speed"
+            );
+            assert!(
+                with < without * 1.03,
+                "{name}: {with:.1} m, {without:.1} m without"
+            );
             // Steering while braking: the wheels keep turning, and so does the car.
             let (_, turning, turned) = emergency_stop(chassis, true, 0.1);
             let (_, locked, straight) = emergency_stop(chassis, false, 0.1);

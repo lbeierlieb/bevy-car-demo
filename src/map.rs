@@ -256,7 +256,12 @@ fn draw(
                 let [r, g, b] = mark.color;
                 let color = Color32::from_rgb(r, g, b);
                 painter.circle(at, 6.0, color, Stroke::new(1.5, Color32::BLACK));
-                label(&painter, at + vec2(12.0, 0.0), Align2::LEFT_CENTER, &mark.label);
+                label(
+                    &painter,
+                    at + vec2(12.0, 0.0),
+                    Align2::LEFT_CENTER,
+                    &mark.label,
+                );
             }
 
             // The cars as arrows, the one being driven larger and outlined in white.
@@ -291,7 +296,9 @@ fn draw(
             }
 
             scale_bar(&painter, screen, scale);
-            let click = view.click.map_or(String::new(), |c| format!("Click: {c}    "));
+            let click = view
+                .click
+                .map_or(String::new(), |c| format!("Click: {c}    "));
             let help = format!("Drag: move    Scroll: zoom    {click}K / Esc: close");
             label(
                 &painter,

@@ -310,7 +310,8 @@ mod tests {
         let (light, heavy) = (tire.nominal_load * 0.5, tire.nominal_load * 1.5);
         assert!(tire.friction(light) > tire.mu && tire.friction(heavy) < tire.mu);
         // Weight moving from one side of an axle to the other costs it grip.
-        let axle = |left: f32, right: f32| left * tire.friction(left) + right * tire.friction(right);
+        let axle =
+            |left: f32, right: f32| left * tire.friction(left) + right * tire.friction(right);
         let level = axle(tire.nominal_load, tire.nominal_load);
         assert!(axle(light, heavy) < 0.99 * level);
     }
@@ -323,7 +324,9 @@ mod tests {
         };
         let at = |angle: f32| {
             let v = 20.0;
-            -tire.force(v, v * angle.tan(), v / tire.radius, 4000.0, 1.0).fy
+            -tire
+                .force(v, v * angle.tan(), v / tire.radius, 4000.0, 1.0)
+                .fy
         };
         at(angle) / at(compound.peak_angle)
     }

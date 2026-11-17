@@ -310,7 +310,9 @@ impl Houses {
     }
 
     fn count(&self, p: Vec2, radius: f32) -> usize {
-        let low = ((p - radius - self.origin) / Self::CELL).floor().max(Vec2::ZERO);
+        let low = ((p - radius - self.origin) / Self::CELL)
+            .floor()
+            .max(Vec2::ZERO);
         let high = ((p + radius - self.origin) / Self::CELL).floor();
         let mut count = 0;
         for row in low.y as usize..=(high.y.max(0.0) as usize).min(self.rows - 1) {

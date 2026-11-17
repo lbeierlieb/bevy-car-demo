@@ -218,13 +218,7 @@ fn leave(
         career.bring_home(&car);
     }
     let shop = places.of(PlaceKind::Dyno);
-    spawn_ride(
-        &mut commands,
-        &career,
-        &terrain,
-        shop.at,
-        shop.yaw,
-    );
+    spawn_ride(&mut commands, &career, &terrain, shop.at, shop.yaw);
     active.0 = PLAYER;
     career.save();
 }

@@ -65,7 +65,10 @@ fn draw(
     // Gizmos draw on top, so they'd cover the dashboard of the car the camera sits in.
     let seated = cameras.iter().any(|camera| camera.driver());
     for car in &cars {
-        for b in terrain.obstacles.near(car.body.position.xz(), OBSTACLE_RANGE) {
+        for b in terrain
+            .obstacles
+            .near(car.body.position.xz(), OBSTACLE_RANGE)
+        {
             for [from, to] in b.obb().edges() {
                 gizmos.line(from, to, css::TOMATO);
             }

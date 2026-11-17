@@ -10,9 +10,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::car::{ActiveCar, Car, CarSetup, heading};
-use crate::chassis::{
-    CHASSIS, CLUTCHES, CarBuild, GEARBOXES, PAINTS, SUSPENSIONS, needs_adapter,
-};
+use crate::chassis::{CHASSIS, CLUTCHES, CarBuild, GEARBOXES, PAINTS, SUSPENSIONS, needs_adapter};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::ecu::{Ecu, EcuModel};
 use crate::physics::engine::families::{FAMILIES, Version};
@@ -302,7 +300,12 @@ fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
         ui.end_row();
         ui.label("Tires")
             .on_hover_text(COMPOUNDS[draft.tires].about);
-        combo(ui, "tires", &mut draft.tires, &COMPOUNDS.map(|compound| compound.name));
+        combo(
+            ui,
+            "tires",
+            &mut draft.tires,
+            &COMPOUNDS.map(|compound| compound.name),
+        );
         ui.end_row();
     });
 }

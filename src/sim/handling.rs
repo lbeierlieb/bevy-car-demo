@@ -170,8 +170,14 @@ fn a_power_slide_can_be_caught() {
     for (chassis, option) in [(3, 0), (4, 1), (6, 2)] {
         let slide = power_slide(CarSetup::factory(chassis, option), false);
         assert!(slide.deepest > 8.0, "{chassis}: no slide: {slide:?}");
-        assert!(!slide.spun() && slide.snap_back < 30.0, "{chassis}: {slide:?}");
-        assert!(slide.end_slip.abs() < 2.0 && slide.end_yaw.abs() < 3.0, "{chassis}: {slide:?}");
+        assert!(
+            !slide.spun() && slide.snap_back < 30.0,
+            "{chassis}: {slide:?}"
+        );
+        assert!(
+            slide.end_slip.abs() < 2.0 && slide.end_yaw.abs() < 3.0,
+            "{chassis}: {slide:?}"
+        );
     }
 }
 
@@ -210,7 +216,10 @@ fn power_slides() {
 fn trace_power_slide() {
     let spec = std::env::var("SLIDE_CAR").unwrap_or("3,0".into());
     let [chassis, option] = [0, 1].map(|i| spec.split(',').nth(i).unwrap().parse().unwrap());
-    println!("{:?}", power_slide(CarSetup::factory(chassis, option), false));
+    println!(
+        "{:?}",
+        power_slide(CarSetup::factory(chassis, option), false)
+    );
 }
 
 /// A car going round the left-hand circle at `speed` (m/s) for `seconds`, calling `each`
@@ -280,7 +289,14 @@ fn tire_temperatures() {
 fn cruising_consumption(setup: CarSetup, speed: f32) -> f32 {
     let terrain = Terrain::flat();
     // From one corner of the flat square along its diagonal.
-    let mut car = Car::spawn_at(0, setup, &terrain, -480.0, -480.0, -0.75 * std::f32::consts::PI);
+    let mut car = Car::spawn_at(
+        0,
+        setup,
+        &terrain,
+        -480.0,
+        -480.0,
+        -0.75 * std::f32::consts::PI,
+    );
     car.drivetrain.automatic = true;
     let dt = 1.0 / CHASSIS_HZ as f32;
     let (mut litres, mut distance) = (0.0, 0.0f64);
@@ -302,7 +318,10 @@ fn cruising_consumption(setup: CarSetup, speed: f32) -> f32 {
 #[test]
 fn cruising_consumption_is_plausible() {
     let consumption = cruising_consumption(CarSetup::factory(3, 0), 100.0 / 3.6);
-    assert!((5.0..9.0).contains(&consumption), "{consumption:.1} L/100 km");
+    assert!(
+        (5.0..9.0).contains(&consumption),
+        "{consumption:.1} L/100 km"
+    );
 }
 
 /// Prints every factory car's consumption at 100 and 150 km/h:
@@ -393,7 +412,11 @@ fn a_car_stops_at_a_wall_and_a_tree() {
     // A trunk in front of the middle of the bonnet.
     let tree = upright(Vec2::splat(0.3));
     let car = drive_into(tree, 20.0, 2.0);
-    assert!(car.body.position.z > -8.0, "went through the tree: {}", car.body.position);
+    assert!(
+        car.body.position.z > -8.0,
+        "went through the tree: {}",
+        car.body.position
+    );
 }
 
 #[test]

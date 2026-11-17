@@ -171,14 +171,16 @@ impl ExhaustSound {
         let size = relative_size(hardware);
         let stock = EngineHardware::default().exhaust;
         let exhaust = &hardware.exhaust;
-        let muffling = |area: Option<f32>, stock: Option<f32>, stock_muffling: f32| match (
-            area, stock,
-        ) {
-            (Some(area), Some(stock)) => {
-                stock_muffling * (stock * size / area).powf(MUFFLER_POWER).min(1.0 / stock_muffling)
-            }
-            _ => 0.0,
-        };
+        let muffling =
+            |area: Option<f32>, stock: Option<f32>, stock_muffling: f32| match (area, stock) {
+                (Some(area), Some(stock)) => {
+                    stock_muffling
+                        * (stock * size / area)
+                            .powf(MUFFLER_POWER)
+                            .min(1.0 / stock_muffling)
+                }
+                _ => 0.0,
+            };
         let silencer = muffling(exhaust.silencer_area, stock.silencer_area, SILENCER);
         let catalyst = muffling(exhaust.cat_area, stock.cat_area, CATALYST);
         Self {
@@ -488,10 +490,22 @@ impl EngineVoice {
         glide(&mut self.load, load.clamp(0.0, 1.0), LOAD_GLIDE);
         glide(&mut self.volume, volume, GLIDE);
         let exhaust = self.targets.exhaust();
-        glide(&mut self.exhaust.muffle, exhaust.muffle.clamp(0.0, 1.0), GLIDE);
+        glide(
+            &mut self.exhaust.muffle,
+            exhaust.muffle.clamp(0.0, 1.0),
+            GLIDE,
+        );
         glide(&mut self.exhaust.bore, exhaust.bore.clamp(0.5, 2.0), GLIDE);
-        glide(&mut self.exhaust.header, exhaust.header.clamp(50.0, 1000.0), GLIDE);
-        glide(&mut self.exhaust.turbine, exhaust.turbine.clamp(0.0, 1.0), GLIDE);
+        glide(
+            &mut self.exhaust.header,
+            exhaust.header.clamp(50.0, 1000.0),
+            GLIDE,
+        );
+        glide(
+            &mut self.exhaust.turbine,
+            exhaust.turbine.clamp(0.0, 1.0),
+            GLIDE,
+        );
         let (revolutions, share) = self.targets.turbo();
         glide(&mut self.turbo_speed, revolutions.max(0.0), GLIDE);
         glide(&mut self.turbo_share, share.clamp(0.0, 1.5), GLIDE);
@@ -639,7 +653,9 @@ impl EngineAudio {
         let hardware = &setup.engine.build.hardware;
         self.targets.set_exhaust(ExhaustSound::of(hardware));
         let speed = drivetrain.engine.turbo_speed;
-        let share = hardware.turbo.map_or(0.0, |turbo| speed / turbo.max_speed());
+        let share = hardware
+            .turbo
+            .map_or(0.0, |turbo| speed / turbo.max_speed());
         self.targets.set_turbo(speed / TAU, share);
     }
 }
@@ -783,7 +799,11 @@ mod tests {
             for version in 0..versions.len() {
                 let hardware = Parts::all_stock(family, version).hardware();
                 let sound = ExhaustSound::of(&hardware);
-                assert!((sound.bore - 1.0).abs() < 0.05, "{}: {sound:?}", hardware.name);
+                assert!(
+                    (sound.bore - 1.0).abs() < 0.05,
+                    "{}: {sound:?}",
+                    hardware.name
+                );
                 assert!(sound.muffle > 0.85, "{}: {sound:?}", hardware.name);
             }
         }
@@ -844,7 +864,10 @@ mod tests {
             }
             let rms = (sum / SAMPLE_RATE as f32).sqrt();
             let set = GAIN * WHISTLE;
-            assert!((rms / set - 1.0).abs() < 0.3, "{revolutions}: {rms} for {set}");
+            assert!(
+                (rms / set - 1.0).abs() < 0.3,
+                "{revolutions}: {rms} for {set}"
+            );
         }
     }
 

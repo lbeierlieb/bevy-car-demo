@@ -403,12 +403,14 @@ pub fn fuel(ui: &mut egui::Ui, car: &Car) {
         fuel.litres(),
         tank.litres
     ));
-    let average = fuel.average().map_or("average and range after 1 km".into(), |average| {
-        format!(
-            "average {average:.1} L/100 km    range {:.0} km",
-            fuel.litres() / average * 100.0
-        )
-    });
+    let average = fuel
+        .average()
+        .map_or("average and range after 1 km".into(), |average| {
+            format!(
+                "average {average:.1} L/100 km    range {:.0} km",
+                fuel.litres() / average * 100.0
+            )
+        });
     ui.label(format!(
         "trip (since filling up) {:.1} km, {:.2} L    {average}",
         fuel.distance / 1000.0,
