@@ -569,6 +569,11 @@ fn spawn_default_car(mut commands: Commands, terrain: Res<Terrain>) {
     commands.spawn((Transform::from_translation(car.body.position), car));
 }
 
+/// How fast the keys turn the front wheels towards full lock, in full locks per second.
+const KEY_STEER_RATE: f32 = 1.0;
+/// How fast they come back towards the middle (released, or steering the other way).
+const KEY_STEER_RETURN_RATE: f32 = 2.5;
+
 /// Keyboard and wheel to controls for the active car; any other car holds all brakes. G
 /// switches between manual and automatic gearboxes, I starts a stalled engine.
 pub fn drive(
@@ -667,8 +672,16 @@ pub fn drive(
             c.steer = steer;
         } else {
             // Keys steer less at speed, and are rate-limited like turning a real wheel.
+            // Turning in is slow so a tap only nudges the wheels; letting go (or steering
+            // the other way) brings them back to the middle faster.
             let target = steer_target / (1.0 + speed.abs() * 0.04);
-            let max_delta = 3.0 * time.delta_secs();
+            let towards_middle = (target - c.steer) * c.steer < 0.0;
+            let rate = if towards_middle {
+                KEY_STEER_RETURN_RATE
+            } else {
+                KEY_STEER_RATE
+            };
+            let max_delta = rate * time.delta_secs();
             c.steer += (target - c.steer).clamp(-max_delta, max_delta);
         }
     }
