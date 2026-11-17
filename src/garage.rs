@@ -3,13 +3,9 @@
 //! (paint, gearbox, clutch, final drive, differentials, suspension, tires), which engine
 //! (any that fits the engine bay), and the engine's own parts.
 //!
-//! Parts on the cylinder side need the engine's maps baked again, which takes a few
-//! seconds: on a thread, or on the web a slice every frame, while the car keeps its old
-//! engine. Baked maps are cached (`~/.cache/car-sim/engines`, local storage on the web),
-//! so going back to a build is quick.
+//! Parts on the cylinder side need the engine's maps baked again (see `workshop`), which
+//! takes a few seconds, while the car keeps its old engine.
 
-#[cfg(target_arch = "wasm32")]
-use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
@@ -21,25 +17,12 @@ use crate::physics::engine::EngineBuild;
 use crate::physics::engine::ecu::{Ecu, EcuModel};
 use crate::physics::engine::families::{FAMILIES, Version};
 use crate::physics::engine::hardware::EngineHardware;
-use crate::physics::engine::maps::{self, Bake, EngineMaps};
+use crate::physics::engine::maps::{self, EngineMaps};
 use crate::physics::engine::parts::{HEADERS, INTERCOOLER, Parts, SLOTS};
 use crate::physics::tire::COMPOUNDS;
-use crate::storage::Folder;
 use crate::terrain::Terrain;
 use crate::ui::{ToolInput, collapse_tool, tool_window};
-
-const MAPS: Folder = Folder {
-    cache: true,
-    name: "engines",
-    extension: "maps",
-    web_prefix: "car-sim-maps:",
-};
-
-/// Grid points baked per batch on the thread, and time spent baking per frame on the web.
-#[cfg(not(target_arch = "wasm32"))]
-const BATCH: usize = 64;
-#[cfg(target_arch = "wasm32")]
-const FRAME_BUDGET: std::time::Duration = std::time::Duration::from_millis(12);
+use crate::workshop::{self, Work};
 
 const WARNING: egui::Color32 = egui::Color32::from_rgb(255, 170, 60);
 
@@ -107,88 +90,6 @@ struct Job {
     work: Work,
 }
 
-/// Baking on a thread, which reports its progress (an f32's bits) and can be told to stop.
-#[cfg(not(target_arch = "wasm32"))]
-struct Work {
-    progress: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    thread: Option<std::thread::JoinHandle<Option<EngineMaps>>>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Work {
-    fn start(hardware: &EngineHardware) -> Self {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-        let progress = Arc::new(AtomicU32::new(0));
-        let cancel = Arc::new(AtomicBool::new(false));
-        let mut bake = Bake::new(hardware);
-        let (shown, stop) = (progress.clone(), cancel.clone());
-        let thread = std::thread::spawn(move || {
-            while !stop.load(Ordering::Relaxed) {
-                if let Some(maps) = bake.advance(BATCH) {
-                    return Some(maps);
-                }
-                shown.store(bake.progress().to_bits(), Ordering::Relaxed);
-            }
-            None
-        });
-        Self {
-            progress,
-            cancel,
-            thread: Some(thread),
-        }
-    }
-
-    fn progress(&self) -> f32 {
-        f32::from_bits(self.progress.load(std::sync::atomic::Ordering::Relaxed))
-    }
-
-    /// The maps once they're done, or nothing if baking failed.
-    fn poll(&mut self) -> Option<Option<EngineMaps>> {
-        if !self.thread.as_ref()?.is_finished() {
-            return None;
-        }
-        Some(self.thread.take()?.join().ok().flatten())
-    }
-
-    fn cancel(self) {
-        self.cancel
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
-/// Baking a slice every frame (there are no threads on the web).
-#[cfg(target_arch = "wasm32")]
-struct Work {
-    bake: Bake,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl Work {
-    fn start(hardware: &EngineHardware) -> Self {
-        Self {
-            bake: Bake::new(hardware),
-        }
-    }
-
-    fn progress(&self) -> f32 {
-        self.bake.progress()
-    }
-
-    fn poll(&mut self) -> Option<Option<EngineMaps>> {
-        let start = Instant::now();
-        while start.elapsed() < FRAME_BUDGET {
-            if let Some(maps) = self.bake.advance(1) {
-                return Some(Some(maps));
-            }
-        }
-        None
-    }
-
-    fn cancel(self) {}
-}
-
 /// The active car and its entity.
 fn active<'a>(
     cars: &'a mut Query<(Entity, &mut Car)>,
@@ -215,7 +116,7 @@ fn bake(
         garage.status = "Baking the maps failed.".to_string();
         return;
     };
-    let _ = MAPS.save(&cache_name(&job.hardware), &maps.to_text(&job.hardware));
+    workshop::keep(&job.hardware, &maps);
     garage.status = match active(&mut cars, job.car) {
         Some((entity, mut car)) => {
             let made = (job.build, job.parts, job.hardware, maps);
@@ -224,10 +125,6 @@ fn bake(
         }
         None => "The car is gone.".to_string(),
     };
-}
-
-fn cache_name(hardware: &EngineHardware) -> String {
-    format!("{:016x}", maps::fingerprint(hardware))
 }
 
 /// Rebuilds `car` as `build` with the engine built from `parts`. An engine of other
@@ -697,10 +594,7 @@ fn start(
     let at_hand = if fingerprint == maps::fingerprint(&current.hardware) {
         Some(current.maps.clone())
     } else {
-        EngineMaps::stock(&hardware).or_else(|| {
-            let text = MAPS.load(&cache_name(&hardware))?;
-            EngineMaps::from_text(&text, fingerprint)
-        })
+        workshop::at_hand(&hardware)
     };
     if let Some(maps) = at_hand {
         let made = (build, parts, hardware, maps);
