@@ -1,5 +1,7 @@
 //! Jobs: delivering a pizza to a house (in the player's car, against the clock) or a car
-//! from the dealer (in that car, which the player then leaves there). The destination has
+//! from the dealer (in that car, after which the player is back at the dealer with their
+//! own). The dealer's trust grows with every car delivered clean and shrinks with knocks;
+//! more trust gets nicer cars to deliver, which pay more. The destination has
 //! a marker, is on the map, and an arrow at the top points to it; stopping on the marker
 //! delivers. Knocks on the way cost: the pizza's tip, or the dealer's trust and pay.
 
@@ -9,12 +11,14 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::hud::{News, Status};
 use super::places::{MARKER_RADIUS, STOPPED, kerb, spawn_marker};
-use super::{Career, PLAYER, Places, Scene, euros};
+use super::{Career, DELIVERY, PLAYER, PlaceKind, Places, Scene, euros};
 use crate::buildings::Footprint;
 use crate::camera::ChaseCamera;
-use crate::car::{ActiveCar, Car};
+use crate::car::{ActiveCar, Car, CarSetup};
+use crate::chassis::{CHASSIS, CarBuild, PAINTS};
 use crate::map::MapMark;
 use crate::map::MapMarks;
+use crate::physics::engine::EngineBuild;
 use crate::terrain::Terrain;
 
 /// A knock that changes the speed by more than this is a hit (m/s); hits closer together
@@ -30,6 +34,27 @@ const PIZZA_BASE: f64 = 10.0;
 const PIZZA_PER_KM: f64 = 9.0;
 const PIZZA_TIP: f64 = 0.3;
 const PIZZA_SECONDS_PER_KM: f32 = 130.0;
+/// Cars to deliver by how much the dealer trusts the player: the trust it takes, the
+/// chassis (in `CHASSIS`), and how much more than the cheapest they pay.
+pub const TIERS: [(f32, &[usize], f64); 4] = [
+    (0.0, &[0, 12, 11], 1.0),
+    (15.0, &[1, 4, 3], 1.8),
+    (40.0, &[2, 5, 6, 10], 3.0),
+    (70.0, &[7, 8, 9], 5.0),
+];
+/// Cars go this far from the dealer (m, as the crow flies), paying this to start with and
+/// per kilometre (€, times the tier's share); each hit keeps this share of the pay.
+const DELIVERY_RANGE: (f32, f32) = (1_500.0, 5_500.0);
+const DELIVERY_BASE: f64 = 30.0;
+const DELIVERY_PER_KM: f64 = 35.0;
+const HIT_PAY: f64 = 0.85;
+/// Trust gained for a car delivered without a knock, lost for each hit, and lost for a car
+/// not delivered.
+const TRUST_CLEAN: f32 = 5.0;
+const TRUST_PER_HIT: f32 = 3.0;
+const TRUST_GIVEN_UP: f32 = 8.0;
+/// A car to deliver waits this far ahead of the dealer's marker (m).
+const DELIVERY_AHEAD: f32 = 12.0;
 /// Destinations are drawn in this colour.
 const DESTINATION: [u8; 3] = [255, 255, 255];
 
@@ -56,6 +81,23 @@ impl Plugin for JobsPlugin {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum JobKind {
     Pizza,
+    /// A car from the dealer: its chassis, engine option and paint, and its tier.
+    Delivery {
+        chassis: usize,
+        option: usize,
+        paint: usize,
+        tier: usize,
+    },
+}
+
+impl JobKind {
+    /// "Pizza delivery", or the car to deliver.
+    pub fn name(&self) -> String {
+        match *self {
+            Self::Pizza => "Pizza delivery".to_string(),
+            Self::Delivery { chassis, .. } => format!("Deliver the {}", CHASSIS[chassis].name),
+        }
+    }
 }
 
 /// A job on offer or under way.
@@ -88,6 +130,16 @@ impl Job {
                 };
                 self.pay * (on_time + tip)
             }
+            JobKind::Delivery { .. } => self.pay * HIT_PAY.powi(self.hits as i32),
+        }
+    }
+
+    /// What delivering it does to the dealer's trust.
+    pub fn trust(&self) -> f32 {
+        if self.hits == 0 {
+            TRUST_CLEAN
+        } else {
+            2.0 - TRUST_PER_HIT * self.hits as f32
         }
     }
 }
@@ -96,7 +148,7 @@ impl Job {
 #[derive(Resource, Default)]
 pub struct Jobs {
     pub current: Option<Job>,
-    pub offer: Option<Job>,
+    pub offers: Vec<Job>,
     rng: Option<Rng>,
     /// Since the last hit (s).
     since_hit: f32,
@@ -122,6 +174,46 @@ impl Jobs {
             hits: 0,
             marker: None,
         })
+    }
+
+    /// Three cars to deliver from `from`, one of the nicest the dealer trusts the player
+    /// with and two of any it does.
+    pub fn deliveries(&mut self, terrain: &Terrain, from: Vec2, trust: f32) -> Vec<Job> {
+        let top = TIERS.iter().rposition(|tier| trust >= tier.0).unwrap_or(0);
+        let mut offers = Vec::new();
+        for k in 0..3 {
+            let rng = self.rng();
+            let tier = if k == 0 { top } else { rng.below(top + 1) };
+            let (_, pool, share) = TIERS[tier];
+            let chassis = pool[rng.below(pool.len())];
+            let option = rng.below(CHASSIS[chassis].engines.len());
+            let paint = rng.below(PAINTS.len());
+            let Some(destination) = pick_house(terrain, rng, from, DELIVERY_RANGE) else {
+                continue;
+            };
+            let distance = destination.distance(from);
+            let km = f64::from(distance) / 1000.0;
+            offers.push(Job {
+                kind: JobKind::Delivery {
+                    chassis,
+                    option,
+                    paint,
+                    tier,
+                },
+                destination,
+                distance,
+                pay: (DELIVERY_BASE + DELIVERY_PER_KM * km) * share,
+                time: None,
+                elapsed: 0.0,
+                hits: 0,
+                marker: None,
+            });
+        }
+        offers.sort_by_key(|job| match job.kind {
+            JobKind::Delivery { tier, .. } => usize::MAX - tier,
+            JobKind::Pizza => 0,
+        });
+        offers
     }
 }
 
@@ -174,17 +266,20 @@ pub fn pick_house(terrain: &Terrain, rng: &mut Rng, from: Vec2, range: (f32, f32
     None
 }
 
-/// Starts the job on offer: its marker goes up and it's on the map.
+/// Starts the job on offer at `index`: its marker goes up and it's on the map.
 pub fn take_offer(
     jobs: &mut Jobs,
+    index: usize,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     terrain: &Terrain,
 ) {
-    let Some(mut job) = jobs.offer.take() else {
+    if index >= jobs.offers.len() {
         return;
-    };
+    }
+    let mut job = jobs.offers.swap_remove(index);
+    jobs.offers.clear();
     job.marker = Some(spawn_marker(
         commands,
         meshes,
@@ -228,15 +323,14 @@ fn watch(
         hit = true;
         news.say(match job.kind {
             JobKind::Pizza => "Ouch! That pizza won't look the same.",
+            JobKind::Delivery { .. } => "Careful! The dealer will see that dent.",
         });
     }
     let distance = cars
         .iter()
         .find(|car| car.index == active.0)
         .map_or(0.0, |car| car.body.position.xz().distance(job.destination));
-    let what = match job.kind {
-        JobKind::Pizza => "Pizza delivery",
-    };
+    let what = job.kind.name();
     let mut line = format!(
         "{what}: {:.1} km, {}",
         distance / 1000.0,
@@ -260,18 +354,19 @@ fn watch(
     marks.0.push(MapMark {
         at: job.destination,
         color: DESTINATION,
-        label: what.to_string(),
+        label: what,
     });
     if hit {
         jobs.since_hit = 0.0;
     }
 }
 
-/// Stopping on the destination's marker finishes the job.
+/// Stopping on the destination's marker finishes the job: a pizza in the player's car, a
+/// car from the dealer in that car (after which the player is back at the dealer).
 fn deliver(
     mut commands: Commands,
-    active: Res<ActiveCar>,
-    cars: Query<&Car>,
+    mut active: ResMut<ActiveCar>,
+    cars: Query<(Entity, &Car)>,
     mut jobs: ResMut<Jobs>,
     mut career: ResMut<Career>,
     mut news: ResMut<News>,
@@ -279,12 +374,16 @@ fn deliver(
     let Some(job) = &jobs.current else {
         return;
     };
-    let Some(car) = cars.iter().find(|car| car.index == active.0) else {
+    let Some((entity, car)) = cars.iter().find(|(_, car)| car.index == active.0) else {
         return;
     };
     let arrived = car.body.position.xz().distance(job.destination) < MARKER_RADIUS
         && car.body.velocity.length() < STOPPED;
-    if !arrived || active.0 != PLAYER {
+    let right_car = match job.kind {
+        JobKind::Pizza => active.0 == PLAYER,
+        JobKind::Delivery { .. } => active.0 == DELIVERY,
+    };
+    if !arrived || !right_car {
         return;
     }
     let job = jobs.current.take().expect("a job");
@@ -303,22 +402,88 @@ fn deliver(
             };
             news.say(format!("Pizza delivered: {}{tip}.", euros(earned)));
         }
+        JobKind::Delivery { chassis, .. } => {
+            career.deliveries += 1;
+            let trust = job.trust();
+            career.trust = (career.trust + trust).clamp(0.0, 100.0);
+            news.say(format!(
+                "{} delivered: {}. Trust {trust:+.0}. Back at the dealer.",
+                CHASSIS[chassis].name,
+                euros(earned)
+            ));
+            commands.entity(entity).despawn();
+            active.0 = PLAYER;
+        }
     }
     career.save();
 }
 
+/// A car the dealer gave to deliver goes back undelivered: less trust.
+fn not_delivered(career: &mut Career, news: &mut News, job: &Job) -> bool {
+    let JobKind::Delivery { chassis, .. } = job.kind else {
+        return false;
+    };
+    career.trust = (career.trust - TRUST_GIVEN_UP).max(0.0);
+    news.say(format!(
+        "The {} went back to the dealer undelivered. Trust -{TRUST_GIVEN_UP:.0}.",
+        CHASSIS[chassis].name
+    ));
+    true
+}
+
 /// Leaving the road (into the garage, or towed) ends any job unfinished.
-fn give_up(mut commands: Commands, mut jobs: ResMut<Jobs>, mut news: ResMut<News>) {
-    jobs.offer = None;
+fn give_up(
+    mut commands: Commands,
+    mut jobs: ResMut<Jobs>,
+    mut news: ResMut<News>,
+    mut career: ResMut<Career>,
+) {
+    jobs.offers.clear();
     let Some(job) = jobs.current.take() else {
         return;
     };
     if let Some(marker) = job.marker {
         commands.entity(marker).despawn();
     }
-    news.say(match job.kind {
-        JobKind::Pizza => "The pizza went cold. No pay.",
-    });
+    if !not_delivered(&mut career, &mut news, &job) {
+        news.say("The pizza went cold. No pay.");
+    }
+    career.save();
+}
+
+/// The dealer's car to deliver, waiting on the road ahead of its marker; the player gets
+/// into it.
+pub fn start_delivery(
+    commands: &mut Commands,
+    terrain: &Terrain,
+    places: &Places,
+    job: &Job,
+    automatic: bool,
+    active: &mut ActiveCar,
+) {
+    let JobKind::Delivery {
+        chassis,
+        option,
+        paint,
+        ..
+    } = job.kind
+    else {
+        return;
+    };
+    let dealer = places.of(PlaceKind::Dealer);
+    let ahead = Vec2::new(-dealer.yaw.sin(), -dealer.yaw.cos());
+    let at = dealer.at + ahead * DELIVERY_AHEAD;
+    let build = CarBuild {
+        paint,
+        ..CarBuild::factory(chassis)
+    };
+    let parts = build.factory_engine(option);
+    let engine = EngineBuild::new(parts.hardware(), parts.ecu);
+    let setup = CarSetup::new(build, parts, engine);
+    let mut car = Car::spawn_at(DELIVERY, setup, terrain, at.x, at.y, dealer.yaw);
+    car.drivetrain.automatic = automatic;
+    commands.spawn((Transform::from_translation(car.body.position), car));
+    active.0 = DELIVERY;
 }
 
 /// An arrow at the top of the screen pointing to the destination, with how far it is.
@@ -375,12 +540,17 @@ fn arrow(
     Ok(())
 }
 
-/// The job under way, with a button to give it up.
+/// The job under way, with a button to give it up (a car to deliver goes back, with the
+/// player).
+#[allow(clippy::too_many_arguments)]
 fn job_window(
     mut contexts: EguiContexts,
     mut commands: Commands,
     mut jobs: ResMut<Jobs>,
     mut news: ResMut<News>,
+    mut career: ResMut<Career>,
+    mut active: ResMut<ActiveCar>,
+    cars: Query<(Entity, &Car)>,
 ) -> Result {
     if jobs.current.is_none() {
         return Ok(());
@@ -398,9 +568,17 @@ fn job_window(
         if let Some(marker) = job.marker {
             commands.entity(marker).despawn();
         }
-        news.say(match job.kind {
-            JobKind::Pizza => "You gave up the pizza. No pay.",
-        });
+        if not_delivered(&mut career, &mut news, &job) {
+            for (entity, car) in &cars {
+                if car.index == DELIVERY {
+                    commands.entity(entity).despawn();
+                }
+            }
+            active.0 = PLAYER;
+            career.save();
+        } else {
+            news.say("You gave up the pizza. No pay.");
+        }
     }
     Ok(())
 }
@@ -444,5 +622,38 @@ mod tests {
         assert!((job.earned() - 14.0).abs() < 1e-6);
         job.elapsed = 3000.0;
         assert!((job.earned() - 28.0 * 0.3).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+
+    #[test]
+    fn trust_gets_nicer_cars_that_pay_more() {
+        let terrain = Terrain::baked();
+        let from = Places::new(&terrain).of(PlaceKind::Dealer).at;
+        let mut jobs = Jobs::default();
+        let tier_of = |job: &Job| match job.kind {
+            JobKind::Delivery { tier, .. } => tier,
+            JobKind::Pizza => panic!("a pizza at the dealer"),
+        };
+        let new = jobs.deliveries(&terrain, from, 0.0);
+        assert_eq!(new.len(), 3);
+        assert!(new.iter().all(|job| tier_of(job) == 0));
+        let trusted = jobs.deliveries(&terrain, from, 80.0);
+        assert_eq!(tier_of(&trusted[0]), 3);
+        let per_km = |job: &Job| job.pay / f64::from(job.distance);
+        assert!(per_km(&trusted[0]) > 3.0 * per_km(&new[0]));
+        for job in new.iter().chain(&trusted) {
+            assert!((DELIVERY_RANGE.0 - 50.0..DELIVERY_RANGE.1 + 50.0).contains(&job.distance));
+        }
+        // Knocks cost pay and trust.
+        let mut job = trusted.into_iter().next().unwrap();
+        assert_eq!(job.trust(), TRUST_CLEAN);
+        let clean = job.earned();
+        job.hits = 2;
+        assert!(job.earned() < 0.75 * clean);
+        assert!(job.trust() < 0.0);
     }
 }
