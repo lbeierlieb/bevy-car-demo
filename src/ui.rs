@@ -9,7 +9,7 @@ use bevy_egui::input::EguiWantsInput;
 use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
 
 use crate::camera::OrbitInput;
-use crate::car::{ActiveCar, Car};
+use crate::car::{ActiveCar, Car, DriverAids};
 use crate::debug::DebugView;
 use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_value, input_name};
 use crate::physics::engine::AMBIENT_PRESSURE;
@@ -154,6 +154,7 @@ fn panel(
     mut cars: Query<&mut Car>,
     mut wheel_panel: WheelPanel,
     mut traffic: ResMut<Traffic>,
+    mut aids: ResMut<DriverAids>,
 ) -> Result {
     let mut automatic = None;
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
@@ -181,10 +182,7 @@ fn panel(
                 if ui.checkbox(&mut on, "Automatic (G)").changed() {
                     automatic = Some(on);
                 }
-                ui.checkbox(&mut car.traction_control, "Traction control")
-                    .on_hover_text("Eases the throttle while a driven wheel spins");
-                ui.checkbox(&mut car.abs, "ABS")
-                    .on_hover_text("Eases the brake of a wheel that's about to lock");
+                aids.show(ui);
             });
             engine(ui, &car);
             fuel(ui, &car);

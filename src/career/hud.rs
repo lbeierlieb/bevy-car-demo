@@ -7,7 +7,7 @@ use bevy_egui::egui::{self, Align2, Color32, FontId, RichText};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::{Career, Scene, euros};
-use crate::car::{ActiveCar, Car};
+use crate::car::{ActiveCar, Car, DriverAids};
 use crate::ui::{WheelPanel, credits};
 
 /// How long a message stays up (s).
@@ -136,6 +136,7 @@ fn settings(
     active: Res<ActiveCar>,
     mut cars: Query<&mut Car>,
     mut wheel_panel: WheelPanel,
+    mut aids: ResMut<DriverAids>,
 ) -> Result {
     if !open.0 {
         return Ok(());
@@ -147,14 +148,13 @@ fn settings(
         .default_width(360.0)
         .vscroll(true)
         .show(contexts.ctx_mut()?, |ui| {
-            if let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) {
+            if let Some(car) = cars.iter().find(|car| car.index == active.0) {
                 ui.horizontal(|ui| {
                     let mut on = car.drivetrain.automatic;
                     if ui.checkbox(&mut on, "Automatic (G)").changed() {
                         automatic = Some(on);
                     }
-                    ui.checkbox(&mut car.traction_control, "Traction control");
-                    ui.checkbox(&mut car.abs, "ABS");
+                    aids.show(ui);
                 });
             }
             ui.collapsing("Wheel and pedals", |ui| wheel_panel.show(ui));

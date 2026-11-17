@@ -12,6 +12,7 @@ use crate::physics::fuel::{self, Fuel, Tank};
 use crate::physics::rigid_body::RigidBody;
 use crate::physics::suspension::{ArmGeometry, AxleSetup, Corner};
 use crate::physics::tire::{COMPOUNDS, TireParams};
+use crate::storage::Folder;
 use crate::terrain::Terrain;
 
 /// Everything the simulation needs to know about a car, worked out from what it's built
@@ -420,7 +421,7 @@ impl Car {
     }
 
     /// Takes the driver's settings (gearbox mode, traction control, ABS) from the car this
-    /// one replaces.
+    /// one replaces. (The active car gets its aids from `DriverAids` anyway.)
     pub fn keep_settings(&mut self, old: &Car) {
         self.drivetrain.automatic = old.drivetrain.automatic;
         self.traction_control = old.traction_control;
@@ -450,6 +451,81 @@ pub fn heading(rotation: Quat) -> f32 {
 #[derive(Resource, Default)]
 pub struct ActiveCar(pub usize);
 
+const SETTINGS: Folder = Folder {
+    cache: false,
+    name: "settings",
+    extension: "cfg",
+    web_prefix: "car-sim-settings:",
+};
+
+/// The driver's choice of aids, the same for every car and kept between runs
+/// (`~/.config/car-sim/settings/aids.cfg`): `drive` hands it to the active car.
+#[derive(Resource, Clone, Copy, PartialEq, Debug)]
+pub struct DriverAids {
+    pub traction_control: bool,
+    pub abs: bool,
+}
+
+impl Default for DriverAids {
+    fn default() -> Self {
+        Self {
+            traction_control: true,
+            abs: true,
+        }
+    }
+}
+
+impl DriverAids {
+    /// The saved choice, or the defaults.
+    pub fn load() -> Self {
+        SETTINGS
+            .load("aids")
+            .map_or_else(Self::default, |text| Self::from_text(&text))
+    }
+
+    pub fn save(&self) {
+        if let Err(err) = SETTINGS.save("aids", &self.to_text()) {
+            warn!("Couldn't save the driving aids: {err}");
+        }
+    }
+
+    fn to_text(self) -> String {
+        format!(
+            "traction_control {}\nabs {}\n",
+            self.traction_control, self.abs
+        )
+    }
+
+    /// Reads what `to_text` wrote; unknown or broken lines are skipped.
+    fn from_text(text: &str) -> Self {
+        let mut aids = Self::default();
+        for line in text.lines() {
+            let mut words = line.split_whitespace();
+            let (Some(key), Some(Ok(on))) = (words.next(), words.next().map(str::parse)) else {
+                continue;
+            };
+            match key {
+                "traction_control" => aids.traction_control = on,
+                "abs" => aids.abs = on,
+                _ => {}
+            }
+        }
+        aids
+    }
+
+    /// Checkboxes for both; saves a change.
+    pub fn show(&mut self, ui: &mut bevy_egui::egui::Ui) {
+        let before = *self;
+        ui.checkbox(&mut self.traction_control, "Traction control")
+            .on_hover_text("Eases the throttle while a driven wheel spins");
+        ui.checkbox(&mut self.abs, "ABS")
+            .on_hover_text("Eases the brake of a wheel that's about to lock");
+        if *self != before {
+            self.save();
+        }
+    }
+}
+
 /// Driving the active car, and its entity following the simulation. Which cars there are
 /// is up to the app.
 pub struct CarPlugin;
@@ -457,6 +533,7 @@ pub struct CarPlugin;
 impl Plugin for CarPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActiveCar>()
+            .insert_resource(DriverAids::load())
             .add_systems(Update, (drive, sync_transforms).chain());
     }
 }
@@ -494,6 +571,7 @@ pub fn drive(
     wheel: Res<WheelInput>,
     time: Res<Time>,
     active: Res<ActiveCar>,
+    aids: Res<DriverAids>,
     mut cars: Query<&mut Car>,
 ) {
     let pressed = |a, b| keys.pressed(a) || keys.pressed(b);
@@ -508,6 +586,8 @@ pub fn drive(
             };
             continue;
         }
+        car.traction_control = aids.traction_control;
+        car.abs = aids.abs;
         let speed = car.forward_speed();
         let forward = pressed(KeyCode::KeyW, KeyCode::ArrowUp);
         let back = pressed(KeyCode::KeyS, KeyCode::ArrowDown);
@@ -604,5 +684,24 @@ pub fn sync_transforms(mut cars: Query<(&Car, &mut Transform)>) {
     for (car, mut transform) in &mut cars {
         transform.translation = car.body.position;
         transform.rotation = car.body.rotation;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn driver_aids_read_back() {
+        let aids = DriverAids {
+            traction_control: false,
+            abs: true,
+        };
+        assert_eq!(DriverAids::from_text(&aids.to_text()), aids);
+        // Broken lines keep the defaults.
+        assert_eq!(
+            DriverAids::from_text("abs maybe\ntraction_control false\n"),
+            aids
+        );
     }
 }
