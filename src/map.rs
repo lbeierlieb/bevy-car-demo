@@ -35,6 +35,7 @@ pub struct MapPlugin;
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MapView>()
+            .init_resource::<MapMarks>()
             .add_message::<MapClicked>()
             .add_systems(Update, toggle)
             .add_systems(
@@ -54,6 +55,16 @@ impl Plugin for TeleportPlugin {
         })
         .add_systems(Update, teleport);
     }
+}
+
+/// Spots an app wants on the map (places, destinations): a dot and a label each.
+#[derive(Resource, Default)]
+pub struct MapMarks(pub Vec<MapMark>);
+
+pub struct MapMark {
+    pub at: Vec2,
+    pub color: [u8; 3],
+    pub label: String,
 }
 
 /// A click on the map, at this map point (x east, z south).
@@ -157,6 +168,7 @@ fn draw(
     terrain: Res<Terrain>,
     active: Res<ActiveCar>,
     cars: Query<&Car>,
+    marks: Res<MapMarks>,
     mut view: ResMut<MapView>,
     mut clicks: MessageWriter<MapClicked>,
 ) -> Result {
@@ -237,6 +249,14 @@ fn draw(
                         painter.add(Shape::convex_polygon(points, HOUSE, Stroke::NONE));
                     }
                 }
+            }
+
+            for mark in &marks.0 {
+                let at = to_screen(mark.at);
+                let [r, g, b] = mark.color;
+                let color = Color32::from_rgb(r, g, b);
+                painter.circle(at, 6.0, color, Stroke::new(1.5, Color32::BLACK));
+                label(&painter, at + vec2(12.0, 0.0), Align2::LEFT_CENTER, &mark.label);
             }
 
             // The cars as arrows, the one being driven larger and outlined in white.

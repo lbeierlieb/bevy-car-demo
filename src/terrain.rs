@@ -342,6 +342,13 @@ impl Terrain {
         Some((point, (-facing.x).atan2(-facing.y)))
     }
 
+    /// The point on a paved road nearest to `p`, the road's direction there and its width.
+    pub fn paved_road_near(&self, p: Vec2) -> Option<(Vec2, Vec2, f32)> {
+        let (road, i, point) = self.closest_on_road(p, |r| r.kind == RoadKind::Paved)?;
+        let along = (road.points[i + 1] - road.points[i]).normalize_or(Vec2::NEG_Y);
+        Some((point, along, road.width))
+    }
+
     /// The point closest to `p` on the roads that pass `keep`, away from the rim: (road,
     /// segment start index, point).
     fn closest_on_road(

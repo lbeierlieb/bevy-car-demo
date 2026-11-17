@@ -49,7 +49,7 @@ impl EcuModel {
     }
 
     /// The word for it in tune files.
-    fn key(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Stock => "stock",
             Self::Programmable => "programmable",

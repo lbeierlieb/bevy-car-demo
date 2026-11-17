@@ -8,6 +8,7 @@ pub mod body;
 pub mod buildings;
 pub mod camera;
 pub mod car;
+pub mod career;
 pub mod chassis;
 pub mod cockpit;
 pub mod debug;
