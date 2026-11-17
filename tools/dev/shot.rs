@@ -10,7 +10,7 @@ impl Plugin for ShotPlugin {
             app.add_systems(PreUpdate, click.before(bevy::input::InputSystems));
             app.add_systems(PostUpdate, forest_cam.before(bevy::transform::TransformSystems::Propagate));
             // Before the car gets its meshes, which would be added to a despawned car.
-            app.add_systems(PreUpdate, (pick_car, line_up));
+            app.add_systems(PreUpdate, (pick_car, line_up, place_car));
             app.add_systems(PostUpdate, car_cam.after(forest_cam).before(bevy::transform::TransformSystems::Propagate));
             app.add_systems(PostUpdate, traffic_cam.after(car_cam).before(bevy::transform::TransformSystems::Propagate));
         }
@@ -194,4 +194,19 @@ fn traffic_cam(
     let forward = body.rotation * Vec3::NEG_Z;
     let eye = body.position - forward * v[0] + Vec3::Y * v[1];
     for mut t in &mut cams { *t = Transform::from_translation(eye).looking_at(body.position + forward * 6.0, Vec3::Y); }
+}
+
+/// PLACE="x,z,frame": put the car being driven on the road nearest map point (x, z) at
+/// that frame, e.g. on a career place's marker.
+fn place_car(terrain: Res<crate::terrain::Terrain>, active: Res<crate::car::ActiveCar>, mut cars: Query<&mut crate::car::Car>, mut frame: Local<u32>) {
+    *frame += 1;
+    let Ok(spec) = std::env::var("PLACE") else { return };
+    let v: Vec<f32> = spec.split(',').map(|s| s.parse().unwrap()).collect();
+    if *frame != v[2] as u32 { return; }
+    let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else { return };
+    let target = Vec2::new(v[0], v[1]);
+    let heading = (car.body.rotation * Vec3::NEG_Z).xz();
+    if let Some((spot, yaw)) = terrain.drive_spot(target, heading) {
+        car.place(&terrain, spot, yaw);
+    }
 }
