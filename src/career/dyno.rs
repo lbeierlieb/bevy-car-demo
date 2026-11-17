@@ -633,7 +633,7 @@ fn screen(
         None => "READY",
         Some(Stage::Idle) => "IDLE",
         Some(Stage::Gears) => "WARM-UP",
-        Some(Stage::Settle) => "SETTLING",
+        Some(Stage::Settle) => "SHIFT",
         Some(Stage::Pull) => "PULL",
         Some(Stage::Coast) => "COAST DOWN",
         Some(Stage::Done) => "DONE",

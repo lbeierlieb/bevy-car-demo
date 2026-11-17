@@ -1,9 +1,10 @@
 //! A chassis dyno with a roller under each axle, the rollers coupled, so a car with any
 //! drive sits on it. It's an inertia dyno: the rollers stand in for the car's mass, and the
 //! power at the wheels is what it takes to spin them up (their inertia times their
-//! acceleration times their speed). A run warms up through the gears, shifts into fourth
-//! (or the top gear, if lower), lets the rollers slow to the start of the pull, and then
-//! pulls at full throttle to the rev limiter.
+//! acceleration times their speed). A run goes up through the gears on part throttle,
+//! revving each only as far as the next gear needs to land just below the start of the
+//! pull, and once in fourth (or the top gear, if lower) pulls at full throttle to the rev
+//! limiter.
 //!
 //! The car runs its own drivetrain and engine, so a run wears it, burns its fuel, and can
 //! break it. The power at the crank is the engine's own; the wheels get it less the
@@ -22,8 +23,8 @@ pub const STEP: f32 = 1.0 / 120.0;
 const IDLE: f32 = 1.5;
 /// The gear pulled in (or the top gear if lower), where it starts sampling (rpm, or this
 /// far above idle if higher) after opening the throttle this much lower (rpm), how far
-/// below the rev limiter the warm-up shifts and the pull ends (rpm), and how often it
-/// samples (rpm).
+/// below the rev limiter a gear is shifted up at the latest and the pull ends (rpm), and
+/// how often it samples (rpm).
 const PULL_GEAR: i8 = 4;
 const START_RPM: f32 = 2000.0;
 const RUN_IN: f32 = 300.0;
@@ -31,10 +32,13 @@ const START_ABOVE_IDLE: f32 = 700.0;
 const SHIFT_MARGIN: f32 = 400.0;
 const END_MARGIN: f32 = 100.0;
 const SAMPLE_RPM: f32 = 100.0;
+/// The throttle going up through the gears.
+const WARM_UP_THROTTLE: f32 = 0.4;
 /// The longest a pull may take (s): a car that can't get to the rev limiter (a slipping
 /// clutch, a dying engine) is stopped.
 const LONGEST_PULL: f32 = 60.0;
-/// How hard the rollers' brake slows them, as the car's deceleration (m/s²).
+/// How hard the rollers' brake slows them after the pull, as the car's deceleration
+/// (m/s²).
 const ROLLER_BRAKE: f32 = 7.0;
 /// Rolling resistance of a tire on a roller, as a share of the load.
 const ROLLING: f32 = 0.012;
@@ -52,9 +56,9 @@ const GRAVITY: f32 = 9.81;
 pub enum Stage {
     /// Idling in neutral.
     Idle,
-    /// Through the gears at full throttle, up to the pull gear.
+    /// Up through the gears on part throttle, to the gear before the pull gear.
     Gears,
-    /// Off the throttle in the pull gear, the rollers braked down to the start speed.
+    /// Shifting into the pull gear.
     Settle,
     /// Full throttle to the rev limiter, sampling.
     Pull,
@@ -102,7 +106,7 @@ pub struct Rollers {
     pub omega: f32,
     pub turned: f32,
     /// The gear pulled in, and the engine speeds the pull starts and ends at, and where
-    /// the warm-up shifts (rpm).
+    /// the warm-up shifts at the latest (rpm).
     pub gear: i8,
     start: f32,
     end: f32,
@@ -202,13 +206,16 @@ impl Rollers {
             }
             Stage::Gears if broken => self.next(Stage::Coast),
             Stage::Gears if car.drivetrain.selected_gear() == self.gear => self.next(Stage::Settle),
-            Stage::Gears if !shifting && car.drivetrain.rpm > self.shift => {
+            Stage::Gears if !shifting && car.drivetrain.gear > 0 => {
+                // Up as soon as the next gear lands at the pull's run-in (the last shift
+                // goes straight into the pull).
                 let gear = car.drivetrain.gear + 1;
-                car.drivetrain.shift_to(engine, gear);
+                let next = engine.rpm_in(gear, self.omega);
+                if next >= self.start - RUN_IN || car.drivetrain.rpm > self.shift {
+                    car.drivetrain.shift_to(engine, gear);
+                }
             }
-            Stage::Settle if car.drivetrain.gear == self.gear && rpm <= self.start - RUN_IN => {
-                self.next(Stage::Pull);
-            }
+            Stage::Settle if car.drivetrain.gear == self.gear => self.next(Stage::Pull),
             Stage::Pull if rpm < self.start => self.last = (self.omega, self.clock),
             Stage::Pull => {
                 let next = self.start + SAMPLE_RPM * self.samples.len() as f32;
@@ -228,14 +235,15 @@ impl Rollers {
             self.broke = car.drivetrain.engine.damage.failures(cylinders);
         }
 
-        // The car on the rollers: full throttle while warming up and pulling, the brake
-        // holding the rollers back while settling and coasting.
+        // The car on the rollers: part throttle up through the gears and full throttle
+        // pulling, the brake holding the rollers back after the pull.
         let throttle = match self.stage {
-            Stage::Gears | Stage::Pull => 1.0,
+            Stage::Gears => WARM_UP_THROTTLE,
+            Stage::Pull => 1.0,
             _ => 0.0,
         };
         let brake = match self.stage {
-            Stage::Settle | Stage::Coast | Stage::Done => self.inertia * ROLLER_BRAKE / self.radius,
+            Stage::Coast | Stage::Done => self.inertia * ROLLER_BRAKE / self.radius,
             _ => 0.0,
         };
         let engine = &car.setup.engine;
@@ -310,18 +318,35 @@ mod tests {
         let (mut car, mut rollers) = on_rollers(3);
         let fuel = car.fuel.litres();
         let mut gears = Vec::new();
-        let mut time = 0.0;
+        let (mut time, mut top_warm_up, mut shifting, mut pull_from) = (0.0, 0.0, 0.0, None);
         while rollers.stage != Stage::Done && time < 300.0 {
             rollers.step(&mut car, STEP);
             time += STEP;
             let gear = car.drivetrain.gear;
-            if rollers.stage == Stage::Gears && gear > 0 && gears.last() != Some(&gear) {
-                gears.push(car.drivetrain.gear);
+            match rollers.stage {
+                Stage::Gears => {
+                    if gear > 0 && gears.last() != Some(&gear) {
+                        gears.push(gear);
+                    }
+                    top_warm_up = f32::max(top_warm_up, car.drivetrain.rpm);
+                }
+                Stage::Settle => shifting += STEP,
+                Stage::Pull if pull_from.is_none() => pull_from = Some(car.drivetrain.rpm),
+                _ => {}
             }
         }
         assert_eq!(rollers.stage, Stage::Done);
-        assert!(time < 60.0, "took {time} s");
+        assert!(time < 45.0, "took {time} s");
         assert_eq!(gears, [1, 2, 3]);
+        // Each gear only revved as far as the next one needs, and the pull starts as soon
+        // as fourth is in, just below where it samples.
+        assert!(top_warm_up < 3500.0, "{top_warm_up} rpm warming up");
+        assert!(shifting < 0.5, "{shifting} s shifting into fourth");
+        let pull_from = pull_from.unwrap();
+        assert!(
+            (1500.0..2000.0).contains(&pull_from),
+            "pulls from {pull_from} rpm"
+        );
         assert!(car.fuel.litres() < fuel);
         assert!(rollers.broke.is_empty());
         let samples = &rollers.samples;
@@ -360,5 +385,29 @@ mod tests {
             .map(Sample::wheel_hp)
             .fold(0.0, f32::max);
         assert!(wheel < 0.88 * crank, "{wheel} whp of {crank} hp");
+    }
+
+    #[test]
+    fn every_car_gets_through_a_run() {
+        for chassis in 0..crate::chassis::CHASSIS.len() {
+            let (mut car, mut rollers) = on_rollers(chassis);
+            let name = car.setup.name;
+            let mut time = 0.0;
+            let mut warm_up = 0.0;
+            while rollers.stage != Stage::Done && time < 120.0 {
+                rollers.step(&mut car, STEP);
+                time += STEP;
+                if rollers.stage == Stage::Gears {
+                    warm_up += STEP;
+                }
+            }
+            assert_eq!(rollers.stage, Stage::Done, "{name}");
+            assert!(warm_up < 15.0, "{name}: {warm_up} s through the gears");
+            assert!(time < 60.0, "{name}: {time} s");
+            let limit = car.setup.engine.build.ecu.rev_limit;
+            let last = rollers.samples.last().expect(name).rpm;
+            assert!(last > limit - 250.0, "{name}: up to {last} rpm");
+            assert!(rollers.broke.is_empty(), "{name}: {:?}", rollers.broke);
+        }
     }
 }

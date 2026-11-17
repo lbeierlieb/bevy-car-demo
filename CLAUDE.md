@@ -159,7 +159,9 @@ pay/time/prices as made up here, one save slot, traffic on.
   the screen drawn with egui over the projected quad, results with `dyno::chart` (shared
   with F5), runs saved in the career (`run` … `endrun`). `rollers.rs`: the simulation, an
   inertia dyno (rollers = the car's mass at the tires), the car's own `Drivetrain` with
-  manual shifts, 6 % gear loss (10 % AWD), 1.2 % rolling; wheel power = roller inertia ×
+  manual shifts (user's wish: up through the gears on 40 % throttle, each gear revved
+  only until the next lands at the pull's run-in, 300 rpm below the 2000 rpm start; the
+  pull starts as soon as fourth is in, no braking down), 6 % gear loss (10 % AWD), 1.2 % rolling; wheel power = roller inertia ×
   acceleration × speed between 100 rpm samples, so ~18 % is lost (incl. spinning up
   engine and wheels). Blocked with a job or in the dealer's car. Parking at home and
   driving out of the garage are `OnTransition`s (not OnExit/OnEnter of Driving), since
