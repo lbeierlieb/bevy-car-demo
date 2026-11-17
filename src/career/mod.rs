@@ -8,6 +8,7 @@
 pub mod catalog;
 mod garage;
 mod hud;
+mod jobs;
 mod menus;
 mod places;
 mod save;
@@ -49,6 +50,7 @@ impl Plugin for CareerPlugin {
                 hud::HudPlugin,
                 garage::GaragePlugin,
                 tow::TowPlugin,
+                jobs::JobsPlugin,
             ))
             .add_systems(OnEnter(Scene::Driving), drive_out)
             .add_systems(OnExit(Scene::Driving), park);

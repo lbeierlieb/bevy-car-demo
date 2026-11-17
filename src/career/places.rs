@@ -74,7 +74,7 @@ pub struct Places {
 }
 
 impl Places {
-    fn new(terrain: &Terrain) -> Self {
+    pub fn new(terrain: &Terrain) -> Self {
         let list = PLACES
             .iter()
             .map(|&(kind, name, [x, z])| {

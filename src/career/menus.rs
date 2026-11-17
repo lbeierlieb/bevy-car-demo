@@ -7,10 +7,14 @@ use bevy_egui::egui::{self, Align2, RichText};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::hud::News;
-use super::places::{AtPlace, PlaceKind, Places};
+use super::jobs::{Jobs, take_offer};
+use super::places::{AtPlace, Place, PlaceKind, Places};
 use super::{Career, Scene, euros};
 use crate::car::{ActiveCar, Car};
 use crate::physics::fuel::Fuel;
+use crate::terrain::Terrain;
+
+const WARNING: egui::Color32 = egui::Color32::from_rgb(255, 170, 60);
 
 /// What fuel costs (€ per litre).
 pub const FUEL_PRICE: f64 = 1.85;
@@ -19,7 +23,7 @@ pub struct MenusPlugin;
 
 impl Plugin for MenusPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.add_systems(Update, forget_offers).add_systems(
             EguiPrimaryContextPass,
             place_window.run_if(in_state(Scene::Driving)),
         );
@@ -34,6 +38,11 @@ pub struct Visit<'w, 's> {
     pub active: Res<'w, ActiveCar>,
     pub cars: Query<'w, 's, &'static mut Car>,
     pub scene: ResMut<'w, NextState<Scene>>,
+    pub jobs: ResMut<'w, Jobs>,
+    pub terrain: Res<'w, Terrain>,
+    pub commands: Commands<'w, 's>,
+    pub meshes: ResMut<'w, Assets<Mesh>>,
+    pub materials: ResMut<'w, Assets<StandardMaterial>>,
 }
 
 impl Visit<'_, '_> {
@@ -41,6 +50,24 @@ impl Visit<'_, '_> {
     pub fn car(&mut self) -> Option<Mut<'_, Car>> {
         let active = self.active.0;
         self.cars.iter_mut().find(|car| car.index == active)
+    }
+
+    /// Starts the job on offer.
+    fn take_job(&mut self) {
+        take_offer(
+            &mut self.jobs,
+            &mut self.commands,
+            &mut self.meshes,
+            &mut self.materials,
+            &self.terrain,
+        );
+    }
+}
+
+/// A job on offer is only on offer while the player is at the place.
+fn forget_offers(at: Res<AtPlace>, mut jobs: ResMut<Jobs>) {
+    if at.is_changed() {
+        jobs.offer = None;
     }
 }
 
@@ -62,6 +89,7 @@ fn place_window(
         .show(contexts.ctx_mut()?, |ui| match place.kind {
             PlaceKind::Home => home(ui, &mut visit),
             PlaceKind::GasStation => gas_station(ui, &mut visit),
+            PlaceKind::Pizzeria => pizzeria(ui, &mut visit, place),
             _ => {
                 ui.label("Closed for now.");
             }
@@ -71,6 +99,9 @@ fn place_window(
 
 fn home(ui: &mut egui::Ui, visit: &mut Visit) {
     ui.label("Home: the garage, with mom's car and yours.");
+    if visit.jobs.current.is_some() {
+        ui.colored_label(WARNING, "Going in now gives up the job you're on.");
+    }
     if ui.button("Into the garage").clicked() {
         visit.scene.set(Scene::Garage);
     }
@@ -111,4 +142,41 @@ fn gas_station(ui: &mut egui::Ui, visit: &mut Visit) {
             .news
             .say(format!("Filled up {litres:.1} L for {}.", euros(price)));
     }
+}
+
+/// A pizza to deliver: where to, what it pays, how long there is.
+fn pizzeria(ui: &mut egui::Ui, visit: &mut Visit, place: &Place) {
+    if visit.jobs.current.is_some() {
+        ui.label("Deliver the one you have first!");
+        return;
+    }
+    if visit.jobs.offer.is_none() {
+        visit.jobs.offer = visit.jobs.pizza(&visit.terrain, place.at);
+    }
+    let Some(offer) = &visit.jobs.offer else {
+        ui.label("No orders right now.");
+        return;
+    };
+    let time = offer.time.unwrap_or(0.0);
+    ui.label(format!(
+        "A pizza for a house {:.1} km away (as the crow flies).",
+        offer.distance / 1000.0
+    ));
+    ui.label(format!(
+        "{} for it, more with a tip if it's there within {}:{:02} and in one piece.",
+        euros(offer.pay),
+        (time / 60.0) as u32,
+        time as u32 % 60
+    ));
+    ui.horizontal(|ui| {
+        if ui.button(RichText::new("Take it").strong()).clicked() {
+            visit.take_job();
+            visit
+                .news
+                .say("Off you go! The house is marked on the map (K).");
+        }
+        if ui.button("Another order").clicked() {
+            visit.jobs.offer = None;
+        }
+    });
 }

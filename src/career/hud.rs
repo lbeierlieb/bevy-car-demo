@@ -88,7 +88,8 @@ fn hud(
                         );
                     });
                     for line in &status.0 {
-                        ui.label(RichText::new(line).color(Color32::WHITE));
+                        let text = RichText::new(line).color(Color32::WHITE);
+                        ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
                     }
                     let keys = match scene.get() {
                         Scene::Driving => "K map   T tow home   C view   F2 settings",
