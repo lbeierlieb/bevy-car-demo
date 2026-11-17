@@ -1,6 +1,7 @@
 //! The garage at home, a scene of its own: a workshop with a bay for mom's car and one for
 //! each of the player's, parts on the shelves, and a window to pick the car to take out,
-//! repair it and fit parts. The room is built deep under home (out of sight of the map),
+//! repair it and fit parts (see `fitting`; engine parts on the cylinder side need the
+//! engine's maps baked, a few seconds, before the car can go out). The room is built deep under home (out of sight of the map),
 //! while the player is in it.
 
 use std::f32::consts::FRAC_PI_2;
@@ -10,13 +11,17 @@ use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, RichText};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
+use super::fitting::{self, finish_engine};
 use super::hud::News;
 use super::places::PlaceKind;
 use super::{Career, GARAGE_BAYS, OwnedCar, Places, Ride, Scene, Wear, catalog, euros};
 use crate::camera::{ChaseCamera, OrbitInput};
+use crate::physics::engine::families::Version;
+use crate::physics::engine::parts::{Parts, SLOTS};
 use crate::physics::tire::COMPOUNDS;
 use crate::terrain::Terrain;
 use crate::visuals::spawn_model;
+use crate::workshop::{self, Work};
 
 /// How far under the ground at home the room is (m).
 const DEPTH: f32 = 200.0;
@@ -42,6 +47,7 @@ impl Plugin for GaragePlugin {
                 (enter, build_room, show_cars).chain(),
             )
             .add_systems(OnExit(Scene::Garage), leave)
+            .add_systems(Update, bake)
             .add_systems(Update, (pick, look).chain().run_if(in_state(Scene::Garage)))
             .add_systems(
                 EguiPrimaryContextPass,
@@ -68,6 +74,17 @@ struct GarageView {
     /// Where the camera is, eased towards where it should be.
     eye: Option<Vec3>,
     status: String,
+    /// An engine being put together: its maps baking.
+    job: Option<EngineJob>,
+}
+
+/// One of the player's cars (by its place) getting an engine of `parts`, which had
+/// `before` when the job started.
+struct EngineJob {
+    car: usize,
+    before: Parts,
+    parts: Parts,
+    work: Work,
 }
 
 impl GarageView {
@@ -75,6 +92,11 @@ impl GarageView {
     fn bay_at(&self, bay: usize) -> Vec3 {
         let first = -BAY_WIDTH * (GARAGE_BAYS as f32) / 2.0;
         self.origin + Vec3::new(first + BAY_WIDTH * bay as f32, 0.0, BAY_Z)
+    }
+
+    /// Whether `ride`'s engine is being put together.
+    fn busy(&self, ride: Ride) -> bool {
+        matches!((ride, &self.job), (Ride::Own(i), Some(job)) if job.car == i)
     }
 
     fn ride(&self) -> Ride {
@@ -327,10 +349,38 @@ fn pick(
     }
 }
 
+/// Out in the picked car, unless its engine is still in pieces.
 fn drive_out(view: &GarageView, career: &mut Career, scene: &mut NextState<Scene>) {
+    if view.busy(view.ride()) {
+        return;
+    }
     career.ride = view.ride();
     career.save();
     scene.set(Scene::Driving);
+}
+
+/// Moves the engine job on; when the maps are baked, the engine goes into the car.
+fn bake(mut view: ResMut<GarageView>, mut career: ResMut<Career>, mut news: ResMut<News>) {
+    let Some(job) = &mut view.job else {
+        return;
+    };
+    let Some(baked) = job.work.poll() else {
+        return;
+    };
+    let job = view.job.take().expect("a job");
+    let Some(maps) = baked else {
+        news.say("Putting the engine together failed.");
+        return;
+    };
+    workshop::keep(&job.parts.hardware(), &maps);
+    match career.cars.get_mut(job.car) {
+        Some(car) if car.setup.engine.parts == job.before => {
+            finish_engine(car, job.parts, maps);
+            news.say(format!("The {}'s engine is back together.", car.setup.name));
+            career.save();
+        }
+        _ => {}
+    }
 }
 
 /// The camera on the picked car, from in front and a little to the side; dragging swings
@@ -407,6 +457,8 @@ fn window(
                     if let Some(status) = status {
                         view.status = status;
                     }
+                    ui.separator();
+                    shelf(ui, &mut career, i, &mut view, &mut news);
                 }
             }
             if career.cars.is_empty() && career.pizzas + career.deliveries == 0 {
@@ -420,8 +472,12 @@ fn window(
                 ui.label(&view.status);
             }
             ui.separator();
+            let busy = view.busy(view.ride());
             out = ui
-                .button(RichText::new("Drive out  (Enter)").strong())
+                .add_enabled(
+                    !busy,
+                    egui::Button::new(RichText::new("Drive out  (Enter)").strong()),
+                )
                 .clicked();
         });
     if out {
@@ -518,4 +574,119 @@ fn bay_labels(
         painter.galley(rect.min + egui::vec2(4.0, 4.0), galley, color);
     }
     Ok(())
+}
+
+/// What's fitted that the factory didn't, and the parts on the shelf to fit.
+fn shelf(ui: &mut egui::Ui, career: &mut Career, i: usize, view: &mut GarageView, news: &mut News) {
+    let car = &career.cars[i];
+    let build = &car.setup.build;
+    let parts = &car.setup.engine.parts;
+    let factory = Version::parts(parts.family, parts.version);
+    let mut fitted: Vec<String> = (0..SLOTS.len())
+        .filter(|&slot| parts.chosen[slot] != factory.chosen[slot])
+        .map(|slot| {
+            fitting::name(super::Item::Engine {
+                slot,
+                part: parts.chosen[slot],
+            })
+        })
+        .collect();
+    let stock = crate::chassis::CarBuild::factory(build.chassis);
+    for (differs, item) in [
+        (build.tires != stock.tires, super::Item::Tires(build.tires)),
+        (
+            build.clutch != stock.clutch,
+            super::Item::Clutch(build.clutch),
+        ),
+        (
+            build.suspension != stock.suspension,
+            super::Item::Suspension(build.suspension),
+        ),
+        (
+            build.gearbox != stock.gearbox,
+            super::Item::Gearbox(build.gearbox),
+        ),
+        (
+            build.limited_slip && !stock.limited_slip,
+            super::Item::LimitedSlip,
+        ),
+        (parts.ecu != factory.ecu, super::Item::Ecu(parts.ecu)),
+    ] {
+        if differs {
+            fitted.push(fitting::name(item));
+        }
+    }
+    if fitted.is_empty() {
+        ui.label("As it left the factory.");
+    } else {
+        ui.label(format!("Fitted: {}", fitted.join(", ")));
+    }
+    if let Some(job) = view.job.as_ref().filter(|job| job.car == i) {
+        ui.add(
+            egui::ProgressBar::new(job.work.progress())
+                .desired_width(250.0)
+                .text("Putting the engine together…"),
+        );
+        return;
+    }
+    if career.items.is_empty() {
+        ui.label(RichText::new("No parts on the shelf: order them at Motor Parts Thiel.").weak());
+        return;
+    }
+    ui.strong("On the shelf");
+    let mut fit = None;
+    egui::ScrollArea::vertical()
+        .max_height(180.0)
+        .show(ui, |ui| {
+            for (k, &item) in career.items.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui.small_button("Fit").clicked() {
+                        fit = Some(k);
+                    }
+                    ui.label(fitting::name(item));
+                });
+            }
+        });
+    ui.label(
+        RichText::new(
+            "The ECU keeps its tune when parts change: the engine may run rich or lean \
+             until it's tuned for them.",
+        )
+        .weak()
+        .small(),
+    );
+    let Some(k) = fit else {
+        return;
+    };
+    let item = career.items[k];
+    match fitting::fit(&mut career.cars[i], item) {
+        Err(why) => view.status = why,
+        Ok(fitted) => {
+            career.items.remove(k);
+            career.items.extend(fitted.off);
+            view.status = format!("{} fitted.", fitting::name(item));
+            if let Some(parts) = fitted.engine {
+                let car = &mut career.cars[i];
+                let hardware = parts.hardware();
+                match workshop::at_hand(&hardware) {
+                    Some(maps) => finish_engine(car, parts, maps),
+                    None => {
+                        view.job = Some(EngineJob {
+                            car: i,
+                            before: car.setup.engine.parts.clone(),
+                            parts,
+                            work: Work::start(&hardware),
+                        });
+                        view.status = "The engine is apart: putting it together…".to_string();
+                    }
+                }
+            }
+            news.say(view.status.clone());
+            // With the engine apart, the career is saved once it's back together (until
+            // then, the save still has the part on the shelf).
+            if view.job.is_none() {
+                career.save();
+            }
+        }
+    }
 }

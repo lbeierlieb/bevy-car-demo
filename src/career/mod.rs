@@ -6,6 +6,7 @@
 //! local storage on the web) whenever something changes hands and in the garage.
 
 pub mod catalog;
+mod fitting;
 mod garage;
 mod hud;
 mod jobs;

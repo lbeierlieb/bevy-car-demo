@@ -98,9 +98,7 @@ fn place_window(
             PlaceKind::GasStation => gas_station(ui, &mut visit),
             PlaceKind::Pizzeria => pizzeria(ui, &mut visit, place),
             PlaceKind::Dealer => dealer(ui, &mut visit, &places),
-            _ => {
-                ui.label("Closed for now.");
-            }
+            PlaceKind::PartsShop => parts_shop(ui, &mut visit),
         });
     Ok(())
 }
@@ -342,6 +340,44 @@ fn for_sale(ui: &mut egui::Ui, visit: &mut Visit) {
     {
         visit.news.say(format!(
             "Sold for {}. Mom dropped off her car for you.",
+            euros(price)
+        ));
+    }
+}
+
+/// Parts to order: they wait on the shelf in the garage at home.
+fn parts_shop(ui: &mut egui::Ui, visit: &mut Visit) {
+    ui.label("Whatever you order waits on the shelf in your garage at home.");
+    let mut order = None;
+    egui::ScrollArea::vertical()
+        .max_height(330.0)
+        .show(ui, |ui| {
+            for (kind, items) in super::catalog::stock() {
+                ui.collapsing(kind, |ui| {
+                    for item in items {
+                        let Some(price) = super::catalog::price(item) else {
+                            continue;
+                        };
+                        ui.horizontal(|ui| {
+                            let afford = visit.career.money >= price;
+                            let button = egui::Button::new(euros(price));
+                            if ui.add_enabled(afford, button).clicked() {
+                                order = Some((item, price));
+                            }
+                            ui.label(super::fitting::name(item));
+                        });
+                    }
+                });
+            }
+        });
+    if let Some((item, price)) = order
+        && visit.career.pay(price)
+    {
+        visit.career.items.push(item);
+        visit.career.save();
+        let name = super::fitting::name(item);
+        visit.news.say(format!(
+            "Ordered: {name} ({}). It's in your garage.",
             euros(price)
         ));
     }

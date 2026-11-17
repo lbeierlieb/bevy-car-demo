@@ -100,6 +100,41 @@ pub fn repair(damage: &Damage, cylinders: usize) -> f64 {
     if parts < 1.0 { 0.0 } else { parts + LABOUR }
 }
 
+/// What the parts shop sells, by kind.
+pub fn stock() -> Vec<(String, Vec<Item>)> {
+    let mut shelves = vec![
+        (
+            "Tires".to_string(),
+            (0..TIRES.len()).map(Item::Tires).collect(),
+        ),
+        (
+            "Clutches".to_string(),
+            (0..CLUTCHES.len()).map(Item::Clutch).collect(),
+        ),
+        (
+            "Suspension".to_string(),
+            (0..SUSPENSIONS.len()).map(Item::Suspension).collect(),
+        ),
+        ("Differentials".to_string(), vec![Item::LimitedSlip]),
+        (
+            "Gearboxes".to_string(),
+            (0..GEARBOXES.len()).map(Item::Gearbox).collect(),
+        ),
+        (
+            "ECUs".to_string(),
+            EcuModel::ALL.into_iter().map(Item::Ecu).collect(),
+        ),
+    ];
+    for (slot, kind) in SLOTS.iter().enumerate() {
+        let items = (0..kind.parts.len())
+            .map(|part| Item::Engine { slot, part })
+            .filter(|&item| price(item).is_some())
+            .collect();
+        shelves.push((format!("Engine: {}", kind.name.to_lowercase()), items));
+    }
+    shelves
+}
+
 /// What a part costs at the parts shop, if it's sold at all.
 pub fn price(item: Item) -> Option<f64> {
     let price = match item {
