@@ -15,6 +15,20 @@ repo, so everything worth knowing between sessions belongs here.
 - Respect "stop"/"wait" messages immediately.
 - Keep this file up to date when something worth knowing next session comes up.
 
+## Two apps (agreed with the user)
+
+The game is a library (`src/lib.rs`) and two apps, each the list of plugins it adds to
+the shared `CorePlugin` (world, simulation, input, driving, visuals, camera, HUD, map,
+sound, egui): the **sandbox** (`src/main.rs`: stock coupé, R reset, map teleport, gizmos,
+F2 panel, F3–F6 tools) and the **career** (`src/bin/career.rs`, `cargo run --bin
+career`). Keep it that way: no mode flags; something only one app has is a plugin of its
+own (e.g. `car::ResetPlugin`, `map::TeleportPlugin`, `ui::PanelPlugin`), and shared
+pieces are public functions (e.g. `ui::WheelPanel::show`, `workshop`).
+
+- rustfmt: the repo wasn't rustfmt-clean before the split (the flake's fmt check fails
+  on old code). Format only files you create (`rustfmt --edition 2024 <file>`); running
+  it on `lib.rs` or a `mod.rs` follows the `mod` lines into every child file.
+
 ## Sandbox workflow
 
 - Build inside the dev shell with a separate target dir (the shared `target/` broke):
@@ -50,12 +64,18 @@ repo, so everything worth knowing between sessions belongs here.
 ### Screenshots (`tools/dev`)
 
 `tools/dev/unstrip.sh` copies `tools/dev/shot.rs` into `src/` and hooks it into
-`main.rs`; `tools/dev/shot.sh out.png [frames] [keys]` renders headless and saves a
-screenshot; `tools/dev/strip.sh` removes the hook. Always run `strip.sh` and check that
-`grep -c shot src/main.rs` prints 0 before committing. Keys are pressed from a third of
+`lib.rs` and both apps; `tools/dev/shot.sh out.png [frames] [keys]` renders headless and
+saves a screenshot (`BIN=career` for the career); `tools/dev/strip.sh` removes the hook.
+Always run `strip.sh` and check that `grep -c shot src/lib.rs src/main.rs
+src/bin/career.rs` prints 0 for each before committing. Keys are pressed from a third of
 the frames until the shot (`k` opens the map, `2` hides the panel, `3` the ECU window,
 `4` the garage, `5` the dyno, `6` the showroom, `f` shows the gizmos (off by default), `c` the driver's view),
-so clicks on a window must come after that. The F3–F6 windows are always there,
+so clicks on a window must come after that (`T` presses the key T, `E` Enter).
+`PLACE="x,z,frame"` puts the driven car on the road nearest that map point, e.g. on a
+career place (building positions in `career/places.rs`). For the career, give it its
+own config dir (`XDG_CONFIG_HOME=<scratch>/cfg`) so the save is fresh or can be edited
+(e.g. `money 50000`); it starts in the garage, whose "Drive out" button is at (72, 371)
+without own cars. The F3–F6 windows are always there,
 collapsed to title bars stacked in the top right (`ui::tool_window`, agreed with the user
 so they can be found); their keys (or a click) expand them, and the bars hide with the
 panel (`2`). `CLICK="x,y,frame;x,y,frame…"` clicks into the
@@ -96,6 +116,42 @@ changed settings back there). Gotchas found with it:
 - gilrs flips Y axes (ABS_Y reads inverted); binding by moving the control handles it.
 - The kernel only reports changes, and gilrs doesn't read initial state: a control
   counts once it has moved.
+
+## Career (first version, agreed with the user)
+
+`src/career/`, all under `CareerPlugin`. Agreed design: start with €500 and mom's car
+(Halden saloon, silver, always full and repaired); home near the spawn with a garage that
+is its own 3D scene (not an overlay); gas station; pizzeria (deliveries to random
+houses); car dealer (buy cars: the car you came in goes home; deliver cars: you get a car,
+deliver it, are teleported back and can do another or drive on in your own; trust grows
+with deliveries, drops with hits, unlocks nicer cars and pay); parts shop (parts wait in
+the garage to be fitted); towing home for money, or "mommy please fetch me". Physical
+part changes never modify the ECU (tuning later). Defaults the user accepted: 3 own bays,
+pay/time/prices as made up here, one save slot, traffic on.
+
+- `mod.rs`: `Career` (money, trust 0–100, own cars as `OwnedCar { setup, wear, age }`,
+  `items` on the shelf, `ride` = Mom or Own(i), counts), `Scene` state (Garage, the
+  start, or Driving). Car indices: `PLAYER` 0, `DELIVERY` 1 (`ActiveCar` says which is
+  driven; the player's car waits at the dealer during a delivery). OnEnter(Driving)
+  spawns the ride at home's marker; OnExit(Driving) keeps its wear, despawns every car
+  and saves. `Wear` is engine damage, fuel and treads.
+- `places.rs`: the places by OSM building middle (home, gas station, pizzeria, dealer,
+  parts shop: picked from the map by me, easy to move), a marker on the road edge in front
+  (`kerb`), `AtPlace` when stopped on one (radius 3.5 m, < 1.5 m/s), labels, `MapMarks`.
+- `menus.rs`: the place windows (`Visit` system param). `jobs.rs`: pizzas (0.4–3 km,
+  €10 + €9/km, 30 % tip on time and clean, a minute + 130 s/km), car deliveries
+  (1.5–5.5 km, four `TIERS` by trust, pay × 1–5, −15 % per hit, trust +5 clean, −3 per
+  hit, −8 undelivered), hits = `Car::knocks` (speed change from house/tree/car contacts)
+  over 1.2 m/s, destination marker, map mark, arrow. `lot.rs`: 7 cars for sale (5 used,
+  2 cheap runabouts), restocked after jobs, dealer sells at worth × 1.2, buys at × 0.8.
+  `catalog.rs`: all prices and `worth`. `fitting.rs`: fitting shelf parts; engine parts
+  return new `Parts`, baked in the garage via `workshop::Work` if not cached.
+  `garage.rs`: the room (200 m under home), bays, models (`visuals::spawn_model`),
+  camera, repairs, shelf. `tow.rs`: T. `hud.rs`: money/trust/status, `News` messages,
+  F2 settings. `save.rs`: the text save (`~/.config/car-sim/career/career.save`).
+- Not done yet: tuning in the career (ECU window), engine swaps, selling parts, body
+  damage, prices tuned by playing, right of way for traffic near markers, garage door
+  animation, a proper pizzeria/dealer building look (they're the OSM houses).
 
 ## Wheel support
 
