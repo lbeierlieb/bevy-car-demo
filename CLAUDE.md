@@ -71,6 +71,8 @@ src/bin/career.rs` prints 0 for each before committing. Keys are pressed from a 
 the frames until the shot (`k` opens the map, `2` hides the panel, `3` the ECU window,
 `4` the garage, `5` the dyno, `6` the showroom, `f` shows the gizmos (off by default), `c` the driver's view),
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
+The keys `3`–`6` don't expand the F3–F6 windows in screenshots (seen 2026-11-17, also on
+the code before the app split): click their title bars instead.
 `PLACE="x,z,frame"` puts the driven car on the road nearest that map point, e.g. on a
 career place (building positions in `career/places.rs`). For the career, give it its
 own config dir (`XDG_CONFIG_HOME=<scratch>/cfg`) so the save is fresh or can be edited
