@@ -83,7 +83,7 @@ fn drive_out(
     mut active: ResMut<ActiveCar>,
 ) {
     let home = places.of(PlaceKind::Home);
-    spawn_ride(&mut commands, &career, &terrain, home.at, home.yaw, true);
+    spawn_ride(&mut commands, &career, &terrain, home.at, home.yaw);
     active.0 = PLAYER;
 }
 
@@ -278,12 +278,10 @@ pub fn spawn_ride(
     terrain: &Terrain,
     at: Vec2,
     yaw: f32,
-    automatic: bool,
 ) {
     let (setup, wear) = career.ride_car();
     let mut car = Car::spawn_at(PLAYER, setup, terrain, at.x, at.y, yaw);
     wear.put_on(&mut car);
-    car.drivetrain.automatic = automatic;
     commands.spawn((Transform::from_translation(car.body.position), car));
 }
 

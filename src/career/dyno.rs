@@ -130,7 +130,6 @@ struct DynoView {
     /// Time not yet stepped (s), and whether the finished run is on file.
     owed: f32,
     filed: bool,
-    automatic: bool,
     swing: f32,
     eye: Option<Vec3>,
     /// How far the view has moved over for the results (0..1).
@@ -163,11 +162,9 @@ fn enter(
     let shop = places.of(PlaceKind::Dyno).at;
     let ground = terrain.sample(shop.x, shop.y).0;
     view.origin = Vec3::new(shop.x, ground - DEPTH, shop.y);
-    view.automatic = true;
     for (entity, car) in &cars {
         if car.index == PLAYER {
             career.bring_home(car);
-            view.automatic = car.drivetrain.automatic;
         }
         commands.entity(entity).despawn();
     }
@@ -227,7 +224,6 @@ fn leave(
         &terrain,
         shop.at,
         shop.yaw,
-        view.automatic,
     );
     active.0 = PLAYER;
     career.save();

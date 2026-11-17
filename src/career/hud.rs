@@ -7,7 +7,7 @@ use bevy_egui::egui::{self, Align2, Color32, FontId, RichText};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::{Career, Scene, euros};
-use crate::car::{ActiveCar, Car, DriverAids};
+use crate::car::DriverAids;
 use crate::ui::{WheelPanel, credits};
 
 /// How long a message stays up (s).
@@ -133,30 +133,19 @@ fn news(mut contexts: EguiContexts, news: Res<News>) -> Result {
 fn settings(
     mut contexts: EguiContexts,
     mut open: ResMut<Settings>,
-    active: Res<ActiveCar>,
-    mut cars: Query<&mut Car>,
     mut wheel_panel: WheelPanel,
     mut aids: ResMut<DriverAids>,
 ) -> Result {
     if !open.0 {
         return Ok(());
     }
-    let mut automatic = None;
     egui::Window::new("Settings  (F2)")
         .open(&mut open.0)
         .default_pos([12.0, 160.0])
         .default_width(360.0)
         .vscroll(true)
         .show(contexts.ctx_mut()?, |ui| {
-            if let Some(car) = cars.iter().find(|car| car.index == active.0) {
-                ui.horizontal(|ui| {
-                    let mut on = car.drivetrain.automatic;
-                    if ui.checkbox(&mut on, "Automatic (G)").changed() {
-                        automatic = Some(on);
-                    }
-                    aids.show(ui);
-                });
-            }
+            ui.horizontal(|ui| aids.show(ui));
             ui.collapsing("Wheel and pedals", |ui| wheel_panel.show(ui));
             ui.collapsing("Controls", |ui| {
                 ui.label("W/S or arrows: throttle, brake    A/D: steer");
@@ -168,10 +157,5 @@ fn settings(
             });
             credits(ui);
         });
-    if let Some(on) = automatic {
-        for mut car in &mut cars {
-            car.drivetrain.automatic = on;
-        }
-    }
     Ok(())
 }

@@ -133,11 +133,10 @@ pub fn buy(
         car.body.position.xz(),
         crate::car::heading(car.body.rotation),
     );
-    let automatic = car.drivetrain.automatic;
     commands.entity(entity).despawn();
     career.cars.push(bought);
     career.ride = Ride::Own(career.cars.len() - 1);
-    spawn_ride(commands, career, terrain, at, yaw, automatic);
+    spawn_ride(commands, career, terrain, at, yaw);
     active.0 = PLAYER;
     career.save();
     Some(name)
@@ -165,9 +164,8 @@ pub fn sell(
         car.body.position.xz(),
         crate::car::heading(car.body.rotation),
     );
-    let automatic = car.drivetrain.automatic;
     commands.entity(entity).despawn();
-    spawn_ride(commands, career, terrain, at, yaw, automatic);
+    spawn_ride(commands, career, terrain, at, yaw);
     active.0 = PLAYER;
     career.save();
     Some(price)

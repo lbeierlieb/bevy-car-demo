@@ -156,7 +156,6 @@ fn panel(
     mut traffic: ResMut<Traffic>,
     mut aids: ResMut<DriverAids>,
 ) -> Result {
-    let mut automatic = None;
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
         return Ok(());
     };
@@ -178,10 +177,6 @@ fn panel(
             };
             ui.horizontal(|ui| {
                 ui.label(format!("Gear {gear}    {:.0} rpm", car.drivetrain.rpm));
-                let mut on = car.drivetrain.automatic;
-                if ui.checkbox(&mut on, "Automatic (G)").changed() {
-                    automatic = Some(on);
-                }
                 aids.show(ui);
             });
             engine(ui, &car);
@@ -212,11 +207,6 @@ fn panel(
             });
             credits(ui);
         });
-    if let Some(on) = automatic {
-        for mut car in &mut cars {
-            car.drivetrain.automatic = on;
-        }
-    }
     Ok(())
 }
 

@@ -280,7 +280,8 @@ catalogue entries, and things like swap subframes are named so they can be price
   it full throttle on the keyboard just spins the wheels of anything strong. It eases
   the throttle to hold the driven wheels at a slip ratio of 0.12, at a rate that follows
   the slip smoothly (no chopping; turbos still hunt a little with the boost lag).
-  Traction control and ABS are the driver's, not the car's (asked for by the user):
+  The gearbox mode (automatic/manual), traction control and ABS are the driver's, not
+  the car's (asked for by the user):
   `car::DriverAids`, saved in `~/.config/car-sim/settings/aids.cfg`, handed to the
   active car by `drive`.
 - **ABS** (asked for by the user, on by default, next to traction control): per wheel,

@@ -458,7 +458,6 @@ pub fn start_delivery(
     terrain: &Terrain,
     places: &Places,
     job: &Job,
-    automatic: bool,
     active: &mut ActiveCar,
 ) {
     let JobKind::Delivery {
@@ -480,8 +479,7 @@ pub fn start_delivery(
     let parts = build.factory_engine(option);
     let engine = EngineBuild::new(parts.hardware(), parts.ecu);
     let setup = CarSetup::new(build, parts, engine);
-    let mut car = Car::spawn_at(DELIVERY, setup, terrain, at.x, at.y, dealer.yaw);
-    car.drivetrain.automatic = automatic;
+    let car = Car::spawn_at(DELIVERY, setup, terrain, at.x, at.y, dealer.yaw);
     commands.spawn((Transform::from_translation(car.body.position), car));
     active.0 = DELIVERY;
 }

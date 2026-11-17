@@ -251,13 +251,11 @@ fn dealer(ui: &mut egui::Ui, visit: &mut Visit, places: &Places) {
         }
     });
     if let Some(i) = take {
-        let automatic = visit.car().is_none_or(|car| car.drivetrain.automatic);
         start_delivery(
             &mut visit.commands,
             &visit.terrain,
             places,
             &visit.jobs.offers[i],
-            automatic,
             &mut visit.active,
         );
         visit.take_job(i);

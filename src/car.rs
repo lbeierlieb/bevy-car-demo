@@ -421,7 +421,7 @@ impl Car {
     }
 
     /// Takes the driver's settings (gearbox mode, traction control, ABS) from the car this
-    /// one replaces. (The active car gets its aids from `DriverAids` anyway.)
+    /// one replaces. (The active car gets them from `DriverAids` anyway.)
     pub fn keep_settings(&mut self, old: &Car) {
         self.drivetrain.automatic = old.drivetrain.automatic;
         self.traction_control = old.traction_control;
@@ -458,10 +458,12 @@ const SETTINGS: Folder = Folder {
     web_prefix: "car-sim-settings:",
 };
 
-/// The driver's choice of aids, the same for every car and kept between runs
-/// (`~/.config/car-sim/settings/aids.cfg`): `drive` hands it to the active car.
+/// The driver's choice of aids (gearbox mode, traction control, ABS), the same for every
+/// car and kept between runs (`~/.config/car-sim/settings/aids.cfg`): `drive` hands it
+/// to the active car.
 #[derive(Resource, Clone, Copy, PartialEq, Debug)]
 pub struct DriverAids {
+    pub automatic: bool,
     pub traction_control: bool,
     pub abs: bool,
 }
@@ -469,6 +471,7 @@ pub struct DriverAids {
 impl Default for DriverAids {
     fn default() -> Self {
         Self {
+            automatic: false,
             traction_control: true,
             abs: true,
         }
@@ -491,8 +494,8 @@ impl DriverAids {
 
     fn to_text(self) -> String {
         format!(
-            "traction_control {}\nabs {}\n",
-            self.traction_control, self.abs
+            "automatic {}\ntraction_control {}\nabs {}\n",
+            self.automatic, self.traction_control, self.abs
         )
     }
 
@@ -505,6 +508,7 @@ impl DriverAids {
                 continue;
             };
             match key {
+                "automatic" => aids.automatic = on,
                 "traction_control" => aids.traction_control = on,
                 "abs" => aids.abs = on,
                 _ => {}
@@ -513,9 +517,10 @@ impl DriverAids {
         aids
     }
 
-    /// Checkboxes for both; saves a change.
+    /// Checkboxes for them all; saves a change.
     pub fn show(&mut self, ui: &mut bevy_egui::egui::Ui) {
         let before = *self;
+        ui.checkbox(&mut self.automatic, "Automatic (G)");
         ui.checkbox(&mut self.traction_control, "Traction control")
             .on_hover_text("Eases the throttle while a driven wheel spins");
         ui.checkbox(&mut self.abs, "ABS")
@@ -571,13 +576,15 @@ pub fn drive(
     wheel: Res<WheelInput>,
     time: Res<Time>,
     active: Res<ActiveCar>,
-    aids: Res<DriverAids>,
+    mut aids: ResMut<DriverAids>,
     mut cars: Query<&mut Car>,
 ) {
     let pressed = |a, b| keys.pressed(a) || keys.pressed(b);
-    let toggle_automatic = keys.just_pressed(KeyCode::KeyG);
+    if keys.just_pressed(KeyCode::KeyG) {
+        aids.automatic ^= true;
+        aids.save();
+    }
     for mut car in &mut cars {
-        car.drivetrain.automatic ^= toggle_automatic;
         if car.index != active.0 {
             car.controls = Controls {
                 brake: 1.0,
@@ -586,6 +593,7 @@ pub fn drive(
             };
             continue;
         }
+        car.drivetrain.automatic = aids.automatic;
         car.traction_control = aids.traction_control;
         car.abs = aids.abs;
         let speed = car.forward_speed();
@@ -694,13 +702,14 @@ mod tests {
     #[test]
     fn driver_aids_read_back() {
         let aids = DriverAids {
+            automatic: true,
             traction_control: false,
             abs: true,
         };
         assert_eq!(DriverAids::from_text(&aids.to_text()), aids);
         // Broken lines keep the defaults.
         assert_eq!(
-            DriverAids::from_text("abs maybe\ntraction_control false\n"),
+            DriverAids::from_text("abs maybe\ntraction_control false\nautomatic true\n"),
             aids
         );
     }
