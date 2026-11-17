@@ -1,7 +1,8 @@
 //! An engine dyno (F5): the active car's engine on a brake that holds its speed, swept at
 //! full throttle from low rpm up to the rev limiter, plotting torque and power at the
 //! crank. It runs a copy of the engine (as built, tuned and worn), so a run doesn't wear
-//! the car's; the last few runs stay on the plot to compare.
+//! the car's; the last few runs stay on the plot to compare. Its chart (`chart`) is shared
+//! with the career's dyno.
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, pos2};
@@ -23,7 +24,7 @@ const SAMPLE_RPM: f32 = 100.0;
 /// Air the dyno cell's fan blows through the radiator (m/s).
 const FAN_AIRSPEED: f32 = 20.0;
 /// Watts per mechanical horsepower.
-const HORSEPOWER: f32 = 745.7;
+pub const HORSEPOWER: f32 = 745.7;
 /// Runs kept on the plot, newest first, and their colours.
 const KEPT: usize = 4;
 const COLORS: [Color32; KEPT] = [
@@ -242,16 +243,75 @@ fn controls(ui: &mut egui::Ui, dyno: &mut Dyno, car: &Car) {
     ));
 }
 
+/// Torque (solid) and power (dashed) of the runs against rpm, the newest on top, with its
+/// readings under the pointer.
+fn plot(ui: &mut egui::Ui, dyno: &Dyno) {
+    let live = dyno.sweep.as_ref().map(|sweep| &sweep.curve);
+    let curves = live.into_iter().chain(dyno.runs.iter());
+    let mut lines = Vec::new();
+    for (k, (curve, color)) in curves.zip(COLORS).enumerate() {
+        let newest = k == 0;
+        lines.push(Line {
+            points: curve.points.clone(),
+            axis: Axis::Torque,
+            color,
+            dashed: false,
+            name: newest.then_some(""),
+        });
+        lines.push(Line {
+            points: (curve.points.iter())
+                .map(|&(rpm, torque)| (rpm, horsepower(rpm, torque.max(0.0))))
+                .collect(),
+            axis: Axis::Power,
+            color,
+            dashed: true,
+            name: newest.then_some(""),
+        });
+    }
+    chart(ui, &lines, 320.0);
+}
+
+/// Which scale a line on a chart is read against: torque on the left, power on the right.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Axis {
+    Torque,
+    Power,
+}
+
+impl Axis {
+    fn unit(self) -> &'static str {
+        match self {
+            Axis::Torque => "N·m",
+            Axis::Power => "hp",
+        }
+    }
+}
+
+/// A line on a chart: values (N·m or hp, by `axis`) by rpm. Lines with a `name` show their
+/// value under the pointer, named so.
+pub struct Line<'a> {
+    pub points: Vec<(f32, f32)>,
+    pub axis: Axis,
+    pub color: Color32,
+    pub dashed: bool,
+    pub name: Option<&'a str>,
+}
+
+/// Power (hp) at `rpm` with `torque` (N·m).
+pub fn horsepower(rpm: f32, torque: f32) -> f32 {
+    Curve::power(rpm, torque) / HORSEPOWER
+}
+
 /// Rounds `value` up to a whole number of `step`s.
 fn ceil_to(value: f32, step: f32) -> f32 {
     (value / step).ceil() * step
 }
 
-/// Torque (solid) and power (dashed) against rpm, the newest run on top, with the
-/// readings under the pointer.
-fn plot(ui: &mut egui::Ui, dyno: &Dyno) {
+/// Torque and power against rpm, `height` high: the first line on top, with the named
+/// lines' readings under the pointer.
+pub fn chart(ui: &mut egui::Ui, lines: &[Line], height: f32) {
     let width = ui.available_width().max(400.0);
-    let (response, painter) = ui.allocate_painter(egui::vec2(width, 320.0), Sense::hover());
+    let (response, painter) = ui.allocate_painter(egui::vec2(width, height), Sense::hover());
     let frame = response.rect;
     let area = Rect::from_min_max(
         frame.min + egui::vec2(48.0, 10.0),
@@ -260,26 +320,23 @@ fn plot(ui: &mut egui::Ui, dyno: &Dyno) {
     let text = ui.visuals().text_color();
     let grid = ui.visuals().widgets.noninteractive.bg_stroke.color;
 
-    let live = dyno.sweep.as_ref().map(|sweep| &sweep.curve);
-    let curves: Vec<(&Curve, Color32)> = live
-        .map(|curve| (curve, COLORS[0]))
-        .into_iter()
-        .chain(
-            dyno.runs
-                .iter()
-                .zip(COLORS.iter().copied().skip(live.is_some() as usize)),
-        )
-        .collect();
-    let points = curves.iter().flat_map(|(curve, _)| curve.points.iter());
     let (mut top_rpm, mut top_torque, mut top_power) = (7000.0f32, 100.0f32, 100.0f32);
-    for &(rpm, torque) in points {
-        top_rpm = top_rpm.max(rpm);
-        top_torque = top_torque.max(torque);
-        top_power = top_power.max(Curve::power(rpm, torque) / HORSEPOWER);
+    for line in lines {
+        for &(rpm, value) in &line.points {
+            top_rpm = top_rpm.max(rpm);
+            match line.axis {
+                Axis::Torque => top_torque = top_torque.max(value),
+                Axis::Power => top_power = top_power.max(value),
+            }
+        }
     }
     let top_rpm = ceil_to(top_rpm, 1000.0);
     let top_torque = ceil_to(top_torque * 1.05, 50.0);
     let top_power = ceil_to(top_power * 1.05, 50.0);
+    let top = |axis: Axis| match axis {
+        Axis::Torque => top_torque,
+        Axis::Power => top_power,
+    };
     let x = |rpm: f32| egui::lerp(area.left()..=area.right(), rpm / top_rpm);
     let y = |value: f32, top: f32| egui::lerp(area.bottom()..=area.top(), value / top);
 
@@ -335,51 +392,49 @@ fn plot(ui: &mut egui::Ui, dyno: &Dyno) {
         text,
     );
 
-    for (curve, color) in curves.iter().rev() {
-        let torque: Vec<Pos2> = curve
+    for line in lines.iter().rev() {
+        let points: Vec<Pos2> = line
             .points
             .iter()
-            .map(|&(rpm, t)| pos2(x(rpm), y(t.max(0.0), top_torque)))
+            .map(|&(rpm, value)| pos2(x(rpm), y(value.max(0.0), top(line.axis))))
             .collect();
-        let power: Vec<Pos2> = curve
-            .points
-            .iter()
-            .map(|&(rpm, t)| {
-                pos2(
-                    x(rpm),
-                    y(Curve::power(rpm, t.max(0.0)) / HORSEPOWER, top_power),
-                )
-            })
-            .collect();
-        painter.add(Shape::line(torque, Stroke::new(2.0, *color)));
-        painter.extend(Shape::dashed_line(
-            &power,
-            Stroke::new(2.0, *color),
-            6.0,
-            4.0,
-        ));
+        let stroke = Stroke::new(2.0, line.color);
+        if line.dashed {
+            painter.extend(Shape::dashed_line(&points, stroke, 6.0, 4.0));
+        } else {
+            painter.add(Shape::line(points, stroke));
+        }
     }
 
-    // Readings of the newest run under the pointer.
-    let (Some(pointer), Some((curve, color))) = (response.hover_pos(), curves.first()) else {
+    // Readings of the named lines under the pointer.
+    let Some(pointer) = response.hover_pos().filter(|p| area.contains(*p)) else {
         return;
     };
-    if !area.contains(pointer) {
-        return;
-    }
     let rpm = (pointer.x - area.left()) / area.width() * top_rpm;
-    let Some(&(at, torque)) = curve
-        .points
-        .iter()
-        .min_by(|a, b| (a.0 - rpm).abs().total_cmp(&(b.0 - rpm).abs()))
-    else {
-        return;
-    };
-    painter.vline(x(at), area.y_range(), Stroke::new(1.0, text));
-    let power = Curve::power(at, torque) / HORSEPOWER;
-    let reading = format!("{at:.0} rpm\n{torque:.0} N·m\n{power:.0} hp");
-    let place = pos2(x(at) + 6.0, area.top() + 4.0);
-    painter.text(place, Align2::LEFT_TOP, reading, font, *color);
+    let mut place = pos2(x(rpm) + 6.0, area.top() + 4.0);
+    let mut shown = false;
+    for line in lines {
+        let Some(name) = line.name else {
+            continue;
+        };
+        let Some(&(at, value)) = line
+            .points
+            .iter()
+            .min_by(|a, b| (a.0 - rpm).abs().total_cmp(&(b.0 - rpm).abs()))
+        else {
+            continue;
+        };
+        if !shown {
+            painter.vline(x(at), area.y_range(), Stroke::new(1.0, text));
+            let reading = format!("{at:.0} rpm");
+            painter.text(place, Align2::LEFT_TOP, reading, font.clone(), text);
+            place.y += 14.0;
+            shown = true;
+        }
+        let reading = format!("{name}{value:.0} {}", line.axis.unit());
+        painter.text(place, Align2::LEFT_TOP, reading, font.clone(), line.color);
+        place.y += 14.0;
+    }
 }
 
 /// Each run's peaks, in its colour.
