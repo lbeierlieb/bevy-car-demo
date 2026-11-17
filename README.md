@@ -100,6 +100,11 @@ in:
 - **Motor Parts Thiel**: order parts; they wait on the shelf in your garage, where you
   fit them. Fitting parts never changes the ECU's tune.
 - **Gas station**: fill up.
+- **Rollwerk Dyno**: an all-wheel chassis dyno in a scene of its own (€120 a run). The
+  car warms up through the gears, then pulls in fourth to the rev limiter while a screen
+  shows the power at the wheels. Afterwards: power and torque at the wheels and at the
+  crank, and every run on file, to name, take notes on and compare. A run wears the car
+  like driving does (Space skips to the results).
 - **Home**: into the garage, a scene of its own: pick the car to take out (A/D, Enter),
   repair its engine, put on new tires, fit parts.
 
@@ -193,7 +198,7 @@ tire grip force, cyan for roll centres.
 | `src/chassis.rs` | The cars: chassis, gearboxes, and which engine fits where |
 | `src/body.rs` | Procedural low-poly car bodies |
 | `src/lib.rs`, `src/main.rs`, `src/bin/career.rs` | The shared `CorePlugin`; the sandbox and career apps |
-| `src/career/` | Career: places, jobs, the garage scene, dealer, parts shop, towing, save |
+| `src/career/` | Career: places, jobs, the garage and dyno scenes, dealer, parts shop, towing, save |
 | `src/garage.rs` | Sandbox showroom and garage |
 | `src/workshop.rs` | Baking engine maps in the background, and their cache |
 | `src/sim.rs` | Multi-rate loop, controls to wheel torques, driving tests |

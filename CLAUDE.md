@@ -77,7 +77,9 @@ the code before the app split): click their title bars instead.
 career place (building positions in `career/places.rs`). For the career, give it its
 own config dir (`XDG_CONFIG_HOME=<scratch>/cfg`) so the save is fresh or can be edited
 (e.g. `money 50000`); it starts in the garage, whose "Drive out" button is at (72, 371)
-without own cars. The F3–F6 windows are always there,
+without own cars. The dyno: `CLICK="72,371,10;544,680,45;640,687,90"
+PLACE="-2601,-3784,25"`, 120 frames: out of the garage, onto the rollers, skipped to the
+results ("The runs on file" button at (678, 680)). The F3–F6 windows are always there,
 collapsed to title bars stacked in the top right (`ui::tool_window`, agreed with the user
 so they can be found); their keys (or a click) expand them, and the bars hide with the
 panel (`2`). `CLICK="x,y,frame;x,y,frame…"` clicks into the
@@ -149,7 +151,19 @@ pay/time/prices as made up here, one save slot, traffic on.
   `catalog.rs`: all prices and `worth`. `fitting.rs`: fitting shelf parts; engine parts
   return new `Parts`, baked in the garage via `workshop::Work` if not cached.
   `garage.rs`: the room (200 m under home), bays, models (`visuals::spawn_model`),
-  camera, repairs, shelf. `tow.rs`: T. `hud.rs`: money/trust/status, `News` messages,
+  camera, repairs, shelf. `dyno.rs` (asked for by the user: own scene, all-wheel dyno,
+  through the gears to fourth then a full pull, a screen with wheel hp, then wheel and
+  crank power and torque, all past runs with names and notes): `Scene::Dyno`, the room
+  200 m under the shop (the player's car is despawned and run as a `Car` held in
+  `DynoView`, respawned at the shop on leaving; engine heard via `audio::EngineAudio`),
+  the screen drawn with egui over the projected quad, results with `dyno::chart` (shared
+  with F5), runs saved in the career (`run` … `endrun`). `rollers.rs`: the simulation, an
+  inertia dyno (rollers = the car's mass at the tires), the car's own `Drivetrain` with
+  manual shifts, 6 % gear loss (10 % AWD), 1.2 % rolling; wheel power = roller inertia ×
+  acceleration × speed between 100 rpm samples, so ~18 % is lost (incl. spinning up
+  engine and wheels). Blocked with a job or in the dealer's car. Parking at home and
+  driving out of the garage are `OnTransition`s (not OnExit/OnEnter of Driving), since
+  Driving ↔ Dyno must not park. `tow.rs`: T. `hud.rs`: money/trust/status, `News` messages,
   F2 settings. `save.rs`: the text save (`~/.config/car-sim/career/career.save`).
 - Not done yet: tuning in the career (ECU window), engine swaps, selling parts, body
   damage, prices tuned by playing, right of way for traffic near markers, garage door
