@@ -640,6 +640,9 @@ fn update_engine(
         engine.muted = !engine.muted;
     }
     let Some(car) = cars.iter().find(|car| car.index == active.0) else {
+        // No car to drive (yet): silence.
+        let (rpm, load, _) = engine.targets.get();
+        engine.targets.set(rpm, load, 0.0);
         return;
     };
     let drivetrain = &car.drivetrain;

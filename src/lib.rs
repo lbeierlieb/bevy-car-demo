@@ -49,8 +49,9 @@ pub fn default_plugins(title: &str) -> impl PluginGroup {
 }
 
 /// What every app has: the map (terrain, scenery, houses and trees to hit, traffic), the
-/// simulation, wheel and keyboard input, the cars and their looks, the camera, the HUD, the
-/// map view, sound, and the egui setup the windows share.
+/// simulation, wheel and keyboard input, driving a car and its looks, the camera, the HUD,
+/// the map view, sound, and the egui setup the windows share. Which car there is, is up
+/// to the app.
 pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
@@ -74,14 +75,11 @@ impl Plugin for CorePlugin {
                 visuals::VisualsPlugin,
                 cockpit::CockpitPlugin,
                 camera::CameraPlugin,
-                debug::DebugPlugin,
                 ui::UiPlugin,
-                ecu_ui::EcuUiPlugin,
                 hud::HudPlugin,
                 map::MapPlugin,
                 audio::AudioPlugin,
             ))
-            .add_plugins((garage::GaragePlugin, dyno::DynoPlugin))
             .add_systems(Startup, setup);
     }
 }

@@ -1,4 +1,6 @@
-//! Telemetry and live setup tuning for the active car.
+//! The windows' common ground (egui, keeping its input from the game, the tool windows),
+//! and the sandbox's panel (F2): telemetry and live setup tuning for the active car. The
+//! panel's wheel settings are public for other apps' windows.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -19,17 +21,27 @@ use crate::wheel_base::{ForceFeedback, WheelBase};
 
 const CORNER_NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
 
+/// egui, with its input kept from the game.
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
             .add_systems(Startup, absorb_input)
-            .add_systems(PreUpdate, block_orbit)
-            .add_systems(
-                EguiPrimaryContextPass,
-                panel.run_if(|view: Res<DebugView>| view.ui),
-            );
+            .add_systems(PreUpdate, block_orbit);
+    }
+}
+
+/// The sandbox's panel (F2, with `DebugPlugin`): the car's state, telemetry, setup
+/// sliders, the wheel and pedals, and the controls.
+pub struct PanelPlugin;
+
+impl Plugin for PanelPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            EguiPrimaryContextPass,
+            panel.run_if(|view: Res<DebugView>| view.ui),
+        );
     }
 }
 
@@ -105,12 +117,35 @@ fn block_orbit(wants: Res<EguiWantsInput>, mut orbit: ResMut<OrbitInput>) {
 
 /// Everything the wheel section of the panel shows and changes.
 #[derive(SystemParam)]
-struct WheelPanel<'w, 's> {
+pub struct WheelPanel<'w, 's> {
     config: ResMut<'w, WheelConfig>,
     capture: ResMut<'w, Capture>,
     gamepads: Gamepads<'w, 's>,
     base: Res<'w, WheelBase>,
     ffb: ResMut<'w, ForceFeedback>,
+}
+
+impl WheelPanel<'_, '_> {
+    /// The bindings with live values, the wheel's settings and force feedback.
+    pub fn show(&mut self, ui: &mut egui::Ui) {
+        let Self {
+            config,
+            capture,
+            gamepads,
+            base,
+            ffb,
+        } = self;
+        wheel(ui, config, capture, gamepads, base);
+        force_feedback(ui, config, ffb);
+    }
+}
+
+/// Where the map and its heights come from.
+pub fn credits(ui: &mut egui::Ui) {
+    ui.collapsing("Map: Gerach to Rattelsdorf and Baunach, Bavaria", |ui| {
+        ui.label("Map data © OpenStreetMap contributors (ODbL)");
+        ui.label("Elevation: DGM1 © Bayerische Vermessungsverwaltung (CC BY 4.0)");
+    });
 }
 
 fn panel(
@@ -164,17 +199,7 @@ fn panel(
             ui.separator();
             telemetry(ui, &car);
             ui.collapsing("Setup", |ui| setup(ui, &mut car));
-            ui.collapsing("Wheel and pedals", |ui| {
-                let WheelPanel {
-                    config,
-                    capture,
-                    gamepads,
-                    base,
-                    ffb,
-                } = &mut wheel_panel;
-                wheel(ui, config, capture, gamepads, base);
-                force_feedback(ui, config, ffb);
-            });
+            ui.collapsing("Wheel and pedals", |ui| wheel_panel.show(ui));
             ui.collapsing("Controls", |ui| {
                 ui.label("W/S or arrows: throttle, brake");
                 ui.label("Q/E: shift down/up    G: automatic gearbox");
@@ -187,10 +212,7 @@ fn panel(
                 ui.label("Wheel and pedals: bind them under \"Wheel and pedals\"");
                 ui.label("Left-drag: orbit or look around    Scroll: zoom");
             });
-            ui.collapsing("Map: Gerach to Rattelsdorf and Baunach, Bavaria", |ui| {
-                ui.label("Map data © OpenStreetMap contributors (ODbL)");
-                ui.label("Elevation: DGM1 © Bayerische Vermessungsverwaltung (CC BY 4.0)");
-            });
+            credits(ui);
         });
     if let Some(on) = automatic {
         for mut car in &mut cars {
@@ -334,7 +356,7 @@ fn force_feedback(ui: &mut egui::Ui, config: &mut WheelConfig, ffb: &mut ForceFe
 }
 
 /// Manifold pressure, mixture, spark, torque and exhaust temperature.
-fn engine(ui: &mut egui::Ui, car: &Car) {
+pub fn engine(ui: &mut egui::Ui, car: &Car) {
     let (drivetrain, build) = (&car.drivetrain, &car.setup.engine.build);
     let engine = &drivetrain.engine;
     let cycle = engine.cycle(build, drivetrain.rpm);
@@ -374,7 +396,7 @@ fn engine(ui: &mut egui::Ui, car: &Car) {
 }
 
 /// What's in the tank, what the engine burns, and how far it goes on what's left.
-fn fuel(ui: &mut egui::Ui, car: &Car) {
+pub fn fuel(ui: &mut egui::Ui, car: &Car) {
     let (fuel, tank) = (&car.fuel, &car.setup.tank);
     let per_hour = car.drivetrain.engine.fuel_flow / fuel::DENSITY * 3600.0;
     let speed = car.body.velocity.length();

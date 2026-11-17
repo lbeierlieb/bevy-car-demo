@@ -446,17 +446,37 @@ pub fn heading(rotation: Quat) -> f32 {
 #[derive(Resource, Default)]
 pub struct ActiveCar(pub usize);
 
+/// Driving the active car, and its entity following the simulation. Which cars there are
+/// is up to the app.
 pub struct CarPlugin;
 
 impl Plugin for CarPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActiveCar>()
-            .add_systems(Startup, spawn_cars)
-            .add_systems(Update, (drive, reset_car, sync_transforms).chain());
+            .add_systems(Update, (drive, sync_transforms).chain());
     }
 }
 
-fn spawn_cars(mut commands: Commands, terrain: Res<Terrain>) {
+/// Starts in the coupé with its base engine, on the road at the map's spawn point.
+pub struct DefaultCarPlugin;
+
+impl Plugin for DefaultCarPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, spawn_default_car);
+    }
+}
+
+/// R (or the wheel's reset button) puts the active car back on its wheels where it is, as
+/// new: refuelled to the fuel load, fresh tires, a repaired engine.
+pub struct ResetPlugin;
+
+impl Plugin for ResetPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, reset_car.after(drive).before(sync_transforms));
+    }
+}
+
+fn spawn_default_car(mut commands: Commands, terrain: Res<Terrain>) {
     // On the road at the spawn point.
     let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
     let car = Car::spawn_at(0, CarSetup::default(), &terrain, p.x, p.y, yaw);
@@ -465,7 +485,7 @@ fn spawn_cars(mut commands: Commands, terrain: Res<Terrain>) {
 
 /// Keyboard and wheel to controls for the active car; any other car holds all brakes. G
 /// switches between manual and automatic gearboxes, I starts a stalled engine.
-fn drive(
+pub fn drive(
     keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<WheelInput>,
     time: Res<Time>,

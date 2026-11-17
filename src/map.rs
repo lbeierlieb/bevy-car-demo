@@ -1,7 +1,8 @@
 //! Map of the whole area (K, or a wheel button bound to "Map"): the ground in its land use
 //! colours as one image, with roads, houses and the cars drawn on top. Drag to move,
-//! scroll to zoom, click to put the car on the nearest road there. Driving goes on
-//! underneath.
+//! scroll to zoom. A click is a `MapClicked` message for whatever the app does with it
+//! (the sandbox's `TeleportPlugin` puts the car on the nearest road there). Driving goes
+//! on underneath.
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Rect, Shape, Stroke, pos2, vec2};
@@ -34,6 +35,7 @@ pub struct MapPlugin;
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MapView>()
+            .add_message::<MapClicked>()
             .add_systems(Update, toggle)
             .add_systems(
                 EguiPrimaryContextPass,
@@ -42,9 +44,27 @@ impl Plugin for MapPlugin {
     }
 }
 
+/// Clicking puts the car being driven on the nearest road there.
+pub struct TeleportPlugin;
+
+impl Plugin for TeleportPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, |mut view: ResMut<MapView>| {
+            view.click = Some("drive from there");
+        })
+        .add_systems(Update, teleport);
+    }
+}
+
+/// A click on the map, at this map point (x east, z south).
+#[derive(Message)]
+pub struct MapClicked(pub Vec2);
+
 #[derive(Resource, Default)]
 pub struct MapView {
     pub open: bool,
+    /// What a click does, for the help line; clicks only count with one.
+    pub click: Option<&'static str>,
     /// Map point in the middle of the screen (x east, z south).
     center: Vec2,
     /// Metres per screen point; 0 until the map is first drawn, which fits the whole map.
@@ -136,8 +156,9 @@ fn draw(
     mut contexts: EguiContexts,
     terrain: Res<Terrain>,
     active: Res<ActiveCar>,
-    mut cars: Query<&mut Car>,
+    cars: Query<&Car>,
     mut view: ResMut<MapView>,
+    mut clicks: MessageWriter<MapClicked>,
 ) -> Result {
     let view = &mut *view;
     let ctx = contexts.ctx_mut()?;
@@ -174,8 +195,7 @@ fn draw(
             view.center = view.center.clamp(-half, half);
 
             let (center, scale) = (view.center, view.scale);
-            let clicked = response
-                .clicked()
+            let clicked = (response.clicked() && view.click.is_some())
                 .then(|| response.interact_pointer_pos())
                 .flatten()
                 .map(|p| {
@@ -251,12 +271,13 @@ fn draw(
             }
 
             scale_bar(&painter, screen, scale);
-            let help = "Drag: move    Scroll: zoom    Click: drive from there    K / Esc: close";
+            let click = view.click.map_or(String::new(), |c| format!("Click: {c}    "));
+            let help = format!("Drag: move    Scroll: zoom    {click}K / Esc: close");
             label(
                 &painter,
                 screen.left_bottom() + vec2(12.0, -12.0),
                 Align2::LEFT_BOTTOM,
-                help,
+                &help,
             );
             label(
                 &painter,
@@ -267,11 +288,25 @@ fn draw(
             clicked
         })
         .inner;
-    // A click puts the car being driven on the nearest road, facing as close to its
-    // current heading as the road allows, and closes the map.
-    if let Some(target) = clicked
-        && let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0)
-    {
+    if let Some(target) = clicked {
+        clicks.write(MapClicked(target));
+    }
+    Ok(())
+}
+
+/// A click puts the car being driven on the nearest road, facing as close to its current
+/// heading as the road allows, and closes the map.
+fn teleport(
+    mut clicks: MessageReader<MapClicked>,
+    terrain: Res<Terrain>,
+    active: Res<ActiveCar>,
+    mut cars: Query<&mut Car>,
+    mut view: ResMut<MapView>,
+) {
+    for &MapClicked(target) in clicks.read() {
+        let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
+            continue;
+        };
         let heading = (car.body.rotation * Vec3::NEG_Z).xz();
         if let Some((spot, yaw)) = terrain.drive_spot(target, heading)
             && spot.distance(target) < PLACE_WITHIN
@@ -280,7 +315,6 @@ fn draw(
             view.open = false;
         }
     }
-    Ok(())
 }
 
 /// A bar of a round length (1, 2 or 5 times a power of ten metres) about 120 points long.
