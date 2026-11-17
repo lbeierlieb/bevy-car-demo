@@ -25,7 +25,8 @@ use std::time::Duration;
 use bevy::audio::{AddAudioSource, ChannelCount, Decodable, SampleRate, Source};
 use bevy::prelude::*;
 
-use crate::car::{ActiveCar, Car};
+use crate::car::{ActiveCar, Car, CarSetup};
+use crate::physics::drivetrain::Drivetrain;
 use crate::physics::engine::families::{Layout, relative_size};
 use crate::physics::engine::hardware::EngineHardware;
 
@@ -201,9 +202,14 @@ impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_audio_source::<EngineSynth>()
             .add_systems(Startup, start_engine)
-            .add_systems(Update, update_engine);
+            .add_systems(Update, update_engine.in_set(EngineSound));
     }
 }
+
+/// Where the engine sound is set from the active car. A system that has another engine
+/// heard (a car on a dyno) runs after it and calls `EngineAudio::hear`.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EngineSound;
 
 /// Targets shared between the game and the audio thread (f32 bits in atomics).
 #[derive(Default)]
@@ -613,10 +619,29 @@ impl Source for EngineVoice {
     }
 }
 
+/// The engine sound: what the audio thread plays, and whether it's muted (M).
 #[derive(Resource)]
-struct Engine {
+pub struct EngineAudio {
     targets: Arc<Targets>,
     muted: bool,
+}
+
+impl EngineAudio {
+    /// Plays the engine of a car with `setup` running as `drivetrain` says.
+    pub fn hear(&self, setup: &CarSetup, drivetrain: &Drivetrain) {
+        let volume = if self.muted || !drivetrain.running {
+            0.0
+        } else {
+            1.0
+        };
+        self.targets.set(drivetrain.rpm, drivetrain.load, volume);
+        self.targets.set_layout(setup.engine.parts.family().layout);
+        let hardware = &setup.engine.build.hardware;
+        self.targets.set_exhaust(ExhaustSound::of(hardware));
+        let speed = drivetrain.engine.turbo_speed;
+        let share = hardware.turbo.map_or(0.0, |turbo| speed / turbo.max_speed());
+        self.targets.set_turbo(speed / TAU, share);
+    }
 }
 
 fn start_engine(mut commands: Commands, mut synths: ResMut<Assets<EngineSynth>>) {
@@ -624,7 +649,7 @@ fn start_engine(mut commands: Commands, mut synths: ResMut<Assets<EngineSynth>>)
     commands.spawn(AudioPlayer(synths.add(EngineSynth {
         targets: targets.clone(),
     })));
-    commands.insert_resource(Engine {
+    commands.insert_resource(EngineAudio {
         targets,
         muted: false,
     });
@@ -634,7 +659,7 @@ fn update_engine(
     keys: Res<ButtonInput<KeyCode>>,
     active: Res<ActiveCar>,
     cars: Query<&Car>,
-    mut engine: ResMut<Engine>,
+    mut engine: ResMut<EngineAudio>,
 ) {
     if keys.just_pressed(KeyCode::KeyM) {
         engine.muted = !engine.muted;
@@ -645,20 +670,7 @@ fn update_engine(
         engine.targets.set(rpm, load, 0.0);
         return;
     };
-    let drivetrain = &car.drivetrain;
-    let volume = if engine.muted || !drivetrain.running {
-        0.0
-    } else {
-        1.0
-    };
-    engine.targets.set(drivetrain.rpm, drivetrain.load, volume);
-    let layout = car.setup.engine.parts.family().layout;
-    engine.targets.set_layout(layout);
-    let hardware = &car.setup.engine.build.hardware;
-    engine.targets.set_exhaust(ExhaustSound::of(hardware));
-    let speed = drivetrain.engine.turbo_speed;
-    let share = hardware.turbo.map_or(0.0, |turbo| speed / turbo.max_speed());
-    engine.targets.set_turbo(speed / TAU, share);
+    engine.hear(&car.setup, &car.drivetrain);
 }
 
 #[cfg(test)]
