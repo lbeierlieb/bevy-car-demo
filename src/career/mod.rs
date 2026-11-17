@@ -11,6 +11,7 @@ mod hud;
 mod menus;
 mod places;
 mod save;
+mod tow;
 
 use bevy::prelude::*;
 
@@ -47,6 +48,7 @@ impl Plugin for CareerPlugin {
                 menus::MenusPlugin,
                 hud::HudPlugin,
                 garage::GaragePlugin,
+                tow::TowPlugin,
             ))
             .add_systems(OnEnter(Scene::Driving), drive_out)
             .add_systems(OnExit(Scene::Driving), park);
