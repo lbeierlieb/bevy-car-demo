@@ -661,7 +661,14 @@ fn step(
         for mut car in &mut traffic {
             if let Some(contact) = touch(&hull, &car.placed_hull()) {
                 crash(&mut car);
-                collision::resolve(&mut player.body, Some(&mut car.body), &[contact], OBSTACLE, dt);
+                let impulse = collision::resolve(
+                    &mut player.body,
+                    Some(&mut car.body),
+                    &[contact],
+                    OBSTACLE,
+                    dt,
+                );
+                player.knocks += impulse / player.body.mass;
             }
         }
     }

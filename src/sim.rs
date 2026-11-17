@@ -72,7 +72,9 @@ pub fn collide_cars(a: &mut Car, b: &mut Car, dt: f32) {
         return;
     }
     if let Some(contact) = hull_a.contact(&hull_b) {
-        collision::resolve(&mut a.body, Some(&mut b.body), &[contact], OBSTACLE, dt);
+        let impulse = collision::resolve(&mut a.body, Some(&mut b.body), &[contact], OBSTACLE, dt);
+        a.knocks += impulse / a.body.mass;
+        b.knocks += impulse / b.body.mass;
     }
 }
 
@@ -84,6 +86,7 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
         body,
         corners,
         steering_torque,
+        knocks,
         ..
     } = car;
     let h = dt / SUBSTEPS as f32;
@@ -143,7 +146,7 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     collision::resolve(body, None, &contacts, GROUND, dt);
     contacts.clear();
     terrain.obstacles.contacts(&hull, &mut contacts);
-    collision::resolve(body, None, &contacts, OBSTACLE, dt);
+    *knocks += collision::resolve(body, None, &contacts, OBSTACLE, dt) / body.mass;
     body.integrate_position(dt);
 
     // The engine drinks from the tank, and the fuel sloshes with what the car feels.

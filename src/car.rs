@@ -309,6 +309,9 @@ pub struct Car {
     /// The fuel in the tank, and the share of the tank the driver fills it to (on a reset).
     pub fuel: Fuel,
     pub fill: f32,
+    /// How hard the body has hit houses, trees and other cars since this was last taken:
+    /// the speed the knocks changed (m/s), added up.
+    pub knocks: f32,
 }
 
 impl Car {
@@ -348,6 +351,7 @@ impl Car {
             abs_pressure: [1.0; 4],
             fuel,
             fill: 1.0,
+            knocks: 0.0,
         }
         .with_fuel_load()
     }

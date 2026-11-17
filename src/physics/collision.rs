@@ -213,10 +213,11 @@ struct Pending {
 }
 
 /// Resolves `contacts` between `body` and something that doesn't move (the ground, a
-/// house), or `other` body, whose contacts point out of `other` into `body`.
-pub fn resolve(body: &mut RigidBody, mut other: Option<&mut RigidBody>, contacts: &[Contact], surface: Surface, dt: f32) {
+/// house), or `other` body, whose contacts point out of `other` into `body`. Gives the
+/// impulse it took along the normals (N·s).
+pub fn resolve(body: &mut RigidBody, mut other: Option<&mut RigidBody>, contacts: &[Contact], surface: Surface, dt: f32) -> f32 {
     if contacts.is_empty() {
-        return;
+        return 0.0;
     }
     let relative = |a: &RigidBody, b: &Option<&mut RigidBody>, p: Vec3| {
         a.velocity_at(p) - b.as_ref().map_or(Vec3::ZERO, |b| b.velocity_at(p))
@@ -265,6 +266,7 @@ pub fn resolve(body: &mut RigidBody, mut other: Option<&mut RigidBody>, contacts
             }
         }
     }
+    pending.iter().map(|p| p.normal_impulse).sum()
 }
 
 /// How much an impulse along `n` at `point` changes how fast the two bodies part there.
