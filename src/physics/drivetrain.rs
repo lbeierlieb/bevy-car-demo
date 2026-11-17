@@ -273,7 +273,8 @@ impl Drivetrain {
     /// clutch pedal, a gear only goes in while the pedal is pressed; otherwise the box stays
     /// in neutral until it is. Reverse only goes in when (nearly) stopped (`speed` in m/s).
     pub fn select_gate(&mut self, engine: &EngineSetup, gate: i8, speed: f32) {
-        let gate = if gate < 0 && speed.abs() > 2.0 {
+        // Reverse is refused while rolling forward (backing up quickly must keep it).
+        let gate = if gate < 0 && speed > 2.0 {
             0
         } else {
             gate
@@ -684,6 +685,12 @@ mod tests {
         drivetrain.step(&engine, 0.0, Some(1.0), 30.0, true, dt);
         drivetrain.select_gate(&engine, -1, 10.0);
         assert_eq!(drivetrain.selected_gear(), 0);
+        // Stopped, it goes in, and stays in while backing up quickly.
+        drivetrain.select_gate(&engine, -1, 0.0);
+        assert_eq!(drivetrain.gear, -1);
+        drivetrain.step(&engine, 0.0, Some(0.0), -30.0, true, dt);
+        drivetrain.select_gate(&engine, -1, -5.0);
+        assert_eq!(drivetrain.selected_gear(), -1);
         // Without a pedal, the automatic clutch puts the gear in.
         let mut drivetrain = Drivetrain::new(&engine);
         drivetrain.select_gate(&engine, 2, 10.0);
