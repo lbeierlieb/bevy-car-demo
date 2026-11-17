@@ -8,4 +8,4 @@ pkg() { nix build --no-link --print-out-paths "github:NixOS/nixpkgs/$REV#$1"; }
 MESA=$(pkg mesa)
 XVFB=$(pkg xvfb-run)
 export VK_ICD_FILENAMES=$(ls $MESA/share/vulkan/icd.d/lvp_icd*.json | head -1)
-SHOT="$1" FRAMES="${2:-120}" KEYS="$3" nix develop -c $XVFB/bin/xvfb-run -a -s "-screen 0 1280x720x24" env CARGO_TARGET_DIR=/repo/target/sandbox cargo run 2>&1 | grep -vE "^\s*$" | grep -iE "error|panic|warn|^WHEEL" | grep -v "Git tree"
+SHOT="$1" FRAMES="${2:-120}" KEYS="$3" nix develop -c $XVFB/bin/xvfb-run -a -s "-screen 0 1280x720x24" env CARGO_TARGET_DIR=/repo/target/sandbox cargo run --bin "${BIN:-car-sim}" 2>&1 | grep -vE "^\s*$" | grep -iE "error|panic|warn|^WHEEL" | grep -v "Git tree"

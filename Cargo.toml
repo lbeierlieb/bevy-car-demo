@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "Bevy car simulation demo: rigid-body chassis, double A-arm suspension, raycast tires"
+default-run = "car-sim"
 
 [dependencies]
 bevy = { version = "0.20", default-features = false, features = ["3d", "keyboard", "mouse", "bevy_audio", "bevy_gilrs"] }
