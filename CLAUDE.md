@@ -200,7 +200,12 @@ and plays force feedback, both through hid-fanatecff on Linux.
   scaled to the game's range, and force feedback pushes back past either end (full
   force 10° past; stays on with the tire forces switched off).
 - Clutch pedal: engine can stall, ignition restarts it. Without a bound pedal the
-  clutch is automatic and the engine never stalls.
+  clutch is automatic and the engine never stalls. The pedal works like a real one
+  (`drivetrain::ENGAGEMENT`, asked for by the user: it had to be floored and stalled at
+  a slight lift): fully engaged over the top 12 %, apart over the bottom 28 % (and gears
+  go in from there), biting at 55 % with 3 % of the capacity (creeps at idle), rising
+  steeply to the top. On idle alone it pulls away when held around 45–50 % until
+  rolling; with 10 % throttle even a half-second release works (stock coupé, 350 N·m).
 - The automatic gearbox ignores the clutch pedal (automatic clutch, no stalling).
 - H-shifter: with a clutch pedal bound, a gear only goes in with the clutch pressed
   (otherwise neutral). Without a pedal, the automatic clutch shifts. Paddles shift

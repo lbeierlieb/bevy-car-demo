@@ -9,8 +9,9 @@
 //! chassis rate.
 //!
 //! With a clutch pedal, the driver works the clutch instead: it passes up to its capacity
-//! (less the further the pedal is pressed) in the direction it slips, and locks once the
-//! engine and wheels meet. Then the engine can be dragged below idle and stall.
+//! (a share of it by the pedal's travel, `ENGAGEMENT`: free play at both ends, a biting
+//! point) in the direction it slips, and locks once the engine and wheels meet. Then the
+//! engine can be dragged below idle and stall.
 
 use std::f32::consts::PI;
 
@@ -21,8 +22,40 @@ use super::engine::{Engine, EngineBuild};
 const RPM: f32 = 60.0 / (2.0 * PI);
 /// Below this, a running engine stalls (only with a clutch pedal).
 const STALL_RPM: f32 = 400.0;
-/// Clutch pedal travel beyond which a gear change needs no help from the automatic clutch.
-const CLUTCH_IN: f32 = 0.6;
+/// The clutch's engagement, pedal travel (0 released, 1 floored) to the share of its
+/// torque capacity it passes (linear in between). Like a real one, the pedal has free
+/// play at the top (fully engaged) and the bottom (fully apart), and the plates meet at
+/// a biting point a little over halfway down: from there they pass only a little torque,
+/// enough to creep at idle, rising steeply towards the top.
+const ENGAGEMENT: [(f32, f32); 9] = [
+    (0.0, 1.0),
+    (0.12, 1.0),
+    (0.22, 0.6),
+    (0.32, 0.3),
+    (0.4, 0.15),
+    (0.47, 0.075),
+    (BITE, 0.03),
+    (0.64, 0.008),
+    (CLUTCH_APART, 0.0),
+];
+/// Pedal travel at the biting point, and from where the plates are apart.
+const BITE: f32 = 0.55;
+const CLUTCH_APART: f32 = 0.72;
+/// Clutch pedal travel beyond which a gear change needs no help from the automatic clutch:
+/// the plates are apart.
+const CLUTCH_IN: f32 = CLUTCH_APART;
+
+/// Share of the clutch's capacity it passes with the pedal pressed to `travel` (0..1).
+pub fn clutch_engagement(travel: f32) -> f32 {
+    let travel = travel.clamp(0.0, 1.0);
+    match ENGAGEMENT.iter().position(|&(p, _)| p > travel) {
+        Some(i) => {
+            let ((p0, s0), (p1, s1)) = (ENGAGEMENT[i - 1], ENGAGEMENT[i]);
+            s0 + (s1 - s0) * (travel - p0) / (p1 - p0)
+        }
+        None => 0.0,
+    }
+}
 /// Time the automatic stays in a gear before it shifts again (s): just after a shift, the
 /// clutch closing can spin the wheels up for a moment, and that isn't speed to shift on.
 const AUTO_DWELL: f32 = 1.0;
@@ -363,7 +396,7 @@ impl Drivetrain {
         let state = self.engine;
         let engine_torque = move |rpm: f32| state.torque(build, rpm);
         if let Some(travel) = clutch {
-            let capacity = engine.clutch_torque * (1.0 - travel) * self.engaged;
+            let capacity = engine.clutch_torque * clutch_engagement(travel) * self.engaged;
             return self.step_pedal(engine, engine_torque, capacity, ratio, wheel_rpm, dt);
         }
 
@@ -621,6 +654,40 @@ mod tests {
             "rpm {}",
             drivetrain.rpm
         );
+    }
+
+    #[test]
+    fn the_clutch_has_free_play_and_a_biting_point() {
+        assert_eq!(clutch_engagement(0.0), 1.0);
+        assert_eq!(clutch_engagement(0.1), 1.0);
+        assert_eq!(clutch_engagement(CLUTCH_APART), 0.0);
+        assert_eq!(clutch_engagement(1.0), 0.0);
+        let mut last = 1.0;
+        for i in 1..=100 {
+            let share = clutch_engagement(i as f32 / 100.0);
+            assert!(share <= last);
+            last = share;
+        }
+        let engine = EngineSetup::default();
+        // Stalled in first: started with the pedal not quite floored, it keeps running.
+        let mut drivetrain = Drivetrain::new(&engine);
+        drive_with_clutch(&mut drivetrain, &engine, 0.0, |_| 0.0, 1.0);
+        assert!(!drivetrain.running);
+        drivetrain.start(&engine);
+        drive_with_clutch(&mut drivetrain, &engine, 0.0, |_| 0.8, 1.0);
+        assert!(drivetrain.running);
+        // Letting the pedal up a little doesn't stall it or move the car.
+        let speed = drive_with_clutch(&mut drivetrain, &engine, 0.0, |_| 0.75, 2.0);
+        assert!(drivetrain.running && speed < 0.01, "speed {speed}");
+        // Held just past the biting point, the car pulls away on the idle alone.
+        let speed = drive_with_clutch(&mut drivetrain, &engine, 0.0, |_| 0.47, 5.0);
+        assert!(drivetrain.running && speed > 2.0, "speed {speed}");
+        // With a little throttle, letting it out in half a second pulls away too.
+        let mut drivetrain = Drivetrain::new(&engine);
+        drive_with_clutch(&mut drivetrain, &engine, 0.1, |_| 1.0, 1.0);
+        let release = |t: f32| (1.0 - t / 0.5).max(0.0);
+        let speed = drive_with_clutch(&mut drivetrain, &engine, 0.1, release, 4.0);
+        assert!(drivetrain.running && speed > 5.0, "speed {speed}");
     }
 
     #[test]
