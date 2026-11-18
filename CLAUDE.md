@@ -53,7 +53,8 @@ pieces are public functions (e.g. `ui::WheelPanel::show`, `workshop`).
   `sudo sh -c 'echo 2 > /proc/sys/vm/drop_caches'`.
 - Dependency sources (no `~/.cargo/registry`): they're tarballs in the store, e.g.
   `ls -d /nix/store/*cargo-src-egui-0.36*`; unpack into the scratchpad with `tar xzf`.
-- Terrain bake tool: `cd tools/bake; nix develop /repo -c cargo build --release; ./target/release/bake …`.
+- Terrain bake tool: `cd tools/bake; nix develop /repo -c cargo build --release; ./target/release/bake …`
+  (commands in README, "The map and baking it"; a bake takes about 4 minutes).
 - Engine maps of every factory engine (22, see `families.rs`) are baked into
   `src/physics/engine/baked/<code>.maps`. After changing `cycle.rs`, `maps.rs` (outside
   their tests; any edit counts, their text is in the fingerprint) or a factory engine's
@@ -551,6 +552,21 @@ phasing, VTEC-style cam switching).
   switching cam 13 s on 4 cores).
 - Next ideas: closed loop (wideband sensor), knock sensor/control, boost control,
   launch/anti-lag; damage to the clutch and gearbox; misfire sound for dead cylinders.
+
+## Map editing (agreed with the user, 2026-11-18)
+
+The map is ours: `map/gerach.osm` (imported from OSM once, edited by the user in JOSM,
+committed; `upload='never'`) is the only input of the bake besides the lidar. `bake
+import` adds new areas without touching what's there (deleted elements stay in the file
+as `action='delete'`). Plan, in this order: (1) map file (done), (2) surfaces with their
+own grip and rolling resistance (mostly asphalt, gravel tracks usually in forest, off-road
+deliberately poor: not an off-road game), (3) roads as their own geometry (smoothed
+height profile, crown, embankments cut into the terrain, own 0.5 m mesh, layered ground
+query so bridges have an underpass), (4) a per-road `condition` making small bumps
+(ISO 8608-like) plus placed potholes/patches, (5) nudging roads off building footprints
+and listing the conflicts left, (6) fences (meshes and collision boxes) and trenches
+(terrain cuts), (7) maybe in-game tools for 3D edits. Tags we add for these go into the
+map file and `KEEP` in `tools/bake/src/osm.rs`.
 
 ## Sky
 

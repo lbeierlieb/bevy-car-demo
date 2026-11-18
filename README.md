@@ -216,16 +216,26 @@ tire grip force, cyan for roll centres.
 | `src/map.rs` | Map of the whole area with roads, houses and the cars |
 | `src/cockpit.rs` | Interior for the driver's view: dashboard, steering wheel, gauges |
 
-## Baking another location
+## The map and baking it
 
-`tools/bake` downloads the lidar terrain model (DGM1, 1 km tiles) from the
-Bavarian surveying administration's open data server, and roads, land use and
-buildings from OpenStreetMap with a single Overpass API query. Downloads are cached
-in `tools/bake/cache` (delete it to fetch fresh data), so re-baking is quick and
-doesn't load the servers again. The map frame is aligned with UTM zone 32,
-like the lidar tiles. Elevation is box-filtered onto a 2 m grid and land use is
-rasterised per cell. Bridges are rebuilt as straight decks, because lidar shows
-the ground under them.
+The map's roads, land use and buildings live in `map/gerach.osm`, an OpenStreetMap
+file that is ours: it was imported from OpenStreetMap once and is edited from then on
+in [JOSM](https://josm.openstreetmap.de/) (File → Open, edit, File → Save). The file
+says `upload='never'`, so JOSM won't upload it to OpenStreetMap. Elements keep their
+OSM ids; JOSM gives new ones negative ids and keeps deleted ones in the file, marked
+`action='delete'`, so a later import doesn't bring them back. The bake only reads the
+tags it knows (see `road_style` and `land_class` in `tools/bake/src/main.rs`).
+
+`tools/bake` has two commands. `import` adds what OpenStreetMap has in and around a
+map rectangle to the map file (making it if needed), through a single Overpass API
+query, keeping only the tags the bake might use. Whatever is already in the file stays
+as it was edited, so a new area can be added next to an edited one. The bake reads the
+map file and the lidar terrain model (DGM1, 1 km tiles) from the Bavarian surveying
+administration's open data server. Downloads are cached in `tools/bake/cache`
+(delete it to fetch fresh data), so re-baking doesn't load the servers again. The map
+frame is aligned with UTM zone 32, like the lidar tiles. Elevation is box-filtered
+onto a 2 m grid and land use is rasterised per cell. Bridges are rebuilt as straight
+decks, because lidar shows the ground under them.
 
 Each 96 m chunk is then given a resolution. It gets 2 m within 20 m of a building
 or 10 m of a paved road or parking area, and 4 m within 6 m of a track. Everything
@@ -244,14 +254,17 @@ covers Bavaria, so locations elsewhere would need another elevation source.
 nix develop
 cd tools/bake
 cargo build --release
-./target/release/bake <lat> <lon> <width_m>[x<height_m>] ../../assets/<name>.terrain \
-    [<spawn_lat> <spawn_lon> [<spawn_heading>]]
+./target/release/bake import <lat> <lon> <width_m>[x<height_m>] ../../map/<name>.osm
+./target/release/bake ../../map/<name>.osm <lat> <lon> <width_m>[x<height_m>] \
+    ../../assets/<name>.terrain [<spawn_lat> <spawn_lon> [<spawn_heading>]]
 ```
 
-The map was baked with `50.0118569 10.8455963 9600x8448 ../../assets/gerach.terrain
-50.0305556 10.8046389 180`, which starts the cars on the road nearest that point in
+The map was imported with `import 50.0118569 10.8455963 9600x8448 ../../map/gerach.osm`
+and is baked with `../../map/gerach.osm 50.0118569 10.8455963 9600x8448
+../../assets/gerach.terrain 50.0305556 10.8046389 180` (about 4 minutes), which starts the cars on the road nearest that point in
 Gerach, facing as close to south (180°) as the road allows, one behind the other. To use a different file,
-change `BAKED` in `src/terrain.rs`. The public Overpass server sometimes answers
+change `BAKED` in `src/terrain.rs`. To make the map bigger, import the bigger
+rectangle into the same file and bake with the new size. The public Overpass server sometimes answers
 that it's busy; the tool then retries every minute, up to five times. Only chunks near the camera are on the GPU, so map size is limited by
 the size of the baked file, which is embedded in the program (about 0.65 MB per km²
 with the current mix of resolutions).
@@ -268,7 +281,8 @@ per cell (2–8 m), so area edges are stepped, most visibly in coarse chunks.
 ## Data attribution
 
 - Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright)
-  contributors, available under the Open Database License (ODbL).
+  contributors, available under the Open Database License (ODbL). `map/*.osm` is
+  derived from it (with our edits) and is available under the ODbL too.
 - Elevation: Digitales Geländemodell 1 m (DGM1) © Bayerische
   Vermessungsverwaltung, [geodaten.bayern.de](https://geodaten.bayern.de/opengeodata/),
   licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

@@ -1,19 +1,22 @@
 //! Bakes a rectangle of real-world terrain, land use, roads and buildings into the binary
 //! format that car-sim embeds (see `src/terrain.rs` in the game for the reader).
 //!
-//! Usage: `bake <lat> <lon> <width_m>[x<height_m>] <out_file> [<spawn_lat> <spawn_lon>
-//! [<spawn_heading>]]`, the heading in compass degrees (0 north, 90 east).
+//! Usage (see `USAGE`): `bake import …` adds what OpenStreetMap has around a map rectangle
+//! to the map file (`osm.rs`), which is then ours and edited in JOSM; `bake <map.osm> …`
+//! bakes from the map file, with the spawn heading in compass degrees (0 north, 90 east).
 //!
 //! Elevation is the 1 m lidar terrain model (DGM1) of the Bavarian surveying
-//! administration, so this only works inside Bavaria. Everything else comes from
-//! OpenStreetMap, via the Overpass API. Downloads are cached in `tools/bake/cache`;
-//! delete it to fetch fresh data. The map frame is aligned with UTM zone 32 (x east, z south), the
-//! grid the DGM1 tiles use.
+//! administration, so this only works inside Bavaria. OpenStreetMap is read via the
+//! Overpass API. Downloads are cached in `tools/bake/cache`; delete it to fetch fresh
+//! data. The map frame is aligned with UTM zone 32 (x east, z south), the grid the DGM1
+//! tiles use.
+
+mod osm;
 
 use std::collections::HashMap;
 use std::io::Cursor;
 
-use quick_xml::events::Event;
+use osm::{Osm, Tags};
 
 /// Terrain grid spacing in metres, at full detail.
 const CELL: f64 = 2.0;
@@ -37,7 +40,6 @@ const BLEND: f64 = 6.0;
 
 type Error = Box<dyn std::error::Error>;
 type Point = (f64, f64);
-type Tags = HashMap<String, String>;
 
 /// Land use classes; where polygons overlap, the higher priority wins.
 mod class {
@@ -269,120 +271,51 @@ struct Area {
     rings: Vec<Vec<Point>>,
 }
 
-/// Parsed OSM XML: nodes, and ways and relations with their member refs and tags.
-#[derive(Default)]
-struct Osm {
-    nodes: HashMap<u64, Point>,
-    ways: HashMap<u64, (Vec<u64>, Tags)>,
-    relations: HashMap<u64, (Vec<u64>, Tags)>,
+/// A way's points in local metres (missing or deleted nodes are skipped).
+fn points(osm: &Osm, refs: &[i64], frame: &Frame) -> Vec<Point> {
+    refs.iter()
+        .filter_map(|r| osm.nodes.get(r).filter(|n| !n.meta.deleted()))
+        .map(|n| frame.to_local(n.lat, n.lon))
+        .collect()
 }
 
-impl Osm {
-    fn parse(&mut self, xml: &str, frame: &Frame) -> Result<(), Error> {
-        // The element currently being read: (is relation, id, member refs, tags).
-        let mut current: Option<(bool, u64, Vec<u64>, Tags)> = None;
-        let mut reader = quick_xml::Reader::from_str(xml);
-        loop {
-            let event = reader.read_event()?;
-            let (Event::Start(e) | Event::Empty(e)) = &event else {
-                match event {
-                    Event::End(e) if matches!(e.name().as_ref(), "way" | "relation") => {
-                        if let Some((relation, id, refs, tags)) = current.take() {
-                            if relation {
-                                self.relations.insert(id, (refs, tags));
-                            } else {
-                                self.ways.insert(id, (refs, tags));
-                            }
-                        }
-                    }
-                    Event::Eof => break,
-                    _ => {}
-                }
-                continue;
+/// Joins the member ways of a multipolygon into closed rings; unclosable pieces are dropped.
+fn rings(osm: &Osm, members: &[osm::Member], frame: &Frame) -> Vec<Vec<Point>> {
+    let mut pieces: Vec<Vec<i64>> = members
+        .iter()
+        .filter(|m| m.kind == "way")
+        .filter_map(|m| osm.ways.get(&m.id))
+        .filter(|w| !w.meta.deleted())
+        .map(|w| w.refs.clone())
+        .collect();
+    let mut rings = Vec::new();
+    while let Some(mut ring) = pieces.pop() {
+        while ring.first() != ring.last() {
+            let end = *ring.last().unwrap();
+            let Some(i) = pieces
+                .iter()
+                .position(|p| p.first() == Some(&end) || p.last() == Some(&end))
+            else {
+                break;
             };
-            let attrs: HashMap<String, String> = e
-                .attributes()
-                .filter_map(Result::ok)
-                .map(|a| (a.key.as_ref().to_owned(), a.value.into_owned()))
-                .collect();
-            let attr = |key: &str| attrs.get(key).cloned().unwrap_or_default();
-            match e.name().as_ref() {
-                "node" => {
-                    let (lat, lon) = (attr("lat").parse::<f64>()?, attr("lon").parse::<f64>()?);
-                    self.nodes
-                        .insert(attr("id").parse()?, frame.to_local(lat, lon));
-                }
-                name @ ("way" | "relation") => {
-                    current = Some((
-                        name == "relation",
-                        attr("id").parse()?,
-                        Vec::new(),
-                        HashMap::new(),
-                    ))
-                }
-                "nd" => {
-                    if let Some((_, _, refs, _)) = &mut current {
-                        refs.push(attr("ref").parse()?);
-                    }
-                }
-                "member" if attr("type") == "way" => {
-                    if let Some((_, _, refs, _)) = &mut current {
-                        refs.push(attr("ref").parse()?);
-                    }
-                }
-                "tag" => {
-                    if let Some((_, _, _, tags)) = &mut current {
-                        tags.insert(attr("k"), attr("v"));
-                    }
-                }
-                _ => {}
+            let mut next = pieces.swap_remove(i);
+            if next.first() != Some(&end) {
+                next.reverse();
             }
+            ring.extend(&next[1..]);
         }
-        Ok(())
-    }
-
-    fn points(&self, refs: &[u64]) -> Vec<Point> {
-        refs.iter()
-            .filter_map(|r| self.nodes.get(r).copied())
-            .collect()
-    }
-
-    /// Joins the member ways of a multipolygon into closed rings; unclosable pieces are dropped.
-    fn rings(&self, members: &[u64]) -> Vec<Vec<Point>> {
-        let mut pieces: Vec<Vec<u64>> = members
-            .iter()
-            .filter_map(|w| self.ways.get(w))
-            .map(|w| w.0.clone())
-            .collect();
-        let mut rings = Vec::new();
-        while let Some(mut ring) = pieces.pop() {
-            while ring.first() != ring.last() {
-                let end = *ring.last().unwrap();
-                let Some(i) = pieces
-                    .iter()
-                    .position(|p| p.first() == Some(&end) || p.last() == Some(&end))
-                else {
-                    break;
-                };
-                let mut next = pieces.swap_remove(i);
-                if next.first() != Some(&end) {
-                    next.reverse();
-                }
-                ring.extend(&next[1..]);
-            }
-            if ring.len() >= 4 && ring.first() == ring.last() {
-                rings.push(self.points(&ring));
-            }
+        if ring.len() >= 4 && ring.first() == ring.last() {
+            rings.push(points(osm, &ring, frame));
         }
-        rings
     }
+    rings
 }
 
 /// Everything the map uses in a lat/lon box around the map, with one Overpass query: the
 /// ways with tags that roads, buildings or land use read, the multipolygon relations, and
-/// (recursively) all their member ways and nodes, also those outside the box. Everything
-/// is clipped to the map in local metres later.
-fn fetch_osm(frame: &Frame, center: Point, (half_x, half_z): Point) -> Result<Osm, Error> {
+/// (recursively) all their member ways and nodes, also those outside the box (the bake
+/// clips to the map in local metres). Tags the bake doesn't need are dropped.
+fn fetch_osm(center: Point, (half_x, half_z): Point) -> Result<Osm, Error> {
     let degrees = |m: f64| (m * 1.1 / 6_371_000.0).to_degrees();
     let (dlat, dlon) = (
         degrees(half_z),
@@ -431,8 +364,10 @@ fn fetch_osm(frame: &Frame, center: Point, (half_x, half_z): Point) -> Result<Os
         }
         unreachable!()
     })?;
-    let mut osm = Osm::default();
-    osm.parse(&String::from_utf8(xml)?, frame)?;
+    let mut osm = Osm::parse(&String::from_utf8(xml)?)?;
+    osm.strip_tags();
+    osm.bounds
+        .push([lat - dlat, lon - dlon, lat + dlat, lon + dlon]);
     Ok(osm)
 }
 
@@ -469,33 +404,74 @@ fn inside_rings(rings: &[Vec<Point>], (px, pz): Point) -> bool {
     inside
 }
 
+const USAGE: &str = "usage:
+  bake import <lat> <lon> <width_m>[x<height_m>] <map.osm>
+  bake <map.osm> <lat> <lon> <width_m>[x<height_m>] <out_file> [<spawn_lat> <spawn_lon> [<spawn_heading>]]";
+
 fn main() -> Result<(), Error> {
-    let args: Vec<String> = std::env::args().collect();
-    let (lat, lon, size, out, spawn) = match args.as_slice() {
-        [_, lat, lon, size, out, spawn @ ..] if spawn.len() <= 3 && spawn.len() != 1 => {
-            (lat, lon, size, out, spawn)
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.as_slice() {
+        [command, lat, lon, size, map] if command == "import" => import(lat, lon, size, map),
+        [map, lat, lon, size, out, spawn @ ..] if spawn.len() <= 3 && spawn.len() != 1 => {
+            bake(map, lat, lon, size, out, spawn)
         }
-        _ => {
-            return Err("usage: bake <lat> <lon> <width_m>[x<height_m>] <out_file> \
-                        [<spawn_lat> <spawn_lon> [<spawn_heading>]]"
-                .into());
-        }
+        _ => Err(USAGE.into()),
+    }
+}
+
+/// The map's centre, and its size in whole chunks along x and z.
+fn extent(lat: &str, lon: &str, size: &str) -> Result<(Point, usize, usize), Error> {
+    let (width, height) = match size.split_once('x') {
+        Some((w, h)) => (w.parse::<f64>()?, h.parse::<f64>()?),
+        None => (size.parse()?, size.parse()?),
     };
+    let chunk_count = |m: f64| (m / (CELL * CHUNK_CELLS as f64)).round().max(1.0) as usize;
+    Ok((
+        (lat.parse()?, lon.parse()?),
+        chunk_count(width),
+        chunk_count(height),
+    ))
+}
+
+/// Adds what OpenStreetMap has in and around a map of that size to the map file (made if
+/// it doesn't exist), leaving everything already in it as it is.
+fn import(lat: &str, lon: &str, size: &str, map: &str) -> Result<(), Error> {
+    let (center, chunks_x, chunks_z) = extent(lat, lon, size)?;
+    let half = |chunks: usize| (chunks * CHUNK_CELLS) as f64 * CELL / 2.0;
+    let fetched = fetch_osm(center, (half(chunks_x), half(chunks_z)))?;
+    let mut osm = match std::fs::read_to_string(map) {
+        Ok(text) => Osm::parse(&text)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Osm::default(),
+        Err(e) => return Err(e.into()),
+    };
+    let added = osm.merge(fetched);
+    std::fs::write(map, osm.write())?;
+    eprintln!(
+        "{map}: added {added} elements, now {} nodes, {} ways, {} relations",
+        osm.nodes.len(),
+        osm.ways.len(),
+        osm.relations.len()
+    );
+    Ok(())
+}
+
+/// Bakes the map of that size around (lat, lon) from the map file and the lidar terrain.
+fn bake(
+    map: &str,
+    lat: &str,
+    lon: &str,
+    size: &str,
+    out: &str,
+    spawn: &[String],
+) -> Result<(), Error> {
     let spawn: Vec<f64> = spawn.iter().map(|v| v.parse()).collect::<Result<_, _>>()?;
-    let center = (lat.parse::<f64>()?, lon.parse::<f64>()?);
+    let (center, chunks_x, chunks_z) = extent(lat, lon, size)?;
     let (east, north) = utm32(center.0, center.1);
     // Centre on a whole metre so grid vertices line up with lidar pixel edges.
     let frame = Frame {
         east: east.round(),
         north: north.round(),
     };
-    // Whole chunks along each axis.
-    let (width, height) = match size.split_once('x') {
-        Some((w, h)) => (w.parse::<f64>()?, h.parse::<f64>()?),
-        None => (size.parse()?, size.parse()?),
-    };
-    let chunk_count = |m: f64| (m / (CELL * CHUNK_CELLS as f64)).round().max(1.0) as usize;
-    let (chunks_x, chunks_z) = (chunk_count(width), chunk_count(height));
     let (cells_x, cells_z) = (chunks_x * CHUNK_CELLS, chunks_z * CHUNK_CELLS);
     let (half_x, half_z) = (cells_x as f64 * CELL / 2.0, cells_z as f64 * CELL / 2.0);
     // Grid vertices per row, and conversions between vertex indices and local metres.
@@ -525,23 +501,17 @@ fn main() -> Result<(), Error> {
         .map(|i| height_at(grid_x(i % n), grid_z(i / n)))
         .collect();
 
-    let osm = fetch_osm(&frame, center, (half_x, half_z))?;
+    let osm = Osm::parse(&std::fs::read_to_string(map)?)?;
     let on_map = |&(x, z): &Point| x.abs() < half_x && z.abs() < half_z;
 
-    // Roads, waterways, buildings and land use areas. Elements are visited in ID order
-    // (not hash map order), so the same data always bakes to the same file.
-    let by_id = |map: &HashMap<u64, (Vec<u64>, Tags)>| {
-        let mut ids: Vec<u64> = map.keys().copied().collect();
-        ids.sort_unstable();
-        ids.into_iter()
-            .map(|id| map[&id].clone())
-            .collect::<Vec<_>>()
-    };
+    // Roads, waterways, buildings and land use areas. Elements are visited in ID order, so
+    // the same data always bakes to the same file.
     let mut roads = Vec::new();
     let mut buildings = Vec::new();
     let mut areas = Vec::new();
-    for (refs, tags) in &by_id(&osm.ways) {
-        let mut points = osm.points(refs);
+    for way in osm.ways.values().filter(|w| !w.meta.deleted()) {
+        let (refs, tags) = (&way.refs, &way.meta.tags);
+        let mut points = points(&osm, refs, &frame);
         if tags.contains_key("building") {
             points.pop();
             if points.len() >= 3 && points.iter().all(on_map) {
@@ -569,13 +539,14 @@ fn main() -> Result<(), Error> {
             }
         }
     }
-    for (members, tags) in &by_id(&osm.relations) {
+    for relation in osm.relations.values().filter(|r| !r.meta.deleted()) {
+        let tags = &relation.meta.tags;
         if tags.get("type").is_some_and(|t| t == "multipolygon")
             && let Some(class) = land_class(tags)
         {
             areas.push(Area {
                 class,
-                rings: osm.rings(members),
+                rings: rings(&osm, &relation.members, &frame),
             });
         }
     }
