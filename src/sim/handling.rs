@@ -258,11 +258,16 @@ fn tire_temperatures() {
                         .iter()
                         .map(|corner| {
                             let tire = &car.setup.axle(corner.front).tire;
+                            let tread = &corner.tread;
+                            let surface: Vec<String> =
+                                tread.surface.iter().map(|t| format!("{t:.0}")).collect();
                             format!(
-                                "{:4.0}°C {:4.1}% {:3.0}%",
-                                corner.tread.temperature,
-                                corner.tread.wear * 100.0,
-                                tire.condition(&corner.tread) * 100.0,
+                                "{} / {:3.0}°C {:.2} bar {:4.1}% {:3.0}%",
+                                surface.join(" "),
+                                tread.core_temperature(),
+                                tire.pressure(tread),
+                                tread.wear() * 100.0,
+                                tire.condition(tread) * 100.0,
                             )
                         })
                         .collect();
@@ -461,7 +466,7 @@ fn grip_at_rest(setup: &CarSetup) -> f32 {
 }
 
 /// A car held on a circle of `radius` (m) at `share` of its grip for `seconds`, steered
-/// to the yaw rate the circle needs, starting on cold tires: the outside treads'
+/// to the yaw rate the circle needs, starting on cold tires: the outside treads' core
 /// temperatures (front, rear; °C) at the end.
 fn cornering_heat(setup: CarSetup, radius: f32, share: f32, seconds: f32) -> [f32; 2] {
     let terrain = Terrain::flat();
@@ -481,7 +486,7 @@ fn cornering_heat(setup: CarSetup, radius: f32, share: f32, seconds: f32) -> [f3
         t += dt;
     }
     // Turning left, the right-hand tires are on the outside.
-    [1, 3].map(|i| car.corners[i].tread.temperature)
+    [1, 3].map(|i| car.corners[i].tread.core_temperature())
 }
 
 /// Light, middling and heavy cars on the same compound heat their tires alike at the same
@@ -538,5 +543,24 @@ fn cornering_temperatures() {
             warmth(front),
             warmth(rear)
         );
+    }
+}
+
+/// The factory's tire pressures suit its tires under the car's weight.
+#[test]
+fn factory_pressures_suit_the_tires() {
+    use crate::chassis::CHASSIS;
+    for chassis in 0..CHASSIS.len() {
+        let setup = CarSetup::factory(chassis, 0);
+        for (axle, front) in [true, false].into_iter().enumerate() {
+            let load = (setup.corner_mass(front) + setup.axle(front).unsprung_mass) * 9.81;
+            let suited = setup.axle(front).tire.suited_pressure(load);
+            let set = setup.build.pressure[axle];
+            assert!(
+                (set - suited).abs() < 0.06,
+                "{}: {set} against {suited:.2}",
+                setup.name
+            );
+        }
     }
 }

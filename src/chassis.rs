@@ -159,12 +159,16 @@ pub static GEARBOXES: [Gearbox; 8] = [
 pub const CLUTCHES: [(&str, f32); 3] = [("Stock", 1.0), ("Sport", 1.6), ("Race", 2.5)];
 
 /// Suspension kits: the name, the ride frequency and damping relative to the chassis'
-/// own, and the extra negative camber (degrees).
-pub const SUSPENSIONS: [(&str, f32, f32, f32); 3] = [
-    ("Stock", 1.0, 1.0, 0.0),
-    ("Sport", 1.2, 1.15, 0.8),
-    ("Track", 1.45, 1.3, 1.8),
+/// own, the extra negative camber they're aligned to, and how far either side of that the
+/// camber can be set (degrees).
+pub const SUSPENSIONS: [(&str, f32, f32, f32, f32); 3] = [
+    ("Stock", 1.0, 1.0, 0.0, 0.5),
+    ("Sport", 1.2, 1.15, 0.8, 1.0),
+    ("Track", 1.45, 1.3, 1.8, 2.0),
 ];
+
+/// The cold tire pressures that can be set (bar).
+pub const PRESSURES: std::ops::RangeInclusive<f32> = 1.2..=3.5;
 
 /// Paints every car comes in.
 pub const PAINTS: [(&str, [f32; 3]); 10] = [
@@ -201,6 +205,9 @@ pub struct Chassis {
     pub damping: f32,
     /// Static camber front and rear (degrees).
     pub camber: [f32; 2],
+    /// Cold tire pressures front and rear (bar): what suits the factory tires under the
+    /// car's weight (see `TireParams::suited_pressure`).
+    pub pressure: [f32; 2],
     pub max_steer: f32,
     /// Share of the stock tires' grip the brakes use with the pedal to the floor. Well
     /// short of all of it, they don't lock the wheels on a dry road; with all-wheel drive
@@ -330,6 +337,9 @@ pub struct CarBuild {
     pub suspension: usize,
     /// Front and rear.
     pub wheels: [Wheel; 2],
+    /// Static camber (degrees) and cold tire pressure (bar), front and rear.
+    pub camber: [f32; 2],
+    pub pressure: [f32; 2],
 }
 
 impl CarBuild {
@@ -345,6 +355,42 @@ impl CarBuild {
             limited_slip: made.limited_slip,
             suspension: 0,
             wheels: made.wheels,
+            camber: made.camber,
+            pressure: made.pressure,
+        }
+    }
+
+    /// The camber (degrees) the suspension kit is aligned to on `axle`.
+    pub fn kit_camber(&self, axle: usize) -> f32 {
+        self.chassis().camber[axle] - SUSPENSIONS[self.suspension].3
+    }
+
+    /// The cambers (degrees) that can be set on `axle` with the suspension kit.
+    pub fn camber_range(&self, axle: usize) -> std::ops::RangeInclusive<f32> {
+        let (kit, reach) = (self.kit_camber(axle), SUSPENSIONS[self.suspension].4);
+        kit - reach..=kit + reach
+    }
+
+    /// Fits the suspension kit `kit` (in `SUSPENSIONS`), aligned as it comes.
+    pub fn set_suspension(&mut self, kit: usize) {
+        self.suspension = kit;
+        self.camber = [0, 1].map(|axle| self.kit_camber(axle));
+    }
+
+    /// The same car on the suspension kit `kit`.
+    pub fn with_suspension(mut self, kit: usize) -> Self {
+        self.set_suspension(kit);
+        self
+    }
+
+    /// Keeps the camber within what the suspension kit can be set to, and the tire
+    /// pressures within `PRESSURES`.
+    pub fn clamp_alignment(&mut self) {
+        for axle in 0..2 {
+            let range = self.camber_range(axle);
+            self.camber[axle] = self.camber[axle].clamp(*range.start(), *range.end());
+            let pressure = self.pressure[axle];
+            self.pressure[axle] = pressure.clamp(*PRESSURES.start(), *PRESSURES.end());
         }
     }
 
@@ -450,6 +496,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [1.3, 1.45],
         damping: 0.3,
         camber: [-0.8, -1.2],
+        pressure: [2.3, 2.1],
         max_steer: 0.56,
         brakes: 0.78,
         drag_area: 0.63,
@@ -534,6 +581,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [1.6, 1.85],
         damping: 0.34,
         camber: [-1.5, -1.5],
+        pressure: [2.4, 2.1],
         max_steer: 0.52,
         brakes: 0.8,
         drag_area: 0.68,
@@ -621,6 +669,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [1.5, 1.65],
         damping: 0.32,
         camber: [-1.2, -1.5],
+        pressure: [2.2, 2.1],
         max_steer: 0.54,
         brakes: 0.8,
         drag_area: 0.6,
@@ -704,6 +753,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [1.65, 1.8],
         damping: 0.33,
         camber: [-1.2, -1.4],
+        pressure: [2.2, 2.1],
         max_steer: 0.5,
         brakes: 0.8,
         drag_area: 0.62,
@@ -789,6 +839,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [1.35, 1.5],
         damping: 0.32,
         camber: [-0.8, -1.2],
+        pressure: [2.5, 2.4],
         max_steer: 0.52,
         brakes: 0.8,
         drag_area: 0.64,
@@ -874,6 +925,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [1.7, 1.8],
         damping: 0.36,
         camber: [-1.5, -1.5],
+        pressure: [2.4, 2.2],
         max_steer: 0.52,
         brakes: 0.8,
         drag_area: 0.72,
@@ -968,6 +1020,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [1.4, 1.5],
         damping: 0.3,
         camber: [-0.8, -1.0],
+        pressure: [2.4, 2.3],
         max_steer: 0.5,
         brakes: 0.78,
         drag_area: 0.74,
@@ -1054,6 +1107,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [1.9, 2.1],
         damping: 0.36,
         camber: [-1.5, -1.8],
+        pressure: [2.0, 2.0],
         max_steer: 0.5,
         brakes: 0.84,
         drag_area: 0.6,
@@ -1144,6 +1198,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [1.8, 2.0],
         damping: 0.36,
         camber: [-1.0, -1.8],
+        pressure: [2.0, 2.2],
         max_steer: 0.5,
         brakes: 0.84,
         drag_area: 0.6,
@@ -1233,6 +1288,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [2.2, 2.4],
         damping: 0.4,
         camber: [-1.8, -2.0],
+        pressure: [2.1, 2.1],
         max_steer: 0.46,
         brakes: 0.82,
         drag_area: 0.68,
@@ -1325,6 +1381,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [2.0, 2.2],
         damping: 0.38,
         camber: [-1.8, -1.8],
+        pressure: [1.7, 1.6],
         max_steer: 0.5,
         brakes: 0.84,
         drag_area: 0.66,
@@ -1409,6 +1466,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [1.25, 1.5],
         damping: 0.3,
         camber: [-0.3, -0.3],
+        pressure: [2.5, 2.3],
         max_steer: 0.54,
         brakes: 0.76,
         drag_area: 1.0,
@@ -1498,6 +1556,7 @@ pub static CHASSIS: [Chassis; 13] = [
         ride: [1.3, 1.6],
         damping: 0.3,
         camber: [-0.3, -0.5],
+        pressure: [2.6, 2.5],
         max_steer: 0.56,
         brakes: 0.76,
         drag_area: 1.15,

@@ -89,7 +89,7 @@ fn offer(rng: &mut Rng, chassis: usize, used: bool) -> ForSale {
             wear.damage.turbo = tired * rng.next();
         }
         for tread in &mut wear.treads {
-            tread.wear = 0.2 + 0.5 * rng.next();
+            tread.set_wear(0.2 + 0.5 * rng.next());
         }
         wear.fuel = setup.tank.litres * (0.1 + 0.3 * rng.next());
     }

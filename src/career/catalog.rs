@@ -87,7 +87,7 @@ fn factory_code(setup: &CarSetup) -> &'static str {
 pub fn tires_worn(setup: &CarSetup, wear: &Wear) -> f64 {
     (0..2)
         .map(|axle| {
-            let worn = (wear.treads[2 * axle].wear + wear.treads[2 * axle + 1].wear) / 2.0;
+            let worn = (wear.treads[2 * axle].wear() + wear.treads[2 * axle + 1].wear()) / 2.0;
             new_tires(setup, axle) * f64::from(worn)
         })
         .sum()
@@ -203,7 +203,7 @@ mod tests {
         let mut worn = new;
         worn.damage.bearings = 1.0;
         worn.treads = [crate::physics::tire::Tread {
-            wear: 0.8,
+            wear: [0.8; crate::physics::tire::RIBS],
             ..default_tread()
         }; 4];
         assert!(worth(&setup, &worn, 0.0) < fresh - 1_000.0);

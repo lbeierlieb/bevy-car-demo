@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 
-use super::tire::{TireForce, TireParams, Tread};
+use super::tire::{Patch, RIB_AT, RIBS, TireForce, TireParams, Tread};
 use crate::terrain::Terrain;
 
 const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
@@ -230,6 +230,8 @@ pub struct Contact {
     pub point: Vec3,
     pub normal: Vec3,
     pub load: f32,
+    /// What each rib carries and grips.
+    pub patch: Patch,
     pub tire: TireForce,
     /// Total tire force in world space.
     pub force: Vec3,
@@ -248,7 +250,7 @@ pub struct Corner {
     /// Wheel spin rate (rad/s, positive rolls forward) and accumulated angle for rendering.
     pub omega: f32,
     pub spin: f32,
-    /// The tire's tread: temperature and wear.
+    /// The tire's rubber: temperatures and wear.
     pub tread: Tread,
     // Inputs, set by the car before each step.
     pub steer: f32,
@@ -307,58 +309,115 @@ impl Corner {
         let hub_velocity =
             chassis.point_velocity(center) + chassis.rotation * (d.center * self.theta_dot);
 
-        // Raycast from the hub, perpendicular to the axle, as far as the tire radius.
+        // Each rib's lowest point (perpendicular to the axle, towards the road), and how far
+        // it reaches into the ground below it along the road's normal.
         let up = chassis.rotation * Vec3::Y;
-        let down = -(up - axle_dir * axle_dir.dot(up)).normalize();
-        let hit = terrain.raycast(center, down, tire.radius);
+        let below = center - (up - axle_dir * axle_dir.dot(up)).normalize() * tire.radius;
+        let (_, n) = terrain.sample(below.x, below.z);
+        let down = -(n - axle_dir * axle_dir.dot(n)).normalize();
+        let outside = axle_dir * self.side;
+        let ribs = RIB_AT.map(|u| center + outside * (u * tire.width / 2.0) + down * tire.radius);
+        let depth = ribs.map(|q| ((terrain.sample(q.x, q.z).0 - q.y) * n.y).min(tire.radius));
 
         // Without ground contact the wheel just spins up under drive torque.
         let inertia = axle.wheel_inertia + self.drive_inertia;
         let mut omega = self.omega + self.drive_torque / inertia * dt;
-        let condition = tire.condition(&self.tread);
-        let patch = hit.map(|hit| {
-            let n = hit.normal;
-            let penetration = tire.radius - hit.distance;
-            let load = (tire.stiffness * penetration - tire.damping * hub_velocity.dot(n)).max(0.0);
+        let touching = depth.iter().any(|&d| d > 0.0);
+        let patch = touching.then(|| {
+            let outward = self.contact.map_or(0.0, |c| c.tire.fy) * self.side;
+            let camber = -axle_dir.dot(n).clamp(-1.0, 1.0).asin();
+            let patch = tire.patch(depth, -hub_velocity.dot(n), outward, camber, &self.tread);
             let forward = n.cross(axle_dir).normalize();
             let right = forward.cross(n);
             let (vx, vy) = (hub_velocity.dot(forward), hub_velocity.dot(right));
 
             // Wheel spin is the stiffest part of the system: update it implicitly by
             // linearising the longitudinal force around the current spin rate.
-            let f0 = tire.force(vx, vy, self.omega, load, condition);
-            let nudged = tire.force(vx, vy, self.omega + 0.01, load, condition);
+            let f0 = tire.force(vx, vy, self.omega, &patch);
+            let nudged = tire.force(vx, vy, self.omega + 0.01, &patch);
             let df_domega = (nudged.fx - f0.fx) / 0.01;
             omega = self.omega
                 + dt * (self.drive_torque - tire.radius * f0.fx)
                     / (inertia + dt * tire.radius * df_domega.max(0.0));
-            (hit.point, n, load, forward, right, vx, vy)
+            (patch, n, forward, right, vx, vy)
         });
         self.omega = apply_brake(omega, self.brake_torque, inertia, dt);
         self.spin += self.omega * dt;
 
-        let tread = &mut self.tread;
         let omega = self.omega;
-        if patch.is_none() {
-            tire.cool(tread, hub_velocity.length(), dt);
-        }
-        self.contact = patch.map(|(point, normal, load, forward, right, vx, vy)| {
-            let params = tire;
-            let tire = params.force(vx, vy, omega, load, condition);
-            // The rubber slides at the difference between the wheel's rim and the road
-            // along, and at the sideways speed across.
-            let slide_x = omega * params.radius - vx;
-            params.heat(tread, &tire, slide_x, vy, load, vx, dt);
-            let force = normal * load + forward * tire.fx + right * tire.fy;
-            Contact {
-                point,
-                normal,
-                load,
-                tire,
+        let speed = hub_velocity.length();
+        let Some((patch, normal, forward, right, vx, vy)) = patch.filter(|p| p.0.load() > 0.0)
+        else {
+            tire.heat(&mut self.tread, None, 0.0, 0.0, speed, dt);
+            self.contact = None;
+            return self.finish(
+                dt,
+                axle,
+                spring_rest_length,
+                chassis,
+                &d,
+                None,
                 force,
-            }
-        });
-        let tire_force = self.contact.map_or(Vec3::ZERO, |c| c.force);
+                torque,
+            );
+        };
+        let tire_force = tire.force(vx, vy, omega, &patch);
+        // The rubber slides at the difference between the wheel's rim and the road along,
+        // and at the sideways speed across.
+        let slide_x = omega * tire.radius - vx;
+        tire.heat(
+            &mut self.tread,
+            Some((&tire_force, &patch)),
+            slide_x,
+            vy,
+            vx,
+            dt,
+        );
+        let load = patch.load();
+        // The patch's centre: the ribs' points on the road, by their load.
+        let point = (0..RIBS)
+            .map(|rib| (ribs[rib] + normal * depth[rib]) * patch.loads[rib])
+            .sum::<Vec3>()
+            / load;
+        let contact = Contact {
+            point,
+            normal,
+            load,
+            patch,
+            tire: tire_force,
+            force: normal * load + forward * tire_force.fx + right * tire_force.fy,
+        };
+        self.contact = Some(contact);
+        self.finish(
+            dt,
+            axle,
+            spring_rest_length,
+            chassis,
+            &d,
+            Some(contact),
+            force,
+            torque,
+        );
+    }
+
+    /// The rest of a step once the tire's force is known: the linkage moves under it, the
+    /// spring, the damper and gravity, and passes it on to the chassis.
+    #[allow(clippy::too_many_arguments)]
+    fn finish(
+        &mut self,
+        dt: f32,
+        axle: &AxleSetup,
+        spring_rest_length: f32,
+        chassis: &ChassisFrame,
+        d: &Derivatives,
+        contact: Option<Contact>,
+        force: &mut Vec3,
+        torque: &mut Vec3,
+    ) {
+        let pose = d.pose;
+        let to_world = |p: Vec3| chassis.position + chassis.rotation * p;
+        let center = to_world(pose.wheel_center);
+        let tire_force = contact.map_or(Vec3::ZERO, |c| c.force);
 
         // Generalised force on θ by virtual work: each force times the θ-derivative of the
         // point it acts on. The spring/damper act along the coilover.
@@ -380,7 +439,7 @@ impl Corner {
         // chassis: the tire force at the contact patch, plus gravity minus inertia at the hub.
         let hub_force = GRAVITY * axle.unsprung_mass
             - chassis.rotation * (d.center * theta_ddot) * axle.unsprung_mass;
-        let contact_point = self.contact.map_or(center, |c| c.point);
+        let contact_point = contact.map_or(center, |c| c.point);
         *force += tire_force + hub_force;
         *torque += (contact_point - chassis.position).cross(tire_force)
             + (center - chassis.position).cross(hub_force);

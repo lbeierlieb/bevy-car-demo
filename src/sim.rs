@@ -237,7 +237,7 @@ fn apply_controls(car: &mut Car, dt: f32) {
         let brake = c.brake * abs_pressure[i];
         // Rolling resistance holds each wheel back like a light brake.
         let tire = &setup.axle(corner.front).tire;
-        let rolling = tire.rolling_torque(corner.contact.map_or(0.0, |c| c.load));
+        let rolling = tire.rolling_torque(corner.contact.map_or(0.0, |c| c.load), &corner.tread);
         corner.drive_torque = torque[i];
         corner.drive_inertia = shares[i] * drive.inertia;
         if corner.front {
@@ -255,7 +255,7 @@ fn apply_controls(car: &mut Car, dt: f32) {
 mod tests {
     use super::*;
     use crate::car::{CarSetup, Controls, heading};
-    use crate::chassis::{CHASSIS, CarBuild, SUSPENSIONS};
+    use crate::chassis::{CHASSIS, SUSPENSIONS};
     use crate::physics::tire::RACE;
     use std::f32::consts::{PI, TAU};
 
@@ -575,11 +575,7 @@ mod tests {
         let factory = (0..CHASSIS.len()).map(|chassis| CarSetup::factory(chassis, 0));
         let track = (0..CHASSIS.len()).map(|chassis| {
             let stock = CarSetup::factory(chassis, 0);
-            let build = CarBuild {
-                suspension: 2,
-                ..stock.build
-            }
-            .on_compound(RACE);
+            let build = stock.build.clone().with_suspension(2).on_compound(RACE);
             CarSetup::new(build, stock.engine.parts, stock.engine.build)
         });
         for setup in factory.chain(track) {

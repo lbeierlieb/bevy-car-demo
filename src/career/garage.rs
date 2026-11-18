@@ -499,8 +499,8 @@ fn condition(ui: &mut egui::Ui, career: &mut Career, i: usize, news: &mut News) 
     // Each axle's tires and the most worn of the pair.
     let worn = |axle: usize| {
         wear.treads[2 * axle]
-            .wear
-            .max(wear.treads[2 * axle + 1].wear)
+            .wear()
+            .max(wear.treads[2 * axle + 1].wear())
     };
     let wheels = setup.build.wheels;
     for axle in 0..2 {

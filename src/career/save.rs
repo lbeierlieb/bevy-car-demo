@@ -15,7 +15,7 @@ use crate::physics::engine::ecu::{Ecu, EcuModel};
 use crate::physics::engine::families::FAMILIES;
 use crate::physics::engine::maps::EngineMaps;
 use crate::physics::engine::parts::{Parts, SLOTS};
-use crate::physics::tire::{COMPOUNDS, Tread};
+use crate::physics::tire::{COMPOUNDS, RIBS, Tread};
 use crate::storage::Folder;
 use crate::wheels::{Rim, TireSize, Wheel};
 use crate::workshop;
@@ -234,6 +234,10 @@ fn write_car(text: &mut String, car: &OwnedCar) {
         })
         .collect();
     *text += &format!("wheels {}\n", wheels.join(" "));
+    // Camber front and rear (degrees), then cold pressures (bar).
+    let [cf, cr] = b.camber;
+    let [pf, pr] = b.pressure;
+    *text += &format!("align {cf} {cr} {pf} {pr}\n");
     let chosen: Vec<String> = p.chosen.iter().map(usize::to_string).collect();
     *text += &format!(
         "parts {} {} {} {} {} {} {} {}\n",
@@ -250,8 +254,10 @@ fn write_car(text: &mut String, car: &OwnedCar) {
     *text += &format!("age {}\n", car.age);
     let wear = &car.wear;
     *text += &format!("fuel {}\n", wear.fuel);
+    // Each tire's wear across its ribs (a parked car cools down).
     let treads: Vec<String> = (wear.treads.iter())
-        .map(|t| format!("{} {}", t.temperature, t.wear))
+        .flat_map(|t| t.wear)
+        .map(|w| w.to_string())
         .collect();
     *text += &format!("treads {}\n", treads.join(" "));
     let d = &wear.damage;
@@ -317,7 +323,7 @@ pub fn read(career: &mut Career, text: &str) {
 
 fn read_car(block: &[&str]) -> Option<OwnedCar> {
     let (mut build, mut parts, mut octane, mut age) = (None, None, 95.0, 0.0);
-    let mut wheels = None;
+    let (mut wheels, mut align) = (None, None);
     let (mut fuel, mut treads, mut damage) = (0.0, [Tread::default(); 4], Damage::default());
     let mut tune = String::new();
     let mut lines = block.iter();
@@ -330,6 +336,9 @@ fn read_car(block: &[&str]) -> Option<OwnedCar> {
         match key {
             "build" => build = read_build(rest),
             "wheels" => wheels = read_wheels(rest),
+            "align" if numbers.len() == 4 && numbers.iter().all(|n| n.is_finite()) => {
+                align = Some([[numbers[0], numbers[1]], [numbers[2], numbers[3]]]);
+            }
             "parts" => parts = read_parts(rest),
             "octane" => octane = numbers.first().copied().unwrap_or(octane),
             "age" => {
@@ -338,12 +347,17 @@ fn read_car(block: &[&str]) -> Option<OwnedCar> {
                     .map_or(0.0, |&a| f64::from(a).clamp(0.0, 1.0))
             }
             "fuel" => fuel = numbers.first().copied().unwrap_or(0.0),
+            "treads" if numbers.len() == 4 * RIBS => {
+                for (tread, ribs) in treads.iter_mut().zip(numbers.chunks(RIBS)) {
+                    for (wear, &rib) in tread.wear.iter_mut().zip(ribs) {
+                        *wear = rib.clamp(0.0, 1.0);
+                    }
+                }
+            }
+            // Before ribs: a temperature and a wear per tire.
             "treads" if numbers.len() == 8 => {
                 for (tread, pair) in treads.iter_mut().zip(numbers.chunks(2)) {
-                    *tread = Tread {
-                        temperature: pair[0],
-                        wear: pair[1].clamp(0.0, 1.0),
-                    };
+                    tread.set_wear(pair[1].clamp(0.0, 1.0));
                 }
             }
             "damage" if numbers.len() == 3 * MAX_CYLINDERS + 3 => {
@@ -367,6 +381,11 @@ fn read_car(block: &[&str]) -> Option<OwnedCar> {
     if let Some(wheels) = wheels {
         build.wheels = wheels;
     }
+    // Saves from before the alignment have the kit's camber and the factory's pressures.
+    if let Some([camber, pressure]) = align {
+        (build.camber, build.pressure) = (camber, pressure);
+    }
+    build.clamp_alignment();
     let parts = build.install(parts).ok()?;
     let hardware = parts.hardware();
     let maps = workshop::at_hand(&hardware).unwrap_or_else(|| {
@@ -404,9 +423,9 @@ fn read_build(words: &[&str]) -> Option<CarBuild> {
         clutch: n(3).filter(|&c| c < CLUTCHES.len())?,
         final_drive: words.get(4)?.parse().ok().filter(|f: &f32| f.is_finite())?,
         limited_slip: n(5)? != 0,
-        suspension: n(6).filter(|&s| s < SUSPENSIONS.len())?,
-        wheels: CarBuild::factory(n(0)?).wheels,
-    };
+        ..CarBuild::factory(n(0)?)
+    }
+    .with_suspension(n(6).filter(|&s| s < SUSPENSIONS.len())?);
     // Saves from before rims and tire sizes have the compound here, on factory sizes.
     let mut build = build;
     if let Some(compound) = words.get(7).and_then(|word| compound(word)) {
@@ -491,7 +510,7 @@ mod tests {
         wear.fuel = 7.5;
         wear.damage.cylinders[2].piston = 0.25;
         wear.damage.turbo = 0.5;
-        wear.treads[3].wear = 0.4;
+        wear.treads[3].wear[4] = 0.4;
         minim.build.wheels[1] = Wheel {
             rim: Rim {
                 diameter: 15,
@@ -504,6 +523,7 @@ mod tests {
             },
             compound: 2,
         };
+        (minim.build.camber, minim.build.pressure) = ([-1.2, -0.9], [2.45, 1.95]);
         career.cars.push(OwnedCar {
             setup: minim,
             wear,
@@ -533,7 +553,7 @@ mod tests {
         assert_eq!(b.setup.engine.build.ecu.rev_limit, 6543.0);
         assert_eq!(b.wear.fuel, 7.5);
         assert_eq!(b.wear.damage, a.wear.damage);
-        assert_eq!(b.wear.treads[3].wear, 0.4);
+        assert_eq!(b.wear.treads[3].wear[4], 0.4);
         assert_eq!(b.age, 0.5);
         assert_eq!(
             back.cars[1].setup.engine.parts,

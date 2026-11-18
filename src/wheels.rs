@@ -138,6 +138,7 @@ impl TireSize {
         let stiffer = wider.sqrt() * taller.powf(-SIDEWALL_STIFFNESS);
         TireParams {
             radius: self.radius(),
+            width: self.width_m(),
             stiffness: STIFFNESS * stiffer,
             damping: DAMPING * stiffer,
             compound,

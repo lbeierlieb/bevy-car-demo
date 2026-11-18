@@ -8,7 +8,7 @@ use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Shape, Stroke, pos2, 
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car};
-use crate::physics::tire::{AMBIENT, Compound};
+use crate::physics::tire::{AMBIENT, Compound, RIBS};
 
 /// Gauge radius (to the middle of the rev arc) and the arc's sweep: 270°, open at the
 /// bottom, from 0 rpm at the lower left clockwise to the top of the scale at the lower right.
@@ -149,20 +149,23 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
 }
 
 /// Tire size in the tire display, and the gap between them.
-const TIRE: egui::Vec2 = vec2(22.0, 34.0);
-const TIRE_GAP: egui::Vec2 = vec2(14.0, 10.0);
+const TIRE: egui::Vec2 = vec2(30.0, 34.0);
+const TIRE_GAP: egui::Vec2 = vec2(14.0, 22.0);
+/// Room under each tire for its pressure.
+const PRESSURE_ROW: f32 = 14.0;
 /// Width of the fuel gauge right of the tires, and its gap to them.
 const FUEL_WIDTH: f32 = 8.0;
 const FUEL_GAP: f32 = 12.0;
 /// Below this share of the tank the fuel gauge turns orange.
 const FUEL_LOW: f32 = 0.15;
 
-/// The four tires left of the gauge, seen from above: coloured by how warm the tread is
-/// against its compound's window (blue cold, green right, red overheated), its temperature
-/// in it, and the worn share darkened from the top. Right of them, the fuel gauge: orange
-/// when low, red while the engine starves.
+/// The four tires left of the gauge, seen from above: each rib (inside towards the car's
+/// middle) coloured by how warm its surface is against the compound's window (blue cold,
+/// green right, red overheated) with its worn share darkened from the top, the core
+/// temperature in the middle, and the pressure below. Right of them, the fuel gauge:
+/// orange when low, red while the engine starves.
 fn tires(ctx: &egui::Context, car: &Car) {
-    let size = 2.0 * TIRE + TIRE_GAP + vec2(16.0 + FUEL_GAP + FUEL_WIDTH, 16.0);
+    let size = 2.0 * TIRE + TIRE_GAP + vec2(16.0 + FUEL_GAP + FUEL_WIDTH, 16.0 + PRESSURE_ROW);
     egui::Area::new(egui::Id::new("tires"))
         .anchor(
             Align2::RIGHT_BOTTOM,
@@ -177,17 +180,43 @@ fn tires(ctx: &egui::Context, car: &Car) {
                 let (column, row) = ((i % 2) as f32, (i / 2) as f32);
                 let min = rect.min + vec2(8.0, 8.0) + vec2(column, row) * (TIRE + TIRE_GAP);
                 let tire = egui::Rect::from_min_size(min, TIRE);
-                let compound = &car.setup.axle(corner.front).tire.compound;
+                let params = &car.setup.axle(corner.front).tire;
                 let tread = corner.tread;
-                painter.rect_filled(tire, 4.0, warmth_color(compound, tread.temperature));
-                let worn = egui::Rect::from_min_size(min, vec2(TIRE.x, TIRE.y * tread.wear));
-                painter.rect_filled(worn, 4.0, Color32::from_black_alpha(150));
+                let rib_width = TIRE.x / RIBS as f32;
+                for rib in 0..RIBS {
+                    // The inside of a left tire is on its right.
+                    let place = if corner.side < 0.0 {
+                        RIBS - 1 - rib
+                    } else {
+                        rib
+                    };
+                    let x = min.x + place as f32 * rib_width;
+                    let strip = egui::Rect::from_min_size(pos2(x, min.y), vec2(rib_width, TIRE.y));
+                    let warmth = warmth_color(&params.compound, tread.surface[rib]);
+                    painter.rect_filled(strip, 1.0, warmth);
+                    let worn = vec2(rib_width, TIRE.y * tread.wear[rib]);
+                    let worn = egui::Rect::from_min_size(strip.min, worn);
+                    painter.rect_filled(worn, 1.0, Color32::from_black_alpha(150));
+                }
+                painter.rect_stroke(
+                    tire,
+                    3.0,
+                    egui::Stroke::new(1.5, BACKGROUND),
+                    egui::StrokeKind::Inside,
+                );
                 painter.text(
                     tire.center(),
                     Align2::CENTER_CENTER,
-                    format!("{:.0}", tread.temperature),
+                    format!("{:.0}", tread.core_temperature()),
                     FontId::proportional(11.0),
                     Color32::BLACK,
+                );
+                painter.text(
+                    pos2(tire.center().x, tire.max.y + 2.0),
+                    Align2::CENTER_TOP,
+                    format!("{:.2}", params.pressure(&tread)),
+                    FontId::proportional(10.0),
+                    Color32::WHITE,
                 );
             }
 

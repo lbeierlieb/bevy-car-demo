@@ -15,6 +15,7 @@ use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_val
 use crate::physics::engine::AMBIENT_PRESSURE;
 use crate::physics::fuel;
 use crate::physics::suspension::AxleSetup;
+use crate::physics::tire::RIBS;
 use crate::sim::{CHASSIS_HZ, SUBSTEPS};
 use crate::traffic::{MOST_CARS, Traffic};
 use crate::wheel_base::{ForceFeedback, WheelBase};
@@ -429,7 +430,10 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
             "Camber °",
             "Travel mm",
             "ω rad/s",
-            "Tread °C",
+            "Surface °C, in to out",
+            "Core °C",
+            "Carcass °C",
+            "bar",
             "Wear %",
             "Grip %",
         ] {
@@ -442,12 +446,25 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
             ui.label(format!("{:.0}", contact.load));
             ui.label(format!("{:.2}", contact.tire.slip_ratio));
             ui.label(format!("{:.1}", contact.tire.slip_angle.to_degrees()));
-            ui.label(format!("{:.2}", corner.pose.camber.to_degrees()));
+            // Against the road while on it (else against the body).
+            let camber = match corner.contact {
+                Some(contact) => contact.patch.camber * corner.side,
+                None => corner.pose.camber,
+            };
+            ui.label(format!("{:.2}", camber.to_degrees()));
             ui.label(format!("{:.0}", corner.travel * 1000.0));
             ui.label(format!("{:.0}", corner.omega));
             let tire = &car.setup.axle(corner.front).tire;
-            ui.label(format!("{:.0}", corner.tread.temperature));
-            ui.label(format!("{:.1}", corner.tread.wear * 100.0));
+            let tread = &corner.tread;
+            let ribs = |temperatures: [f32; RIBS]| {
+                let ribs: Vec<String> = temperatures.iter().map(|t| format!("{t:.0}")).collect();
+                ribs.join(" ")
+            };
+            ui.label(ribs(tread.surface));
+            ui.label(ribs(tread.core));
+            ui.label(format!("{:.0}", tread.carcass));
+            ui.label(format!("{:.2}", tire.pressure(tread)));
+            ui.label(format!("{:.1}", tread.wear() * 100.0));
             ui.label(format!("{:.0}", tire.condition(&corner.tread) * 100.0));
             ui.end_row();
         }

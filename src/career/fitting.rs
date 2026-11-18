@@ -72,10 +72,11 @@ pub fn fit(car: &mut OwnedCar, item: Item, axle: usize) -> Result<Fitted, String
             None
         }
         Item::Clutch(i) => Some(Item::Clutch(std::mem::replace(&mut build.clutch, i))),
-        Item::Suspension(i) => Some(Item::Suspension(std::mem::replace(
-            &mut build.suspension,
-            i,
-        ))),
+        Item::Suspension(i) => {
+            let old = build.suspension;
+            build.set_suspension(i);
+            Some(Item::Suspension(old))
+        }
         Item::Gearbox(i) => {
             if !build.chassis().gearboxes().any(|g| g == i) {
                 return Err(format!(
@@ -231,15 +232,15 @@ mod tests {
         let mut car = coupe();
         let size = |width, aspect, rim| TireSize { width, aspect, rim };
         let rim = |diameter, width| Rim { diameter, width };
-        car.wear.treads[0].wear = 0.5;
-        car.wear.treads[2].wear = 0.5;
+        car.wear.treads[0].set_wear(0.5);
+        car.wear.treads[2].set_wear(0.5);
         // New tires at the front: fresh treads there, the worn ones go to the bin.
         let fitted = fit(&mut car, Item::Tires(size(225, 45, 17), SPORT), 0).unwrap();
         assert_eq!(fitted.off, None);
         let compounds = car.setup.build.wheels.map(|wheel| wheel.compound);
         assert_eq!(compounds, [SPORT, STREET]);
         assert_eq!(
-            (car.wear.treads[0].wear, car.wear.treads[2].wear),
+            (car.wear.treads[0].wear(), car.wear.treads[2].wear()),
             (0.0, 0.5)
         );
         // Bigger rims need tires for them.

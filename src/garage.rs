@@ -296,14 +296,15 @@ fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
             .on_hover_text("Open differentials let a wheel without grip spin away the torque");
         ui.checkbox(&mut draft.limited_slip, "Limited-slip");
         ui.end_row();
-        ui.label("Suspension")
-            .on_hover_text("Stiffer springs and dampers, and more negative camber");
-        combo(
-            ui,
-            "suspension",
-            &mut draft.suspension,
-            &SUSPENSIONS.map(|kit| kit.0),
+        ui.label("Suspension").on_hover_text(
+            "Stiffer springs and dampers, aligned to more negative camber, and more room to set \
+             it",
         );
+        let mut kit = draft.suspension;
+        combo(ui, "suspension", &mut kit, &SUSPENSIONS.map(|kit| kit.0));
+        if kit != draft.suspension {
+            draft.set_suspension(kit);
+        }
         ui.end_row();
     });
 }

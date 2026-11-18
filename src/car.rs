@@ -11,6 +11,7 @@ use crate::physics::engine::parts::Parts;
 use crate::physics::fuel::{self, Fuel, Tank};
 use crate::physics::rigid_body::RigidBody;
 use crate::physics::suspension::{ArmGeometry, AxleSetup, Corner};
+use crate::physics::tire::TireParams;
 
 use crate::storage::Folder;
 use crate::terrain::Terrain;
@@ -90,7 +91,7 @@ impl CarSetup {
         let laden = sprung_mass + fuel_mass;
         let front_share =
             (sprung_mass * rear_z + fuel_mass * (rear_z - tank_at.z)) / (laden * chassis.wheelbase);
-        let (_, ride, damping, camber) = SUSPENSIONS[build.suspension];
+        let (_, ride, damping, ..) = SUSPENSIONS[build.suspension];
         let share = |i: usize| {
             if i == 0 {
                 front_share
@@ -128,7 +129,7 @@ impl CarSetup {
             ] {
                 *point += shift;
             }
-            geometry.static_camber = (chassis.camber[i] - camber).to_radians();
+            geometry.static_camber = build.camber[i].to_radians();
             // Toe-in at the rear keeps the car stable, especially off throttle.
             geometry.static_toe = if i == 0 { 0.0 } else { 0.25f32.to_radians() };
             let unsprung_mass = unsprung(i);
@@ -138,7 +139,10 @@ impl CarSetup {
                 damping: 0.0,
                 unsprung_mass,
                 wheel_inertia: wheel.inertia() + HUB_INERTIA * chassis.hub[i],
-                tire: wheel.tire.params(wheel.compound),
+                tire: TireParams {
+                    inflation: build.pressure[i],
+                    ..wheel.tire.params(wheel.compound)
+                },
             };
             axle.tune(
                 chassis.ride[i] * ride,
@@ -455,7 +459,9 @@ impl Car {
     #[cfg(test)]
     pub fn warm_tires(&mut self) {
         for corner in &mut self.corners {
-            corner.tread.temperature = self.setup.axle(corner.front).tire.compound.best;
+            corner
+                .tread
+                .warm(self.setup.axle(corner.front).tire.compound.best);
         }
     }
 
