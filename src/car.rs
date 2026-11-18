@@ -321,9 +321,9 @@ pub struct Car {
     pub corners: [Corner; 4],
     pub drivetrain: Drivetrain,
     pub controls: Controls,
-    /// Torque of the front tires about the steering axes (N·m, positive turns the wheels
-    /// left), for force feedback.
-    pub steering_torque: f32,
+    /// What the front wheels do to the steering (positive turns them left), for force
+    /// feedback.
+    pub rack: crate::sim::steering::Rack,
     /// Traction control: whether it's on, and the share of the driver's throttle it
     /// lets through right now.
     pub traction_control: bool,
@@ -374,7 +374,7 @@ impl Car {
             body,
             corners,
             controls: Controls::default(),
-            steering_torque: 0.0,
+            rack: Default::default(),
             traction_control: true,
             traction: 1.0,
             abs: true,

@@ -171,6 +171,9 @@ pub struct WheelConfig {
     pub deadzone: f32,
     /// Force feedback strength and on/off, and whether its direction is flipped.
     pub ffb_gain: f32,
+    /// How much stronger the quick part of the force feedback (bumps, the driven front
+    /// wheels' tugs) comes through than the steady pull: 1 is as the tires make it.
+    pub ffb_road: f32,
     pub ffb_enabled: bool,
     pub ffb_invert: bool,
 }
@@ -184,6 +187,7 @@ impl Default for WheelConfig {
             base_range: None,
             deadzone: 0.02,
             ffb_gain: 0.5,
+            ffb_road: 2.5,
             ffb_enabled: true,
             ffb_invert: false,
         }
@@ -218,11 +222,12 @@ impl WheelConfig {
 
     fn to_text(&self) -> String {
         let mut text = format!(
-            "# car-sim wheel settings\nenabled {}\nrange {}\ndeadzone {}\nffb_gain {}\nffb_enabled {}\nffb_invert {}\n",
+            "# car-sim wheel settings\nenabled {}\nrange {}\ndeadzone {}\nffb_gain {}\nffb_road {}\nffb_enabled {}\nffb_invert {}\n",
             self.enabled,
             self.range,
             self.deadzone,
             self.ffb_gain,
+            self.ffb_road,
             self.ffb_enabled,
             self.ffb_invert
         );
@@ -258,6 +263,7 @@ impl WheelConfig {
                 "base_range" => config.base_range = value.parse().ok().or(config.base_range),
                 "deadzone" => config.deadzone = value.parse().unwrap_or(config.deadzone),
                 "ffb_gain" => config.ffb_gain = value.parse().unwrap_or(config.ffb_gain),
+                "ffb_road" => config.ffb_road = value.parse().unwrap_or(config.ffb_road),
                 "ffb_enabled" => config.ffb_enabled = value.parse().unwrap_or(config.ffb_enabled),
                 "ffb_invert" => config.ffb_invert = value.parse().unwrap_or(config.ffb_invert),
                 "bind" => {
@@ -692,6 +698,7 @@ mod tests {
             range: 720.0,
             base_range: Some(2520.0),
             ffb_gain: 0.35,
+            ffb_road: 4.0,
             ffb_invert: true,
             ..default()
         };

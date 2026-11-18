@@ -518,8 +518,11 @@ impl TireParams {
     /// Pneumatic trail at a slip: it shrinks as more of the contact patch slides and is
     /// gone at the peak slip angle, so the self-aligning torque (lateral force times trail)
     /// fades before the grip does. That's what makes the steering go light near the limit.
+    /// Driving or braking hard slides the rear of the patch as well, so the slip ratio
+    /// counts too, against its own peak.
     pub fn trail(&self, force: &TireForce) -> f32 {
-        let slip = (force.slip_angle / self.peak_angle()).abs();
+        let slip = (force.slip_angle / self.peak_angle())
+            .hypot(force.slip_ratio / self.compound.peak_ratio);
         self.pneumatic_trail * (1.0 - slip).max(0.0)
     }
 

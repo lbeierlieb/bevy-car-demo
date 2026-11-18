@@ -6,8 +6,11 @@
 //! force feedback holds the wheel at either end, like in BeamNG.
 //!
 //! Force feedback (Linux) is one constant-force effect on the wheel's evdev device, updated
-//! every chassis step with the front tires' self-aligning torque. Damping and friction are
-//! left to the base's own tuning menu, which filters at a far higher rate.
+//! every chassis step with what the front wheels do to the steering (`sim::steering`), as
+//! a share of what the car's tires reach near the limit, so light and heavy cars feel alike.
+//! The quick part of it (bumps, tugs from the driven front wheels) can be made stronger
+//! than the steady pull ("Road feel"). Damping and friction are left to the base's own
+//! tuning menu, which filters at a far higher rate.
 
 use std::path::{Path, PathBuf};
 
@@ -15,12 +18,14 @@ use bevy::prelude::*;
 
 use crate::car::{ActiveCar, Car};
 use crate::input::{Action, WheelConfig, WheelInput};
+use crate::sim::steering;
 
 /// Where hid-fanatecff lists its devices; each has a `range` file in degrees.
 const DRIVER_DIR: &str = "/sys/module/hid_fanatec/drivers/hid:fanatec";
-/// Steering torque (N·m about the steering axes) that drives the wheel at full force with
-/// the strength at 1. Near the limit the tires reach about 300 N·m (the 2-litre coupé).
-const FULL_SCALE: f32 = 400.0;
+/// Time constant (s) of the steering's steady pull: what changes faster than that is the
+/// road's detail, scaled by the road feel. Faster than a driver turns the wheel, so turning
+/// in doesn't feel heavier for it.
+const DETAIL: f32 = 0.03;
 /// Seconds for the force to ramp up after the wheel connects, the window gets focus or
 /// the car changes, so the wheel never jerks.
 const FADE_IN: f32 = 1.0;
@@ -144,6 +149,8 @@ pub struct ForceFeedback {
     /// Time left in a test push from the panel.
     pub test: f32,
     fade: f32,
+    /// The steady part of the steering torque (shares of full scale), see `DETAIL`.
+    steady: f32,
     /// Time until looking for a device again.
     retry: f32,
     car: usize,
@@ -156,10 +163,16 @@ impl ForceFeedback {
     }
 }
 
-/// Force for a steering torque: positive (turning the front wheels left) pushes the wheel
-/// left; `fade` ramps it in.
-fn level(config: &WheelConfig, steering_torque: f32, fade: f32) -> f32 {
-    (config.ffb_gain * steering_torque / FULL_SCALE * fade).clamp(-1.0, 1.0)
+/// Force for a steering torque, as a share of the car's full scale: positive (turning the
+/// front wheels left) pushes the wheel left; `fade` ramps it in.
+fn level(config: &WheelConfig, share: f32, fade: f32) -> f32 {
+    (config.ffb_gain * share * fade).clamp(-1.0, 1.0)
+}
+
+/// A steering torque `share` with its quick part, what it is off `steady`, scaled by the
+/// road feel.
+fn with_road_feel(config: &WheelConfig, share: f32, steady: f32) -> f32 {
+    steady + config.ffb_road * (share - steady)
 }
 
 /// Force holding the wheel within the rotation range, for a steering wheel `angle` from the
@@ -221,11 +234,18 @@ fn force_feedback(
     let target = if ffb.test > 0.0 {
         ffb.test -= dt;
         TEST_LEVEL
-    } else if config.ffb_enabled {
-        car.map_or(0.0, |car| {
-            let rolling = (car.body.velocity.length() / ROLLING).min(1.0);
-            level(&config, car.steering_torque * rolling, ffb.fade)
-        })
+    } else if config.ffb_enabled
+        && let Some(car) = car
+    {
+        let rolling = (car.body.velocity.length() / ROLLING).min(1.0);
+        let share = car.rack.total() * rolling / steering::full_scale(&car.setup);
+        ffb.steady = if ffb.fade > 0.0 {
+            ffb.steady + (share - ffb.steady) * (dt / DETAIL).min(1.0)
+        } else {
+            share
+        };
+        let felt = with_road_feel(&config, share, ffb.steady);
+        level(&config, felt, ffb.fade)
     } else {
         0.0
     };
@@ -408,10 +428,22 @@ mod tests {
         };
         // Turning left, the tires pull the wheels back to the right: the wheel is pushed
         // right, and harder the more they pull, up to the base's maximum.
-        assert!(level(&config, -100.0, 1.0) < 0.0);
-        assert!(level(&config, -200.0, 1.0) < level(&config, -100.0, 1.0));
-        assert_eq!(level(&config, -10_000.0, 1.0), -1.0);
-        assert_eq!(level(&config, -100.0, 0.0), 0.0);
+        assert!(level(&config, -0.2, 1.0) < 0.0);
+        assert!(level(&config, -0.4, 1.0) < level(&config, -0.2, 1.0));
+        assert_eq!(level(&config, -10.0, 1.0), -1.0);
+        assert_eq!(level(&config, -0.2, 0.0), 0.0);
+    }
+
+    #[test]
+    fn road_feel_scales_the_quick_part_only() {
+        let config = WheelConfig {
+            ffb_road: 3.0,
+            ..default()
+        };
+        // Steady, it's as the tires make it; a kick off the steady pull comes through
+        // three times as strong.
+        assert_eq!(with_road_feel(&config, -0.3, -0.3), -0.3);
+        assert!((with_road_feel(&config, -0.2, -0.3) - 0.0).abs() < 1e-6);
     }
 
     #[test]

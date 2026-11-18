@@ -179,10 +179,18 @@ control is once it has moved: if the lever is already in a gear when the game st
 it notices at the first move (until then, the gearbox is in neutral).
 
 **Force feedback** (Linux, through the kernel's evdev interface, e.g. with
-hid-fanatecff) comes from the front tires: their side force acts a few centimetres
-behind the steering axes, pulling the wheel back towards where the car is going.
-That trail shrinks as the tires start to slide, so the wheel goes light before the
-front lets go. The force starts at half strength, ramps in over a second, and drops
+hid-fanatecff) is what the front wheels do to the steering, worked out from the
+suspension as it stands: their side force acts a few centimetres behind the steering
+axes, pulling the wheel back towards where the car is going. That trail shrinks as the
+tires start to slide, so the wheel goes light before the front lets go. On top come
+braking and bumps through the scrub radius, the load through the inclined axes, and
+with front- or all-wheel drive the driveshafts' torque: it tugs over bumps under
+power, straightens the wheel as the body rolls, and pulls a little to one side behind
+a transverse engine, whose shafts differ in length. Full force is about what the
+car's front tires reach near the limit, so a light car's wheel is as alive as a heavy
+one's. **Road feel** sets how strongly the quick part (bumps, tugs) comes through
+against the steady pull (1: as the tires make it; 2.5 to start with). The force
+starts at half strength, ramps in over a second, and drops
 to zero while the window is in the background. It's rate-limited (full force takes
 a fifth of a second), so kerbs and crashes don't jolt a direct-drive wheel. Click
 **Test: push left** once: if the wheel turns right, tick **Reverse direction**.

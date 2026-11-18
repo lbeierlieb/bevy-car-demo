@@ -322,6 +322,11 @@ fn force_feedback(ui: &mut egui::Ui, config: &mut WheelConfig, ffb: &mut ForceFe
     };
     ui.label(format!("On {device}"));
     ui.add(egui::Slider::new(&mut config.ffb_gain, 0.0..=1.0).text("Strength"));
+    ui.add(egui::Slider::new(&mut config.ffb_road, 0.0..=5.0).text("Road feel"))
+        .on_hover_text(
+            "How strongly bumps and the driven front wheels' tugs come through, against the \
+             steady pull of the tires: 1 is as they make it",
+        );
     let side = if ffb.level >= 0.0 { "left" } else { "right" };
     let clipping = ffb.level.abs() > 0.99;
     ui.add(

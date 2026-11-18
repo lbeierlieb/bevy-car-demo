@@ -193,7 +193,16 @@ and plays force feedback, both through hid-fanatecff on Linux.
 ### Design decisions (agreed with the user)
 
 - Target: Linux with hid-fanatecff. Force feedback only there; input works everywhere.
-- Force feedback: self-aligning torque only. Damping/friction from the base's tuning
+- Force feedback: the rack torque (`sim/steering.rs`, `Rack`, averaged over the
+  substeps): every front tire force's moment about its steering axis from the linkage
+  (the axis tilted back for 30 mm of caster trail, which the linkage lacks), pneumatic
+  trail (falls with slip angle and slip ratio), Fx at the carcass' sideways deflection,
+  and the driveshaft torque along the shaft (inner joints by the differential, 0.12 m
+  left of the middle with a transverse gearbox: torque steer). Asked for by the user
+  (light cars felt too light, wanted bumps and FWD/AWD power): full scale is 0.055 m ×
+  the front axle's weight (`full_scale`, every car ~0.6 at 0.7 g), and "Road feel"
+  (`ffb_road`, default 2.5) scales what's off a 0.03 s low-pass. `steering_feel`
+  (ignored) prints every car. Damping/friction from the base's tuning
   menu (evdev 0.13 can't send damper parameters). Rate-limited, fades in with speed.
 - The game sets the base's rotation range (default 540°) and restores it on exit;
   either end is full lock. If it can't, soft lock like BeamNG: the base's range is read
@@ -220,8 +229,9 @@ and plays force feedback, both through hid-fanatecff on Linux.
 
 - "Test: push left" in the panel: tick "Reverse direction" if it pushes right (the sign
   convention of hid-fanatecff couldn't be verified without hardware).
-- Tune the default force strength (0.5, with 400 N·m of steering torque as full scale;
-  tires peak around 300 N·m in the coupé, with 30 mm of caster trail).
+- Tune the default force strength (0.5) and road feel (2.5) on the real wheel; the
+  physical road content is small (std ~2 % of full scale on a rough road, ~5 % floored
+  in a FWD car), the 0.5 per-step smoothing in `force_feedback` also eats some of it.
 - That the game can set the rotation range (see below; last seen failing), and the soft
   lock where it can't (strength and feel on a direct drive base; may need damping).
 

@@ -12,13 +12,11 @@ use crate::physics::drivetrain::Drive;
 use crate::physics::suspension::ChassisFrame;
 use crate::terrain::Terrain;
 
+pub mod steering;
+
 pub const CHASSIS_HZ: f64 = 120.0;
 pub const SUBSTEPS: usize = 10;
 const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
-/// Distance the front tires' contact points trail the steering axes (from caster, m).
-/// Past the peak slip angle the pneumatic trail is gone and this is all that keeps
-/// the wheel pulling towards where the front tires roll: into countersteer in a slide.
-const MECHANICAL_TRAIL: f32 = 0.03;
 /// Density of the air (kg/m³).
 const AIR_DENSITY: f32 = 1.2;
 /// Traction control: the slip ratio of a driven wheel it holds (a little past the tires'
@@ -83,12 +81,13 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
         setup,
         body,
         corners,
-        steering_torque,
+        rack,
         knocks,
         ..
     } = car;
     let h = dt / SUBSTEPS as f32;
     let (mut force, mut torque) = (Vec3::ZERO, Vec3::ZERO);
+    let mut sum = steering::Rack::default();
     let rest_length = [true, false].map(|front| {
         let axle = setup.axle(front);
         axle.spring_rest_length(setup.corner_mass(front))
@@ -122,15 +121,10 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
                 &mut torque,
             );
         }
+        sum += steering::Rack::of(setup, corners, position, rotation);
     }
-    // The front tires' lateral forces act behind the steering axes, turning the wheels
-    // towards where they're rolling: self-aligning torque.
-    *steering_torque = corners
-        .iter()
-        .filter(|corner| corner.front)
-        .filter_map(|corner| corner.contact)
-        .map(|contact| (setup.front.tire.trail(&contact.tire) + MECHANICAL_TRAIL) * contact.tire.fy)
-        .sum();
+    // What the front wheels do to the steering, averaged over the substeps.
+    *rack = sum.scaled(1.0 / SUBSTEPS as f32);
     // The air: drag against the motion, and downforce over each axle, both with the
     // square of the speed.
     let pressure = 0.5 * AIR_DENSITY * body.velocity.length_squared();
@@ -392,9 +386,9 @@ mod tests {
         run(&mut car, &terrain, 1.0);
         // The tires pull the steering back towards straight ahead.
         assert!(
-            car.steering_torque < -10.0,
+            car.rack.total() < -10.0,
             "steering torque {}",
-            car.steering_torque
+            car.rack.total()
         );
         // Positive steer turns left, i.e. increases the heading angle (wrapped to ±π).
         let turned = (heading(car.body.rotation) - before + std::f32::consts::PI)

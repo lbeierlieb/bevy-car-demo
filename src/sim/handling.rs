@@ -156,7 +156,7 @@ fn print_state(car: &Car, t: f32) {
         yaw.to_degrees(),
         car.body.velocity.length(),
         car.controls.steer,
-        car.steering_torque,
+        car.rack.total(),
         car.controls.throttle,
         tires.join(" | "),
     );
