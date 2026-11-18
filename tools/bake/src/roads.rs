@@ -266,8 +266,9 @@ fn tangent(points: &[Point], i: usize) -> Point {
 /// Sets the heights of all drivable roads: smooth profiles that follow `lidar`, the
 /// ground height at a point. The lidar is read across the road's width at each point and
 /// the median taken, so a centreline mapped a little off onto a verge or a ditch still
-/// finds the road.
-pub fn profiles(roads: &mut [Road], lidar: impl Fn(Point) -> f64) {
+/// finds the road. Nodes in `pins` (their `ele`) hold the roads through them at that
+/// height.
+pub fn profiles(roads: &mut [Road], pins: &HashMap<i64, f64>, lidar: impl Fn(Point) -> f64) {
     let mut problem = Problem::default();
     // Points that are the same mapped node share a height.
     let mut of_node: HashMap<i64, usize> = HashMap::new();
@@ -280,7 +281,13 @@ pub fn profiles(roads: &mut [Road], lidar: impl Fn(Point) -> f64) {
                 problem.count - 1
             };
             ids.push(match node {
-                Some(node) => *of_node.entry(node).or_insert_with(|| fresh(&mut problem)),
+                Some(node) => *of_node.entry(node).or_insert_with(|| {
+                    let id = fresh(&mut problem);
+                    if let Some(&ele) = pins.get(&node) {
+                        problem.pins.push((id, ele));
+                    }
+                    id
+                }),
                 None => fresh(&mut problem),
             });
         }

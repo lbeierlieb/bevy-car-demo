@@ -288,7 +288,7 @@ fn draw(
                 .get("ele")
                 .and_then(|e| e.parse::<f32>().ok())
             {
-                Some(ele) => Vec3::new(base.x, ele, base.z),
+                Some(ele) => Vec3::new(base.x, ele - terrain.base, base.z),
                 None => base + Vec3::Y * POST,
             };
             gizmos.line(base, top, kind.color());

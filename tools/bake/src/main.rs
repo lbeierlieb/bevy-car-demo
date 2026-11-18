@@ -17,7 +17,9 @@ mod fences;
 mod osm;
 mod profile;
 mod roads;
+mod terrain;
 
+use std::collections::HashMap;
 use std::io::Cursor;
 
 use osm::{Frame, Osm, Tags};
@@ -485,6 +487,58 @@ fn bake(
         .collect();
 
     let osm = Osm::parse(&std::fs::read_to_string(map)?)?;
+
+    // Terrain areas (map editor) change the terrain before anything is fitted to it; the
+    // road profiles see the change too (as `delta`, added to the lidar).
+    let mut terrain_areas = Vec::new();
+    let live_ways = osm.ways.iter().filter(|(_, w)| !w.meta.deleted());
+    for (&id, way) in live_ways.filter(|(_, w)| w.meta.tags.contains_key("carsim:terrain")) {
+        let corners: Vec<(Point, Option<f64>)> = way
+            .refs
+            .iter()
+            .filter_map(|r| {
+                let node = osm.nodes.get(r).filter(|n| !n.meta.deleted())?;
+                let ele = node.meta.tags.get("ele").and_then(|e| e.parse().ok());
+                Some((frame.to_local(node.lat, node.lon), ele))
+            })
+            .collect();
+        match terrain::Area::new(&way.meta.tags, &corners) {
+            Ok(area) => terrain_areas.push(area),
+            Err(e) => eprintln!("terrain area way {id} skipped: {e}"),
+        }
+    }
+    let delta: Option<Vec<f32>> = (!terrain_areas.is_empty()).then(|| {
+        let before = heights.clone();
+        for area in &terrain_areas {
+            area.apply(&mut heights, n, (-half_x, -half_z), CELL);
+        }
+        eprintln!("{} terrain areas applied", terrain_areas.len());
+        heights
+            .iter()
+            .zip(&before)
+            .map(|(a, b)| (a - b) as f32)
+            .collect()
+    });
+    // The change at a point, between grid vertices.
+    let delta_at = |x: f64, z: f64| -> f64 {
+        let Some(delta) = &delta else {
+            return 0.0;
+        };
+        let fx = ((x + half_x) / CELL).clamp(0.0, cells_x as f64 - 1e-9);
+        let fz = ((z + half_z) / CELL).clamp(0.0, cells_z as f64 - 1e-9);
+        let (i, j) = (fx as usize, fz as usize);
+        let (tx, tz) = (fx - i as f64, fz - j as f64);
+        let d = |i: usize, j: usize| delta[j * n + i] as f64;
+        (d(i, j) * (1.0 - tx) + d(i + 1, j) * tx) * (1.0 - tz)
+            + (d(i, j + 1) * (1.0 - tx) + d(i + 1, j + 1) * tx) * tz
+    };
+    // Road heights pinned in the map editor.
+    let pins: HashMap<i64, f64> = osm
+        .nodes
+        .iter()
+        .filter(|(_, n)| !n.meta.deleted())
+        .filter_map(|(&id, n)| Some((id, n.meta.tags.get("ele")?.parse().ok()?)))
+        .collect();
     let on_map = |&(x, z): &Point| x.abs() < half_x && z.abs() < half_z;
     // Roads stop where the rim starts to rise.
     let inside = |&(x, z): &Point| x.abs() < half_x - RIM && z.abs() < half_z - RIM;
@@ -666,8 +720,8 @@ fn bake(
 
     // Road heights: smooth profiles along the lidar; the terrain cut and filled to them
     // (not under bridges: lidar shows the ground there, and the decks span over it).
-    roads::profiles(&mut roads, |(x, z)| {
-        dgm.sample(frame.east + x, frame.north - z)
+    roads::profiles(&mut roads, &pins, |(x, z)| {
+        dgm.sample(frame.east + x, frame.north - z) + delta_at(x, z)
     });
     let grid = Grid {
         cells_x,
@@ -711,6 +765,22 @@ fn bake(
             }
         }
     };
+    for area in &terrain_areas {
+        let (mut lo, mut hi) = (area.outline[0], area.outline[0]);
+        for &(x, z) in &area.outline {
+            lo = (lo.0.min(x), lo.1.min(z));
+            hi = (hi.0.max(x), hi.1.max(z));
+        }
+        let mut z = lo.1;
+        while z <= hi.1 + chunk_size {
+            let mut x = lo.0;
+            while x <= hi.0 + chunk_size {
+                refine((x.min(hi.0), z.min(hi.1)), 4.0, STEP_DETAIL);
+                x += chunk_size / 2.0;
+            }
+            z += chunk_size / 2.0;
+        }
+    }
     for point in buildings.iter().flat_map(|b| &b.points) {
         refine(*point, 20.0, STEP_DETAIL);
     }
@@ -804,7 +874,8 @@ fn bake(
 
     // Write (all little-endian, and the whole file compressed with zlib): b"CSTR", version u32, cells along x and z u32, cell size f32,
     // chunk cells u32, spawn point (x, z) f32, spawn heading as a direction (x, z) f32
-    // ((0, 0) if not given),
+    // ((0, 0) if not given), the lowest point's height above sea level f32 (heights are
+    // above it),
     // then per chunk (row-major, rows along z): step u8 (in cells), the chunk's
     // (chunk cells / step + 1)² vertex heights u16 in centimetres above the lowest point
     // (row-major, each as the wrapping difference from left + above - above-left, or the
@@ -845,7 +916,7 @@ fn bake(
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&12u32.to_le_bytes());
+    put(&13u32.to_le_bytes());
     put(&(cells_x as u32).to_le_bytes());
     put(&(cells_z as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
@@ -854,6 +925,7 @@ fn bake(
     put(&(spawn.1 as f32).to_le_bytes());
     put(&(heading.0 as f32).to_le_bytes());
     put(&(heading.1 as f32).to_le_bytes());
+    put(&(base as f32).to_le_bytes());
     for cz in 0..chunks_z {
         for cx in 0..chunks_x {
             let s = steps[cz * chunks_x + cx];

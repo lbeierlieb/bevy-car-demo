@@ -173,6 +173,8 @@ pub struct Terrain {
     /// they should face along it (zero if none).
     spawn: Vec2,
     spawn_heading: Vec2,
+    /// Height above sea level of the map's y = 0 (its lowest point).
+    pub base: f32,
     pub roads: Vec<Road>,
     /// The road segments near each cell, for `surface`.
     road_grid: RoadGrid,
@@ -257,7 +259,7 @@ impl Terrain {
         let mut r = Bytes(&inflated);
         r.take(4);
         let version = r.u32();
-        if version != 12 {
+        if version != 13 {
             return Err(format!("unsupported terrain version {version}"));
         }
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
@@ -265,6 +267,7 @@ impl Terrain {
         let chunk_cells = r.u32() as usize;
         let spawn = Vec2::new(r.f32(), r.f32());
         let spawn_heading = Vec2::new(r.f32(), r.f32());
+        let base = r.f32();
         let n = cells_x + 1;
         let mut heights = vec![0.0; n * (cells_z + 1)];
         let mut chunks = Vec::new();
@@ -362,6 +365,7 @@ impl Terrain {
             chunks,
             spawn,
             spawn_heading,
+            base,
             road_grid: RoadGrid::new(&roads, half),
             roads,
             buildings,
@@ -389,6 +393,7 @@ impl Terrain {
                 .collect(),
             spawn: Vec2::ZERO,
             spawn_heading: Vec2::NEG_Y,
+            base: 0.0,
             roads: Vec::new(),
             road_grid: RoadGrid::new(&[], Vec2::splat(cells as f32 * 2.0)),
             buildings: Vec::new(),

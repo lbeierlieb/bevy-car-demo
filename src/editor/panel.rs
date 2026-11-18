@@ -337,11 +337,14 @@ fn selected(ui: &mut egui::Ui, s: &mut State) {
     if let Some(id) = node.filter(|n| s.doc.node(*n).is_some()) {
         ui.separator();
         let p = s.doc.pos(id).unwrap_or_default();
-        let ground = s.terrain.sample(p.x, p.y).0;
+        let ground = s.terrain.sample(p.x, p.y).0 + s.terrain.base;
         let ways = s.doc.ways_of(id).to_vec();
         ui.horizontal(|ui| {
             ui.strong(format!("Node {id}"));
-            ui.label(format!("in {} way(s), ground {ground:.2} m", ways.len()));
+            ui.label(format!(
+                "in {} way(s), ground {ground:.2} m above sea level",
+                ways.len()
+            ));
         });
         let ele = s
             .doc

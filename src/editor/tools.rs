@@ -404,7 +404,9 @@ pub fn run(
             None
         }
         Command::Raise(cm) => selection.node.map(|node| {
-            let ground = doc.pos(node).map_or(0.0, |p| terrain.sample(p.x, p.y).0);
+            let ground = doc
+                .pos(node)
+                .map_or(0.0, |p| terrain.sample(p.x, p.y).0 + terrain.base);
             let mut now = 0.0;
             doc.edit("height pin", |e| {
                 e.modify_node(node, |n| {
@@ -596,7 +598,7 @@ fn finish(doc: &mut Doc, tools: &mut Tools, selection: &mut Selection, terrain: 
     let heights: Vec<f32> = points
         .iter()
         .filter_map(|p| p.at(doc))
-        .map(|p| terrain.land(p.x, p.y).0)
+        .map(|p| terrain.land(p.x, p.y).0 + terrain.base)
         .collect();
     let tags = new_tags(tools, &heights);
     let slope = tags.get(TERRAIN).is_some_and(|op| op == "slope");
@@ -680,7 +682,7 @@ fn place(
     let class_of = |doc: &Doc, way: i64| doc.way(way).map(|w| Class::of(&w.meta.tags));
     let tag_value = |at: Vec2| -> String {
         if kind == Place::Height {
-            format!("{:.2}", terrain.sample(at.x, at.y).0)
+            format!("{:.2}", terrain.sample(at.x, at.y).0 + terrain.base)
         } else {
             value.into()
         }

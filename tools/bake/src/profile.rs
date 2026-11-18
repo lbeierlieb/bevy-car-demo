@@ -10,6 +10,9 @@
 //! held, sweeping until nothing moves; then the lidar heights far off the profile are
 //! trusted less (Huber) and it's solved again, so a dip where a bridge's ends are mapped
 //! short doesn't pull the road down.
+//!
+//! Pinned heights (a node's `ele`, set in the map editor) are hard constraints: the road
+//! passes through them exactly and bends smoothly towards them.
 
 /// Huber's threshold: lidar heights further than this off the profile count less (m).
 const ROBUST: f64 = 0.25;
@@ -21,6 +24,8 @@ const SETTLED: f64 = 1e-3;
 const OVERRELAX: f64 = 1.7;
 /// Shortest point spacing used for slopes (m), so near-duplicate points don't blow up.
 const MIN_SPACING: f64 = 0.2;
+/// The weight of a pinned height, against the lidar's metre-by-metre weights of about 1.
+const PIN: f64 = 1e7;
 
 /// The stiffness that lets through bumps longer than `wavelength` (m) and smooths shorter
 /// ones away: with the data weighed per metre, the response is 1 / (1 + stiffness k⁴).
@@ -38,6 +43,8 @@ pub struct Problem {
     pub bends: Vec<([usize; 3], [f64; 2], f64)>,
     /// The heights of each road in order, none twice (closed roads are split in two).
     pub chains: Vec<Vec<usize>>,
+    /// Heights that must be exactly so: (height, value).
+    pub pins: Vec<(usize, f64)>,
 }
 
 impl Problem {
@@ -52,6 +59,11 @@ impl Problem {
         }
         for (x, seen) in x.iter_mut().zip(&seen) {
             *x /= seen.max(1.0);
+        }
+        let mut pinned = vec![None; n];
+        for &(i, value) in &self.pins {
+            pinned[i] = Some(value);
+            x[i] = value;
         }
         // Each bend as coefficients on its heights and a weight.
         let bends: Vec<([usize; 3], [f64; 3], f64)> = self
@@ -101,6 +113,10 @@ impl Problem {
                         (vec![1e-9; m], vec![0.0; m], vec![0.0; m], vec![0.0; m]);
                     stamps += 1;
                     for (j, &i) in chain.iter().enumerate() {
+                        if let Some(value) = pinned[i] {
+                            d[j] += PIN;
+                            rhs[j] += PIN * value;
+                        }
                         for &t in &data_of[i] {
                             let (_, w, r) = self.data[t];
                             d[j] += w * trust[t];
@@ -149,6 +165,11 @@ impl Problem {
             }
             rounds.push(sweeps);
             sweeps = 0;
+        }
+        for (x, pin) in x.iter_mut().zip(&pinned) {
+            if let Some(value) = pin {
+                *x = *value;
+            }
         }
         let mut off: Vec<f64> = self
             .data
@@ -310,5 +331,28 @@ mod tests {
         assert!((x[50] - 2.5).abs() < 0.1, "bump left {}", x[50] - 2.5);
         assert!((x[140] - 7.0).abs() < 0.05, "gap at {}", x[140]);
         assert!((x[100] - 5.0).abs() < 0.02, "slope at {}", x[100]);
+    }
+
+    #[test]
+    fn pinned_heights_hold_and_the_road_bends_towards_them() {
+        // A flat road 200 m long, pinned 2 m up in the middle.
+        let mut problem = Problem {
+            count: 201,
+            chains: vec![(0..201).collect()],
+            pins: vec![(100, 2.0)],
+            ..Default::default()
+        };
+        for i in 0..201 {
+            problem.data.push((i, 1.0, 0.0));
+            if i > 0 && i < 200 {
+                problem
+                    .bends
+                    .push(([i - 1, i, i + 1], [1.0, 1.0], stiffness(40.0)));
+            }
+        }
+        let x = problem.solve();
+        assert_eq!(x[100], 2.0);
+        assert!(x[95] > 1.5 && x[95] < 2.0, "near the pin {}", x[95]);
+        assert!(x[0].abs() < 0.05, "far from it {}", x[0]);
     }
 }
