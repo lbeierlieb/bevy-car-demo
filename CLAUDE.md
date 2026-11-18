@@ -23,7 +23,9 @@ sound, egui): the **sandbox** (`src/main.rs`: stock coupé, R reset, map telepor
 F2 panel, F3–F6 tools) and the **career** (`src/bin/career.rs`, `cargo run --bin
 career`). Keep it that way: no mode flags; something only one app has is a plugin of its
 own (e.g. `car::ResetPlugin`, `map::TeleportPlugin`, `ui::PanelPlugin`), and shared
-pieces are public functions (e.g. `ui::WheelPanel::show`, `workshop`).
+pieces are public functions (e.g. `ui::WheelPanel::show`, `workshop`). A third app,
+the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars): its
+`editor::EditorPlugin` adds the terrain, scenery, sky and map plugins itself.
 
 - rustfmt (asked for by the user): the whole repo is rustfmt-clean since 2026-11-17.
   Always run `nix develop -c cargo fmt --all` before every commit (and `cargo fmt` in
@@ -54,7 +56,9 @@ pieces are public functions (e.g. `ui::WheelPanel::show`, `workshop`).
 - Dependency sources (no `~/.cargo/registry`): they're tarballs in the store, e.g.
   `ls -d /nix/store/*cargo-src-egui-0.36*`; unpack into the scratchpad with `tar xzf`.
 - Terrain bake tool: `cd tools/bake; nix develop /repo -c cargo build --release; ./target/release/bake …`
-  (commands in README, "The map and baking it"; a bake takes about 6 s).
+  (commands in README, "The map and baking it"; a bake takes about 20 s). The native
+apps load `assets/gerach.terrain` at startup, so tests and apps see a re-bake at once;
+the embedded copy (`include_bytes!`) is only the fallback, but commit the re-baked file.
 - Engine maps of every factory engine (22, see `families.rs`) are baked into
   `src/physics/engine/baked/<code>.maps`. After changing `cycle.rs`, `maps.rs` (outside
   their tests; any edit counts, their text is in the fingerprint) or a factory engine's
@@ -75,6 +79,12 @@ the frames until the shot (`k` opens the map, `2` hides the panel, `3` the ECU w
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
 The keys `3`–`6` don't expand the F3–F6 windows in screenshots (seen 2026-11-17, also on
 the code before the app split): click their title bars instead.
+`PLACE="x,z,frame"`The editor (`BIN=editor`, hooked by `EditorShotPlugin`): `EDITCAM="x,z,height,yaw,pitch"`
+(degrees, the first 20 frames), `CLICK="x,y,frame[,x2,y2]"` sets the window's cursor and
+holds the left button (a drag with x2, y2), `UICLICK` is the window-event click for
+egui (the map, buttons), `EDITKEYS="Digit2@25;ControlLeft+KeyS@60"` taps keys. A view
+of a village road: `EDITCAM="-2986,-1954,45,0,-70"`, the road at (1000, 381). Saving
+or baking in a shot writes the real map and terrain files: `git checkout map assets`.
 `PLACE="x,z,frame"` puts the driven car on the road nearest that map point, e.g. on a
 career place (building positions in `career/places.rs`). For the career, give it its
 own config dir (`XDG_CONFIG_HOME=<scratch>/cfg`) so the save is fresh or can be edited
@@ -587,7 +597,7 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    file) into format v12; the game's `src/fences.rs` draws six kinds in pieces ≤ 2.5 m
    on `Terrain::sample` and puts a solid box per piece in the obstacle grid. Agreed:
    solid (not breakable), gates open, only what's in the map (no generated rails).
-7. Map editor (agreed 2026-11-18, being built): see "Map editor" below.
+7. Map editor (agreed 2026-11-18, built the night after): see "Map editor" below.
 
 ### Map editor (step 7, agreed with the user)
 
@@ -618,6 +628,26 @@ HUD, sound). Decisions:
   as fallback and for the web), so a bake shows up without recompiling.
 - Inspector: what's under the cursor (way id, tags), and the conflict markers from the
   bake shown in 3D with next/previous.
+
+Built (all in `src/editor/`, see its module docs and README "The map editor"; nothing
+of it tried with a real mouse yet, only headless): `doc.rs` (the `Osm` with node
+positions, ways per node, `Change`-based undo via `Doc::edit`), `index.rs` (`Class`
+of a way by tags, `PointKind`, 64 m grid rebuilt per revision), `overlay.rs` (gizmo
+lines draped 0.3 m above `Terrain::sample`, cached per revision; hover picks the
+nearest node within 12 px × 1.3, else segment, in ground metres), `tools.rs` (`Tool`,
+`Command` shared by keys and panel), `panel.rs` (an `egui::Area` top right: a
+`Window` kept its old size and scrolled), `bake.rs` (`sh -c`: `cargo build --release`
+in `tools/bake` without `CARGO_TARGET_DIR` (the dev shell's `cargo run` adds
+`--profile`), then the binary; on success `Terrain::parse` + `scenery::Reload` +
+`MapView::rebuild`), `conflicts.rs`. Decisions made alone: tags `carsim:terrain`
+(flatten|raise|smooth|slope), `carsim:height` (m above sea level), `carsim:offset`,
+`carsim:radius`, `carsim:fade` (default 5 m, inside the outline); slope corners and
+pins are `ele` (above sea level; baked format 13 stores `Terrain::base`, the lowest
+point's height, to convert). egui input is **not** absorbed in the editor (bevy_egui
+then resets the mouse buttons whenever egui is over the pointer, dropping drags):
+systems check `EguiWantsInput` themselves. The bake is shared code-wise: `src/osm.rs`
+is `#[path]`-included by `tools/bake` (std + quick-xml only). Map file ids: new
+elements without `version` (JOSM rejects one on new elements).
 
 ## Sky
 

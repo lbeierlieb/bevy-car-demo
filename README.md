@@ -72,12 +72,17 @@ A small Bevy demo of car simulation techniques:
 nix develop               # toolchain + native libraries
 cargo run                 # the sandbox: optimised build (release-dev profile) with fast rebuilds
 cargo run --bin career    # the career
+cargo run --bin editor    # the map editor (native only)
 cargo test                # physics unit tests and headless driving tests
 ```
 
-There are two apps built from the same library: the **sandbox** (`src/main.rs`, every
-car and part for free, with the developer tools) and the **career** (`src/bin/career.rs`).
-Each is the list of plugins it adds to the shared `CorePlugin`.
+There are three apps built from the same library: the **sandbox** (`src/main.rs`, every
+car and part for free, with the developer tools), the **career** (`src/bin/career.rs`)
+and the **map editor** (`src/bin/editor.rs`, no cars; see "The map editor" below). The
+driving apps are each the list of plugins they add to the shared `CorePlugin`. On
+native, they read the baked map from `assets/gerach.terrain` at startup, so a fresh
+bake shows up without recompiling (the copy built in is the fallback, and the web
+build's map).
 
 Or without entering the shell: `nix run`. The web build is served with
 `nix run .#serve-wasm` at <http://localhost:8080>. `nix flake check` builds both
@@ -198,6 +203,8 @@ tire grip force, cyan for roll centres.
 | `src/chassis.rs` | The cars: chassis, gearboxes, and which engine fits where |
 | `src/body.rs` | Procedural low-poly car bodies |
 | `src/lib.rs`, `src/main.rs`, `src/bin/career.rs` | The shared `CorePlugin`; the sandbox and career apps |
+| `src/editor/`, `src/bin/editor.rs` | The map editor |
+| `src/osm.rs` | The map file's reader and writer (shared with the bake) |
 | `src/career/` | Career: places, jobs, the garage and dyno scenes, dealer, parts shop, towing, save |
 | `src/garage.rs` | Sandbox showroom and garage |
 | `src/workshop.rs` | Baking engine maps in the background, and their cache |
@@ -220,7 +227,8 @@ tire grip force, cyan for roll centres.
 
 The map's roads, land use and buildings live in `map/gerach.osm`, an OpenStreetMap
 file that is ours: it was imported from OpenStreetMap once and is edited from then on
-in [JOSM](https://josm.openstreetmap.de/) (File → Open, edit, File → Save). The file
+in the map editor (below) or [JOSM](https://josm.openstreetmap.de/) (File → Open,
+edit, File → Save). The file
 says `upload='never'`, so JOSM won't upload it to OpenStreetMap. Elements keep their
 OSM ids; JOSM gives new ones negative ids and keeps deleted ones in the file, marked
 `action='delete'`, so a later import doesn't bring them back. The bake only reads the
@@ -291,6 +299,15 @@ bridge are left out (its parapets stand in for them). Barriers still standing on
 road, mostly ones crossing it without a gate, are listed in the conflicts file too.
 Every barrier is solid: cars stop at it like at a wall.
 
+Two kinds of edits are ours, made in the map editor. `ele` on a node (metres above
+sea level) pins the height of the roads through it: the profile passes through it
+exactly and bends smoothly towards it. A closed way tagged `carsim:terrain` changes
+the lidar terrain before the roads are fitted (`tools/bake/src/terrain.rs`):
+`flatten` to `carsim:height` (above sea level), `raise` by `carsim:offset`
+(negative lowers), `smooth` over `carsim:radius` metres (default 6), or `slope`, a
+plane through the `ele` heights of its corners. Each fades in over `carsim:fade`
+metres (default 5) inside its outline; its chunks get full detail.
+
 Each 96 m chunk is then given a resolution. It gets 2 m within 20 m of a building
 or 14 m of a road, and next to paved areas. Everything else gets 8 m, with each coarse vertex averaging the terrain around it. Along seams
 between resolutions, the finer side's edge is bent onto the coarser side's straight
@@ -314,13 +331,50 @@ cargo build --release
 
 The map was imported with `import 50.0118569 10.8455963 9600x8448 ../../map/gerach.osm`
 and is baked with `../../map/gerach.osm 50.0118569 10.8455963 9600x8448
-../../assets/gerach.terrain 50.0305556 10.8046389 180` (a few seconds), which starts the cars on the road nearest that point in
+../../assets/gerach.terrain 50.0305556 10.8046389 180` (about 20 seconds; the map
+editor runs the same with F5), which starts the cars on the road nearest that point in
 Gerach, facing as close to south (180°) as the road allows, one behind the other. To use a different file,
-change `BAKED` in `src/terrain.rs`. To make the map bigger, import the bigger
+change `BAKED` and `TERRAIN_FILE` in `src/terrain.rs` (and the map file and bake
+arguments at the top of `src/editor/mod.rs`). To make the map bigger, import the bigger
 rectangle into the same file and bake with the new size. The public Overpass server sometimes answers
 that it's busy; the tool then retries every minute, up to five times. Only chunks near the camera are on the GPU, so map size is limited by
 the size of the baked file, which is embedded in the program (zlib-compressed, with heights and road points as small differences: about 0.19 MB per km²
 with the current mix of resolutions).
+
+## The map editor
+
+`cargo run --bin editor` (in `nix develop`, from the repo) flies over the baked map
+with the map file drawn on top, coloured by kind: roads yellow, waterways blue,
+buildings red, barriers purple, land use green, terrain areas orange. It edits
+`map/gerach.osm` directly, written the way JOSM writes it (new elements with negative
+ids, changed ones marked `action='modify'`, deleted ones kept as `action='delete'`),
+so JOSM and `bake import` still work with the file.
+
+- **Flying**: hold the right mouse button to look around, WASD to move, Q/E down and
+  up, Shift faster, the mouse wheel sets the speed. M opens the map; a click there
+  flies to that spot.
+- **Selecting** (tool 1): click a way or a node; the panel shows its id and tags, as
+  rows of key and value (typed values are written when the field is left, one undo
+  step; `…` offers values for keys like `highway`, `surface`, `smoothness`), with
+  buttons adding common keys. Drag a node to move it, Ctrl+click on a way to add a
+  node there, Delete removes the selected node (or way), X splits the selected way at
+  the selected node.
+- **Drawing** (tools 2–6: road, fence, building, land use, terrain area; the kind is
+  picked in the panel): click to add points. Clicking a node joins it, clicking a way
+  adds a shared node to it. Enter or a click on the last point finishes; a click on the
+  first point closes an area. Backspace takes a point back, Escape cancels. A new
+  terrain area gets the terrain's mean height (flatten), 1 m (raise), a 6 m radius
+  (smooth) or its corners' heights (slope), all editable in the tag table.
+- **Placing** (tool 7): speed bumps, humps, tables and potholes on a road (or where
+  clicked), gates on a fence, and height pins on a road.
+- **Heights**: Page Up/Down raise and lower the selected node's height pin by 10 cm
+  (Shift: 1 m); it starts at the ground there. The pin shows as a cyan post to its
+  height.
+- **Conflicts**: the bake's list (`map/gerach.conflicts.gpx`) is shown as red posts with
+  labels; Previous/Next fly to them, and buttons select the way and building one names.
+- **File**: Ctrl+Z / Ctrl+Y undo and redo, Ctrl+S saves. F5 (or "Save and bake")
+  saves, builds and runs the bake (about 20 s, progress in the panel) into
+  `assets/gerach.terrain` and reloads the map in place.
 
 ## Deliberate simplifications
 
