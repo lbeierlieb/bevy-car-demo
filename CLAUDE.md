@@ -552,6 +552,15 @@ phasing, VTEC-style cam switching).
 - Next ideas: closed loop (wideband sensor), knock sensor/control, boost control,
   launch/anti-lag; damage to the clutch and gearbox; misfire sound for dead cylinders.
 
+## Sky
+
+`src/sky.rs`: a dome (900 m, inside the 1000 m far plane, following the camera) with an
+unlit, unfogged texture made at startup (2048×512, lat-long of the upper half): gradient
+from `ZENITH` to `HAZE` (the fog's colour too, so the land fades into the horizon), the
+sun's glow and disc towards `SUN` (also where the directional light sits), and a flat
+cloud layer of value-noise fbm seen in perspective (octaves finer than a texel dropped).
+Knobs at the top. The sun is 59° up, so it's never in the chase view.
+
 ## Audio
 
 The engine's layout (`families::Layout`) sets how many pulses there are in a cycle and

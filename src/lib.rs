@@ -22,6 +22,7 @@ pub mod obstacles;
 pub mod physics;
 pub mod scenery;
 pub mod sim;
+pub mod sky;
 pub mod storage;
 pub mod terrain;
 pub mod traffic;
@@ -35,8 +36,6 @@ pub mod workshop;
 
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
-
-const SKY: Color = Color::srgb(0.62, 0.76, 0.90);
 
 /// The engine's own plugins, with the game's window titled `title`.
 pub fn default_plugins(title: &str) -> impl PluginGroup {
@@ -59,31 +58,31 @@ pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(ClearColor(SKY))
-            .insert_resource(GlobalAmbientLight {
-                brightness: 250.0,
-                ..default()
-            })
-            .add_plugins((
-                (
-                    terrain::TerrainPlugin,
-                    scenery::SceneryPlugin,
-                    obstacles::ObstaclesPlugin,
-                    traffic::TrafficPlugin,
-                ),
-                sim::SimPlugin,
-                input::InputPlugin,
-                wheel_base::WheelBasePlugin,
-                car::CarPlugin,
-                visuals::VisualsPlugin,
-                cockpit::CockpitPlugin,
-                camera::CameraPlugin,
-                ui::UiPlugin,
-                hud::HudPlugin,
-                map::MapPlugin,
-                audio::AudioPlugin,
-            ))
-            .add_systems(Startup, setup);
+        app.insert_resource(GlobalAmbientLight {
+            brightness: 250.0,
+            ..default()
+        })
+        .add_plugins((
+            (
+                terrain::TerrainPlugin,
+                scenery::SceneryPlugin,
+                obstacles::ObstaclesPlugin,
+                traffic::TrafficPlugin,
+            ),
+            sim::SimPlugin,
+            input::InputPlugin,
+            wheel_base::WheelBasePlugin,
+            car::CarPlugin,
+            visuals::VisualsPlugin,
+            cockpit::CockpitPlugin,
+            camera::CameraPlugin,
+            ui::UiPlugin,
+            hud::HudPlugin,
+            map::MapPlugin,
+            audio::AudioPlugin,
+            sky::SkyPlugin,
+        ))
+        .add_systems(Startup, setup);
     }
 }
 
@@ -94,7 +93,7 @@ fn setup(mut commands: Commands) {
             shadow_maps_enabled: true,
             ..default()
         },
-        Transform::from_xyz(30.0, 60.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_translation(sky::SUN).looking_at(Vec3::ZERO, Vec3::Y),
         CascadeShadowConfigBuilder {
             maximum_distance: 120.0,
             ..default()
@@ -105,7 +104,7 @@ fn setup(mut commands: Commands) {
         Camera3d::default(),
         camera::ChaseCamera::default(),
         DistanceFog {
-            color: SKY,
+            color: sky::HAZE,
             falloff: FogFalloff::Linear {
                 start: 180.0,
                 end: 480.0,
