@@ -132,7 +132,7 @@ fn fly(
         camera.speed = (camera.speed as isize + step).clamp(0, SPEEDS.len() as isize - 1) as usize;
     }
     transform.rotation = camera.rotation();
-    if view.open {
+    if view.open || egui.wants_keyboard_input() {
         return;
     }
 

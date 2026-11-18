@@ -23,7 +23,7 @@ pub mod tools;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use bevy_egui::{EguiGlobalSettings, EguiPlugin};
+use bevy_egui::EguiPlugin;
 
 use crate::osm::Frame;
 
@@ -104,8 +104,8 @@ fn load(mut commands: Commands, mut map: ResMut<crate::map::MapView>) {
     map.click = Some("fly there");
 }
 
-fn setup(mut commands: Commands, mut egui: ResMut<EguiGlobalSettings>) {
-    // Typing into a field shouldn't fly the camera.
-    egui.enable_absorb_bevy_input_system = true;
+fn setup(mut commands: Commands) {
+    // egui's input isn't absorbed (that would drop a node being dragged as soon as the
+    // pointer crosses the panel): the systems ask `EguiWantsInput` themselves.
     crate::spawn_sun(&mut commands);
 }

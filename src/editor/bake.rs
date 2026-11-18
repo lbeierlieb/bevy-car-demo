@@ -75,11 +75,12 @@ fn arguments(out: &Path) -> Vec<String> {
 
 fn start(
     keys: Res<ButtonInput<KeyCode>>,
+    egui: Res<bevy_egui::input::EguiWantsInput>,
     mut bake: ResMut<Bake>,
     mut doc: ResMut<Doc>,
     mut tools: ResMut<Tools>,
 ) {
-    if keys.just_pressed(KeyCode::F5) {
+    if keys.just_pressed(KeyCode::F5) && !egui.wants_keyboard_input() {
         bake.requested = true;
     }
     if !std::mem::take(&mut bake.requested) || bake.job.is_some() {
@@ -92,15 +93,21 @@ fn start(
         return;
     }
     let out = Terrain::file().unwrap_or_else(|| repo_file(TERRAIN_FILE));
+    // Built first if cargo is there (`cargo build`: the dev shell's `cargo run` adds a
+    // profile of its own), where `tools/bake` builds it by itself, whatever this app was
+    // built with; then run.
     let manifest = repo_file("tools/bake/Cargo.toml");
-    let mut cargo = Command::new("cargo");
-    cargo
-        .args(["run", "--release", "--manifest-path"])
+    let binary = repo_file("tools/bake/target/release/bake");
+    let mut script = Command::new("sh");
+    script
+        .env_remove("CARGO_TARGET_DIR")
+        .arg("-c")
+        .arg(BUILD_AND_RUN)
+        .arg(&binary)
         .arg(&manifest)
-        .arg("--")
         .args(arguments(&out));
-    let spawned = spawn(cargo).or_else(|_| {
-        let mut built = Command::new(repo_file("tools/bake/target/release/bake"));
+    let spawned = spawn(script).or_else(|_| {
+        let mut built = Command::new(&binary);
         built.args(arguments(&out));
         spawn(built)
     });
@@ -119,6 +126,13 @@ fn start(
         }
     }
 }
+
+/// `sh -c` script: $0 is the bake's binary, $1 its manifest, the rest its arguments.
+const BUILD_AND_RUN: &str = r#"if command -v cargo >/dev/null; then
+    cargo build --release --manifest-path "$1" || exit 1
+fi
+shift
+exec "$0" "$@""#;
 
 type Output = Arc<Mutex<Vec<String>>>;
 

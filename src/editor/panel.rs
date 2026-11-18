@@ -144,26 +144,30 @@ fn panel(mut contexts: EguiContexts, mut s: State) -> Result {
         return Ok(());
     }
     let height = ctx.content_rect().height() - 60.0;
-    egui::Window::new("Map editor")
+    // An area sized by its content each frame (a window would keep its old size and
+    // scroll instead of growing).
+    egui::Area::new(egui::Id::new("map editor"))
         .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
-        .default_width(340.0)
-        .resizable(false)
         .show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(height)
-                .show(ui, |ui| {
-                    ui.set_width(330.0);
-                    file(ui, &mut s);
-                    ui.separator();
-                    tools(ui, &mut s);
-                    ui.separator();
-                    selected(ui, &mut s);
-                    ui.separator();
-                    conflicts(ui, &mut s);
-                    ui.separator();
-                    layers(ui, &mut s);
-                    help(ui);
-                });
+            egui::Frame::window(ui.style()).show(ui, |ui| {
+                ui.heading("Map editor");
+                egui::ScrollArea::vertical()
+                    .max_height(height)
+                    .min_scrolled_height(height.min(560.0))
+                    .show(ui, |ui| {
+                        ui.set_width(330.0);
+                        file(ui, &mut s);
+                        ui.separator();
+                        tools(ui, &mut s);
+                        ui.separator();
+                        selected(ui, &mut s);
+                        ui.separator();
+                        conflicts(ui, &mut s);
+                        ui.separator();
+                        layers(ui, &mut s);
+                        help(ui);
+                    });
+            });
         });
     Ok(())
 }
@@ -188,7 +192,7 @@ fn file(ui: &mut egui::Ui, s: &mut State) {
             .unwrap_or_default();
         ui.strong(name);
         if s.doc.dirty {
-            ui.colored_label(egui::Color32::from_rgb(255, 190, 80), "● unsaved");
+            ui.colored_label(egui::Color32::from_rgb(255, 190, 80), "(unsaved)");
         }
     });
     ui.horizontal(|ui| {
@@ -356,7 +360,12 @@ fn selected(ui: &mut egui::Ui, s: &mut State) {
                 Some(ele) => ui.label(format!("Height pin {ele:.2} m ({:+.2})", ele - ground)),
                 None => ui.label("No height pin"),
             };
-            for (label, cm) in [("▲", 10), ("▼", -10), ("▲1m", 100), ("▼1m", -100)] {
+            for (label, cm) in [
+                ("+10 cm", 10),
+                ("-10 cm", -10),
+                ("+1 m", 100),
+                ("-1 m", -100),
+            ] {
                 if ui
                     .small_button(label)
                     .on_hover_text("Page Up/Down (Shift: a metre)")
@@ -405,46 +414,40 @@ fn tag_table(ui: &mut egui::Ui, s: &mut State, is_way: bool, id: i64, class: Opt
         table.rows.push(Default::default());
     }
     let mut commit = false;
-    egui::Grid::new(("tags", is_way))
-        .num_columns(3)
-        .striped(true)
-        .show(ui, |ui| {
-            let mut remove = None;
-            for (i, (key, value)) in table.rows.iter_mut().enumerate() {
-                let k = ui.add(
-                    egui::TextEdit::singleline(key)
-                        .desired_width(120.0)
-                        .hint_text("key"),
+    ui.vertical(|ui| {
+        let mut remove = None;
+        for (i, (key, value)) in table.rows.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                let k = ui.add_sized(
+                    [125.0, 20.0],
+                    egui::TextEdit::singleline(key).hint_text("key"),
                 );
-                let v = ui.add(
-                    egui::TextEdit::singleline(value)
-                        .desired_width(110.0)
-                        .hint_text("value"),
+                let v = ui.add_sized(
+                    [125.0, 20.0],
+                    egui::TextEdit::singleline(value).hint_text("value"),
                 );
                 commit |= k.lost_focus() || v.lost_focus();
-                ui.horizontal(|ui| {
-                    if let Some((_, options)) = VALUES.iter().find(|(k, _)| k == key) {
-                        ui.menu_button("▾", |ui| {
-                            for option in *options {
-                                if ui.button(*option).clicked() {
-                                    *value = option.to_string();
-                                    commit = true;
-                                    ui.close();
-                                }
+                if let Some((_, options)) = VALUES.iter().find(|(k, _)| k == key) {
+                    ui.menu_button("…", |ui| {
+                        for option in *options {
+                            if ui.button(*option).clicked() {
+                                *value = option.to_string();
+                                commit = true;
+                                ui.close();
                             }
-                        });
-                    }
-                    if !key.is_empty() && ui.small_button("✕").clicked() {
-                        remove = Some(i);
-                    }
-                });
-                ui.end_row();
-            }
-            if let Some(i) = remove {
-                table.rows.remove(i);
-                commit = true;
-            }
-        });
+                        }
+                    });
+                }
+                if !key.is_empty() && ui.small_button("×").clicked() {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = remove {
+            table.rows.remove(i);
+            commit = true;
+        }
+    });
     ui.horizontal_wrapped(|ui| {
         ui.small("Add:");
         for key in suggestions(class) {

@@ -19,7 +19,7 @@ const LIFT: f32 = 0.3;
 /// Draped lines get a point at least this often (m).
 const DRAPE: f32 = 4.0;
 /// How close to the cursor something must be to be picked (screen pixels).
-const PICK_PIXELS: f32 = 9.0;
+const PICK_PIXELS: f32 = 12.0;
 /// Point nodes are drawn as posts this tall (m).
 const POST: f32 = 2.5;
 

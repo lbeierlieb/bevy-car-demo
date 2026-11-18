@@ -398,9 +398,12 @@ pub struct EditorShotPlugin;
 impl Plugin for EditorShotPlugin {
     fn build(&self, app: &mut App) {
         if std::env::var("SHOT").is_ok() {
+            // No window-event clicks (as `click` sends for egui): egui would take the
+            // pointer and bevy_egui release the button.
             app.add_systems(PreUpdate, shot.after(bevy::input::InputSystems));
-            app.add_systems(PreUpdate, click.before(bevy::input::InputSystems));
             app.add_systems(PreUpdate, edit_cam);
+            app.add_systems(PreUpdate, edit_keys.after(bevy::input::InputSystems));
+            app.add_systems(PreUpdate, edit_click.after(bevy::input::InputSystems));
         }
     }
 }
@@ -417,5 +420,90 @@ fn edit_cam(
         cam.yaw = v[3].to_radians();
         cam.pitch = v[4].to_radians();
         transform.translation = Vec3::new(v[0], terrain.sample(v[0], v[1]).0 + v[2], v[1]);
+    }
+}
+
+/// The editor reads the window's cursor and the mouse buttons (not window events), so
+/// CLICK sets those too; `CLICK="x,y,frame,x2,y2"` drags from (x, y) to (x2, y2).
+fn edit_click(
+    mut frame: Local<u32>,
+    mut windows: Query<&mut Window>,
+    mut buttons: ResMut<ButtonInput<MouseButton>>,
+) {
+    *frame += 1;
+    let Ok(spec) = std::env::var("CLICK") else {
+        return;
+    };
+    let Ok(mut window) = windows.single_mut() else {
+        return;
+    };
+    for one in spec.split(';') {
+        let v: Vec<f32> = one.split(',').map(|s| s.parse().unwrap()).collect();
+        let at = v[2] as u32;
+        let drag = v.len() >= 5;
+        let (from, to) = (
+            Vec2::new(v[0], v[1]),
+            if drag {
+                Vec2::new(v[3], v[4])
+            } else {
+                Vec2::new(v[0], v[1])
+            },
+        );
+        let end = if drag { at + 12 } else { at + 3 };
+        if (at..=end + 3).contains(&*frame) {
+            let t = ((*frame as f32 - at as f32 - 2.0) / (end - at - 2) as f32).clamp(0.0, 1.0);
+            window.set_cursor_position(Some(from.lerp(to, t)));
+        }
+        // Held every frame (something releases an injected press otherwise).
+        if (at + 2..end).contains(&*frame) {
+            buttons.press(MouseButton::Left);
+        }
+        if *frame == end {
+            buttons.release(MouseButton::Left);
+        }
+    }
+}
+
+/// `EDITKEYS="Digit2@25;Enter@60"`: taps those keys (by `KeyCode` name) at those frames;
+/// `ControlLeft+KeyZ@50` holds the first while tapping the second.
+fn edit_keys(mut frame: Local<u32>, mut keys: ResMut<ButtonInput<KeyCode>>) {
+    *frame += 1;
+    let Ok(spec) = std::env::var("EDITKEYS") else {
+        return;
+    };
+    let code = |name: &str| match name {
+        "Digit1" => KeyCode::Digit1,
+        "Digit2" => KeyCode::Digit2,
+        "Digit3" => KeyCode::Digit3,
+        "Digit4" => KeyCode::Digit4,
+        "Digit5" => KeyCode::Digit5,
+        "Digit6" => KeyCode::Digit6,
+        "Digit7" => KeyCode::Digit7,
+        "Enter" => KeyCode::Enter,
+        "Escape" => KeyCode::Escape,
+        "Delete" => KeyCode::Delete,
+        "Backspace" => KeyCode::Backspace,
+        "KeyX" => KeyCode::KeyX,
+        "KeyZ" => KeyCode::KeyZ,
+        "KeyY" => KeyCode::KeyY,
+        "KeyS" => KeyCode::KeyS,
+        "KeyM" => KeyCode::KeyM,
+        "PageUp" => KeyCode::PageUp,
+        "PageDown" => KeyCode::PageDown,
+        "ControlLeft" => KeyCode::ControlLeft,
+        "ShiftLeft" => KeyCode::ShiftLeft,
+        "F5" => KeyCode::F5,
+        other => panic!("EDITKEYS: unknown key {other}"),
+    };
+    for one in spec.split(';') {
+        let (names, at) = one.split_once('@').unwrap();
+        let at: u32 = at.parse().unwrap();
+        let names: Vec<KeyCode> = names.split('+').map(code).collect();
+        if *frame == at {
+            names.iter().for_each(|k| keys.press(*k));
+        }
+        if *frame == at + 1 {
+            names.iter().for_each(|k| keys.release(*k));
+        }
     }
 }
