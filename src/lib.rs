@@ -30,6 +30,7 @@ pub mod tunes;
 pub mod ui;
 pub mod visuals;
 pub mod wheel_base;
+pub mod wheels;
 pub mod workshop;
 
 use bevy::light::CascadeShadowConfigBuilder;

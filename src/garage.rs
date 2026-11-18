@@ -299,13 +299,17 @@ fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
         );
         ui.end_row();
         ui.label("Tires")
-            .on_hover_text(COMPOUNDS[draft.tires].about);
+            .on_hover_text(COMPOUNDS[draft.wheels[0].compound].about);
+        let mut compound = draft.wheels[0].compound;
         combo(
             ui,
             "tires",
-            &mut draft.tires,
+            &mut compound,
             &COMPOUNDS.map(|compound| compound.name),
         );
+        for wheel in &mut draft.wheels {
+            wheel.compound = compound;
+        }
         ui.end_row();
     });
 }

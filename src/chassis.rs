@@ -15,6 +15,7 @@ use crate::physics::drivetrain::Drive;
 use crate::physics::engine::families::{FAMILIES, Family};
 use crate::physics::engine::parts::Parts;
 use crate::physics::fuel::Tank;
+use crate::wheels::{Rim, TireSize, Wheel, WheelRoom};
 
 /// Width a transverse engine's gearbox takes up at the end of its crank (m).
 const TRANSAXLE_LENGTH: f32 = 0.36;
@@ -188,10 +189,11 @@ pub struct Chassis {
     pub mass_at: f32,
     pub cg_height: f32,
     pub wheelbase: f32,
-    /// Front and rear: track, tire radius and width (m), unsprung mass per corner (kg).
+    /// Front and rear: track (m), the factory's rims and tires, the room in the wheel
+    /// wells, and unsprung mass per corner (kg).
     pub track: [f32; 2],
-    pub tire_radius: [f32; 2],
-    pub tire_width: [f32; 2],
+    pub wheels: [Wheel; 2],
+    pub room: [WheelRoom; 2],
     pub unsprung: [f32; 2],
     /// Peak friction of the stock tires.
     pub grip: f32,
@@ -244,8 +246,8 @@ impl Chassis {
         Wheels {
             wheelbase: self.wheelbase,
             track: self.track,
-            radius: self.tire_radius,
-            width: self.tire_width,
+            radius: self.wheels.map(|wheel| wheel.tire.radius()),
+            width: self.wheels.map(|wheel| wheel.tire.width_m()),
         }
     }
 
@@ -322,7 +324,8 @@ pub struct CarBuild {
     pub final_drive: f32,
     pub limited_slip: bool,
     pub suspension: usize,
-    pub tires: usize,
+    /// Front and rear.
+    pub wheels: [Wheel; 2],
 }
 
 impl CarBuild {
@@ -337,12 +340,20 @@ impl CarBuild {
             final_drive: made.final_drive,
             limited_slip: made.limited_slip,
             suspension: 0,
-            tires: 0,
+            wheels: made.wheels,
         }
     }
 
     pub fn chassis(&self) -> &'static Chassis {
         &CHASSIS[self.chassis]
+    }
+
+    /// The same car on tires of `compound` (in `tire::COMPOUNDS`) all round.
+    pub fn on_compound(mut self, compound: usize) -> Self {
+        for wheel in &mut self.wheels {
+            wheel.compound = compound;
+        }
+        self
     }
 
     pub fn gearbox(&self) -> &'static Gearbox {
@@ -371,6 +382,23 @@ impl CarBuild {
     }
 }
 
+/// Street tires of `width` (mm) and `aspect` (%) on rims of `diameter` and `rim_width`
+/// (inches, tenths of an inch).
+const fn wheel(diameter: u8, rim_width: u8, width: u16, aspect: u8) -> Wheel {
+    Wheel {
+        rim: Rim {
+            diameter,
+            width: rim_width,
+        },
+        tire: TireSize {
+            width,
+            aspect,
+            rim: diameter,
+        },
+        compound: 0,
+    }
+}
+
 const fn detail(at: [f32; 3], size: [f32; 3], tone: Tone) -> Detail {
     Detail { at, size, tone }
 }
@@ -389,8 +417,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.54,
         wheelbase: 2.35,
         track: [1.42, 1.41],
-        tire_radius: [0.29, 0.29],
-        tire_width: [0.17, 0.17],
+        wheels: [wheel(14, 55, 165, 65), wheel(14, 55, 165, 65)],
+        room: [
+            WheelRoom {
+                diameter: 0.62,
+                width: 195,
+                min_rim: 13,
+            },
+            WheelRoom {
+                diameter: 0.62,
+                width: 195,
+                min_rim: 13,
+            },
+        ],
         unsprung: [30.0, 28.0],
         grip: 0.95,
         ride: [1.3, 1.45],
@@ -460,8 +499,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.51,
         wheelbase: 2.6,
         track: [1.53, 1.51],
-        tire_radius: [0.31, 0.31],
-        tire_width: [0.21, 0.21],
+        wheels: [wheel(17, 70, 205, 45), wheel(17, 70, 205, 45)],
+        room: [
+            WheelRoom {
+                diameter: 0.67,
+                width: 235,
+                min_rim: 15,
+            },
+            WheelRoom {
+                diameter: 0.67,
+                width: 235,
+                min_rim: 15,
+            },
+        ],
         unsprung: [36.0, 32.0],
         grip: 1.05,
         ride: [1.6, 1.85],
@@ -534,8 +584,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.44,
         wheelbase: 2.31,
         track: [1.43, 1.45],
-        tire_radius: [0.3, 0.3],
-        tire_width: [0.19, 0.19],
+        wheels: [wheel(16, 65, 195, 50), wheel(16, 65, 195, 50)],
+        room: [
+            WheelRoom {
+                diameter: 0.65,
+                width: 225,
+                min_rim: 14,
+            },
+            WheelRoom {
+                diameter: 0.65,
+                width: 225,
+                min_rim: 14,
+            },
+        ],
         unsprung: [32.0, 34.0],
         grip: 1.05,
         ride: [1.5, 1.65],
@@ -604,8 +665,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.46,
         wheelbase: 2.57,
         track: [1.52, 1.53],
-        tire_radius: [0.32, 0.32],
-        tire_width: [0.22, 0.23],
+        wheels: [wheel(17, 75, 225, 45), wheel(17, 80, 235, 45)],
+        room: [
+            WheelRoom {
+                diameter: 0.68,
+                width: 255,
+                min_rim: 16,
+            },
+            WheelRoom {
+                diameter: 0.69,
+                width: 265,
+                min_rim: 16,
+            },
+        ],
         unsprung: [38.0, 40.0],
         grip: 1.1,
         ride: [1.65, 1.8],
@@ -676,8 +748,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.52,
         wheelbase: 2.85,
         track: [1.58, 1.6],
-        tire_radius: [0.33, 0.33],
-        tire_width: [0.23, 0.24],
+        wheels: [wheel(17, 75, 225, 50), wheel(17, 75, 225, 50)],
+        room: [
+            WheelRoom {
+                diameter: 0.71,
+                width: 255,
+                min_rim: 15,
+            },
+            WheelRoom {
+                diameter: 0.71,
+                width: 255,
+                min_rim: 15,
+            },
+        ],
         unsprung: [42.0, 44.0],
         grip: 1.05,
         ride: [1.35, 1.5],
@@ -748,8 +831,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.49,
         wheelbase: 2.55,
         track: [1.53, 1.53],
-        tire_radius: [0.32, 0.32],
-        tire_width: [0.22, 0.22],
+        wheels: [wheel(17, 75, 215, 50), wheel(17, 75, 215, 50)],
+        room: [
+            WheelRoom {
+                diameter: 0.7,
+                width: 245,
+                min_rim: 15,
+            },
+            WheelRoom {
+                diameter: 0.7,
+                width: 245,
+                min_rim: 15,
+            },
+        ],
         unsprung: [40.0, 40.0],
         grip: 1.1,
         ride: [1.7, 1.8],
@@ -829,8 +923,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.5,
         wheelbase: 2.75,
         track: [1.6, 1.62],
-        tire_radius: [0.34, 0.34],
-        tire_width: [0.24, 0.27],
+        wheels: [wheel(18, 85, 245, 45), wheel(18, 95, 275, 40)],
+        room: [
+            WheelRoom {
+                diameter: 0.73,
+                width: 275,
+                min_rim: 17,
+            },
+            WheelRoom {
+                diameter: 0.73,
+                width: 305,
+                min_rim: 17,
+            },
+        ],
         unsprung: [44.0, 50.0],
         grip: 1.05,
         ride: [1.4, 1.5],
@@ -905,8 +1010,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.42,
         wheelbase: 2.45,
         track: [1.54, 1.56],
-        tire_radius: [0.32, 0.33],
-        tire_width: [0.22, 0.27],
+        wheels: [wheel(18, 80, 225, 40), wheel(18, 95, 265, 40)],
+        room: [
+            WheelRoom {
+                diameter: 0.69,
+                width: 255,
+                min_rim: 17,
+            },
+            WheelRoom {
+                diameter: 0.72,
+                width: 295,
+                min_rim: 17,
+            },
+        ],
         unsprung: [38.0, 44.0],
         grip: 1.15,
         ride: [1.9, 2.1],
@@ -982,8 +1098,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.45,
         wheelbase: 2.4,
         track: [1.5, 1.54],
-        tire_radius: [0.32, 0.33],
-        tire_width: [0.22, 0.28],
+        wheels: [wheel(18, 80, 225, 40), wheel(18, 100, 285, 35)],
+        room: [
+            WheelRoom {
+                diameter: 0.69,
+                width: 255,
+                min_rim: 17,
+            },
+            WheelRoom {
+                diameter: 0.71,
+                width: 315,
+                min_rim: 17,
+            },
+        ],
         unsprung: [38.0, 46.0],
         grip: 1.15,
         ride: [1.8, 2.0],
@@ -1058,8 +1185,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.4,
         wheelbase: 2.65,
         track: [1.66, 1.62],
-        tire_radius: [0.33, 0.35],
-        tire_width: [0.25, 0.32],
+        wheels: [wheel(19, 90, 255, 35), wheel(19, 110, 315, 35)],
+        room: [
+            WheelRoom {
+                diameter: 0.71,
+                width: 285,
+                min_rim: 19,
+            },
+            WheelRoom {
+                diameter: 0.75,
+                width: 345,
+                min_rim: 19,
+            },
+        ],
         unsprung: [42.0, 52.0],
         grip: 1.25,
         ride: [2.2, 2.4],
@@ -1137,8 +1275,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.36,
         wheelbase: 2.25,
         track: [1.42, 1.4],
-        tire_radius: [0.28, 0.28],
-        tire_width: [0.19, 0.21],
+        wheels: [wheel(15, 70, 195, 45), wheel(15, 75, 205, 45)],
+        room: [
+            WheelRoom {
+                diameter: 0.62,
+                width: 245,
+                min_rim: 14,
+            },
+            WheelRoom {
+                diameter: 0.63,
+                width: 265,
+                min_rim: 14,
+            },
+        ],
         unsprung: [24.0, 26.0],
         grip: 1.2,
         ride: [2.0, 2.2],
@@ -1208,8 +1357,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.72,
         wheelbase: 3.1,
         track: [1.6, 1.6],
-        tire_radius: [0.38, 0.38],
-        tire_width: [0.26, 0.26],
+        wheels: [wheel(17, 75, 255, 65), wheel(17, 75, 255, 65)],
+        room: [
+            WheelRoom {
+                diameter: 0.81,
+                width: 285,
+                min_rim: 16,
+            },
+            WheelRoom {
+                diameter: 0.81,
+                width: 285,
+                min_rim: 16,
+            },
+        ],
         unsprung: [58.0, 62.0],
         grip: 0.95,
         ride: [1.25, 1.5],
@@ -1284,8 +1444,19 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.74,
         wheelbase: 3.0,
         track: [1.62, 1.6],
-        tire_radius: [0.33, 0.33],
-        tire_width: [0.21, 0.21],
+        wheels: [wheel(16, 65, 215, 60), wheel(16, 65, 215, 60)],
+        room: [
+            WheelRoom {
+                diameter: 0.71,
+                width: 245,
+                min_rim: 15,
+            },
+            WheelRoom {
+                diameter: 0.71,
+                width: 245,
+                min_rim: 15,
+            },
+        ],
         unsprung: [44.0, 44.0],
         grip: 0.95,
         ride: [1.3, 1.6],
@@ -1370,6 +1541,12 @@ mod tests {
             let build = CarBuild::factory(index);
             assert!(made.gearboxes().any(|gearbox| gearbox == made.gearbox));
             assert!(made.paint < PAINTS.len());
+            // The factory's wheels fit, on the sizes on offer.
+            for (room, wheel) in made.room.iter().zip(&made.wheels) {
+                assert_eq!(room.misfit(wheel), None, "{}", made.name);
+                assert!(Rim::all().any(|rim| rim == wheel.rim), "{}", made.name);
+                assert!(TireSize::all().any(|tire| tire == wheel.tire));
+            }
             for (option, code) in made.engines.iter().enumerate() {
                 // The factory's engines fit without a swap subframe or an adapter, with
                 // their own exhaust manifold: their maps come baked with the game.

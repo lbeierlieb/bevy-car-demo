@@ -17,6 +17,7 @@ use crate::physics::engine::maps::EngineMaps;
 use crate::physics::engine::parts::{Parts, SLOTS};
 use crate::physics::tire::{COMPOUNDS, Tread};
 use crate::storage::Folder;
+use crate::wheels::{Rim, TireSize, Wheel};
 use crate::workshop;
 
 const SAVES: Folder = Folder {
@@ -161,7 +162,7 @@ fn write_car(text: &mut String, car: &OwnedCar) {
     let p = &engine.parts;
     *text += "car\n";
     *text += &format!(
-        "build {} {} {} {} {} {} {} {}\n",
+        "build {} {} {} {} {} {} {}\n",
         b.chassis,
         b.paint,
         b.gearbox,
@@ -169,8 +170,17 @@ fn write_car(text: &mut String, car: &OwnedCar) {
         b.final_drive,
         u8::from(b.limited_slip),
         b.suspension,
-        b.tires
     );
+    let wheels: Vec<String> = (b.wheels.iter())
+        .map(|w| {
+            let (rim, tire) = (w.rim, w.tire);
+            format!(
+                "{} {} {} {} {}",
+                rim.diameter, rim.width, tire.width, tire.aspect, w.compound
+            )
+        })
+        .collect();
+    *text += &format!("wheels {}\n", wheels.join(" "));
     let chosen: Vec<String> = p.chosen.iter().map(usize::to_string).collect();
     *text += &format!(
         "parts {} {} {} {} {} {} {} {}\n",
@@ -251,6 +261,7 @@ pub fn read(career: &mut Career, text: &str) {
 
 fn read_car(block: &[&str]) -> Option<OwnedCar> {
     let (mut build, mut parts, mut octane, mut age) = (None, None, 95.0, 0.0);
+    let mut wheels = None;
     let (mut fuel, mut treads, mut damage) = (0.0, [Tread::default(); 4], Damage::default());
     let mut tune = String::new();
     let mut lines = block.iter();
@@ -262,6 +273,7 @@ fn read_car(block: &[&str]) -> Option<OwnedCar> {
         let numbers: Vec<f32> = rest.iter().filter_map(|w| w.parse().ok()).collect();
         match key {
             "build" => build = read_build(rest),
+            "wheels" => wheels = read_wheels(rest),
             "parts" => parts = read_parts(rest),
             "octane" => octane = numbers.first().copied().unwrap_or(octane),
             "age" => {
@@ -295,7 +307,10 @@ fn read_car(block: &[&str]) -> Option<OwnedCar> {
             _ => {}
         }
     }
-    let (build, parts) = (build?, parts?);
+    let (mut build, parts): (CarBuild, _) = (build?, parts?);
+    if let Some(wheels) = wheels {
+        build.wheels = wheels;
+    }
     let parts = build.install(parts).ok()?;
     let hardware = parts.hardware();
     let maps = workshop::at_hand(&hardware).unwrap_or_else(|| {
@@ -334,9 +349,38 @@ fn read_build(words: &[&str]) -> Option<CarBuild> {
         final_drive: words.get(4)?.parse().ok().filter(|f: &f32| f.is_finite())?,
         limited_slip: n(5)? != 0,
         suspension: n(6).filter(|&s| s < SUSPENSIONS.len())?,
-        tires: n(7).filter(|&t| t < COMPOUNDS.len())?,
+        wheels: CarBuild::factory(n(0)?).wheels,
     };
+    // Saves from before rims and tire sizes have the compound here, on factory sizes.
+    let mut build = build;
+    if let Some(compound) = n(7).filter(|&t| t < COMPOUNDS.len()) {
+        for wheel in &mut build.wheels {
+            wheel.compound = compound;
+        }
+    }
     Some(build)
+}
+
+/// Front and rear: rim diameter and width, tire width and aspect, and compound.
+fn read_wheels(words: &[&str]) -> Option<[Wheel; 2]> {
+    let n = |i: usize| words.get(i)?.parse::<u16>().ok();
+    let byte = |i: usize| n(i).and_then(|v| u8::try_from(v).ok());
+    let wheel = |at: usize| {
+        let wheel = Wheel {
+            rim: Rim {
+                diameter: byte(at)?,
+                width: byte(at + 1)?,
+            },
+            tire: TireSize {
+                width: n(at + 2)?,
+                aspect: byte(at + 3)?,
+                rim: byte(at)?,
+            },
+            compound: usize::from(n(at + 4)?),
+        };
+        (wheel.compound < COMPOUNDS.len() && wheel.tire.fits(&wheel.rim)).then_some(wheel)
+    };
+    Some([wheel(0)?, wheel(5)?])
 }
 
 fn read_parts(words: &[&str]) -> Option<Parts> {
@@ -381,6 +425,18 @@ mod tests {
         wear.damage.cylinders[2].piston = 0.25;
         wear.damage.turbo = 0.5;
         wear.treads[3].wear = 0.4;
+        minim.build.wheels[1] = Wheel {
+            rim: Rim {
+                diameter: 15,
+                width: 65,
+            },
+            tire: TireSize {
+                width: 195,
+                aspect: 50,
+                rim: 15,
+            },
+            compound: 2,
+        };
         career.cars.push(OwnedCar {
             setup: minim,
             wear,
@@ -416,6 +472,14 @@ mod tests {
             back.cars[1].setup.engine.parts,
             career.cars[1].setup.engine.parts
         );
+    }
+
+    #[test]
+    fn old_saves_put_their_compound_on_factory_sizes() {
+        let build = read_build(&["3", "0", "6", "0", "3.9", "0", "0", "1"]).unwrap();
+        let factory = CarBuild::factory(3).wheels;
+        assert_eq!(build.wheels.map(|w| w.tire), factory.map(|w| w.tire));
+        assert_eq!(build.wheels.map(|w| w.compound), [1, 1]);
     }
 
     #[test]

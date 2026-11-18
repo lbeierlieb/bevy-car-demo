@@ -499,7 +499,7 @@ fn condition(ui: &mut egui::Ui, career: &mut Career, i: usize, news: &mut News) 
     let worn = wear.treads.iter().map(|t| t.wear).fold(0.0, f32::max);
     ui.label(format!(
         "{} tires, {:.0} % worn",
-        COMPOUNDS[setup.build.tires].name,
+        COMPOUNDS[setup.build.wheels[0].compound].name,
         worn * 100.0
     ));
     let damage = &wear.damage;
@@ -524,7 +524,7 @@ fn condition(ui: &mut egui::Ui, career: &mut Career, i: usize, news: &mut News) 
             done = Some((repair, "The engine is repaired.".to_string()));
         }
     }
-    let tires = catalog::TIRES[setup.build.tires];
+    let tires = catalog::TIRES[setup.build.wheels[0].compound];
     if worn > 0.05 {
         let button = egui::Button::new(format!("New tires: {}", euros(tires)));
         if ui.add_enabled(money >= tires, button).clicked() {
@@ -593,7 +593,10 @@ fn shelf(ui: &mut egui::Ui, career: &mut Career, i: usize, view: &mut GarageView
         .collect();
     let stock = crate::chassis::CarBuild::factory(build.chassis);
     for (differs, item) in [
-        (build.tires != stock.tires, super::Item::Tires(build.tires)),
+        (
+            build.wheels != stock.wheels,
+            super::Item::Tires(build.wheels[0].compound),
+        ),
         (
             build.clutch != stock.clutch,
             super::Item::Clutch(build.clutch),

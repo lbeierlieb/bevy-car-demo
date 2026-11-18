@@ -40,10 +40,12 @@ pub fn fit(car: &mut OwnedCar, item: Item) -> Result<Fitted, String> {
     let mut parts = car.setup.engine.parts.clone();
     let off = match item {
         Item::Tires(i) => {
-            if build.tires == i {
+            if build.wheels.iter().all(|wheel| wheel.compound == i) {
                 car.wear.treads = Wear::new(&car.setup).treads;
             }
-            build.tires = i;
+            for wheel in &mut build.wheels {
+                wheel.compound = i;
+            }
             None
         }
         Item::Clutch(i) => Some(Item::Clutch(std::mem::replace(&mut build.clutch, i))),
@@ -77,7 +79,7 @@ pub fn fit(car: &mut OwnedCar, item: Item) -> Result<Fitted, String> {
     };
     let engine_changed = parts != car.setup.engine.parts;
     if build != car.setup.build {
-        let tires_changed = build.tires != car.setup.build.tires;
+        let tires_changed = build.wheels != car.setup.build.wheels;
         let engine = car.setup.engine.build.clone();
         car.setup = CarSetup::new(build, car.setup.engine.parts.clone(), engine);
         if tires_changed {
@@ -150,7 +152,8 @@ mod tests {
                 engine: None
             }
         );
-        assert_eq!((car.setup.build.tires, car.wear.treads[0].wear), (1, 0.0));
+        assert_eq!(car.setup.build.wheels.map(|wheel| wheel.compound), [1, 1]);
+        assert_eq!(car.wear.treads[0].wear, 0.0);
         assert!(fit(&mut car, Item::Gearbox(0)).is_err(), "a transverse box");
         // The coupé comes with open differentials.
         fit(&mut car, Item::LimitedSlip).unwrap();

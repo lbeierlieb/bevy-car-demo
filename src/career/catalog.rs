@@ -82,7 +82,7 @@ fn factory_code(setup: &CarSetup) -> &'static str {
 /// What putting new tires of the same kind on a car costs, by how worn they are.
 pub fn tires_worn(setup: &CarSetup, wear: &Wear) -> f64 {
     let worn = wear.treads.iter().map(|t| t.wear).sum::<f32>() / 4.0;
-    TIRES[setup.build.tires] * f64::from(worn)
+    TIRES[setup.build.wheels[0].compound] * f64::from(worn)
 }
 
 /// What repairing an engine of `cylinders` costs.

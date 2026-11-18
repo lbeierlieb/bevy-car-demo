@@ -578,9 +578,9 @@ mod tests {
             let stock = CarSetup::factory(chassis, 0);
             let build = CarBuild {
                 suspension: 2,
-                tires: 2,
                 ..stock.build
-            };
+            }
+            .on_compound(2);
             CarSetup::new(build, stock.engine.parts, stock.engine.build)
         });
         for setup in factory.chain(track) {

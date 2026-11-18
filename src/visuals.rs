@@ -11,8 +11,8 @@ use crate::physics::suspension::CornerPose;
 
 /// Fore-aft spacing of each A-arm's two inner mounts.
 const ARM_SPREAD: f32 = 0.18;
-/// The rim's radius relative to the tire's.
-const RIM: f32 = 0.64;
+/// How far the rim's flange stands out past its bead seat (m).
+const FLANGE: f32 = 0.012;
 
 pub struct VisualsPlugin;
 
@@ -134,13 +134,15 @@ pub fn spawn_model(
         for corner in 0..4 {
             let axle = corner / 2;
             let side = if corner % 2 == 0 { -1.0 } else { 1.0 };
-            let (radius, width) = (chassis.tire_radius[axle], chassis.tire_width[axle]);
+            let wheel_size = &build.wheels[axle];
+            let (radius, width) = (wheel_size.tire.radius(), wheel_size.tire.width_m());
+            let rim = wheel_size.rim.radius() + FLANGE;
             let z = if axle == 0 { -0.5 } else { 0.5 } * chassis.wheelbase;
             let at = Vec3::new(side * chassis.track[axle] / 2.0, radius, z);
             let turned = Quat::from_rotation_z(FRAC_PI_2);
             for (material, scale) in [
                 (&rubber, Vec3::new(radius, width, radius)),
-                (&alloy, Vec3::new(RIM * radius, width + 0.01, RIM * radius)),
+                (&alloy, Vec3::new(rim, width + 0.01, rim)),
             ] {
                 parent.spawn((
                     Mesh3d(wheel.clone()),
@@ -163,7 +165,9 @@ fn pose_parts(cars: Query<&Car>, mut parts: Query<(&Part, &ChildOf, &mut Transfo
         let corner = &car.corners[part.corner];
         let pose: &CornerPose = &corner.pose;
         let radius = car.setup.axle(corner.front).tire.radius;
-        let width = car.setup.build.chassis().tire_width[usize::from(!corner.front)];
+        let wheel_size = &car.setup.build.wheels[usize::from(!corner.front)];
+        let width = wheel_size.tire.width_m();
+        let rim = wheel_size.rim.radius() + FLANGE;
         // Spinning about the axle (x); a cylinder's own axis is y.
         let spinning =
             pose.upright * Quat::from_rotation_x(-corner.spin) * Quat::from_rotation_z(FRAC_PI_2);
@@ -175,13 +179,10 @@ fn pose_parts(cars: Query<&Car>, mut parts: Query<(&Part, &ChildOf, &mut Transfo
         *transform = match part.kind {
             PartKind::Tire => wheel(spinning, Vec3::new(radius, width, radius)),
             // The rim and its spokes stand a little proud of the tire's sides.
-            PartKind::Rim => wheel(
-                spinning,
-                Vec3::new(RIM * radius, width + 0.01, RIM * radius),
-            ),
+            PartKind::Rim => wheel(spinning, Vec3::new(rim, width + 0.01, rim)),
             PartKind::Spoke(angle) => wheel(
                 spinning * Quat::from_rotation_y(angle),
-                Vec3::new(1.9 * RIM * radius, width + 0.02, 0.22 * radius),
+                Vec3::new(1.9 * rim, width + 0.02, 0.22 * radius),
             ),
             PartKind::Upright => bar(pose.lower_ball, pose.upper_ball, 0.06),
             PartKind::Coilover => bar(pose.spring_bottom, pose.spring_top, 0.07),

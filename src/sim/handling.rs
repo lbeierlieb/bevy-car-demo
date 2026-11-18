@@ -245,15 +245,11 @@ fn circle(setup: CarSetup, speed: f32, seconds: usize, mut each: impl FnMut(usiz
 #[test]
 #[ignore]
 fn tire_temperatures() {
-    use crate::chassis::CarBuild;
     use crate::physics::tire::COMPOUNDS;
     for (tires, compound) in COMPOUNDS.iter().enumerate() {
         for speed in [8.0, 14.0, 17.0, 19.0] {
             let factory = CarSetup::factory(3, 0);
-            let build = CarBuild {
-                tires,
-                ..factory.build.clone()
-            };
+            let build = factory.build.clone().on_compound(tires);
             let setup = CarSetup::new(build, factory.engine.parts, factory.engine.build);
             circle(setup, speed, 120, |second, car| {
                 if [10, 30, 60, 120].contains(&second) {

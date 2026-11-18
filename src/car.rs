@@ -90,10 +90,13 @@ impl CarSetup {
         let front_share =
             (sprung_mass * rear_z + fuel_mass * (rear_z - tank_at.z)) / (laden * chassis.wheelbase);
         let (_, ride, damping, camber) = SUSPENSIONS[build.suspension];
-        let compound = COMPOUNDS[build.tires];
-        let grip = chassis.grip * compound.grip;
+        let compound_grip = |i: usize| COMPOUNDS[build.wheels[i].compound].grip;
+        let grip = chassis.grip * (compound_grip(0) + compound_grip(1)) / 2.0;
         let axle = |i: usize| {
-            let radius = chassis.tire_radius[i];
+            let wheel = &build.wheels[i];
+            let compound = COMPOUNDS[wheel.compound];
+            let grip = chassis.grip * compound.grip;
+            let radius = wheel.tire.radius();
             let share = if i == 0 {
                 front_share
             } else {
@@ -144,7 +147,7 @@ impl CarSetup {
         };
 
         let mass = laden + 2.0 * (chassis.unsprung[0] + chassis.unsprung[1]);
-        let radius = (chassis.tire_radius[0] + chassis.tire_radius[1]) / 2.0;
+        let radius = (build.wheels[0].tire.radius() + build.wheels[1].tire.radius()) / 2.0;
         // Braking as hard as the tires can, the weight shifts forward by the height of
         // the centre of mass over the wheelbase; a little more to the front keeps the
         // rear wheels from locking first.
@@ -257,7 +260,7 @@ pub fn body_box(chassis: &Chassis) -> Obb {
         .fold(0.0, f32::max);
     let (nose, tail) = (body.z(0.0, &wheels), body.z(body.length, &wheels));
     let half_width = (0..2)
-        .map(|i| (chassis.track[i] + chassis.tire_width[i]) / 2.0)
+        .map(|i| (chassis.track[i] + chassis.wheels[i].tire.width_m()) / 2.0)
         .fold(body.width / 2.0, f32::max);
     Obb {
         center: Vec3::new(0.0, (body.floor + top) / 2.0, (nose + tail) / 2.0),
@@ -406,10 +409,15 @@ impl Car {
             car.drivetrain.engine = self.drivetrain.engine;
         }
         let (new, old) = (&car.setup.build, &self.setup.build);
-        let same_tires = new.chassis == old.chassis && new.tires == old.tires;
+        // Each axle keeps its tires' state if they're the same tires.
+        let same_tires = |front: bool| {
+            let axle = usize::from(!front);
+            new.chassis == old.chassis && new.wheels[axle] == old.wheels[axle]
+        };
+        let same_tires = [true, false].map(same_tires);
         for (corner, old) in car.corners.iter_mut().zip(&self.corners) {
             corner.omega = old.omega;
-            if same_tires {
+            if same_tires[usize::from(!corner.front)] {
                 corner.tread = old.tread;
             }
         }
