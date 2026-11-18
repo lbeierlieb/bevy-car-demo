@@ -24,6 +24,7 @@ const KEEP: &[&str] = &[
     "barrier",
     "depth",
     "diameter",
+    "fence_type",
     "bridge",
     "building",
     "building:levels",

@@ -395,6 +395,7 @@ fn fetch_osm(center: Point, (half_x, half_z): Point) -> Result<Osm, Error> {
         "leisure",
         "amenity",
         "area:highway",
+        "barrier",
     ]
     .iter()
     .map(|key| format!("way[\"{key}\"]({bbox});"))
@@ -403,7 +404,11 @@ fn fetch_osm(center: Point, (half_x, half_z): Point) -> Result<Osm, Error> {
         "[out:xml][timeout:600];\
          ({ways}relation[\"type\"=\"multipolygon\"]({bbox}););(._;>;);out body;"
     );
-    let xml = cached(&format!("osm_{bbox}.xml"), || {
+    // Named by the query too, so asking for more fetches again (FNV-1a).
+    let hash = query.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
+    });
+    let xml = cached(&format!("osm_{bbox}_{:08x}.xml", hash as u32), || {
         // The public server answers 429, 502 or 504 when it's busy: wait and retry.
         for attempt in 1.. {
             eprintln!("POST {OVERPASS} ({bbox})");
