@@ -23,10 +23,16 @@ pub struct SceneryPlugin;
 
 impl Plugin for SceneryPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup)
-            .add_systems(PostUpdate, stream);
+        app.add_message::<Reload>()
+            .add_systems(Startup, setup)
+            .add_systems(PostUpdate, (reload, stream).chain());
     }
 }
+
+/// Sent after the `Terrain` resource was replaced (the map editor's re-bake): every chunk
+/// is built again from the new map.
+#[derive(Message)]
+pub struct Reload;
 
 #[derive(Resource)]
 struct Scenery {
@@ -66,6 +72,25 @@ fn setup(
         }),
         loaded: vec![None; terrain.chunk_count()],
     });
+}
+
+fn reload(
+    mut commands: Commands,
+    mut reloads: MessageReader<Reload>,
+    terrain: Res<Terrain>,
+    mut scenery: ResMut<Scenery>,
+) {
+    if reloads.read().count() == 0 {
+        return;
+    }
+    for entity in scenery.loaded.iter_mut().filter_map(Option::take).flatten() {
+        commands.entity(entity).despawn();
+    }
+    scenery.roads = RoadRibbons::new(&terrain);
+    scenery.buildings = Buildings::new(&terrain);
+    scenery.fences = Fences::new(&terrain);
+    scenery.forest = Forest::new(&terrain);
+    scenery.loaded = vec![None; terrain.chunk_count()];
 }
 
 fn stream(

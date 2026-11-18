@@ -71,17 +71,39 @@ pub struct MapMark {
 #[derive(Message)]
 pub struct MapClicked(pub Vec2);
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct MapView {
     pub open: bool,
     /// What a click does, for the help line; clicks only count with one.
     pub click: Option<&'static str>,
+    /// The key that opens and closes it (K in the driving apps).
+    pub key: KeyCode,
     /// Map point in the middle of the screen (x east, z south).
     center: Vec2,
     /// Metres per screen point; 0 until the map is first drawn, which fits the whole map.
     scale: f32,
     /// Built the first time the map opens.
     layers: Option<Layers>,
+}
+
+impl Default for MapView {
+    fn default() -> Self {
+        Self {
+            open: false,
+            click: None,
+            key: KeyCode::KeyK,
+            center: Vec2::ZERO,
+            scale: 0.0,
+            layers: None,
+        }
+    }
+}
+
+impl MapView {
+    /// Forgets the drawn layers, so they're built again from the map (after a re-bake).
+    pub fn rebuild(&mut self) {
+        self.layers = None;
+    }
 }
 
 /// What the map draws, prepared once.
@@ -141,38 +163,43 @@ impl Layers {
     }
 }
 
-/// K, the wheel's map button or (to close) Escape. Opening centres the map on the car
-/// being driven, at the last zoom.
+/// K (the view's key), the wheel's map button or (to close) Escape. Opening centres the
+/// map on the car being driven (without one, where the camera is), at the last zoom.
 fn toggle(
     keys: Res<ButtonInput<KeyCode>>,
-    wheel: Res<WheelInput>,
-    active: Res<ActiveCar>,
+    wheel: Option<Res<WheelInput>>,
+    active: Option<Res<ActiveCar>>,
     cars: Query<&Car>,
+    camera: Query<&GlobalTransform, With<Camera3d>>,
     mut view: ResMut<MapView>,
 ) {
     let close = view.open && keys.just_pressed(KeyCode::Escape);
-    if !(keys.just_pressed(KeyCode::KeyK) || wheel.map || close) {
+    if !(keys.just_pressed(view.key) || wheel.is_some_and(|w| w.map) || close) {
         return;
     }
     view.open = !view.open;
-    if view.open
-        && view.scale > 0.0
-        && let Some(car) = cars.iter().find(|car| car.index == active.0)
-    {
+    if !view.open || view.scale <= 0.0 {
+        return;
+    }
+    let active = active.map_or(usize::MAX, |a| a.0);
+    if let Some(car) = cars.iter().find(|car| car.index == active) {
         view.center = car.body.position.xz();
+    } else if let Ok(camera) = camera.single() {
+        view.center = camera.translation().xz();
     }
 }
 
 fn draw(
     mut contexts: EguiContexts,
     terrain: Res<Terrain>,
-    active: Res<ActiveCar>,
+    active: Option<Res<ActiveCar>>,
     cars: Query<&Car>,
     marks: Res<MapMarks>,
     mut view: ResMut<MapView>,
     mut clicks: MessageWriter<MapClicked>,
 ) -> Result {
     let view = &mut *view;
+    let active = active.map_or(usize::MAX, |a| a.0);
     let ctx = contexts.ctx_mut()?;
     let screen = ctx.content_rect();
     let half = terrain.half_size();
@@ -266,9 +293,9 @@ fn draw(
 
             // The cars as arrows, the one being driven larger and outlined in white.
             let mut cars: Vec<&Car> = cars.iter().collect();
-            cars.sort_by_key(|car| car.index == active.0);
+            cars.sort_by_key(|car| car.index == active);
             for car in cars {
-                let driven = car.index == active.0;
+                let driven = car.index == active;
                 let at = to_screen(car.body.position.xz());
                 let forward = (car.body.rotation * Vec3::NEG_Z)
                     .xz()
@@ -299,7 +326,9 @@ fn draw(
             let click = view
                 .click
                 .map_or(String::new(), |c| format!("Click: {c}    "));
-            let help = format!("Drag: move    Scroll: zoom    {click}K / Esc: close");
+            let key = format!("{:?}", view.key);
+            let key = key.trim_start_matches("Key");
+            let help = format!("Drag: move    Scroll: zoom    {click}{key} / Esc: close");
             label(
                 &painter,
                 screen.left_bottom() + vec2(12.0, -12.0),
