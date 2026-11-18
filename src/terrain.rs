@@ -7,6 +7,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
+use crate::fences::{Fence, FenceKind};
 use crate::physics::collision::Obstacles;
 use crate::physics::surface::Surface;
 use crate::relief::{Feature, Waves};
@@ -174,6 +175,8 @@ pub struct Terrain {
     /// The road segments near each cell, for `surface`.
     road_grid: RoadGrid,
     pub buildings: Vec<Building>,
+    /// Fences, walls, hedges and guard rails.
+    pub fences: Vec<Fence>,
     /// Houses and tree trunks as boxes, for collisions (filled in at startup, see
     /// `obstacles.rs`; empty in tests unless built).
     pub obstacles: Obstacles,
@@ -209,7 +212,7 @@ impl Terrain {
             .expect("the baked terrain file is corrupt");
         let mut r = Bytes(&inflated);
         assert_eq!(r.take(4), b"CSTR", "not a baked terrain file");
-        assert_eq!(r.u32(), 11, "unsupported terrain version");
+        assert_eq!(r.u32(), 12, "unsupported terrain version");
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
         let cell = r.f32();
         let chunk_cells = r.u32() as usize;
@@ -291,6 +294,17 @@ impl Terrain {
                 Building { levels, outline }
             })
             .collect();
+        let fences = (0..r.u32())
+            .map(|_| {
+                let (kind, height) = (FenceKind::from_byte(r.take(1)[0]), r.f32());
+                let points = (0..r.u32()).map(|_| Vec2::new(r.f32(), r.f32())).collect();
+                Fence {
+                    kind,
+                    height,
+                    points,
+                }
+            })
+            .collect();
         let half = Vec2::new(cells_x as f32, cells_z as f32) * cell / 2.0;
         Self {
             cells_x,
@@ -304,6 +318,7 @@ impl Terrain {
             road_grid: RoadGrid::new(&roads, half),
             roads,
             buildings,
+            fences,
             obstacles: Obstacles::default(),
         }
     }
@@ -330,6 +345,7 @@ impl Terrain {
             roads: Vec::new(),
             road_grid: RoadGrid::new(&[], Vec2::splat(cells as f32 * 2.0)),
             buildings: Vec::new(),
+            fences: Vec::new(),
             obstacles: Obstacles::default(),
         }
     }

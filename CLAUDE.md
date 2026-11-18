@@ -580,7 +580,13 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    shared points pinned) and writes what's left to `map/gerach.conflicts.gpx`
    (gitignored), for JOSM. 303 overlaps → 106: 50 near junctions, 46 between houses
    narrower than the road (wants a `width` tag), a few needing more than 2 m.
-6. Fences (meshes and collision boxes) and trenches (terrain cuts).
+6. Fences (done; the user dropped trenches): `barrier` ways (imported 2026-11-18:
+   184 guard rails, 35 walls, 32 fences, 15 hedges, 14 railings) baked by
+   `tools/bake/src/fences.rs` (gates cut as gaps, barriers along roads pushed 0.5 m
+   off the edge, those along bridges dropped, the rest on roads listed in the conflicts
+   file) into format v12; the game's `src/fences.rs` draws six kinds in pieces ≤ 2.5 m
+   on `Terrain::sample` and puts a solid box per piece in the obstacle grid. Agreed:
+   solid (not breakable), gates open, only what's in the map (no generated rails).
 7. Maybe in-game tools for 3D edits.
 
 ## Sky

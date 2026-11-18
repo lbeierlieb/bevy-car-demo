@@ -14,6 +14,7 @@ pub mod cockpit;
 pub mod debug;
 pub mod dyno;
 pub mod ecu_ui;
+pub mod fences;
 pub mod garage;
 pub mod hud;
 pub mod input;

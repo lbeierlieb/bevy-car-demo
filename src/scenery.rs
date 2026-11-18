@@ -1,11 +1,12 @@
 //! Streams the map's meshes: only chunks near the camera are built and kept on the GPU,
 //! so memory stays the same however big the map is. Each loaded chunk has three meshes:
-//! ground, road ribbons, and objects (houses and trees).
+//! ground, road ribbons, and objects (houses, trees and fences).
 
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 use crate::buildings::Buildings;
+use crate::fences::Fences;
 use crate::terrain::{FlatMesh, RoadRibbons, Terrain};
 use crate::trees::Forest;
 
@@ -31,6 +32,7 @@ impl Plugin for SceneryPlugin {
 struct Scenery {
     roads: RoadRibbons,
     buildings: Buildings,
+    fences: Fences,
     forest: Forest,
     ground_material: Handle<StandardMaterial>,
     road_material: Handle<StandardMaterial>,
@@ -47,6 +49,7 @@ fn setup(
     commands.insert_resource(Scenery {
         roads: RoadRibbons::new(&terrain),
         buildings: Buildings::new(&terrain),
+        fences: Fences::new(&terrain),
         forest: Forest::new(&terrain),
         ground_material: materials.add(StandardMaterial {
             perceptual_roughness: 0.95,
@@ -120,6 +123,7 @@ fn build_chunk(
     terrain.ground_mesh(index, &mut ground);
     scenery.roads.mesh(terrain, index, &mut roads, &mut objects);
     scenery.buildings.mesh(terrain, index, &mut objects);
+    scenery.fences.mesh(terrain, index, &mut objects);
     scenery.forest.mesh(terrain, index, &mut objects);
 
     // Ground and roads don't cast shadows: on gentle real terrain self-shadowing is barely

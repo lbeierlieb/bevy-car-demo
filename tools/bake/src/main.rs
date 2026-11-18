@@ -12,6 +12,7 @@
 //! tiles use.
 
 mod clearance;
+mod fences;
 mod osm;
 mod profile;
 mod roads;
@@ -143,37 +144,50 @@ impl Frame {
     }
 }
 
-/// Writes the roads still running into buildings as GPX waypoints (JOSM opens them as a
-/// marker layer), deepest first.
-fn write_conflicts(
-    path: &str,
-    conflicts: &[clearance::Conflict],
-    roads: &[Road],
-    road_ways: &[i64],
-    buildings: &[Building],
-    frame: &Frame,
-) -> Result<(), Error> {
-    let mut sorted: Vec<&clearance::Conflict> = conflicts.iter().collect();
-    sorted.sort_by(|a, b| b.overlap.total_cmp(&a.overlap));
-    let mut gpx = String::from(
-        "<?xml version='1.0' encoding='UTF-8'?>\n<gpx version='1.1' creator='bake' xmlns='http://www.topografix.com/GPX/1/1'>\n",
-    );
-    for c in sorted {
-        let (lat, lon) = frame.to_geo(c.at);
+/// Something in the map to fix: where, a short label and what it is.
+struct Marker {
+    at: Point,
+    name: String,
+    desc: String,
+}
+
+impl Marker {
+    /// A road still running into a building.
+    fn road_in_building(
+        c: &clearance::Conflict,
+        roads: &[Road],
+        road_ways: &[i64],
+        buildings: &[Building],
+    ) -> Self {
         let road = &roads[c.road];
-        let mut what = format!(
+        let mut desc = format!(
             "way {} ({:.1} m wide) {:.1} m into building {}",
             road_ways[c.road], road.width, c.overlap, buildings[c.building].way
         );
         if let Some(gap) = c.gap {
-            what += &format!(", {gap:.1} m between the houses");
+            desc += &format!(", {gap:.1} m between the houses");
         }
         if c.junction {
-            what += ", near a junction";
+            desc += ", near a junction";
         }
+        Self {
+            at: c.at,
+            name: format!("{:.1} m", c.overlap),
+            desc,
+        }
+    }
+}
+
+/// Writes the markers as GPX waypoints (JOSM opens them as a marker layer).
+fn write_markers(path: &str, markers: &[Marker], frame: &Frame) -> Result<(), Error> {
+    let mut gpx = String::from(
+        "<?xml version='1.0' encoding='UTF-8'?>\n<gpx version='1.1' creator='bake' xmlns='http://www.topografix.com/GPX/1/1'>\n",
+    );
+    for m in markers {
+        let (lat, lon) = frame.to_geo(m.at);
         gpx += &format!(
-            "  <wpt lat='{lat:.7}' lon='{lon:.7}'><name>{:.1} m</name><desc>{what}</desc></wpt>\n",
-            c.overlap
+            "  <wpt lat='{lat:.7}' lon='{lon:.7}'><name>{}</name><desc>{}</desc></wpt>\n",
+            m.name, m.desc
         );
     }
     gpx += "</gpx>\n";
@@ -542,9 +556,30 @@ fn bake(
     let mut road_ways = Vec::new();
     let mut off_ground = Vec::new();
     let mut buildings = Vec::new();
+    let mut fence_list = Vec::new();
     let mut areas = Vec::new();
     for (&id, way) in osm.ways.iter().filter(|(_, w)| !w.meta.deleted()) {
         let (refs, tags) = (&way.refs, &way.meta.tags);
+        if let Some((kind, height)) = fences::style(tags) {
+            let mapped: Vec<(Point, Option<f64>)> = refs
+                .iter()
+                .filter_map(|r| {
+                    let node = osm.nodes.get(r).filter(|n| !n.meta.deleted())?;
+                    let p = frame.to_local(node.lat, node.lon);
+                    Some((p, fences::opening(&node.meta.tags)))
+                })
+                .collect();
+            for run in mapped.split(|(p, _)| !inside(p)) {
+                for points in fences::cut(run) {
+                    fence_list.push(fences::Fence {
+                        way: id,
+                        kind,
+                        height,
+                        points,
+                    });
+                }
+            }
+        }
         let mut points = points(&osm, refs, &frame);
         if tags.contains_key("building") {
             points.pop();
@@ -661,12 +696,32 @@ fn bake(
     // Roads off the houses, and a list of where they still run into one, as waypoints
     // for JOSM next to the map file.
     let outlines: Vec<&[Point]> = buildings.iter().map(|b| b.points.as_slice()).collect();
-    let (conflicts, moved, farthest) = clearance::nudge(&mut roads, &off_ground, &outlines);
+    let (mut conflicts, moved, farthest) = clearance::nudge(&mut roads, &off_ground, &outlines);
+    conflicts.sort_by(|a, b| b.overlap.total_cmp(&a.overlap));
+    let mut markers: Vec<Marker> = conflicts
+        .iter()
+        .map(|c| Marker::road_in_building(c, &roads, &road_ways, &buildings))
+        .collect();
+    // Barriers along roads moved off them; those still on one (crossing it without a
+    // gate) are listed.
+    let mut fence_list = fences::drop_on_bridges(fence_list, &roads);
+    let fences_moved = fences::clear_roads(&mut fence_list, &roads, &off_ground);
+    let mut on_roads = fences::on_roads(&fence_list, &roads, &off_ground);
+    on_roads.sort_by(|a, b| b.length.total_cmp(&a.length));
+    markers.extend(on_roads.iter().map(|o| Marker {
+        at: o.at,
+        name: format!("barrier {:.0} m", o.length),
+        desc: format!(
+            "barrier way {} stands {:.1} m on road way {} ({:.1} m wide)",
+            fence_list[o.fence].way, o.length, road_ways[o.road], roads[o.road].width
+        ),
+    }));
     let report = format!("{}.conflicts.gpx", map.trim_end_matches(".osm"));
-    write_conflicts(&report, &conflicts, &roads, &road_ways, &buildings, &frame)?;
+    write_markers(&report, &markers, &frame)?;
     eprintln!(
-        "moved {moved} roads off buildings (up to {farthest:.1} m); {} conflicts left, see {report}",
-        conflicts.len()
+        "moved {moved} roads off buildings (up to {farthest:.1} m) and {fences_moved} barriers off roads; {} roads still in buildings and {} barriers on roads, see {report}",
+        conflicts.len(),
+        on_roads.len()
     );
 
     // Road heights: smooth profiles along the lidar; the terrain cut and filled to them
@@ -824,7 +879,10 @@ fn bake(
     // 3 pothole), along the road, right of its centreline, length (potholes: diameter) and
     // height (potholes: negative) f32 in metres,
     // building count u32, then per building: levels f32 (0: unknown), point count u32,
-    // outline points (x, z) f32.
+    // outline points (x, z) f32,
+    // fence count u32, then per fence (barriers: walls, hedges, guard rails too): kind u8
+    // (0 rails, 1 metal, 2 panel, 3 wall, 4 hedge, 5 guard rail), height f32, point count
+    // u32, points (x, z) f32.
     let base = heights.iter().copied().fold(f64::INFINITY, f64::min);
     let top = heights.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if top - base > u16::MAX as f64 / 100.0 {
@@ -847,7 +905,7 @@ fn bake(
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&11u32.to_le_bytes());
+    put(&12u32.to_le_bytes());
     put(&(cells_x as u32).to_le_bytes());
     put(&(cells_z as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
@@ -938,6 +996,12 @@ fn bake(
         put(&(building.levels as f32).to_le_bytes());
         polyline(&mut put, &building.points);
     }
+    put(&(fence_list.len() as u32).to_le_bytes());
+    for fence in &fence_list {
+        put(&[fence.kind as u8]);
+        put(&(fence.height as f32).to_le_bytes());
+        polyline(&mut put, &fence.points);
+    }
     let raw = bytes.len();
     let bytes = miniz_oxide::deflate::compress_to_vec_zlib(&bytes, 8);
     std::fs::write(out, &bytes)?;
@@ -954,9 +1018,10 @@ fn bake(
         CELL * STEP_EMPTY as f64
     );
     eprintln!(
-        "wrote {out}: {cells_x}x{cells_z} cells of {CELL} m, {} roads, {} buildings, {} areas, relief {:.1} m, {} KiB",
+        "wrote {out}: {cells_x}x{cells_z} cells of {CELL} m, {} roads, {} buildings, {} fences, {} areas, relief {:.1} m, {} KiB",
         roads.len(),
         buildings.len(),
+        fence_list.len(),
         areas.len(),
         heights.iter().copied().fold(f64::NEG_INFINITY, f64::max) - base,
         bytes.len() / 1024

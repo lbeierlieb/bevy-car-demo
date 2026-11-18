@@ -278,6 +278,19 @@ then move the way or tag a narrower `width`. Each marker says the way and the
 building, how far the road reaches in, the room between the houses where that's
 narrower than the road, and whether it's at a junction (where the road can't move).
 
+Fences come from `barrier` ways (`tools/bake/src/fences.rs`, drawn and made solid
+in `src/fences.rs`). `barrier=fence` is wooden posts and rails, or thin metal ones for
+`fence_type=chain_link`, `metal`, `railing`, `wire` and the like, or closed boards
+for `panel`, `concrete` and `palisade`. `wall`, `hedge`, `guard_rail`, `railing` and
+`jersey_barrier` are built too; `height` in metres overrides the default. A
+`barrier=gate` (or `lift_gate`, `swing_gate`, `entrance`, `cattle_grid`…) node on
+a barrier opens a gap 3.5 m wide, or `width` metres; gates are always open.
+Barriers running along a road are moved out to 50 cm beyond its edge (mapped guard
+rails are often a metre off, and road widths are guesses), and those along a
+bridge are left out (its parapets stand in for them). Barriers still standing on a
+road, mostly ones crossing it without a gate, are listed in the conflicts file too.
+Every barrier is solid: cars stop at it like at a wall.
+
 Each 96 m chunk is then given a resolution. It gets 2 m within 20 m of a building
 or 14 m of a road, and next to paved areas. Everything else gets 8 m, with each coarse vertex averaging the terrain around it. Along seams
 between resolutions, the finer side's edge is bent onto the coarser side's straight

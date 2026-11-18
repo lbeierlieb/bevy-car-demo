@@ -421,6 +421,26 @@ fn a_car_stops_at_a_wall_and_a_tree() {
 }
 
 #[test]
+fn a_car_stops_at_a_fence_and_a_guard_rail() {
+    use crate::fences::{self, Fence, FenceKind};
+    for (kind, height) in [(FenceKind::Rails, 1.2), (FenceKind::GuardRail, 0.75)] {
+        // One piece across the way, 10 m ahead.
+        let fence = Fence {
+            kind,
+            height,
+            points: vec![Vec2::new(-1.2, -10.0), Vec2::new(1.2, -10.0)],
+        };
+        let piece = fences::pieces(&fence, 0)[0];
+        let car = drive_into(fences::solid(&Terrain::flat(), &fence, &piece), 20.0, 2.0);
+        assert!(
+            car.body.position.z > -8.0,
+            "went through the {kind:?}: {}",
+            car.body.position
+        );
+    }
+}
+
+#[test]
 fn a_car_on_its_roof_rests_on_it() {
     let terrain = Terrain::flat();
     let mut car = Car::spawn_at(0, CarSetup::factory(3, 0), &terrain, 0.0, 0.0, 0.0);

@@ -1,9 +1,10 @@
-//! The map's houses, tree trunks and bridge parapets as boxes for collisions, built once
+//! The map's houses, tree trunks, fences and bridge parapets as boxes for collisions, built once
 //! at startup into the terrain's grid of obstacles.
 
 use bevy::prelude::*;
 
 use crate::buildings::Shell;
+use crate::fences;
 use crate::physics::collision::{Obstacles, Upright};
 use crate::terrain::{DECK_DEPTH, PARAPET_HEIGHT, PARAPET_WIDTH, RoadKind, Terrain};
 use crate::trees::Forest;
@@ -21,8 +22,8 @@ impl Plugin for ObstaclesPlugin {
     }
 }
 
-/// Every house (walls up to the ridge), every tree trunk (a square as wide as it), and
-/// the parapets along bridges (in pieces a couple of metres long, down to the slab's
+/// Every house (walls up to the ridge), every tree trunk (a square as wide as it), the
+/// fences (in pieces), and the parapets along bridges (in pieces a couple of metres long, down to the slab's
 /// bottom, so nothing slips under them).
 pub fn build(terrain: &Terrain) -> Obstacles {
     let mut boxes = Vec::new();
@@ -73,6 +74,11 @@ pub fn build(terrain: &Terrain) -> Obstacles {
                     angle: axis.to_angle(),
                 });
             }
+        }
+    }
+    for (i, fence) in terrain.fences.iter().enumerate() {
+        for piece in fences::pieces(fence, i) {
+            boxes.push(fences::solid(terrain, fence, &piece));
         }
     }
     Obstacles::new(boxes, CELL)
