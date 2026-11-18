@@ -97,6 +97,26 @@ impl Class {
     }
 }
 
+/// Whether the bake builds this road (see `road_style` in the bake): footways, paths,
+/// cycleways and the like it leaves out.
+pub fn baked_road(tags: &Tags) -> bool {
+    tags.get("highway").is_some_and(|h| {
+        matches!(
+            h.trim_end_matches("_link"),
+            "motorway"
+                | "trunk"
+                | "primary"
+                | "secondary"
+                | "tertiary"
+                | "residential"
+                | "unclassified"
+                | "living_street"
+                | "service"
+                | "track"
+        )
+    })
+}
+
 /// The tag that makes a closed way a terrain area, and its operations (see the bake's
 /// `terrain.rs`).
 pub const TERRAIN: &str = "carsim:terrain";

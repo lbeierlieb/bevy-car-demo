@@ -336,6 +336,9 @@ fn selected(ui: &mut egui::Ui, s: &mut State) {
                 fly_to(s, p);
             }
         });
+        if class == Class::Area {
+            area_kind(ui, s, id, &w.meta.tags);
+        }
         // Land use often comes from a multipolygon this is part of.
         let relations: Vec<String> = s
             .doc
@@ -415,6 +418,33 @@ fn selected(ui: &mut egui::Ui, s: &mut State) {
             }
         });
         tag_table(ui, s, false, id, None);
+    }
+}
+
+/// A menu switching a land use area between the kinds the bake knows.
+fn area_kind(ui: &mut egui::Ui, s: &mut State, id: i64, tags: &Tags) {
+    let current = AREAS
+        .iter()
+        .position(|(_, k, v)| tags.get(*k).is_some_and(|t| t == v));
+    let mut pick = current;
+    egui::ComboBox::from_label("land use")
+        .selected_text(current.map_or("other", |i| AREAS[i].0))
+        .show_ui(ui, |ui| {
+            for (i, (name, ..)) in AREAS.iter().enumerate() {
+                ui.selectable_value(&mut pick, Some(i), *name);
+            }
+        });
+    if let Some(i) = pick.filter(|_| pick != current) {
+        let mut tags = tags.clone();
+        for key in ["landuse", "natural", "leisure", "area:highway"] {
+            tags.remove(key);
+        }
+        if tags.get("amenity").is_some_and(|a| a == "parking") {
+            tags.remove("amenity");
+        }
+        let (_, key, value) = AREAS[i];
+        tags.insert(key.into(), value.into());
+        s.doc.edit("land use kind", |e| e.set_way_tags(id, tags));
     }
 }
 

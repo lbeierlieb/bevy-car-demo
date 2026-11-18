@@ -9,7 +9,7 @@ use bevy_egui::input::EguiWantsInput;
 
 use super::camera::FlyCamera;
 use super::doc::Doc;
-use super::index::{Class, Index, PointKind};
+use super::index::{Class, Index, PointKind, baked_road};
 use super::tools::{DrawPoint, Hover, Selection, Target, Tools};
 use crate::map::MapView;
 use crate::terrain::Terrain;
@@ -268,6 +268,10 @@ fn draw(
             .as_ref()
             .is_some_and(|d| d.moved && way.refs.contains(&d.node));
         let mut color = class.color();
+        if class == Class::Road && !baked_road(&way.meta.tags) {
+            // Paths and the like: not built.
+            color = color.darker(0.35);
+        }
         if Some(way_id) == selected_way {
             color = Color::WHITE;
         } else if Some(way_id) == hovered_way {
