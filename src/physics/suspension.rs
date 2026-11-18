@@ -252,6 +252,9 @@ pub struct Corner {
     pub spin: f32,
     /// The tire's rubber: temperatures and wear.
     pub tread: Tread,
+    /// The sideways slip the tire acts on (the slip angle's tangent): it lags the patch's
+    /// motion as the carcass flexes, see `TireParams::relax`.
+    pub slip: f32,
     // Inputs, set by the car before each step.
     pub steer: f32,
     pub drive_torque: f32,
@@ -276,6 +279,7 @@ impl Corner {
             omega: 0.0,
             spin: 0.0,
             tread: Tread::default(),
+            slip: 0.0,
             steer: 0.0,
             drive_torque: 0.0,
             drive_inertia: 0.0,
@@ -330,24 +334,31 @@ impl Corner {
             let forward = n.cross(axle_dir).normalize();
             let right = forward.cross(n);
             let (vx, vy) = (hub_velocity.dot(forward), hub_velocity.dot(right));
+            // The carcass deflects sideways and the patch takes up the slip as it rolls.
+            let length = tire.relaxation_length(&patch, &self.tread, self.slip);
+            self.slip = tire.relax(self.slip, vx, vy, length, dt);
+            let force = |omega| tire.relaxed_force(vx, vy, omega, self.slip, length, &patch);
 
             // Wheel spin is the stiffest part of the system: update it implicitly by
             // linearising the longitudinal force around the current spin rate.
-            let f0 = tire.force(vx, vy, self.omega, &patch);
-            let nudged = tire.force(vx, vy, self.omega + 0.01, &patch);
+            let f0 = force(self.omega);
+            let nudged = force(self.omega + 0.01);
             let df_domega = (nudged.fx - f0.fx) / 0.01;
             omega = self.omega
                 + dt * (self.drive_torque - tire.radius * f0.fx)
                     / (inertia + dt * tire.radius * df_domega.max(0.0));
-            (patch, n, forward, right, vx, vy)
+            (patch, n, forward, right, vx, vy, length)
         });
         self.omega = apply_brake(omega, self.brake_torque, inertia, dt);
         self.spin += self.omega * dt;
 
         let omega = self.omega;
         let speed = hub_velocity.length();
-        let Some((patch, normal, forward, right, vx, vy)) = patch.filter(|p| p.0.load() > 0.0)
+        let Some((patch, normal, forward, right, vx, vy, length)) =
+            patch.filter(|p| p.0.load() > 0.0)
         else {
+            // Off the ground, the carcass springs back.
+            self.slip = 0.0;
             tire.heat(&mut self.tread, None, 0.0, 0.0, speed, dt);
             self.contact = None;
             return self.finish(
@@ -361,7 +372,7 @@ impl Corner {
                 torque,
             );
         };
-        let tire_force = tire.force(vx, vy, omega, &patch);
+        let tire_force = tire.relaxed_force(vx, vy, omega, self.slip, length, &patch);
         // The rubber slides at the difference between the wheel's rim and the road along,
         // and at the sideways speed across.
         let slide_x = omega * tire.radius - vx;

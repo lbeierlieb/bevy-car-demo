@@ -5,7 +5,7 @@
 //! that high, on a 16" rim. A rim is a diameter and a width (in inches). Each axle of a car
 //! has its own rims and tires, of a compound in `tire::COMPOUNDS`.
 
-use crate::physics::tire::{COMPOUNDS, GRIP, ROLLING, TireParams};
+use crate::physics::tire::{COMPOUNDS, GRIP, RELAXATION, ROLLING, TireParams};
 
 /// Metres in an inch.
 const INCH: f32 = 0.0254;
@@ -36,6 +36,8 @@ const DAMPING: f32 = 1_500.0;
 /// How the stiffness and the peak slip angle follow the sidewall's height.
 const SIDEWALL_STIFFNESS: f32 = 0.3;
 const SIDEWALL_PEAK: f32 = 0.35;
+/// How the relaxation length follows the sidewall's height (a taller one flexes more).
+const SIDEWALL_RELAXATION: f32 = 0.4;
 /// Moment of inertia of what spins with the wheel on the hub (brake disc, hub, half the
 /// drive shaft) per kg of the corner's unsprung mass without its wheel (m²).
 pub const HUB_INERTIA: f32 = 0.004;
@@ -147,6 +149,7 @@ impl TireSize {
             sidewall: taller.powf(SIDEWALL_PEAK),
             tread_area: self.areas().0,
             rolling: ROLLING * compound.rolling * wider.sqrt(),
+            relaxation: RELAXATION * taller.powf(SIDEWALL_RELAXATION),
             ..TireParams::default()
         }
     }

@@ -564,3 +564,28 @@ fn factory_pressures_suit_the_tires() {
         }
     }
 }
+
+/// Pushed sideways standing still (as if parked across a slope), the tires hold the car
+/// on their carcasses' flex instead of letting it creep away, and it doesn't rock.
+#[test]
+fn tires_hold_a_parked_car() {
+    let terrain = Terrain::flat();
+    let mut car = Car::spawn_at(0, CarSetup::factory(3, 0), &terrain, 0.0, 0.0, 0.0);
+    let dt = 1.0 / CHASSIS_HZ as f32;
+    for _ in 0..(2.0 / dt) as usize {
+        step_car(&mut car, &terrain, dt);
+    }
+    let start = car.body.position;
+    let push = car.body.rotation * Vec3::X * 0.15 * 9.81 * car.body.mass;
+    let mut moved = 0.0;
+    for step in 0..(5.0 / dt) as usize {
+        car.body.add_force_at_center(push);
+        step_car(&mut car, &terrain, dt);
+        let sideways = (car.body.position - start).dot(car.body.rotation * Vec3::X);
+        if step as f32 * dt > 1.0 {
+            moved = sideways;
+        }
+    }
+    assert!(moved.abs() < 0.03, "moved {moved} m");
+    assert!(car.body.velocity.length() < 0.01, "{}", car.body.velocity);
+}
