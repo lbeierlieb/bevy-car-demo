@@ -10,7 +10,9 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::car::{ActiveCar, Car, CarSetup, heading};
-use crate::chassis::{CHASSIS, CLUTCHES, CarBuild, GEARBOXES, PAINTS, SUSPENSIONS, needs_adapter};
+use crate::chassis::{
+    CHASSIS, CLUTCHES, CarBuild, GEARBOXES, PAINTS, PRESSURES, SUSPENSIONS, needs_adapter,
+};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::ecu::{Ecu, EcuModel};
 use crate::physics::engine::families::{FAMILIES, Version};
@@ -215,6 +217,7 @@ fn window(
         let garage = &mut *garage;
         car_parts(ui, &mut garage.draft.0);
         wheel_parts(ui, &mut garage.draft.0, &mut garage.same_wheels);
+        alignment(ui, &mut garage.draft.0, static_loads(&car.setup));
         ui.separator();
         engine(ui, garage);
         build_now = build(ui, garage, &car);
@@ -349,6 +352,50 @@ fn wheel_parts(ui: &mut egui::Ui, draft: &mut CarBuild, same: &mut bool) {
     if let Some(why) = draft.wheel_misfit() {
         ui.colored_label(WARNING, why);
     }
+}
+
+/// Each tire's load with the car standing (N), front and rear.
+pub fn static_loads(setup: &CarSetup) -> [f32; 2] {
+    [true, false].map(|front| (setup.corner_mass(front) + setup.axle(front).unsprung_mass) * 9.81)
+}
+
+/// Camber (within what the suspension kit allows) and cold tire pressure per axle, with
+/// the pressure the tires suit under `loads` (N, front and rear; see `static_loads`).
+pub fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, loads: [f32; 2]) {
+    ui.strong("Alignment and pressures").on_hover_text(
+        "Negative camber leans the tops of the wheels in: it evens out the load across the \
+         outside tire in a corner, but wears and heats the inside shoulders on the straight. \
+         Tires warm up and gain pressure as they work: too little and they carry on their \
+         shoulders, too much and on their middle. Read the tire temperatures across the tread \
+         (F2) to set both.",
+    );
+    egui::Grid::new("alignment").num_columns(4).show(ui, |ui| {
+        for axle in 0..2 {
+            ui.label(["Front", "Rear"][axle]);
+            let range = build.camber_range(axle);
+            ui.add(
+                egui::Slider::new(&mut build.camber[axle], range)
+                    .step_by(0.1)
+                    .fixed_decimals(1)
+                    .suffix("° camber"),
+            );
+            ui.add(
+                egui::Slider::new(&mut build.pressure[axle], PRESSURES)
+                    .step_by(0.05)
+                    .fixed_decimals(2)
+                    .suffix(" bar"),
+            );
+            let wheel = &build.wheels[axle];
+            let suited = wheel
+                .tire
+                .params(wheel.compound)
+                .suited_pressure(loads[axle]);
+            ui.label(format!("suits {suited:.1}"))
+                .on_hover_text("Cold, for the tires to carry evenly once warm, standing");
+            ui.end_row();
+        }
+    });
+    build.clamp_alignment();
 }
 
 /// Rim diameter and width, tire width and sidewall, and compound. Another rim diameter or

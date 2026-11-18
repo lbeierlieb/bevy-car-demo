@@ -457,6 +457,7 @@ fn window(
                     if let Some(status) = status {
                         view.status = status;
                     }
+                    alignment(ui, &mut career.cars[i]);
                     ui.separator();
                     shelf(ui, &mut career, i, &mut view, &mut news);
                 }
@@ -565,6 +566,17 @@ fn condition(ui: &mut egui::Ui, career: &mut Career, i: usize, news: &mut News) 
     career.save();
     news.say(format!("{status} ({})", euros(price)));
     Some(status)
+}
+
+/// Camber and tire pressures, set for free at home (kept when driving out).
+fn alignment(ui: &mut egui::Ui, car: &mut OwnedCar) {
+    let mut build = car.setup.build.clone();
+    egui::CollapsingHeader::new("Alignment and pressures")
+        .id_salt("alignment")
+        .show(ui, |ui| {
+            crate::garage::alignment(ui, &mut build, crate::garage::static_loads(&car.setup));
+        });
+    fitting::rebuild(car, build);
 }
 
 /// Which bay is whose, above the cars.

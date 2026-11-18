@@ -156,7 +156,8 @@ pub fn fit_wheels(
 }
 
 /// The car as `build`, with its engine as it is.
-fn rebuild(car: &mut OwnedCar, build: CarBuild) {
+/// Rebuilds `car`'s setup with `build`, if that's another.
+pub fn rebuild(car: &mut OwnedCar, build: CarBuild) {
     if build != car.setup.build {
         let engine = car.setup.engine.build.clone();
         car.setup = CarSetup::new(build, car.setup.engine.parts.clone(), engine);
