@@ -14,6 +14,8 @@ use crate::relief::{Feature, Waves};
 
 /// From Gerach (96161, Bavaria) to Rattelsdorf, Ebing and Baunach: 9.6 × 8.4 km.
 const BAKED: &[u8] = include_bytes!("../assets/gerach.terrain");
+/// The same, as a path from the repo's root (the native apps read it at startup).
+pub const TERRAIN_FILE: &str = "assets/gerach.terrain";
 /// Width of the raised rim at the map edge (baked into the heights; roads stop before it).
 const RIM: f32 = 30.0;
 /// How far waterway ribbons float above the terrain, to avoid z-fighting.
@@ -34,7 +36,7 @@ pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Terrain::baked());
+        app.insert_resource(Terrain::load());
     }
 }
 
@@ -203,16 +205,61 @@ pub struct RayHit {
 }
 
 impl Terrain {
-    /// Parses the embedded map (format described in `tools/bake`). Chunks are stored at
+    /// The map the apps start with: on native, the baked file in `assets/` as it is on disk
+    /// (so a fresh bake shows up without recompiling), else the copy built into the game.
+    pub fn load() -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = Self::file() {
+            match std::fs::read(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|b| Self::parse(&b))
+            {
+                Ok(terrain) => {
+                    info!("Map loaded from {}", path.display());
+                    return terrain;
+                }
+                Err(e) => warn!(
+                    "Couldn't load {}: {e}; using the built-in map",
+                    path.display()
+                ),
+            }
+        }
+        Self::baked()
+    }
+
+    /// Where the baked map file is on disk: `assets/gerach.terrain` from the working
+    /// directory, or in the source tree the game was built from.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn file() -> Option<std::path::PathBuf> {
+        [
+            std::path::PathBuf::from(TERRAIN_FILE),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(TERRAIN_FILE),
+        ]
+        .into_iter()
+        .find(|path| path.is_file())
+    }
+
+    /// The map built into the game.
+    pub fn baked() -> Self {
+        Self::parse(BAKED).expect("the built-in map is broken")
+    }
+
+    /// Parses a baked map (format described in `tools/bake`). Chunks are stored at
     /// different resolutions; the full-detail height grid is rebuilt from them, with the
     /// vertices of coarse chunks lying on their coarse triangles, so physics queries match
     /// the rendered surface exactly.
-    pub fn baked() -> Self {
-        let inflated = miniz_oxide::inflate::decompress_to_vec_zlib(BAKED)
-            .expect("the baked terrain file is corrupt");
+    pub fn parse(file: &[u8]) -> Result<Self, String> {
+        let inflated = miniz_oxide::inflate::decompress_to_vec_zlib(file)
+            .map_err(|_| "the file is corrupt".to_string())?;
+        if inflated.len() < 8 || &inflated[..4] != b"CSTR" {
+            return Err("not a baked terrain file".into());
+        }
         let mut r = Bytes(&inflated);
-        assert_eq!(r.take(4), b"CSTR", "not a baked terrain file");
-        assert_eq!(r.u32(), 12, "unsupported terrain version");
+        r.take(4);
+        let version = r.u32();
+        if version != 12 {
+            return Err(format!("unsupported terrain version {version}"));
+        }
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
         let cell = r.f32();
         let chunk_cells = r.u32() as usize;
@@ -306,7 +353,7 @@ impl Terrain {
             })
             .collect();
         let half = Vec2::new(cells_x as f32, cells_z as f32) * cell / 2.0;
-        Self {
+        Ok(Self {
             cells_x,
             cells_z,
             cell,
@@ -320,7 +367,7 @@ impl Terrain {
             buildings,
             fences,
             obstacles: Obstacles::default(),
-        }
+        })
     }
 
     /// A flat, empty square 1 km across at height 0, paved all over, for driving tests.
