@@ -95,6 +95,37 @@ fn drape(terrain: &Terrain, points: &[Vec2]) -> Vec<Vec3> {
     out
 }
 
+/// Where a ray from the camera meets the ground (distance and point), up to 3 km out:
+/// steps that grow with the distance (a pixel there is bigger), then halving.
+fn ground_hit(terrain: &Terrain, origin: Vec3, dir: Vec3) -> Option<(f32, Vec3)> {
+    let above = |t: f32| {
+        let p = origin + dir * t;
+        p.y - terrain.sample(p.x, p.z).0
+    };
+    if above(0.0) < 0.0 {
+        return Some((0.0, origin));
+    }
+    let mut t0 = 0.0;
+    while t0 < 3000.0 {
+        let t1 = t0 + 0.2 + t0 * 0.004;
+        if above(t1) < 0.0 {
+            let (mut lo, mut hi) = (t0, t1);
+            for _ in 0..14 {
+                let mid = 0.5 * (lo + hi);
+                if above(mid) < 0.0 {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            let t = 0.5 * (lo + hi);
+            return Some((t, origin + dir * t));
+        }
+        t0 = t1;
+    }
+    None
+}
+
 /// A node's position, with the one being dragged where it's being dragged to.
 pub fn node_pos(doc: &Doc, tools: &Tools, id: i64) -> Option<Vec2> {
     match &tools.drag {
@@ -130,19 +161,19 @@ fn hover(
     let Ok(ray) = camera.viewport_to_world(eye, cursor) else {
         return;
     };
-    let Some(hit) = terrain.raycast(ray.origin, *ray.direction, 3000.0) else {
+    let Some((distance, point)) = ground_hit(&terrain, ray.origin, *ray.direction) else {
         return;
     };
-    hover.ground = Some(hit.point);
+    hover.ground = Some(point);
     hover.screen = Some(cursor);
     // Metres per pixel at the hit point.
     let fov = match projection {
         Projection::Perspective(p) => p.fov,
         _ => 0.8,
     };
-    let per_pixel = hit.distance * 2.0 * (fov / 2.0).tan() / window.height().max(1.0);
+    let per_pixel = distance * 2.0 * (fov / 2.0).tan() / window.height().max(1.0);
     let tolerance = (PICK_PIXELS * per_pixel).max(0.25);
-    let g = hit.point.xz();
+    let g = point.xz();
     let dragged = tools.drag.as_ref().map(|d| d.node);
 
     let mut best_node: Option<(f32, i64)> = None;

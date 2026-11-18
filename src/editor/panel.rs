@@ -317,7 +317,7 @@ fn selected(ui: &mut egui::Ui, s: &mut State) {
         let class = Class::of(&w.meta.tags);
         let points = s.doc.points(&w);
         let length: f32 = points.windows(2).map(|p| p[0].distance(p[1])).sum();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.strong(format!("Way {id}"));
             ui.label(format!(
                 "{}, {} nodes, {length:.0} m",
@@ -336,6 +336,27 @@ fn selected(ui: &mut egui::Ui, s: &mut State) {
                 fly_to(s, p);
             }
         });
+        // Land use often comes from a multipolygon this is part of.
+        let relations: Vec<String> = s
+            .doc
+            .osm
+            .relations
+            .iter()
+            .filter(|(_, r)| !r.meta.deleted())
+            .filter(|(_, r)| r.members.iter().any(|m| m.kind == "way" && m.id == id))
+            .map(|(rid, r)| {
+                let tags: Vec<String> = r
+                    .meta
+                    .tags
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect();
+                format!("In relation {rid}: {}", tags.join(", "))
+            })
+            .collect();
+        for line in relations {
+            ui.small(line);
+        }
         tag_table(ui, s, true, id, Some(class));
     }
     if let Some(id) = node.filter(|n| s.doc.node(*n).is_some()) {
@@ -343,7 +364,7 @@ fn selected(ui: &mut egui::Ui, s: &mut State) {
         let p = s.doc.pos(id).unwrap_or_default();
         let ground = s.terrain.sample(p.x, p.y).0 + s.terrain.base;
         let ways = s.doc.ways_of(id).to_vec();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.strong(format!("Node {id}"));
             ui.label(format!(
                 "in {} way(s), ground {ground:.2} m above sea level",
@@ -355,7 +376,7 @@ fn selected(ui: &mut egui::Ui, s: &mut State) {
             .node(id)
             .and_then(|n| n.meta.tags.get("ele"))
             .and_then(|e| e.parse::<f32>().ok());
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             match ele {
                 Some(ele) => ui.label(format!("Height pin {ele:.2} m ({:+.2})", ele - ground)),
                 None => ui.label("No height pin"),
@@ -512,9 +533,27 @@ fn conflicts(ui: &mut egui::Ui, s: &mut State) {
     {
         fly_to(s, at);
     }
-    if let Some(c) = s.conflicts.current.and_then(|i| s.conflicts.list.get(i)) {
-        ui.label(format!("{}: {}", c.name, c.desc));
-    }
+    let Some(c) = s.conflicts.current.and_then(|i| s.conflicts.list.get(i)) else {
+        return;
+    };
+    ui.label(format!("{}: {}", c.name, c.desc));
+    // The ways it names ("way 123 … building 456"), to select.
+    let words: Vec<&str> = c.desc.split_whitespace().collect();
+    let named: Vec<(String, i64)> = words
+        .windows(2)
+        .filter(|w| matches!(w[0], "way" | "building"))
+        .filter_map(|w| Some((w[0].to_string(), w[1].trim_end_matches(',').parse().ok()?)))
+        .collect();
+    ui.horizontal_wrapped(|ui| {
+        for (what, id) in named {
+            if s.doc.way(id).is_some() && ui.small_button(format!("Select {what} {id}")).clicked() {
+                *s.selection = Selection {
+                    way: Some(id),
+                    node: None,
+                };
+            }
+        }
+    });
 }
 
 fn layers(ui: &mut egui::Ui, s: &mut State) {

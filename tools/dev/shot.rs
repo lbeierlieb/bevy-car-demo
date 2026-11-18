@@ -7,7 +7,7 @@ impl Plugin for ShotPlugin {
     fn build(&self, app: &mut App) {
         if std::env::var("SHOT").is_ok() {
             app.add_systems(PreUpdate, shot.after(bevy::input::InputSystems));
-            app.add_systems(PreUpdate, click.before(bevy::input::InputSystems));
+            app.add_systems(PreUpdate, click::<false>.before(bevy::input::InputSystems));
             app.add_systems(
                 PostUpdate,
                 forest_cam.before(bevy::transform::TransformSystems::Propagate),
@@ -65,14 +65,15 @@ fn shot(
 }
 
 /// CLICK="x,y,frame[;x,y,frame…]": move the mouse to (x, y) in the window and click there
-/// at that frame (as window events, which is what bevy_egui reads).
-fn click(
+/// at that frame (as window events, which is what bevy_egui reads). The editor's hook reads
+/// UICLICK instead (CLICK is its 3D clicks).
+fn click<const UI: bool>(
     mut frame: Local<u32>,
     windows: Query<Entity, With<Window>>,
     mut events: MessageWriter<bevy::window::WindowEvent>,
 ) {
     *frame += 1;
-    let Ok(spec) = std::env::var("CLICK") else {
+    let Ok(spec) = std::env::var(if UI { "UICLICK" } else { "CLICK" }) else {
         return;
     };
     let window = windows.single().unwrap();
@@ -402,6 +403,7 @@ impl Plugin for EditorShotPlugin {
             // pointer and bevy_egui release the button.
             app.add_systems(PreUpdate, shot.after(bevy::input::InputSystems));
             app.add_systems(PreUpdate, edit_cam);
+            app.add_systems(PreUpdate, click::<true>.before(bevy::input::InputSystems));
             app.add_systems(PreUpdate, edit_keys.after(bevy::input::InputSystems));
             app.add_systems(PreUpdate, edit_click.after(bevy::input::InputSystems));
         }
@@ -409,12 +411,18 @@ impl Plugin for EditorShotPlugin {
 }
 
 fn edit_cam(
+    mut frame: Local<u32>,
     terrain: Res<crate::terrain::Terrain>,
     mut cams: Query<(&mut crate::editor::camera::FlyCamera, &mut Transform)>,
 ) {
+    // Only at the start (the scenery loads around it), so the camera can move later.
+    *frame += 1;
     let Ok(spec) = std::env::var("EDITCAM") else {
         return;
     };
+    if *frame > 20 {
+        return;
+    }
     let v: Vec<f32> = spec.split(',').map(|s| s.parse().unwrap()).collect();
     for (mut cam, mut transform) in &mut cams {
         cam.yaw = v[3].to_radians();
