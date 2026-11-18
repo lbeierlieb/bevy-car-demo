@@ -558,20 +558,27 @@ phasing, VTEC-style cam switching).
 The map is ours: `map/gerach.osm` (imported from OSM once, edited by the user in JOSM,
 committed; `upload='never'`) is the only input of the bake besides the lidar. `bake
 import` adds new areas without touching what's there (deleted elements stay in the file
-as `action='delete'`). Plan, in this order: (1) map file (done), (2) surfaces (done:
-`physics/surface.rs`, grip share and rolling resistance factor per `Surface`; roads by
-their ribbon via `Terrain::surface` (a grid of road segments), else by land use; road
-kinds from OSM `surface`, untagged tracks by `tracktype`; `Terrain::flat` is paved, so
-driving tests that would leave a road use it), (3, done: bake
-`roads.rs`/`profile.rs`; game `Terrain::ground(x, z, y)` with levels (a deck carries
-what's within a metre below its surface), `sample` the level beneath any bridge, `land`
-the bare terrain; bridges drawn as slab and parapets, parapets are obstacles) roads as their own geometry (smoothed
-height profile, crown, embankments cut into the terrain, own 0.5 m mesh, layered ground
-query so bridges have an underpass), (4) a per-road `condition` making small bumps
-(ISO 8608-like) plus placed potholes/patches, (5) nudging roads off building footprints
-and listing the conflicts left, (6) fences (meshes and collision boxes) and trenches
-(terrain cuts), (7) maybe in-game tools for 3D edits. Tags we add for these go into the
-map file and `KEEP` in `tools/bake/src/osm.rs`.
+as `action='delete'`). Tags we add go into the map file and `KEEP` in
+`tools/bake/src/osm.rs`. The plan, in this order:
+
+1. Map file (done).
+2. Surfaces (done): `physics/surface.rs`, grip share and rolling resistance factor per
+   `Surface`; road kinds from OSM `surface`, untagged tracks by `tracktype` (the user
+   checked: OSM's tags are right, keep the rules); else by land use. `Terrain::flat` is
+   paved, so driving tests that would leave a road use it (`flat_road` has one road).
+3. Roads as their own geometry (done): bake `roads.rs` (spline centrelines 1 m apart,
+   crown, terrain cut and filled, carved under bridge decks) and `profile.rs` (network
+   least squares, block SOR over chains of roads running on into each other). Game:
+   `Terrain::ground(x, z, y)` blends overlapping roads (weights fade at road ends) and
+   has levels (a deck carries what's within a metre below its surface); `sample` is the
+   level beneath any bridge, `land` the bare terrain. Bridges are drawn as slab and
+   parapets; parapets are obstacles. Not done: tunnels, junction shapes, piers.
+4. Road condition (done): `relief.rs`, OSM `smoothness` to ISO 8608 roughness (waves
+   0.5–20 m), features from `traffic_calming=bump|hump|table` and `hazard=pothole`
+   nodes. The baked file is zlib-compressed, heights predicted from neighbours.
+5. Nudging roads off building footprints and listing the conflicts left.
+6. Fences (meshes and collision boxes) and trenches (terrain cuts).
+7. Maybe in-game tools for 3D edits.
 
 ## Sky
 

@@ -46,6 +46,114 @@ pub struct Road {
     nodes: Vec<Option<i64>>,
     /// Height of the centreline at each point (waterways: none).
     pub heights: Vec<f64>,
+    /// How bumpy the surface is: the displacement spectrum at 0.1 cycles per metre, in
+    /// 10⁻⁶ m³, as in ISO 8608 (class A is 16, each class four times the one before).
+    pub roughness: f64,
+}
+
+/// Roughness (see `Road::roughness`) for OSM's `smoothness`, or by surface if it isn't
+/// tagged: asphalt smooth (class A), stones a little rougher, tracks rougher still.
+pub fn roughness(kind: RoadKind, smoothness: Option<&str>) -> f64 {
+    match smoothness {
+        Some("excellent") => 4.0,
+        Some("good") => 16.0,
+        Some("intermediate") => 64.0,
+        Some("bad") => 256.0,
+        Some("very_bad") => 1024.0,
+        Some("horrible") => 4096.0,
+        Some("very_horrible" | "impassable") => 8192.0,
+        _ => match kind {
+            RoadKind::Asphalt => 16.0,
+            RoadKind::Cobbles => 64.0,
+            RoadKind::Gravel => 128.0,
+            RoadKind::Dirt => 512.0,
+            RoadKind::Water => 0.0,
+        },
+    }
+}
+
+/// Something built into a road where a node is tagged so: speed bumps, humps and tables
+/// across it (`traffic_calming`), and potholes (`hazard=pothole`).
+pub struct Feature {
+    pub kind: FeatureKind,
+    /// The road it's on, how far along it and how far right of the centreline (m).
+    pub road: usize,
+    pub along: f64,
+    pub right: f64,
+    /// Length along the road (bumps) or diameter (potholes), and height (negative: depth).
+    pub size: f64,
+    pub height: f64,
+}
+
+#[derive(Clone, Copy)]
+pub enum FeatureKind {
+    /// A short bump with a rounded top.
+    Bump = 0,
+    /// A long, gentle hump.
+    Hump = 1,
+    /// A flat top with ramps.
+    Table = 2,
+    Pothole = 3,
+}
+
+impl Feature {
+    /// The feature a node with these tags (`height`, `diameter` and `depth` in metres
+    /// override the defaults) describes, without its place yet.
+    pub fn kind_of(tags: &crate::Tags) -> Option<(FeatureKind, f64, f64)> {
+        let number = |k: &str| {
+            tags.get(k)
+                .and_then(|v| v.trim_end_matches('m').trim().parse::<f64>().ok())
+        };
+        let (kind, size, height) = match tags.get("traffic_calming").map(String::as_str) {
+            Some("bump") => (FeatureKind::Bump, 0.6, 0.08),
+            Some("hump") => (FeatureKind::Hump, 3.7, 0.07),
+            Some("table") => (FeatureKind::Table, 8.0, 0.07),
+            _ if tags.get("hazard").is_some_and(|h| h == "pothole") => {
+                let depth = number("depth").unwrap_or(0.06);
+                return Some((
+                    FeatureKind::Pothole,
+                    number("diameter").unwrap_or(0.8),
+                    -depth,
+                ));
+            }
+            _ => return None,
+        };
+        Some((kind, size, number("height").unwrap_or(height)))
+    }
+
+    /// Puts a feature at `p` onto the nearest drivable road reaching there (if any).
+    pub fn place(
+        roads: &[Road],
+        (kind, size, height): (FeatureKind, f64, f64),
+        p: Point,
+    ) -> Option<Self> {
+        let mut best: Option<(f64, Feature)> = None;
+        for (r, road) in roads.iter().enumerate().filter(|(_, r)| r.drivable()) {
+            let mut along = 0.0;
+            for pair in road.points.windows(2) {
+                let ((x0, z0), (x1, z1)) = (pair[0], pair[1]);
+                let (dx, dz) = (x1 - x0, z1 - z0);
+                let length = dx.hypot(dz).max(1e-9);
+                let t = (((p.0 - x0) * dx + (p.1 - z0) * dz) / (length * length)).clamp(0.0, 1.0);
+                let off = (p.0 - x0 - dx * t).hypot(p.1 - z0 - dz * t);
+                // Right of the road: the side its perpendicular (-dz, dx) points to.
+                let right = ((p.0 - x0) * -dz + (p.1 - z0) * dx) / length;
+                if off <= road.width / 2.0 + 1.0 && best.as_ref().is_none_or(|b| off < b.0) {
+                    let feature = Feature {
+                        kind,
+                        road: r,
+                        along: along + t * length,
+                        right,
+                        size,
+                        height,
+                    };
+                    best = Some((off, feature));
+                }
+                along += length;
+            }
+        }
+        best.map(|b| b.1)
+    }
 }
 
 impl Road {
@@ -88,6 +196,7 @@ impl Road {
             points,
             nodes,
             heights: Vec::new(),
+            roughness: 0.0,
         }
     }
 

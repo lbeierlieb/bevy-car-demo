@@ -18,7 +18,7 @@ mod roads;
 use std::io::Cursor;
 
 use osm::{Osm, Tags};
-use roads::{Grid, Road, RoadKind};
+use roads::{Feature, Grid, Road, RoadKind};
 
 /// Terrain grid spacing in metres, at full detail.
 const CELL: f64 = 2.0;
@@ -512,7 +512,10 @@ fn bake(
                 let mut run = run.to_vec();
                 run.dedup_by(|b, a| a.1 == b.1);
                 if run.len() >= 2 {
-                    roads.push(Road::new(kind, width, bridge, &run));
+                    let mut road = Road::new(kind, width, bridge, &run);
+                    road.roughness =
+                        roads::roughness(kind, tags.get("smoothness").map(String::as_str));
+                    roads.push(road);
                 }
             }
         }
@@ -595,6 +598,16 @@ fn bake(
     };
     roads::conform(&roads, &mut heights, &grid);
     roads::carve_under_bridges(&roads, &mut heights, &grid);
+    // Bumps and potholes, on the roads their nodes are on (or next to).
+    let features: Vec<Feature> = osm
+        .nodes
+        .values()
+        .filter(|n| !n.meta.deleted())
+        .filter_map(|n| {
+            let kind = Feature::kind_of(&n.meta.tags)?;
+            Feature::place(&roads, kind, frame.to_local(n.lat, n.lon))
+        })
+        .collect();
 
     // Raised rim so cars stay on the map.
     for (i, h) in heights.iter_mut().enumerate() {
@@ -721,8 +734,12 @@ fn bake(
     // (chunk cells / step)² land use classes u8 (row-major),
     // road count u32, then per road: kind u8 (0 asphalt, 1 gravel, 2 water, 3 cobbles,
     // 4 dirt), bridge u8 (0 or 1), width f32, crown f32 (fall per metre to the edges),
+    // roughness f32 (ISO 8608's displacement spectrum at 0.1 cycles/m, in 10⁻⁶ m³),
     // point count u32, points (x, z in cm, height above the lowest point in mm; 0 for
     // waterways): the first as i32, the others as i16 steps from the one before,
+    // feature count u32, then per feature: road u32, kind u8 (0 bump, 1 hump, 2 table,
+    // 3 pothole), along the road, right of its centreline, length (potholes: diameter) and
+    // height (potholes: negative) f32 in metres,
     // building count u32, then per building: levels f32 (0: unknown), point count u32,
     // outline points (x, z) f32.
     let base = heights.iter().copied().fold(f64::INFINITY, f64::min);
@@ -747,7 +764,7 @@ fn bake(
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&10u32.to_le_bytes());
+    put(&11u32.to_le_bytes());
     put(&(cells_x as u32).to_le_bytes());
     put(&(cells_z as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
@@ -803,6 +820,7 @@ fn bake(
         put(&[road.kind as u8, road.bridge as u8]);
         put(&(road.width as f32).to_le_bytes());
         put(&(road.crown() as f32).to_le_bytes());
+        put(&(road.roughness as f32).to_le_bytes());
         put(&(road.points.len() as u32).to_le_bytes());
         // Centimetres along, millimetres up: the first point as is, then the steps.
         let mut last = [0i32; 3];
@@ -822,6 +840,14 @@ fn bake(
                 }
             }
             last = at;
+        }
+    }
+    put(&(features.len() as u32).to_le_bytes());
+    for f in &features {
+        put(&(f.road as u32).to_le_bytes());
+        put(&[f.kind as u8]);
+        for v in [f.along, f.right, f.size, f.height] {
+            put(&(v as f32).to_le_bytes());
         }
     }
     put(&(buildings.len() as u32).to_le_bytes());

@@ -479,6 +479,37 @@ mod tests {
     }
 
     #[test]
+    fn rough_roads_shake_the_car_and_smooth_ones_hardly() {
+        // Coasting at 54 km/h along a straight road: how much the body moves up and down.
+        let shaking = |roughness: f32| {
+            let terrain = Terrain::flat_road(roughness);
+            let mut car = Car::spawn_at(0, CarSetup::default(), &terrain, 0.0, 400.0, 0.0);
+            car.parking_brake = false;
+            car.drivetrain.shift_to(&car.setup.engine, 0);
+            run(&mut car, &terrain, 1.0);
+            car.body.velocity = car.body.rotation * Vec3::NEG_Z * 15.0;
+            for corner in car.corners.iter_mut() {
+                corner.omega = 15.0 / car.setup.axle(corner.front).tire.radius;
+            }
+            let dt = 1.0 / CHASSIS_HZ as f32;
+            let (mut sum, mut steps, mut last) = (0.0, 0, car.body.velocity.y);
+            for _ in 0..(4.0 / dt) as usize {
+                step_car(&mut car, &terrain, dt);
+                let lift = (car.body.velocity.y - last) / dt;
+                last = car.body.velocity.y;
+                sum += lift * lift;
+                steps += 1;
+            }
+            assert!(car.body.position.x.abs() < 2.0, "left the road");
+            (sum / steps as f32).sqrt()
+        };
+        let (smooth, rough) = (shaking(16.0), shaking(1024.0));
+        println!("vertical acceleration: {smooth:.2} m/s² smooth, {rough:.2} m/s² rough");
+        assert!(smooth < 0.3, "smooth road: {smooth} m/s²");
+        assert!((0.5..5.0).contains(&rough), "rough road: {rough} m/s²");
+    }
+
+    #[test]
     fn automatic_shifts_up_without_hunting() {
         let terrain = Terrain::flat();
         let mut car = Car::spawn_at(0, CarSetup::default(), &terrain, 0.0, 400.0, 0.0);

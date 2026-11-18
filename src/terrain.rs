@@ -9,6 +9,7 @@ use bevy::prelude::*;
 
 use crate::physics::collision::Obstacles;
 use crate::physics::surface::Surface;
+use crate::relief::{Feature, Waves};
 
 /// From Gerach (96161, Bavaria) to Rattelsdorf, Ebing and Baunach: 9.6 × 8.4 km.
 const BAKED: &[u8] = include_bytes!("../assets/gerach.terrain");
@@ -117,6 +118,33 @@ pub struct Road {
     pub heights: Vec<f32>,
     /// Distance along the road to each point.
     along: Vec<f32>,
+    /// How uneven its surface is (ISO 8608's displacement spectrum at 0.1 cycles per
+    /// metre, in 10⁻⁶ m³: class A is 16), and that unevenness.
+    pub roughness: f32,
+    waves: Waves,
+    /// Speed bumps and potholes, by how far along the road they are.
+    pub features: Vec<Feature>,
+}
+
+impl Road {
+    /// The unevenness and the features at `along` metres along and `right` of the
+    /// centreline, `margin` inside the edge: height, and slope along and rightward.
+    fn relief(&self, along: f32, right: f32, margin: f32) -> (f32, Vec2) {
+        let (mut height, mut slope) = self.waves.at(along, right, margin);
+        for feature in &self.features {
+            let (h, s) = feature.at(along, right);
+            height += h;
+            slope += s;
+        }
+        (height, slope)
+    }
+
+    /// Whether a feature reaches within `distance` of `along`.
+    fn feature_near(&self, along: f32, distance: f32) -> bool {
+        self.features
+            .iter()
+            .any(|f| (f.along - along).abs() < f.reach() + distance)
+    }
 }
 
 /// The ground somewhere: its height, upward normal, and what it is.
@@ -181,7 +209,7 @@ impl Terrain {
             .expect("the baked terrain file is corrupt");
         let mut r = Bytes(&inflated);
         assert_eq!(r.take(4), b"CSTR", "not a baked terrain file");
-        assert_eq!(r.u32(), 10, "unsupported terrain version");
+        assert_eq!(r.u32(), 11, "unsupported terrain version");
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
         let cell = r.f32();
         let chunk_cells = r.u32() as usize;
@@ -205,10 +233,10 @@ impl Terrain {
                 chunks.push(Chunk { step, classes });
             }
         }
-        let roads: Vec<Road> = (0..r.u32())
+        let mut roads: Vec<Road> = (0..r.u32())
             .map(|_| {
                 let (kind, bridge) = (RoadKind::from_byte(r.take(1)[0]), r.take(1)[0] != 0);
-                let (width, crown) = (r.f32(), r.f32());
+                let (width, crown, roughness) = (r.f32(), r.f32(), r.f32());
                 // Centimetres along, millimetres up: the first point, then steps.
                 let count = r.u32() as usize;
                 let mut at = [r.u32() as i32, r.u32() as i32, r.u32() as i32];
@@ -226,6 +254,10 @@ impl Terrain {
                 for pair in points.windows(2) {
                     along.push(along.last().unwrap() + pair[0].distance(pair[1]));
                 }
+                // The same bumps whatever else changes in the map.
+                let start = (points[0] * 100.0).as_ivec2();
+                let seed = (start.x as u32).wrapping_mul(73_856_093)
+                    ^ (start.y as u32).wrapping_mul(19_349_663);
                 Road {
                     kind,
                     width,
@@ -234,9 +266,24 @@ impl Terrain {
                     points,
                     heights,
                     along,
+                    roughness,
+                    waves: Waves::new(roughness, seed),
+                    features: Vec::new(),
                 }
             })
             .collect();
+        for _ in 0..r.u32() {
+            let road = r.u32() as usize;
+            let kind = Feature::kind_from_byte(r.take(1)[0]);
+            let (along, right, size, height) = (r.f32(), r.f32(), r.f32(), r.f32());
+            roads[road].features.push(Feature {
+                kind,
+                along,
+                right,
+                size,
+                height,
+            });
+        }
         let buildings = (0..r.u32())
             .map(|_| {
                 let levels = r.f32();
@@ -285,6 +332,31 @@ impl Terrain {
             buildings: Vec::new(),
             obstacles: Obstacles::default(),
         }
+    }
+
+    /// `flat`, with a straight asphalt road 6 m wide along z through the middle, as uneven
+    /// as `roughness` says (see `Road::roughness`).
+    #[cfg(test)]
+    pub fn flat_road(roughness: f32) -> Self {
+        let mut terrain = Self::flat();
+        let points: Vec<Vec2> = (0..=900)
+            .map(|i| Vec2::new(0.0, 450.0 - i as f32))
+            .collect();
+        let along = (0..=900).map(|i| i as f32).collect();
+        terrain.roads.push(Road {
+            kind: RoadKind::Asphalt,
+            width: 6.0,
+            bridge: false,
+            crown: 0.025,
+            heights: vec![0.1; points.len()],
+            points,
+            along,
+            roughness,
+            waves: Waves::new(roughness, 1),
+            features: Vec::new(),
+        });
+        terrain.road_grid = RoadGrid::new(&terrain.roads, terrain.half_size());
+        terrain
     }
 
     /// Half the map's extent along x and z; the map is centred on the origin.
@@ -392,9 +464,11 @@ impl Terrain {
             let to_end = s.min(road.along[road.along.len() - 1] - s);
             let weight = margin.max(1e-3) * (to_end / ROAD_FADE).clamp(0.02, 1.0);
             let side = along.perp();
+            let right = (p - a).dot(side);
             let rise = (road.heights[i + 1] - road.heights[i]) / length;
-            let height = road.heights[i] + rise * t * length - road.crown * off;
-            let slope = along * rise - side * road.crown * (p - a).dot(side).signum();
+            let (bump, tilt) = road.relief(s, right, margin);
+            let height = road.heights[i] + rise * t * length - road.crown * off + bump;
+            let slope = along * (rise + tilt.x) + side * (tilt.y - road.crown * right.signum());
             // One entry per road: the segment it covers the point best with.
             match covering[..count].iter_mut().find(|c| c.0 == r) {
                 Some(entry) if entry.1 >= weight => {}
@@ -720,44 +794,61 @@ impl RoadRibbons {
         for &(r, i) in &self.by_chunk[index] {
             let road = &terrain.roads[r];
             let (points, n) = (&road.points, road.points.len());
-            let across = 2 * (road.width / 2.0 / DRAPE_STEP).ceil().max(1.0) as usize;
-            // Half the road across at point `i`, and the vertices across it.
+            // Finer where there's more to see: twice on rough roads, four times around
+            // bumps and potholes.
+            let fine = if road.feature_near(road.along[i], 1.0) {
+                4
+            } else if road.roughness >= 64.0 {
+                2
+            } else {
+                1
+            };
+            let step = DRAPE_STEP / fine as f32;
+            let across = 2 * (road.width / 2.0 / step).ceil().max(1.0) as usize;
+            // Half the road across at point `i`.
             let side = |i: usize| {
                 let tangent =
                     (points[(i + 1).min(n - 1)] - points[i.saturating_sub(1)]).normalize_or_zero();
                 Vec2::new(-tangent.y, tangent.x) * road.width / 2.0
             };
-            let row = |i: usize| -> Vec<Vec3> {
-                let side = side(i);
+            // The vertices across the road `f` of the way from point `i` to the next.
+            let row = |f: f32| -> Vec<Vec3> {
+                let centre = points[i].lerp(points[i + 1], f);
+                let side = side(i).lerp(side(i + 1), f).normalize_or_zero() * road.width / 2.0;
+                let level = road.heights[i] + (road.heights[i + 1] - road.heights[i]) * f;
                 (0..=across)
                     .map(|j| {
                         let u = 2.0 * j as f32 / across as f32 - 1.0;
-                        let p = points[i] + side * u;
+                        let p = centre + side * u;
                         // Looked up a little inside the edge, which may lie just outside
                         // the segments' cover on a bend (and would drop off a bridge).
-                        let q = points[i] + side * u * 0.98;
+                        let q = centre + side * u * 0.98;
                         let ground = if road.kind == RoadKind::Water {
                             terrain.land(p.x, p.y).0
                         } else {
-                            terrain.ground(q.x, q.y, road.heights[i]).height
+                            terrain.ground(q.x, q.y, level).height
                         };
                         Vec3::new(p.x, ground + road.kind.lift(), p.y)
                     })
                     .collect()
             };
-            let (near, far) = (row(i), row(i + 1));
+            let rows: Vec<Vec<Vec3>> = (0..=fine).map(|k| row(k as f32 / fine as f32)).collect();
             let color = road.kind.color();
-            for j in 0..across {
-                let (a, b) = (near[j], near[j + 1]);
-                let (c, d) = (far[j], far[j + 1]);
-                mesh.triangle([a, b, c], color);
-                mesh.triangle([b, d, c], color);
+            for pair in rows.windows(2) {
+                let (near, far) = (&pair[0], &pair[1]);
+                for j in 0..across {
+                    let (a, b) = (near[j], near[j + 1]);
+                    let (c, d) = (far[j], far[j + 1]);
+                    mesh.triangle([a, b, c], color);
+                    mesh.triangle([b, d, c], color);
+                }
             }
+            let (near, far) = (&rows[0], &rows[fine]);
             if road.bridge && road.kind != RoadKind::Water {
                 let edges = |row: &[Vec3], i: usize| [(row[0], -side(i)), (row[across], side(i))];
                 bridge_segment(
-                    edges(&near, i),
-                    edges(&far, i + 1),
+                    edges(near, i),
+                    edges(far, i + 1),
                     (i == 0, i + 2 == n),
                     structure,
                 );
@@ -1092,6 +1183,54 @@ mod tests {
             }
         }
         assert!(underpasses > 10, "{underpasses} points over roads");
+    }
+
+    #[test]
+    fn potholes_and_bumps_are_in_the_road() {
+        let mut terrain = Terrain::baked();
+        // The middle of a long asphalt road, away from others.
+        let (r, i) = terrain
+            .roads
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.kind == RoadKind::Asphalt && !r.bridge && r.points.len() > 100)
+            .find_map(|(r, road)| {
+                let i = road.points.len() / 2;
+                let p = road.points[i];
+                (terrain
+                    .road_grid
+                    .near(p)
+                    .iter()
+                    .all(|&(o, _)| o as usize == r))
+                .then_some((r, i))
+            })
+            .unwrap();
+        let (p, along) = (terrain.roads[r].points[i], terrain.roads[r].along[i]);
+        let before = terrain.sample(p.x, p.y).0;
+        let feature = |kind, along, size, height| Feature {
+            kind,
+            along,
+            right: 0.0,
+            size,
+            height,
+        };
+        terrain.roads[r].features = vec![
+            feature(crate::relief::FeatureKind::Pothole, along, 0.8, -0.06),
+            feature(crate::relief::FeatureKind::Bump, along + 5.0, 0.6, 0.08),
+        ];
+        let dip = terrain.sample(p.x, p.y).0 - before;
+        assert!((dip + 0.06).abs() < 0.002, "pothole {dip} m deep");
+        // The bump goes right across, also near the edge.
+        let ahead = (terrain.roads[r].points[i + 5] - p).normalize();
+        let q = p + ahead * 5.0 + ahead.perp() * (terrain.roads[r].width / 2.0 - 0.3);
+        let without = {
+            let saved = std::mem::take(&mut terrain.roads[r].features);
+            let h = terrain.sample(q.x, q.y).0;
+            terrain.roads[r].features = saved;
+            h
+        };
+        let rise = terrain.sample(q.x, q.y).0 - without;
+        assert!(rise > 0.05, "bump {rise} m high");
     }
 
     #[test]

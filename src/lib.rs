@@ -20,6 +20,7 @@ pub mod input;
 pub mod map;
 pub mod obstacles;
 pub mod physics;
+pub mod relief;
 pub mod scenery;
 pub mod sim;
 pub mod sky;

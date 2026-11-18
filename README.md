@@ -255,6 +255,17 @@ under the road and a metre of shoulder, then sloping at 0.6 to the natural groun
 In the game, a road's surface (blended where roads overlap, so junctions have no
 steps) is both what is drawn and what the tires drive on.
 
+Roads have small bumps on top (`src/relief.rs`), as uneven as their `smoothness` tag
+says: `excellent`, `good` (ISO 8608 class A), `intermediate` (B), `bad` (C),
+`very_bad` (D), `horrible` (E). Untagged asphalt is `good`, stones `intermediate`,
+gravel between `intermediate` and `bad`, dirt between `bad` and `very_bad`. To make
+an older stretch of road, split the way in JOSM and tag that part. The bumps are a sum
+of waves 0.5 to 20 m long with ISO 8608's spectrum, fading out towards the edges. A
+node on (or next to) a road tagged `traffic_calming=bump` (0.6 m long, 8 cm high),
+`hump` (3.7 m, 7 cm) or `table` (8 m with 1 m ramps, 7 cm), or `hazard=pothole` (0.8 m
+across, 6 cm deep), builds that into the road; `height`, `diameter` and `depth` in
+metres change the sizes.
+
 Each 96 m chunk is then given a resolution. It gets 2 m within 20 m of a building
 or 14 m of a road, and next to paved areas. Everything else gets 8 m, with each coarse vertex averaging the terrain around it. Along seams
 between resolutions, the finer side's edge is bent onto the coarser side's straight
