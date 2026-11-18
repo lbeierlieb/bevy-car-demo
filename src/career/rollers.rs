@@ -40,8 +40,6 @@ const LONGEST_PULL: f32 = 60.0;
 /// How hard the rollers' brake slows them after the pull, as the car's deceleration
 /// (m/s²).
 const ROLLER_BRAKE: f32 = 7.0;
-/// Rolling resistance of a tire on a roller, as a share of the load.
-const ROLLING: f32 = 0.012;
 /// Torque lost in the gearbox and differentials, as a share of what goes through: with
 /// two driven axles, more.
 const GEAR_LOSS: f32 = 0.06;
@@ -143,6 +141,8 @@ impl Rollers {
             .map(|front| 2.0 * setup.axle(front).wheel_inertia)
             .iter()
             .sum();
+        // The tires' rolling resistance on the rollers, as a share of the load.
+        let rolling = (setup.front.tire.rolling + setup.rear.tire.rolling) / 2.0;
         let gear = PULL_GEAR.min(engine.top_gear());
         let limit = engine.build.ecu.rev_limit;
         let start = START_RPM.max(engine.idle_rpm() + START_ABOVE_IDLE);
@@ -165,7 +165,7 @@ impl Rollers {
             shift: limit - SHIFT_MARGIN,
             inertia: mass * radius * radius,
             wheels,
-            rolling: ROLLING * mass * GRAVITY * radius,
+            rolling: rolling * mass * GRAVITY * radius,
             gear_loss,
             radius,
             power: 0.0,

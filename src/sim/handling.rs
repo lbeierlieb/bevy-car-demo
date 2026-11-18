@@ -448,3 +448,95 @@ fn two_cars_collide() {
     let gap = b.body.position.z - a.body.position.z;
     assert!(gap < -3.5, "{gap}");
 }
+
+/// The car's peak sideways grip at rest (g): its tires' friction under their loads.
+fn grip_at_rest(setup: &CarSetup) -> f32 {
+    let axle = |front: bool| {
+        let tire = &setup.axle(front).tire;
+        let load = (setup.corner_mass(front) + setup.axle(front).unsprung_mass) * 9.81;
+        (tire.friction(load) * load, load)
+    };
+    let (front, rear) = (axle(true), axle(false));
+    (front.0 + rear.0) / (front.1 + rear.1)
+}
+
+/// A car held on a circle of `radius` (m) at `share` of its grip for `seconds`, steered
+/// to the yaw rate the circle needs, starting on cold tires: the outside treads'
+/// temperatures (front, rear; °C) at the end.
+fn cornering_heat(setup: CarSetup, radius: f32, share: f32, seconds: f32) -> [f32; 2] {
+    let terrain = Terrain::flat();
+    let speed = (share * grip_at_rest(&setup) * 9.81 * radius).sqrt();
+    let mut car = Car::spawn_at(0, setup, &terrain, 0.0, 0.0, 0.0);
+    car.drivetrain.gear = 2;
+    let dt = 1.0 / CHASSIS_HZ as f32;
+    let mut t = 0.0;
+    while t < seconds {
+        let forward = car.forward_speed();
+        let (_, yaw) = slip_and_yaw(&car);
+        let wanted = forward.max(1.0) / radius;
+        let c = &mut car.controls;
+        c.steer = (c.steer + 2.0 * (wanted - yaw) * dt).clamp(0.0, 1.0);
+        c.throttle = (0.3 + 0.5 * (speed - forward)).clamp(0.0, 1.0);
+        step_car(&mut car, &terrain, dt);
+        t += dt;
+    }
+    // Turning left, the right-hand tires are on the outside.
+    [1, 3].map(|i| car.corners[i].tread.temperature)
+}
+
+/// Light, middling and heavy cars on the same compound heat their tires alike at the same
+/// share of their grip, as their tires are sized for them; on the middling car's tires,
+/// the light car's stay cool and the heavy car's cook.
+#[test]
+fn tires_are_sized_for_their_cars() {
+    use crate::chassis::CHASSIS;
+    use crate::physics::tire::STREET;
+    let spread = |sized: bool| {
+        let temperatures: Vec<f32> = [0, 3, 11]
+            .into_iter()
+            .map(|chassis| {
+                let factory = CarSetup::factory(chassis, 0);
+                let mut build = factory.build.clone().on_compound(STREET);
+                if !sized {
+                    build.wheels = CHASSIS[3].wheels.map(|wheel| wheel.with_compound(STREET));
+                }
+                let setup = CarSetup::new(build, factory.engine.parts, factory.engine.build);
+                let name = setup.name;
+                let [front, rear] = cornering_heat(setup, 40.0, 0.7, 60.0);
+                println!("{name} (sized {sized}): outside treads {front:.0} °C, {rear:.0} °C");
+                front.max(rear)
+            })
+            .collect();
+        let hottest = temperatures.iter().copied().fold(f32::MIN, f32::max);
+        let coolest = temperatures.iter().copied().fold(f32::MAX, f32::min);
+        hottest - coolest
+    };
+    let (sized, same) = (spread(true), spread(false));
+    assert!(
+        sized < 0.7 * same && sized < 25.0,
+        "{sized} against {same} K"
+    );
+}
+
+/// Prints how warm every car as it leaves the factory gets its outside treads at 70 % of
+/// its grip for a minute, and how much grip that leaves them: `cargo test --profile
+/// release-dev cornering_temperatures -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn cornering_temperatures() {
+    use crate::chassis::CHASSIS;
+    for chassis in 0..CHASSIS.len() {
+        let setup = CarSetup::factory(chassis, 0);
+        let (name, compound) = (setup.name, setup.front.tire.compound);
+        let grip = grip_at_rest(&setup);
+        let [front, rear] = cornering_heat(setup, 40.0, 0.7, 60.0);
+        let warmth = |t: f32| compound.warmth(t) * 100.0;
+        println!(
+            "{name:<8} {:<8} grip {grip:.2}: front {front:3.0} °C ({:3.0} %), rear {rear:3.0} °C \
+             ({:3.0} %)",
+            compound.name,
+            warmth(front),
+            warmth(rear)
+        );
+    }
+}

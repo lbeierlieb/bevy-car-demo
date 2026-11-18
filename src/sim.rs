@@ -21,8 +21,6 @@ const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
 const MECHANICAL_TRAIL: f32 = 0.03;
 /// Density of the air (kg/m³).
 const AIR_DENSITY: f32 = 1.2;
-/// Rolling resistance of the tires: the share of their load that holds them back.
-const ROLLING_RESISTANCE: f32 = 0.012;
 /// Traction control: the slip ratio of a driven wheel it holds (a little past the tires'
 /// best), how fast it closes the throttle per share of that slip it's over and opens it
 /// again per share it's under (shares of the pedal per second), and the least it leaves.
@@ -239,7 +237,7 @@ fn apply_controls(car: &mut Car, dt: f32) {
         let brake = c.brake * abs_pressure[i];
         // Rolling resistance holds each wheel back like a light brake.
         let tire = &setup.axle(corner.front).tire;
-        let rolling = ROLLING_RESISTANCE * corner.contact.map_or(0.0, |c| c.load) * tire.radius;
+        let rolling = tire.rolling_torque(corner.contact.map_or(0.0, |c| c.load));
         corner.drive_torque = torque[i];
         corner.drive_inertia = shares[i] * drive.inertia;
         if corner.front {

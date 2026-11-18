@@ -13,17 +13,21 @@ use std::f32::consts::FRAC_PI_2;
 const LOW_SPEED: f32 = 3.0;
 /// Air and road temperature (°C): where the tread starts and cools towards.
 pub const AMBIENT: f32 = 20.0;
-/// Heat capacity of the tread (J/K): how fast it warms up and cools down.
+/// Tread area (width times circumference, m²) of the tire the thermal constants and the
+/// compounds' tread life are for; a bigger tread warms and cools slower in proportion,
+/// and lasts longer.
+const REFERENCE_TREAD: f32 = 0.44;
+/// Heat capacity of the reference tread (J/K): how fast it warms up and cools down.
 const TREAD_CAPACITY: f32 = 2500.0;
 /// Share of the sliding power that goes into the tread (the rest heats the road).
 const SLIDING_HEAT: f32 = 0.8;
-/// Power the carcass turns into heat as it flexes rolling: this share of the load times
-/// the speed (the rolling resistance).
-const HYSTERESIS: f32 = 0.012;
-/// Heat the tread loses to the air per kelvin above it (W/K): standing, and growing with
-/// the square root of the speed (per √(m/s)).
+/// Heat the reference tread loses to the air per kelvin above it (W/K): standing, and
+/// growing with the square root of the speed (per √(m/s)).
 const COOLING: f32 = 15.0;
 const COOLING_SPEED: f32 = 8.0;
+/// Rolling resistance of a street tire (the share of its load that holds it back); the
+/// power it takes is what heats the carcass as it flexes.
+pub const ROLLING: f32 = 0.012;
 /// Peak friction of street tires at the load they're made for (see `TireParams::mu`).
 pub const GRIP: f32 = 1.05;
 /// Grip lost with the tread worn through.
@@ -47,8 +51,10 @@ pub struct Compound {
     pub best: f32,
     pub cold: f32,
     pub overheat: f32,
-    /// Sliding energy (J) that wears the tread through at its best temperature.
+    /// Sliding energy (J) that wears the reference tread through at its best temperature.
     pub life: f32,
+    /// Rolling resistance relative to a street tire's.
+    pub rolling: f32,
 }
 
 impl Compound {
@@ -88,10 +94,11 @@ pub const COMPOUNDS: [Compound; 4] = [
         peak_ratio: 0.13,
         c_lat: 1.3,
         c_long: 1.45,
-        best: 50.0,
+        best: 55.0,
         cold: 0.95,
-        overheat: 25.0,
+        overheat: 35.0,
         life: 100e6,
+        rolling: 0.8,
     },
     Compound {
         name: "Street",
@@ -106,6 +113,7 @@ pub const COMPOUNDS: [Compound; 4] = [
         cold: 0.93,
         overheat: 30.0,
         life: 60e6,
+        rolling: 1.0,
     },
     Compound {
         name: "Sport",
@@ -119,6 +127,7 @@ pub const COMPOUNDS: [Compound; 4] = [
         cold: 0.82,
         overheat: 30.0,
         life: 25e6,
+        rolling: 1.1,
     },
     Compound {
         name: "Race",
@@ -133,6 +142,7 @@ pub const COMPOUNDS: [Compound; 4] = [
         cold: 0.68,
         overheat: 35.0,
         life: 8e6,
+        rolling: 1.25,
     },
 ];
 
@@ -154,6 +164,13 @@ pub struct TireParams {
     pub load_sensitivity: f32,
     /// How far behind the contact centre the lateral force acts at small slip angles (m).
     pub pneumatic_trail: f32,
+    /// How far the sidewall lets the tread twist: the compound's peak slip angle is scaled
+    /// by it (a taller sidewall peaks later).
+    pub sidewall: f32,
+    /// Tread area: width times circumference (m²).
+    pub tread_area: f32,
+    /// Rolling resistance: the share of the load that holds the wheel back.
+    pub rolling: f32,
 }
 
 impl Default for TireParams {
@@ -167,6 +184,9 @@ impl Default for TireParams {
             nominal_load: 3000.0,
             load_sensitivity: 0.27,
             pneumatic_trail: 0.04,
+            sidewall: 1.0,
+            tread_area: REFERENCE_TREAD,
+            rolling: ROLLING,
         }
     }
 }
@@ -222,11 +242,21 @@ impl TireParams {
         self.compound.warmth(tread.temperature) * (1.0 - WORN_GRIP * tread.wear.min(1.0))
     }
 
+    /// Slip angle where the grip peaks (rad): the compound's, on this sidewall.
+    pub fn peak_angle(&self) -> f32 {
+        self.compound.peak_angle * self.sidewall
+    }
+
+    /// Torque (N·m) rolling resistance holds the wheel back with under `load` (N).
+    pub fn rolling_torque(&self, load: f32) -> f32 {
+        self.rolling * load * self.radius
+    }
+
     /// Pneumatic trail at a slip: it shrinks as more of the contact patch slides and is
     /// gone at the peak slip angle, so the self-aligning torque (lateral force times trail)
     /// fades before the grip does. That's what makes the steering go light near the limit.
     pub fn trail(&self, force: &TireForce) -> f32 {
-        let slip = (force.slip_angle / self.compound.peak_angle).abs();
+        let slip = (force.slip_angle / self.peak_angle()).abs();
         self.pneumatic_trail * (1.0 - slip).max(0.0)
     }
 
@@ -241,7 +271,7 @@ impl TireParams {
         // Combined slip: normalise both slips by their peak, so that the total force follows
         // the direction of the combined slip vector and saturates along a friction ellipse.
         let compound = &self.compound;
-        let (peak_long, peak_lat) = (compound.peak_ratio, compound.peak_angle);
+        let (peak_long, peak_lat) = (compound.peak_ratio, self.peak_angle());
         let sx = slip_ratio / peak_long;
         let sy = slip_angle / peak_lat;
         let rho = sx.hypot(sy);
@@ -282,21 +312,32 @@ impl TireParams {
         dt: f32,
     ) {
         let sliding = (force.fx * slide_x).abs() + (force.fy * slide_y).abs();
-        let heating = SLIDING_HEAT * sliding + HYSTERESIS * load * speed.abs();
-        tread.temperature += self.cooling(tread, speed, heating) * dt / TREAD_CAPACITY;
+        let heating = SLIDING_HEAT * sliding + self.rolling * load * speed.abs();
+        tread.temperature += self.cooling(tread, speed, heating) * dt / self.capacity();
         let rate = self.compound.wear_rate(tread.temperature);
-        tread.wear = (tread.wear + sliding * rate * dt / self.compound.life).min(1.0);
+        let life = self.compound.life * self.size();
+        tread.wear = (tread.wear + sliding * rate * dt / life).min(1.0);
+    }
+
+    /// The tread's area relative to the reference tread's.
+    fn size(&self) -> f32 {
+        self.tread_area / REFERENCE_TREAD
+    }
+
+    /// The tread's heat capacity (J/K).
+    fn capacity(&self) -> f32 {
+        TREAD_CAPACITY * self.size()
     }
 
     /// Heat flowing into the tread (W) with `heating` and the air going past at `speed`.
     fn cooling(&self, tread: &Tread, speed: f32, heating: f32) -> f32 {
-        let conductance = COOLING + COOLING_SPEED * speed.abs().sqrt();
+        let conductance = (COOLING + COOLING_SPEED * speed.abs().sqrt()) * self.size();
         heating - conductance * (tread.temperature - AMBIENT)
     }
 
     /// The tread cooling in the air with the wheel off the ground.
     pub fn cool(&self, tread: &mut Tread, speed: f32, dt: f32) {
-        tread.temperature += self.cooling(tread, speed, 0.0) * dt / TREAD_CAPACITY;
+        tread.temperature += self.cooling(tread, speed, 0.0) * dt / self.capacity();
     }
 }
 

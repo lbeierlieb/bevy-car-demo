@@ -5,7 +5,7 @@
 //! that high, on a 16″ rim. A rim is a diameter and a width (in inches). Each axle of a car
 //! has its own rims and tires, of a compound in `tire::COMPOUNDS`.
 
-use crate::physics::tire::COMPOUNDS;
+use crate::physics::tire::{COMPOUNDS, GRIP, ROLLING, TireParams};
 
 /// Metres in an inch.
 const INCH: f32 = 0.0254;
@@ -26,6 +26,16 @@ const TREAD_DEPTH: f32 = 0.95;
 /// patch).
 const DESIGN_LOAD: f32 = 14_500.0;
 const DESIGN_DIAMETER: f32 = 0.64;
+/// The tire the carcass figures are for: its width (m) and sidewall (%). A wider tire is
+/// stiffer and rolls heavier (with the root of the width); a lower sidewall is stiffer
+/// and peaks at a smaller slip angle.
+const REFERENCE_WIDTH: f32 = 0.215;
+const REFERENCE_ASPECT: f32 = 45.0;
+const STIFFNESS: f32 = 200_000.0;
+const DAMPING: f32 = 1_500.0;
+/// How the stiffness and the peak slip angle follow the sidewall's height.
+const SIDEWALL_STIFFNESS: f32 = 0.3;
+const SIDEWALL_PEAK: f32 = 0.35;
 /// Moment of inertia of what spins with the wheel on the hub (brake disc, hub, half the
 /// drive shaft) per kg of the corner's unsprung mass without its wheel (m²).
 pub const HUB_INERTIA: f32 = 0.004;
@@ -120,6 +130,26 @@ impl TireSize {
         DESIGN_LOAD * self.width_m() * (diameter / DESIGN_DIAMETER).sqrt()
     }
 
+    /// The tire of this size and `compound` (in `tire::COMPOUNDS`).
+    pub fn params(&self, compound: usize) -> TireParams {
+        let compound = COMPOUNDS[compound];
+        let wider = self.width_m() / REFERENCE_WIDTH;
+        let taller = f32::from(self.aspect) / REFERENCE_ASPECT;
+        let stiffer = wider.sqrt() * taller.powf(-SIDEWALL_STIFFNESS);
+        TireParams {
+            radius: self.radius(),
+            stiffness: STIFFNESS * stiffer,
+            damping: DAMPING * stiffer,
+            compound,
+            mu: GRIP * compound.grip,
+            nominal_load: self.design_load(),
+            sidewall: taller.powf(SIDEWALL_PEAK),
+            tread_area: self.areas().0,
+            rolling: ROLLING * compound.rolling * wider.sqrt(),
+            ..TireParams::default()
+        }
+    }
+
     /// Areas of the tread and of both sidewalls (m²).
     fn areas(&self) -> (f32, f32) {
         let (outside, inside) = (self.radius(), self.rim_radius());
@@ -180,6 +210,11 @@ impl Wheel {
     /// Moment of inertia of one rim with its tire (kg·m²).
     pub fn inertia(&self) -> f32 {
         self.rim.inertia() + self.tire.inertia()
+    }
+
+    /// The same rims and tires in `compound`.
+    pub fn with_compound(self, compound: usize) -> Self {
+        Self { compound, ..self }
     }
 
     /// E.g. `205/55 R16 street on 16×7.0″`.
@@ -261,6 +296,20 @@ mod tests {
         // A wheel and tire spins with about 1 kg·m².
         let inertia = rim.inertia() + tire.inertia();
         assert!(inertia > 0.8 && inertia < 1.1, "{inertia}");
+    }
+
+    #[test]
+    fn wider_tires_grip_more_but_roll_heavier() {
+        use crate::physics::tire::STREET;
+        let (narrow, wide) = (size(205, 45, 17), size(245, 40, 17));
+        let (n, w) = (narrow.params(STREET), wide.params(STREET));
+        // About 5 % more grip under the same load for a fifth more width.
+        let more = w.friction(3500.0) / n.friction(3500.0);
+        assert!(more > 1.04 && more < 1.07, "{more}");
+        assert!(w.rolling > n.rolling && w.tread_area > n.tread_area);
+        assert!(wide.mass() > narrow.mass() && wide.inertia() > narrow.inertia());
+        // A lower sidewall is stiffer and peaks sooner.
+        assert!(w.sidewall < n.sidewall && w.stiffness > n.stiffness);
     }
 
     #[test]

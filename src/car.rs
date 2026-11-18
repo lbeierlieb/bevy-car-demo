@@ -11,7 +11,7 @@ use crate::physics::engine::parts::Parts;
 use crate::physics::fuel::{self, Fuel, Tank};
 use crate::physics::rigid_body::RigidBody;
 use crate::physics::suspension::{ArmGeometry, AxleSetup, Corner};
-use crate::physics::tire::{COMPOUNDS, GRIP, TireParams};
+
 use crate::storage::Folder;
 use crate::terrain::Terrain;
 use crate::wheels::{HUB_INERTIA, Wheel};
@@ -105,7 +105,7 @@ impl CarSetup {
         // ones fitted, and of the factory's, which the brakes are made for.
         let grip_of = |wheels: &[Wheel; 2]| {
             let load = |i: usize| static_load(i);
-            let friction = |i: usize| tire_params(&wheels[i]).friction(load(i));
+            let friction = |i: usize| wheels[i].tire.params(wheels[i].compound).friction(load(i));
             (friction(0) * load(0) + friction(1) * load(1)) / (load(0) + load(1))
         };
         let (grip, factory_grip) = (grip_of(&build.wheels), grip_of(&chassis.wheels));
@@ -138,7 +138,7 @@ impl CarSetup {
                 damping: 0.0,
                 unsprung_mass,
                 wheel_inertia: wheel.inertia() + HUB_INERTIA * chassis.hub[i],
-                tire: tire_params(wheel),
+                tire: wheel.tire.params(wheel.compound),
             };
             axle.tune(
                 chassis.ride[i] * ride,
@@ -198,7 +198,7 @@ impl CarSetup {
             brake_torque: chassis.brakes * factory_grip * mass * 9.81 * radius,
             brake_bias: brake_bias.min(0.9),
             handbrake_torque: 2.0 * mass,
-            drag_area: chassis.drag_area,
+            drag_area: chassis.drag_area + tire_drag(&build.wheels, &chassis.wheels),
             downforce_area: chassis.downforce_area,
             body_offset,
             eye: body_offset + Vec3::new(-eye_left, eye_y, body.z(eye_x, &wheels)),
@@ -252,16 +252,17 @@ impl CarSetup {
     }
 }
 
-/// A tire on `wheel`: its size sets the load it's made for, at which it grips with the
-/// friction of its compound.
-fn tire_params(wheel: &Wheel) -> TireParams {
-    TireParams {
-        radius: wheel.tire.radius(),
-        compound: COMPOUNDS[wheel.compound],
-        mu: GRIP * COMPOUNDS[wheel.compound].grip,
-        nominal_load: wheel.tire.design_load(),
-        ..TireParams::default()
-    }
+/// Drag area per m² of a tire's front (width times diameter): about half of it stands in
+/// the air, at a drag coefficient of about 0.6.
+const TIRE_DRAG: f32 = 0.3;
+
+/// Drag area (m²) `wheels` add over the factory's (less for smaller tires): the chassis'
+/// own drag area is with those.
+fn tire_drag(wheels: &[Wheel; 2], factory: &[Wheel; 2]) -> f32 {
+    let front = |wheel: &Wheel| wheel.tire.width_m() * 2.0 * wheel.tire.radius();
+    (0..2)
+        .map(|i| 2.0 * TIRE_DRAG * (front(&wheels[i]) - front(&factory[i])))
+        .sum()
 }
 
 /// The box around a chassis' body (and its wheels, where they stand out), in the body's
