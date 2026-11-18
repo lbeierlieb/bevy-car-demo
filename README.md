@@ -234,12 +234,25 @@ map file and the lidar terrain model (DGM1, 1 km tiles) from the Bavarian survey
 administration's open data server. Downloads are cached in `tools/bake/cache`
 (delete it to fetch fresh data), so re-baking doesn't load the servers again. The map
 frame is aligned with UTM zone 32, like the lidar tiles. Elevation is box-filtered
-onto a 2 m grid and land use is rasterised per cell. Bridges are rebuilt as straight
-decks, because lidar shows the ground under them.
+onto a 2 m grid and land use is rasterised per cell.
+
+Roads are their own geometry (`tools/bake/src/roads.rs`). Each centreline is a
+Catmull-Rom spline through the mapped points, sampled every metre, so roads still
+meet where they share a point. Heights along all roads are solved at once as least
+squares (`profile.rs`): close to the lidar (the median across the road's width, so a
+centreline mapped onto a verge still finds the road), with changes of slope costing
+enough to smooth out bumps shorter than 80 m on main roads down to 25 m on tracks.
+Roads share their height where they meet and bend smoothly where one runs on into
+another, and lidar heights far off the profile count less. Bridges get next to no
+lidar weight, since lidar shows the ground under them, so their decks span smoothly
+between the approaches; the terrain is raised beside them. The surface has a crown
+(2.5 % on paved roads, 3 % on tracks), and the terrain is cut and filled to it: 8 cm
+under the road and a metre of shoulder, then sloping at 0.6 to the natural ground.
+In the game, a road's surface (blended where roads overlap, so junctions have no
+steps) is both what is drawn and what the tires drive on.
 
 Each 96 m chunk is then given a resolution. It gets 2 m within 20 m of a building
-or 10 m of a paved road or parking area, and 4 m within 6 m of a track. Everything
-else gets 8 m, with each coarse vertex averaging the terrain around it. Along seams
+or 14 m of a road, and next to paved areas. Everything else gets 8 m, with each coarse vertex averaging the terrain around it. Along seams
 between resolutions, the finer side's edge is bent onto the coarser side's straight
 edge, so there are no cracks. Chunks are stored at their own resolution. The game
 rebuilds the full 2 m height grid from them, with coarse areas lying exactly on

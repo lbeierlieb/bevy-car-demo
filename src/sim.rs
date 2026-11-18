@@ -460,11 +460,13 @@ mod tests {
 
     #[test]
     fn the_air_limits_the_top_speed() {
-        let terrain = Terrain::baked();
-        let mut car = test_car(&terrain);
+        // On flat asphalt: at this speed a real road's first bend comes too soon.
+        let terrain = Terrain::flat();
+        let mut car = Car::spawn_at(0, CarSetup::default(), &terrain, 0.0, 400.0, 0.0);
+        car.parking_brake = false;
         run(&mut car, &terrain, 1.0);
         // Coasting in neutral from 180 km/h: drag and the tires slow the car by about
-        // 1 m/s² (0.62 m² of drag area on 1260 kg), and so does the climbing road.
+        // 1 m/s² (0.62 m² of drag area on 1260 kg).
         car.drivetrain.shift_to(&car.setup.engine, 0);
         car.body.velocity = car.body.rotation * Vec3::NEG_Z * 50.0;
         let radius = car.setup.front.tire.radius;
@@ -473,7 +475,7 @@ mod tests {
         }
         run(&mut car, &terrain, 0.5);
         let lost = 50.0 - car.body.velocity.length();
-        assert!((0.3..1.2).contains(&lost), "lost {lost} m/s");
+        assert!((0.3..0.8).contains(&lost), "lost {lost} m/s");
     }
 
     #[test]

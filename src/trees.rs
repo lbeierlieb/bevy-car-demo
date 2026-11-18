@@ -304,15 +304,30 @@ mod tests {
             .collect();
         println!("{} trees and bushes", trees.len());
         assert!(trees.len() > 1000);
+        // The road segments by 32 m square (each in every square it comes near).
+        let square = |p: Vec2| (p / 32.0).floor().as_ivec2();
+        let mut near: std::collections::HashMap<IVec2, Vec<(Vec2, Vec2, f32)>> = Default::default();
+        for road in &terrain.roads {
+            let reach = Vec2::splat(road.width / 2.0 + CLEARANCE);
+            for pair in road.points.windows(2) {
+                let (lo, hi) = (
+                    square(pair[0].min(pair[1]) - reach),
+                    square(pair[0].max(pair[1]) + reach),
+                );
+                for x in lo.x..=hi.x {
+                    for z in lo.y..=hi.y {
+                        near.entry(IVec2::new(x, z))
+                            .or_default()
+                            .push((pair[0], pair[1], road.width));
+                    }
+                }
+            }
+        }
         for p in trees {
             assert!(matches!(terrain.land_class(p.x, p.y), SCRUB | FOREST));
-            for road in &terrain.roads {
-                for pair in road.points.windows(2) {
-                    let (a, b) = (pair[0], pair[1]);
-                    let t =
-                        ((p - a).dot(b - a) / (b - a).length_squared().max(1e-6)).clamp(0.0, 1.0);
-                    assert!(p.distance(a + (b - a) * t) > road.width / 2.0 + CLEARANCE);
-                }
+            for &(a, b, width) in near.get(&square(p)).into_iter().flatten() {
+                let t = ((p - a).dot(b - a) / (b - a).length_squared().max(1e-6)).clamp(0.0, 1.0);
+                assert!(p.distance(a + (b - a) * t) > width / 2.0 + CLEARANCE);
             }
         }
     }

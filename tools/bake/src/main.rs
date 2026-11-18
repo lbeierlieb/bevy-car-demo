@@ -12,28 +12,29 @@
 //! tiles use.
 
 mod osm;
+mod profile;
+mod roads;
 
 use std::io::Cursor;
 
 use osm::{Osm, Tags};
+use roads::{Grid, Road, RoadKind};
 
 /// Terrain grid spacing in metres, at full detail.
 const CELL: f64 = 2.0;
 /// Chunk side in cells (96 m). Each chunk is stored at one of the steps below, which all
 /// divide it. The map is a whole number of chunks along each axis.
 const CHUNK_CELLS: usize = 48;
-/// Chunk resolutions as steps in cells: 2 m, 4 m and 8 m.
+/// Chunk resolutions as steps in cells: 2 m and 8 m.
 const STEP_DETAIL: usize = 1;
-const STEP_TRACKS: usize = 2;
 const STEP_EMPTY: usize = 4;
 /// Width of the raised rim at the map edge.
 const RIM: f64 = 30.0;
 const USER_AGENT: &str = "car-sim-bake/0.3 (Bevy car simulation demo)";
 const CACHE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/cache");
 const OVERPASS: &str = "https://overpass-api.de/api/interpreter";
-/// Bridges: lidar shows the ground under them, so their decks are rebuilt as straight
-/// ramps between the ends, with the terrain raised beside them over `BLEND` metres.
-const ROAD_STEP: f64 = 2.0;
+/// Bridges: lidar shows the ground under them, so the terrain is raised to their decks,
+/// beside them over `BLEND` metres.
 const SHOULDER: f64 = 1.0;
 const BLEND: f64 = 6.0;
 
@@ -207,24 +208,6 @@ impl Dgm1 {
     }
 }
 
-/// A road's surface, or a waterway.
-#[derive(Clone, Copy)]
-enum RoadKind {
-    Asphalt = 0,
-    Gravel = 1,
-    Water = 2,
-    Cobbles = 3,
-    /// Earth and grass.
-    Dirt = 4,
-}
-
-struct Road {
-    kind: RoadKind,
-    width: f64,
-    bridge: bool,
-    points: Vec<Point>,
-}
-
 /// Kind and width of a drivable road or a waterway; `None` for anything else.
 fn road_style(tags: &Tags) -> Option<(RoadKind, f64)> {
     let tag = |k: &str| tags.get(k).map(String::as_str);
@@ -391,20 +374,6 @@ fn fetch_osm(center: Point, (half_x, half_z): Point) -> Result<Osm, Error> {
     Ok(osm)
 }
 
-/// Resamples a polyline at roughly `ROAD_STEP` spacing, keeping the original vertices.
-fn resample(points: &[Point]) -> Vec<Point> {
-    let mut out = vec![points[0]];
-    for pair in points.windows(2) {
-        let ((x0, z0), (x1, z1)) = (pair[0], pair[1]);
-        let steps = ((x1 - x0).hypot(z1 - z0) / ROAD_STEP).ceil().max(1.0) as usize;
-        for i in 1..=steps {
-            let t = i as f64 / steps as f64;
-            out.push((x0 + (x1 - x0) * t, z0 + (z1 - z0) * t));
-        }
-    }
-    out
-}
-
 fn smoothstep(t: f64) -> f64 {
     let t = t.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -509,6 +478,8 @@ fn bake(
 
     let osm = Osm::parse(&std::fs::read_to_string(map)?)?;
     let on_map = |&(x, z): &Point| x.abs() < half_x && z.abs() < half_z;
+    // Roads stop where the rim starts to rise.
+    let inside = |&(x, z): &Point| x.abs() < half_x - RIM && z.abs() < half_z - RIM;
 
     // Roads, waterways, buildings and land use areas. Elements are visited in ID order, so
     // the same data always bakes to the same file.
@@ -533,15 +504,25 @@ fn bake(
                 rings: vec![points],
             });
         } else if let Some((kind, width)) = road_style(tags) {
+            // Culverts run under the roads.
+            if kind == RoadKind::Water && tags.contains_key("tunnel") {
+                continue;
+            }
             let bridge = tags.get("bridge").is_some_and(|b| b != "no");
+            let mapped: Vec<(i64, Point)> = refs
+                .iter()
+                .filter_map(|r| {
+                    let node = osm.nodes.get(r).filter(|n| !n.meta.deleted())?;
+                    Some((*r, frame.to_local(node.lat, node.lon)))
+                })
+                .collect();
             // Split the way wherever it leaves the map.
-            for run in points.split(|p| !on_map(p)).filter(|run| run.len() >= 2) {
-                roads.push(Road {
-                    kind,
-                    width,
-                    bridge,
-                    points: run.to_vec(),
-                });
+            for run in mapped.split(|(_, p)| !inside(p)) {
+                let mut run = run.to_vec();
+                run.dedup_by(|b, a| a.1 == b.1);
+                if run.len() >= 2 {
+                    roads.push(Road::new(kind, width, bridge, &run));
+                }
             }
         }
     }
@@ -611,17 +592,24 @@ fn bake(
         }
     }
 
-    // Bridges: straight decks between the end heights, terrain raised up to them.
+    // Road heights: smooth profiles along the lidar; the terrain cut and filled to them.
+    roads::profiles(&mut roads, |(x, z)| {
+        dgm.sample(frame.east + x, frame.north - z)
+    });
+    let grid = Grid {
+        cells_x,
+        cells_z,
+        cell: CELL,
+    };
+    roads::conform(&roads, &mut heights, &grid);
+
+    // Bridges: the terrain raised up to their decks.
     let mut nearest = vec![(f64::INFINITY, 0.0); heights.len()];
-    let grid_height = |x: f64, z: f64| heights[index_z(z) * n + index_x(x)];
-    for road in roads.iter_mut().filter(|r| r.bridge) {
-        road.points = resample(&road.points);
-        let (start, end) = (road.points[0], *road.points.last().unwrap());
-        let (h0, h1) = (grid_height(start.0, start.1), grid_height(end.0, end.1));
-        let count = road.points.len();
-        let deck: Vec<f64> = (0..count)
-            .map(|i| h0 + (h1 - h0) * i as f64 / (count - 1) as f64)
-            .collect();
+    for road in roads
+        .iter()
+        .filter(|r| r.bridge && r.kind != RoadKind::Water)
+    {
+        let deck = &road.heights;
         let reach = road.width / 2.0 + SHOULDER + BLEND;
         for (i, pair) in road.points.windows(2).enumerate() {
             let ((x0, z0), (x1, z1)) = (pair[0], pair[1]);
@@ -634,7 +622,8 @@ fn bake(
                     let edge = (px - x0 - dx * t).hypot(pz - z0 - dz * t) - road.width / 2.0;
                     let slot = &mut nearest[gz * n + gx];
                     if edge < slot.0 {
-                        *slot = (edge, deck[i] * (1.0 - t) + deck[i + 1] * t);
+                        let centre = deck[i] * (1.0 - t) + deck[i + 1] * t;
+                        *slot = (edge, centre - road.crown() * road.width / 2.0 - 0.08);
                     }
                 }
             }
@@ -654,8 +643,8 @@ fn bake(
         *h += edge * edge * 0.05;
     }
 
-    // Resolution per chunk, as a step in grid cells: full detail around buildings, paved
-    // roads and paved areas, medium around tracks, coarse everywhere else.
+    // Resolution per chunk, as a step in grid cells: full detail around buildings, roads
+    // and paved areas, coarse everywhere else.
     let mut steps = vec![STEP_EMPTY; chunks_x * chunks_z];
     let chunk_size = CHUNK_CELLS as f64 * CELL;
     let mut refine = |(x, z): Point, margin: f64, step: usize| {
@@ -673,14 +662,10 @@ fn bake(
     for point in buildings.iter().flat_map(|b| &b.points) {
         refine(*point, 20.0, STEP_DETAIL);
     }
-    for road in &roads {
-        let (margin, step) = match road.kind {
-            RoadKind::Asphalt | RoadKind::Cobbles => (10.0, STEP_DETAIL),
-            RoadKind::Gravel | RoadKind::Dirt => (6.0, STEP_TRACKS),
-            RoadKind::Water => continue,
-        };
-        for point in resample(&road.points) {
-            refine(point, margin, step);
+    // Wide enough for the embankments.
+    for road in roads.iter().filter(|r| r.kind != RoadKind::Water) {
+        for &point in &road.points {
+            refine(point, 14.0, STEP_DETAIL);
         }
     }
     for (i, _) in classes
@@ -772,8 +757,8 @@ fn bake(
     // (chunk cells / step + 1)² vertex heights u16 in centimetres above the lowest point and
     // (chunk cells / step)² land use classes u8 (row-major),
     // road count u32, then per road: kind u8 (0 asphalt, 1 gravel, 2 water, 3 cobbles,
-    // 4 dirt), width f32,
-    // point count u32, points (x, z) f32,
+    // 4 dirt), bridge u8 (0 or 1), width f32, crown f32 (fall per metre to the edges),
+    // point count u32, points (x, z, height above the lowest point; 0 for waterways) f32,
     // building count u32, then per building: levels f32 (0: unknown), point count u32,
     // outline points (x, z) f32.
     let base = heights.iter().copied().fold(f64::INFINITY, f64::min);
@@ -798,7 +783,7 @@ fn bake(
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&8u32.to_le_bytes());
+    put(&9u32.to_le_bytes());
     put(&(cells_x as u32).to_le_bytes());
     put(&(cells_z as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
@@ -835,9 +820,16 @@ fn bake(
     };
     put(&(roads.len() as u32).to_le_bytes());
     for road in &roads {
-        put(&[road.kind as u8]);
+        put(&[road.kind as u8, road.bridge as u8]);
         put(&(road.width as f32).to_le_bytes());
-        polyline(&mut put, &road.points);
+        put(&(road.crown() as f32).to_le_bytes());
+        put(&(road.points.len() as u32).to_le_bytes());
+        for (i, &(x, z)) in road.points.iter().enumerate() {
+            let height = road.heights.get(i).map_or(0.0, |h| h - base);
+            for v in [x, z, height] {
+                put(&(v as f32).to_le_bytes());
+            }
+        }
     }
     put(&(buildings.len() as u32).to_le_bytes());
     for building in &buildings {
@@ -847,10 +839,8 @@ fn bake(
     std::fs::write(out, &bytes)?;
     let count = |s: usize| steps.iter().filter(|&&step| step == s).count();
     eprintln!(
-        "chunks: {} at {CELL} m, {} at {} m, {} at {} m",
+        "chunks: {} at {CELL} m, {} at {} m",
         count(STEP_DETAIL),
-        count(STEP_TRACKS),
-        CELL * STEP_TRACKS as f64,
         count(STEP_EMPTY),
         CELL * STEP_EMPTY as f64
     );

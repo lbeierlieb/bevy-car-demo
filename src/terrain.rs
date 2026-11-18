@@ -1,5 +1,6 @@
 //! Real-world terrain baked by `tools/bake`: a heightfield rendered flat-shaded and queried
-//! analytically (the physics sees exactly the triangles that are drawn), plus road ribbons.
+//! analytically (the physics sees exactly the triangles that are drawn), and roads with
+//! their own heights on it (`Terrain::ground`), drawn as ribbons on that same surface.
 //! Meshes are built per chunk, on demand (see `scenery`).
 
 use bevy::asset::RenderAssetUsages;
@@ -13,12 +14,16 @@ use crate::physics::surface::Surface;
 const BAKED: &[u8] = include_bytes!("../assets/gerach.terrain");
 /// Width of the raised rim at the map edge (baked into the heights; roads stop before it).
 const RIM: f32 = 30.0;
-/// How far road ribbons float above the terrain, to avoid z-fighting.
-const ROAD_LIFT: f32 = 0.05;
+/// How far waterway ribbons float above the terrain, to avoid z-fighting.
+const WATER_LIFT: f32 = 0.05;
 /// Maximum spacing of road ribbon vertices, along and across the road.
 const DRAPE_STEP: f32 = 1.0;
 /// Cell size of the grid of road segments, for looking up the surface (m).
-const ROAD_CELL: f32 = 8.0;
+const ROAD_CELL: f32 = 4.0;
+/// Where roads overlap (junctions), the surface blends them, each by how far inside its
+/// edge the point is, fading out over this distance towards the road's ends (m), so the
+/// surface stays continuous where a side road's crown meets a main road's camber.
+const ROAD_FADE: f32 = 3.0;
 
 pub struct TerrainPlugin;
 
@@ -73,6 +78,18 @@ impl RoadKind {
         }
     }
 
+    /// How far the ribbon is drawn above the road's surface, so where roads overlap the
+    /// better one shows (m).
+    fn lift(self) -> f32 {
+        match self {
+            RoadKind::Asphalt => 0.012,
+            RoadKind::Cobbles => 0.009,
+            RoadKind::Gravel => 0.006,
+            RoadKind::Dirt => 0.003,
+            RoadKind::Water => WATER_LIFT,
+        }
+    }
+
     /// Vertex colour of the ribbon (linear).
     pub fn color(self) -> [f32; 4] {
         match self {
@@ -88,8 +105,23 @@ impl RoadKind {
 pub struct Road {
     pub kind: RoadKind,
     pub width: f32,
-    /// Centreline in the xz plane (x east, z south).
+    pub bridge: bool,
+    /// The surface falls this much per metre from the middle to the edges.
+    pub crown: f32,
+    /// Centreline in the xz plane (x east, z south), about a metre apart.
     pub points: Vec<Vec2>,
+    /// The centreline's height at each point (waterways: zero; they lie on the terrain).
+    pub heights: Vec<f32>,
+    /// Distance along the road to each point.
+    along: Vec<f32>,
+}
+
+/// The ground somewhere: its height, upward normal, and what it is.
+#[derive(Clone, Copy, Debug)]
+pub struct Ground {
+    pub height: f32,
+    pub normal: Vec3,
+    pub surface: Surface,
 }
 
 #[derive(Resource)]
@@ -144,7 +176,7 @@ impl Terrain {
     pub fn baked() -> Self {
         let mut r = Bytes(BAKED);
         assert_eq!(r.take(4), b"CSTR", "not a baked terrain file");
-        assert_eq!(r.u32(), 8, "unsupported terrain version");
+        assert_eq!(r.u32(), 9, "unsupported terrain version");
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
         let cell = r.f32();
         let chunk_cells = r.u32() as usize;
@@ -172,13 +204,23 @@ impl Terrain {
         }
         let roads: Vec<Road> = (0..r.u32())
             .map(|_| {
-                let kind = RoadKind::from_byte(r.take(1)[0]);
-                let width = r.f32();
-                let points = (0..r.u32()).map(|_| Vec2::new(r.f32(), r.f32())).collect();
+                let (kind, bridge) = (RoadKind::from_byte(r.take(1)[0]), r.take(1)[0] != 0);
+                let (width, crown) = (r.f32(), r.f32());
+                let (points, heights): (Vec<Vec2>, Vec<f32>) = (0..r.u32())
+                    .map(|_| (Vec2::new(r.f32(), r.f32()), r.f32()))
+                    .unzip();
+                let mut along = vec![0.0];
+                for pair in points.windows(2) {
+                    along.push(along.last().unwrap() + pair[0].distance(pair[1]));
+                }
                 Road {
                     kind,
                     width,
+                    bridge,
+                    crown,
                     points,
+                    heights,
+                    along,
                 }
             })
             .collect();
@@ -265,8 +307,8 @@ impl Terrain {
         }
     }
 
-    /// Surface height and upward normal at (x, z).
-    pub fn sample(&self, x: f32, z: f32) -> (f32, Vec3) {
+    /// The terrain's height and upward normal at (x, z), without the roads on it.
+    pub fn land(&self, x: f32, z: f32) -> (f32, Vec3) {
         let [a, b, c] = self.triangle(x, z);
         let normal = (b - a).cross(c - a).normalize();
         // Plane through `a`: normal · (p - a) = 0, solved for y.
@@ -288,22 +330,83 @@ impl Terrain {
         chunk.classes[local(iz) * m + local(ix)]
     }
 
-    /// What the ground at (x, z) is: the best of the roads there (as their ribbons are
-    /// drawn), else the land use's.
+    /// Height and upward normal of the ground at (x, z): the roads where there are any,
+    /// else the terrain.
+    pub fn sample(&self, x: f32, z: f32) -> (f32, Vec3) {
+        let ground = self.ground(x, z);
+        (ground.height, ground.normal)
+    }
+
+    /// What the ground at (x, z) is.
     pub fn surface(&self, x: f32, z: f32) -> Surface {
+        self.ground(x, z).surface
+    }
+
+    /// The ground at (x, z): the roads covering it (blended where they overlap, see
+    /// `ROAD_FADE`), else the terrain (and its land use, or a waterway on it).
+    pub fn ground(&self, x: f32, z: f32) -> Ground {
         let p = Vec2::new(x, z);
-        self.road_grid
-            .near(p)
-            .iter()
-            .filter_map(|&(r, i)| {
-                let road = &self.roads[r as usize];
-                let (a, b) = (road.points[i as usize], road.points[i as usize + 1]);
-                let t = ((p - a).dot(b - a) / (b - a).length_squared().max(1e-6)).clamp(0.0, 1.0);
-                (a.lerp(b, t).distance_squared(p) <= road.width * road.width / 4.0)
-                    .then(|| road.kind.surface())
-            })
-            .max_by(|a, b| a.grip().total_cmp(&b.grip()))
-            .unwrap_or_else(|| land_surface(self.land_class(x, z)))
+        // Per road covering it: (road, weight, height, slope as d height / d (x, z)).
+        let mut covering: [(usize, f32, f32, Vec2); 8] = [(usize::MAX, 0.0, 0.0, Vec2::ZERO); 8];
+        let mut count = 0;
+        let mut water = false;
+        for &(r, i) in self.road_grid.near(p) {
+            let (r, i) = (r as usize, i as usize);
+            let road = &self.roads[r];
+            let (a, b) = (road.points[i], road.points[i + 1]);
+            let length = a.distance(b).max(1e-6);
+            let along = (b - a) / length;
+            let t = ((p - a).dot(along) / length).clamp(0.0, 1.0);
+            let off = a.lerp(b, t).distance(p);
+            let margin = road.width / 2.0 - off;
+            if margin < 0.0 {
+                continue;
+            }
+            if road.kind == RoadKind::Water {
+                water = true;
+                continue;
+            }
+            let s = road.along[i] + t * length;
+            let to_end = s.min(road.along[road.along.len() - 1] - s);
+            let weight = margin.max(1e-3) * (to_end / ROAD_FADE).clamp(0.02, 1.0);
+            let side = along.perp();
+            let rise = (road.heights[i + 1] - road.heights[i]) / length;
+            let height = road.heights[i] + rise * t * length - road.crown * off;
+            let slope = along * rise - side * road.crown * (p - a).dot(side).signum();
+            // One entry per road: the segment it covers the point best with.
+            match covering[..count].iter_mut().find(|c| c.0 == r) {
+                Some(entry) if entry.1 >= weight => {}
+                Some(entry) => *entry = (r, weight, height, slope),
+                None if count < 8 => {
+                    covering[count] = (r, weight, height, slope);
+                    count += 1;
+                }
+                None => {}
+            }
+        }
+        if count == 0 {
+            let (height, normal) = self.land(x, z);
+            let surface = if water {
+                Surface::Water
+            } else {
+                land_surface(self.land_class(x, z))
+            };
+            return Ground {
+                height,
+                normal,
+                surface,
+            };
+        }
+        let covering = &covering[..count];
+        let total: f32 = covering.iter().map(|c| c.1).sum();
+        let height = covering.iter().map(|c| c.1 * c.2).sum::<f32>() / total;
+        let slope = covering.iter().map(|c| c.1 * c.3).sum::<Vec2>() / total;
+        let main = covering.iter().max_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
+        Ground {
+            height,
+            normal: Vec3::new(-slope.x, 1.0, -slope.y).normalize(),
+            surface: self.roads[main.0].kind.surface(),
+        }
     }
 
     /// Ground colour at (x, z), as the terrain is drawn there.
@@ -555,7 +658,7 @@ pub struct RoadRibbons {
 }
 
 struct Ribbon {
-    color: [f32; 4],
+    kind: RoadKind,
     width: f32,
     points: Vec<Vec2>,
 }
@@ -564,7 +667,6 @@ impl RoadRibbons {
     pub fn new(terrain: &Terrain) -> Self {
         let mut ribbons = Vec::new();
         for road in &terrain.roads {
-            let color = road.kind.color();
             // Skip where the road climbs the rim at the map edge.
             for run in road
                 .points
@@ -572,7 +674,7 @@ impl RoadRibbons {
                 .filter(|run| run.len() >= 2)
             {
                 ribbons.push(Ribbon {
-                    color,
+                    kind: road.kind,
                     width: road.width,
                     points: resample(run, DRAPE_STEP),
                 });
@@ -588,14 +690,22 @@ impl RoadRibbons {
     }
 
     /// The ribbon quads starting in one chunk. Vertices are at most `DRAPE_STEP` apart
-    /// along and across the road, each set onto the terrain, so the ribbon follows the
-    /// 2 m terrain mesh.
+    /// along and across the road (with one on the crown), each set onto the ground as the
+    /// physics sees it: roads on their own surface (blended where they overlap), waterways
+    /// on the terrain.
     pub fn mesh(&self, terrain: &Terrain, index: usize, mesh: &mut FlatMesh) {
-        let lift = |p: Vec2| Vec3::new(p.x, terrain.sample(p.x, p.y).0 + ROAD_LIFT, p.y);
         for &(r, i) in &self.by_chunk[index] {
             let ribbon = &self.ribbons[r];
+            let lift = |p: Vec2| {
+                let ground = if ribbon.kind == RoadKind::Water {
+                    terrain.land(p.x, p.y).0
+                } else {
+                    terrain.sample(p.x, p.y).0
+                };
+                Vec3::new(p.x, ground + ribbon.kind.lift(), p.y)
+            };
             let (points, n) = (&ribbon.points, ribbon.points.len());
-            let across = (ribbon.width / DRAPE_STEP).ceil().max(1.0) as usize;
+            let across = 2 * (ribbon.width / 2.0 / DRAPE_STEP).ceil().max(1.0) as usize;
             let row = |i: usize| -> Vec<Vec3> {
                 let tangent =
                     (points[(i + 1).min(n - 1)] - points[i.saturating_sub(1)]).normalize_or_zero();
@@ -608,8 +718,8 @@ impl RoadRibbons {
             for j in 0..across {
                 let (a, b) = (near[j], near[j + 1]);
                 let (c, d) = (far[j], far[j + 1]);
-                mesh.triangle([a, b, c], ribbon.color);
-                mesh.triangle([b, d, c], ribbon.color);
+                mesh.triangle([a, b, c], ribbon.kind.color());
+                mesh.triangle([b, d, c], ribbon.kind.color());
             }
         }
     }
@@ -821,23 +931,17 @@ mod tests {
     #[test]
     fn roads_have_their_surface_and_the_land_its_own() {
         let terrain = Terrain::baked();
-        let mut seen = Vec::new();
+        // At each road's middle, the road's own surface, but for a few crossings.
+        let (mut seen, mut own, mut count) = (Vec::new(), 0, 0);
         for road in terrain.roads.iter().filter(|r| r.kind != RoadKind::Water) {
-            let (a, b) = (road.points[0], road.points[1]);
-            let middle = a.lerp(b, 0.5);
-            let edge = middle + (b - a).perp().normalize() * (road.width / 2.0 - 0.1);
-            for p in [middle, edge] {
-                // Another, better road may cross it there.
-                let surface = terrain.surface(p.x, p.y);
-                assert!(
-                    surface.grip() >= road.kind.surface().grip(),
-                    "{surface:?} at {p}"
-                );
-            }
+            let p = road.points[road.points.len() / 2];
+            own += (terrain.surface(p.x, p.y) == road.kind.surface()) as usize;
+            count += 1;
             if !seen.contains(&road.kind) {
                 seen.push(road.kind);
             }
         }
+        assert!(own as f32 > 0.97 * count as f32, "{own} of {count}");
         assert_eq!(seen.len(), 4, "{seen:?}");
         // Away from the roads, the land use decides.
         let forest = (0..10_000)
@@ -877,7 +981,7 @@ mod tests {
                 let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]);
                 let plane_y = tri[0].y
                     - (normal.x * (p.x - tri[0].x) + normal.z * (p.z - tri[0].z)) / normal.y;
-                assert!((terrain.sample(p.x, p.z).0 - plane_y).abs() < 1e-3);
+                assert!((terrain.land(p.x, p.z).0 - plane_y).abs() < 1e-3);
             }
         }
         assert!(coarse_chunks > 0);
