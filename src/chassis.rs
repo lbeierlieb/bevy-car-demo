@@ -190,11 +190,11 @@ pub struct Chassis {
     pub cg_height: f32,
     pub wheelbase: f32,
     /// Front and rear: track (m), the factory's rims and tires, the room in the wheel
-    /// wells, and unsprung mass per corner (kg).
+    /// wells, and the unsprung mass of a corner without its wheel (hub, upright, brake; kg).
     pub track: [f32; 2],
     pub wheels: [Wheel; 2],
     pub room: [WheelRoom; 2],
-    pub unsprung: [f32; 2],
+    pub hub: [f32; 2],
     /// Peak friction of the stock tires.
     pub grip: f32,
     /// Ride frequency front and rear (Hz), and damping ratio.
@@ -249,6 +249,11 @@ impl Chassis {
             radius: self.wheels.map(|wheel| wheel.tire.radius()),
             width: self.wheels.map(|wheel| wheel.tire.width_m()),
         }
+    }
+
+    /// Unsprung mass of a front or rear corner (kg) on the factory's wheels.
+    pub fn unsprung(&self, axle: usize) -> f32 {
+        self.hub[axle] + self.wheels[axle].mass()
     }
 
     /// The families of the engines the factory offers.
@@ -430,7 +435,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 13,
             },
         ],
-        unsprung: [30.0, 28.0],
+        hub: [17.0, 15.0],
         grip: 0.95,
         ride: [1.3, 1.45],
         damping: 0.3,
@@ -512,7 +517,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 15,
             },
         ],
-        unsprung: [36.0, 32.0],
+        hub: [18.0, 15.0],
         grip: 1.05,
         ride: [1.6, 1.85],
         damping: 0.34,
@@ -597,7 +602,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 14,
             },
         ],
-        unsprung: [32.0, 34.0],
+        hub: [16.0, 18.0],
         grip: 1.05,
         ride: [1.5, 1.65],
         damping: 0.32,
@@ -678,7 +683,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 16,
             },
         ],
-        unsprung: [38.0, 40.0],
+        hub: [19.0, 20.0],
         grip: 1.1,
         ride: [1.65, 1.8],
         damping: 0.33,
@@ -761,7 +766,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 15,
             },
         ],
-        unsprung: [42.0, 44.0],
+        hub: [22.0, 24.0],
         grip: 1.05,
         ride: [1.35, 1.5],
         damping: 0.32,
@@ -844,7 +849,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 15,
             },
         ],
-        unsprung: [40.0, 40.0],
+        hub: [21.0, 21.0],
         grip: 1.1,
         ride: [1.7, 1.8],
         damping: 0.36,
@@ -936,7 +941,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 17,
             },
         ],
-        unsprung: [44.0, 50.0],
+        hub: [22.0, 25.0],
         grip: 1.05,
         ride: [1.4, 1.5],
         damping: 0.3,
@@ -1023,7 +1028,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 17,
             },
         ],
-        unsprung: [38.0, 44.0],
+        hub: [18.0, 20.0],
         grip: 1.15,
         ride: [1.9, 2.1],
         damping: 0.36,
@@ -1111,7 +1116,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 17,
             },
         ],
-        unsprung: [38.0, 46.0],
+        hub: [18.0, 21.0],
         grip: 1.15,
         ride: [1.8, 2.0],
         damping: 0.36,
@@ -1198,7 +1203,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 19,
             },
         ],
-        unsprung: [42.0, 52.0],
+        hub: [18.0, 22.0],
         grip: 1.25,
         ride: [2.2, 2.4],
         damping: 0.4,
@@ -1288,7 +1293,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 14,
             },
         ],
-        unsprung: [24.0, 26.0],
+        hub: [9.0, 10.0],
         grip: 1.2,
         ride: [2.0, 2.2],
         damping: 0.38,
@@ -1370,7 +1375,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 16,
             },
         ],
-        unsprung: [58.0, 62.0],
+        hub: [35.0, 39.0],
         grip: 0.95,
         ride: [1.25, 1.5],
         damping: 0.3,
@@ -1457,7 +1462,7 @@ pub static CHASSIS: [Chassis; 13] = [
                 min_rim: 15,
             },
         ],
-        unsprung: [44.0, 44.0],
+        hub: [26.0, 26.0],
         grip: 0.95,
         ride: [1.3, 1.6],
         damping: 0.3,

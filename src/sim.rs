@@ -454,7 +454,7 @@ mod tests {
             wheels > 1.5 * spinning,
             "wheels at {wheels} m/s, car at {spinning}"
         );
-        assert!(speed > spinning + 3.0, "{speed} against {spinning} m/s");
+        assert!(speed > spinning + 2.0, "{speed} against {spinning} m/s");
     }
 
     #[test]

@@ -14,6 +14,7 @@ use crate::physics::suspension::{ArmGeometry, AxleSetup, Corner};
 use crate::physics::tire::{COMPOUNDS, TireParams};
 use crate::storage::Folder;
 use crate::terrain::Terrain;
+use crate::wheels::HUB_INERTIA;
 
 /// Everything the simulation needs to know about a car, worked out from what it's built
 /// of: a chassis and what's fitted to it (`build`), and an engine.
@@ -121,13 +122,13 @@ impl CarSetup {
             // Toe-in at the rear keeps the car stable, especially off throttle.
             geometry.static_toe = if i == 0 { 0.0 } else { 0.25f32.to_radians() };
             let stock = TireParams::default();
-            let unsprung_mass = chassis.unsprung[i];
+            let unsprung_mass = chassis.hub[i] + wheel.mass();
             let mut axle = AxleSetup {
                 geometry,
                 spring_rate: 0.0,
                 damping: 0.0,
                 unsprung_mass,
-                wheel_inertia: 0.45 * unsprung_mass * radius * radius,
+                wheel_inertia: wheel.inertia() + HUB_INERTIA * chassis.hub[i],
                 tire: TireParams {
                     radius,
                     compound,
@@ -146,7 +147,8 @@ impl CarSetup {
             axle
         };
 
-        let mass = laden + 2.0 * (chassis.unsprung[0] + chassis.unsprung[1]);
+        let unsprung = |i: usize| chassis.hub[i] + build.wheels[i].mass();
+        let mass = laden + 2.0 * (unsprung(0) + unsprung(1));
         let radius = (build.wheels[0].tire.radius() + build.wheels[1].tire.radius()) / 2.0;
         // Braking as hard as the tires can, the weight shifts forward by the height of
         // the centre of mass over the wheelbase; a little more to the front keeps the

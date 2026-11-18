@@ -527,7 +527,7 @@ impl TrafficCar {
         let top = hull.center.y + hull.half.y;
         hull.center.y = top / 2.0;
         hull.half.y = top / 2.0;
-        let mass = model.mass + DRIVETRAIN_MASS + 2.0 * (model.unsprung[0] + model.unsprung[1]);
+        let mass = model.mass + DRIVETRAIN_MASS + 2.0 * (model.unsprung(0) + model.unsprung(1));
         let size = Vec3::new(model.body.width, 1.0, model.body.length);
         let mut body = RigidBody::new(
             Vec3::ZERO,

@@ -21,6 +21,9 @@ const SIDEWALL_MASS: f32 = 2.8;
 const RIM_INERTIA: f32 = 0.65;
 /// How far in from the outside the tread's mass is, as a share of the radius.
 const TREAD_DEPTH: f32 = 0.95;
+/// Moment of inertia of what spins with the wheel on the hub (brake disc, hub, half the
+/// drive shaft) per kg of the corner's unsprung mass without its wheel (m²).
+pub const HUB_INERTIA: f32 = 0.004;
 /// The rim width that suits a tire best (inches per mm of tire width), and how far either
 /// side of it a rim still takes the tire (inches).
 const IDEAL_RIM: f32 = 0.8 / 25.4;

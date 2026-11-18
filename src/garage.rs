@@ -723,7 +723,7 @@ fn brochure(ui: &mut egui::Ui, shown: &mut Showroom) -> bool {
     let mass = chassis.mass
         + parts.family().built_mass(&parts.hardware())
         + GEARBOXES[chassis.gearbox].mass
-        + 2.0 * (chassis.unsprung[0] + chassis.unsprung[1]);
+        + 2.0 * (chassis.unsprung(0) + chassis.unsprung(1));
     ui.label(format!("{mass:.0} kg with it"));
     ui.label("(F4, the garage, fits any engine there's room for)");
     ui.add_space(4.0);
