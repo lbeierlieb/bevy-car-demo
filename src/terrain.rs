@@ -177,9 +177,11 @@ impl Terrain {
     /// vertices of coarse chunks lying on their coarse triangles, so physics queries match
     /// the rendered surface exactly.
     pub fn baked() -> Self {
-        let mut r = Bytes(BAKED);
+        let inflated = miniz_oxide::inflate::decompress_to_vec_zlib(BAKED)
+            .expect("the baked terrain file is corrupt");
+        let mut r = Bytes(&inflated);
         assert_eq!(r.take(4), b"CSTR", "not a baked terrain file");
-        assert_eq!(r.u32(), 9, "unsupported terrain version");
+        assert_eq!(r.u32(), 10, "unsupported terrain version");
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
         let cell = r.f32();
         let chunk_cells = r.u32() as usize;
@@ -192,9 +194,7 @@ impl Terrain {
             for cx in 0..cells_x / chunk_cells {
                 let step = r.take(1)[0] as usize;
                 let m = chunk_cells / step;
-                let coarse: Vec<f32> = (0..(m + 1) * (m + 1))
-                    .map(|_| r.u16() as f32 / 100.0)
-                    .collect();
+                let coarse = predicted_heights(&mut r, m + 1);
                 for lz in 0..=chunk_cells {
                     for lx in 0..=chunk_cells {
                         let i = (cz * chunk_cells + lz) * n + cx * chunk_cells + lx;
@@ -209,9 +209,19 @@ impl Terrain {
             .map(|_| {
                 let (kind, bridge) = (RoadKind::from_byte(r.take(1)[0]), r.take(1)[0] != 0);
                 let (width, crown) = (r.f32(), r.f32());
-                let (points, heights): (Vec<Vec2>, Vec<f32>) = (0..r.u32())
-                    .map(|_| (Vec2::new(r.f32(), r.f32()), r.f32()))
-                    .unzip();
+                // Centimetres along, millimetres up: the first point, then steps.
+                let count = r.u32() as usize;
+                let mut at = [r.u32() as i32, r.u32() as i32, r.u32() as i32];
+                let (mut points, mut heights) = (Vec::new(), Vec::new());
+                for i in 0..count {
+                    if i > 0 {
+                        for v in &mut at {
+                            *v += r.u16() as i16 as i32;
+                        }
+                    }
+                    points.push(Vec2::new(at[0] as f32, at[1] as f32) / 100.0);
+                    heights.push(at[2] as f32 / 1000.0);
+                }
                 let mut along = vec![0.0];
                 for pair in points.windows(2) {
                     along.push(along.last().unwrap() + pair[0].distance(pair[1]));
@@ -826,11 +836,35 @@ fn on_coarse_grid(coarse: &[f32], m: usize, step: usize, lx: usize, lz: usize) -
     }
 }
 
-/// Little-endian reader over the baked file.
-struct Bytes(&'static [u8]);
+/// A chunk's `side`² heights (m), stored as centimetres predicted from their neighbours
+/// before them (see `tools/bake`): low bytes, then high bytes.
+fn predicted_heights(r: &mut Bytes, side: usize) -> Vec<f32> {
+    let count = side * side;
+    let (low, high) = (r.take(count), r.take(count));
+    let mut cm = vec![0u16; count];
+    for j in 0..side {
+        for i in 0..side {
+            let at = |i: usize, j: usize| cm[j * side + i];
+            let guess = match (i, j) {
+                (0, 0) => 0,
+                (0, _) => at(0, j - 1),
+                (_, 0) => at(i - 1, 0),
+                _ => at(i - 1, j)
+                    .wrapping_add(at(i, j - 1))
+                    .wrapping_sub(at(i - 1, j - 1)),
+            };
+            let k = j * side + i;
+            cm[k] = guess.wrapping_add(u16::from_le_bytes([low[k], high[k]]));
+        }
+    }
+    cm.into_iter().map(|h| h as f32 / 100.0).collect()
+}
 
-impl Bytes {
-    fn take(&mut self, n: usize) -> &'static [u8] {
+/// Little-endian reader over the baked file.
+struct Bytes<'a>(&'a [u8]);
+
+impl<'a> Bytes<'a> {
+    fn take(&mut self, n: usize) -> &'a [u8] {
         let (head, rest) = self.0.split_at(n);
         self.0 = rest;
         head

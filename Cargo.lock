@@ -2184,6 +2184,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "evdev",
+ "miniz_oxide 0.9.1",
  "web-sys",
 ]
 

@@ -711,15 +711,18 @@ fn bake(
         }
     }
 
-    // Write (all little-endian): b"CSTR", version u32, cells along x and z u32, cell size f32,
+    // Write (all little-endian, and the whole file compressed with zlib): b"CSTR", version u32, cells along x and z u32, cell size f32,
     // chunk cells u32, spawn point (x, z) f32, spawn heading as a direction (x, z) f32
     // ((0, 0) if not given),
     // then per chunk (row-major, rows along z): step u8 (in cells), the chunk's
-    // (chunk cells / step + 1)² vertex heights u16 in centimetres above the lowest point and
+    // (chunk cells / step + 1)² vertex heights u16 in centimetres above the lowest point
+    // (row-major, each as the wrapping difference from left + above - above-left, or the
+    // one neighbour at the edges, or 0; all low bytes, then all high bytes) and
     // (chunk cells / step)² land use classes u8 (row-major),
     // road count u32, then per road: kind u8 (0 asphalt, 1 gravel, 2 water, 3 cobbles,
     // 4 dirt), bridge u8 (0 or 1), width f32, crown f32 (fall per metre to the edges),
-    // point count u32, points (x, z, height above the lowest point; 0 for waterways) f32,
+    // point count u32, points (x, z in cm, height above the lowest point in mm; 0 for
+    // waterways): the first as i32, the others as i16 steps from the one before,
     // building count u32, then per building: levels f32 (0: unknown), point count u32,
     // outline points (x, z) f32.
     let base = heights.iter().copied().fold(f64::INFINITY, f64::min);
@@ -744,7 +747,7 @@ fn bake(
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&9u32.to_le_bytes());
+    put(&10u32.to_le_bytes());
     put(&(cells_x as u32).to_le_bytes());
     put(&(cells_z as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
@@ -759,12 +762,28 @@ fn bake(
             let m = CHUNK_CELLS / s;
             let (i0, j0) = (cx * CHUNK_CELLS, cz * CHUNK_CELLS);
             put(&[s as u8]);
+            // Each height as what's left after predicting it from its neighbours before
+            // it (left plus above minus above-left; at the edges, the one neighbour),
+            // wrapping; low bytes first, then high bytes.
+            let cm = |i: usize, j: usize| {
+                ((heights[(j0 + j * s) * n + i0 + i * s] - base) * 100.0).round() as u16
+            };
+            let mut left = Vec::new();
             for j in 0..=m {
                 for i in 0..=m {
-                    let h = heights[(j0 + j * s) * n + i0 + i * s] - base;
-                    put(&((h * 100.0).round() as u16).to_le_bytes());
+                    let guess = match (i, j) {
+                        (0, 0) => 0,
+                        (0, _) => cm(0, j - 1),
+                        (_, 0) => cm(i - 1, 0),
+                        _ => cm(i - 1, j)
+                            .wrapping_add(cm(i, j - 1))
+                            .wrapping_sub(cm(i - 1, j - 1)),
+                    };
+                    left.push(cm(i, j).wrapping_sub(guess));
                 }
             }
+            put(&left.iter().map(|v| *v as u8).collect::<Vec<_>>());
+            put(&left.iter().map(|v| (*v >> 8) as u8).collect::<Vec<_>>());
             for j in 0..m {
                 for i in 0..m {
                     put(&[classes[(j0 + j * s + s / 2) * cells_x + i0 + i * s + s / 2]]);
@@ -785,11 +804,24 @@ fn bake(
         put(&(road.width as f32).to_le_bytes());
         put(&(road.crown() as f32).to_le_bytes());
         put(&(road.points.len() as u32).to_le_bytes());
+        // Centimetres along, millimetres up: the first point as is, then the steps.
+        let mut last = [0i32; 3];
         for (i, &(x, z)) in road.points.iter().enumerate() {
             let height = road.heights.get(i).map_or(0.0, |h| h - base);
-            for v in [x, z, height] {
-                put(&(v as f32).to_le_bytes());
+            let at = [
+                (x * 100.0).round() as i32,
+                (z * 100.0).round() as i32,
+                (height * 1000.0).round() as i32,
+            ];
+            for k in 0..3 {
+                if i == 0 {
+                    put(&at[k].to_le_bytes());
+                } else {
+                    let step = i16::try_from(at[k] - last[k]).map_err(|_| "road step too long")?;
+                    put(&step.to_le_bytes());
+                }
             }
+            last = at;
         }
     }
     put(&(buildings.len() as u32).to_le_bytes());
@@ -797,7 +829,14 @@ fn bake(
         put(&(building.levels as f32).to_le_bytes());
         polyline(&mut put, &building.points);
     }
+    let raw = bytes.len();
+    let bytes = miniz_oxide::deflate::compress_to_vec_zlib(&bytes, 8);
     std::fs::write(out, &bytes)?;
+    eprintln!(
+        "compressed {} KiB to {} KiB",
+        raw / 1024,
+        bytes.len() / 1024
+    );
     let count = |s: usize| steps.iter().filter(|&&step| step == s).count();
     eprintln!(
         "chunks: {} at {CELL} m, {} at {} m",
