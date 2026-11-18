@@ -383,8 +383,21 @@ and without traction control; `trace_power_slide` prints one step by step
   unwind early, helped by the caster pulling the wheel: mechanical trail is now 30 mm
   (was 15) and the force feedback may change faster.
 - Load sensitivity (`TireParams::load_sensitivity`, then 0.1, now 0.27) made slides
-  slightly deeper, not easier, but makes axle balance matter. Relaxation length wasn't
-  added: at speed it lags by only ~20 ms, so it matters only at low speed.
+  slightly deeper, not easier, but makes axle balance matter.
+- Relaxation (asked for by the user): `Corner::slips` are the slip ratio and the slip
+  angle's tangent the tire acts on, lagging the patch (`TireParams::relax`, exact
+  exponential over the substep; standing, they integrate the creep, so the carcass is a
+  spring). Lengths (`TireParams::relaxation`): 0.5 m across on the reference tire
+  (`RELAXATION`, × sidewall height^0.4, × √(load/design), ÷ pressure stiffness), 0.15 of
+  that along; shortened by the Magic Formula's local slope (to 0.1 at saturation), since
+  the first-order model otherwise winds up a huge deflection in a slide and reverses far
+  too late (that made the bot spin the Halden). Low-speed damping below 4 m/s (0.01 s
+  along, 0.03 s across) against the unshortened carcass lengths; damping against the
+  shortened one blew up on locked wheels. No `LOW_SPEED` slip floor any more (only the
+  steady `force` for tests). `tires_hold_a_parked_car` pushes a parked car 0.15 g
+  sideways and, on the brakes, along. Snap back in caught power slides grew a little
+  (Tarn W20 4.6° → 6°, Halden S30 12° → 15°); the Halden W20T without traction control
+  now spins with the bot.
 - With the bot, mid- and rear-engined cars still spin (plausible), as does the 6.2 V8
   Harrow floored in second, and the 5-litre V8s snap back; the other front-engined cars
   are caught (asserted by `a_power_slide_can_be_caught`).
@@ -426,8 +439,7 @@ and without traction control; `trace_power_slide` prints one step by step
   not: a parked car cools) and an `align` line.
 - Not tuned by driving yet: the heating rates, the windows (now surface temperatures),
   how much grip overheating costs, wear rates, how strongly camber and pressure matter.
-  Possible next steps: relaxation length (a lateral carcass state), rim width affecting
-  the sidewall, brake heat into the rim and the tire's air, toe settings.
+  Possible next steps: rim width affecting the sidewall, brake heat into the rim and the tire's air, toe settings.
 
 ## Engine model
 
