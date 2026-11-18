@@ -116,12 +116,12 @@ career is saved in `~/.config/car-sim/career/` (local storage on the web).
 
 | Key | Action |
 | --- | --- |
-| W / S, arrows | Throttle; brake (a stopped car holds on hills) |
+| W / S, arrows | Throttle; brake |
 | Q / E | Shift down / up (R, N, 1 and up) |
 | G | Toggle automatic gearbox (S at a stop then selects reverse) |
 | I | Start the engine after a stall (only with a clutch pedal) |
 | A / D | Steer |
-| Space | Handbrake |
+| Space | Parking brake on/off (cars start with it on) |
 | R | Reset car |
 | F1 / F2 | Toggle gizmos / telemetry panel |
 | F3 / F4 / F5 | ECU tuning / garage (rebuild the car) / engine dyno |

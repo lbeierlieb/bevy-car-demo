@@ -335,6 +335,9 @@ pub struct Car {
     /// How hard the body has hit houses, trees and other cars since this was last taken:
     /// the speed the knocks changed (m/s), added up.
     pub knocks: f32,
+    /// The handbrake as a parking brake: Space (or a handbrake button) pulls it on or
+    /// releases it. Cars start with it on.
+    pub parking_brake: bool,
 }
 
 impl Car {
@@ -375,6 +378,7 @@ impl Car {
             fuel,
             fill: 1.0,
             knocks: 0.0,
+            parking_brake: true,
         }
         .with_fuel_load()
     }
@@ -423,6 +427,7 @@ impl Car {
         car.body.velocity = self.body.velocity;
         car.body.angular_velocity = self.body.angular_velocity;
         car.controls = self.controls;
+        car.parking_brake = self.parking_brake;
         car.keep_settings(self);
         if same_engine {
             car.drivetrain.engine = self.drivetrain.engine;
@@ -641,6 +646,7 @@ pub fn drive(
             corners,
             drivetrain,
             controls: c,
+            parking_brake,
             ..
         } = &mut *car;
         c.clutch = wheel.clutch;
@@ -684,18 +690,13 @@ pub fn drive(
         // The pedals add to the keys; they work the same in both gearbox modes.
         let go = (go as u8 as f32).max(wheel.throttle.unwrap_or(0.0));
         let stop = (stop as u8 as f32).max(wheel.brake.unwrap_or(0.0));
-        (c.throttle, c.brake) = if go > 0.0 {
-            (go, stop)
-        } else if stop > 0.0 {
-            (0.0, stop)
-        } else if speed.abs() < 2.0 {
-            // Hill hold: without input, keep a (nearly) stopped car from rolling away.
-            (0.0, 1.0)
-        } else {
-            (0.0, 0.0)
-        };
-        c.handbrake =
-            (keys.pressed(KeyCode::Space) as u8 as f32).max(wheel.handbrake.unwrap_or(0.0));
+        (c.throttle, c.brake) = if go > 0.0 { (go, stop) } else { (0.0, stop) };
+        // Space and a handbrake button pull the parking brake on or release it; a lever
+        // works directly, on top of it.
+        if keys.just_pressed(KeyCode::Space) || wheel.handbrake_toggle {
+            *parking_brake ^= true;
+        }
+        c.handbrake = (*parking_brake as u8 as f32).max(wheel.handbrake.unwrap_or(0.0));
         if let Some(steer) = wheel.steer {
             // A steering wheel turns the front wheels directly, at a fixed ratio.
             c.steer = steer;

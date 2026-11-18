@@ -149,7 +149,7 @@ fn settings(
             ui.collapsing("Wheel and pedals", |ui| wheel_panel.show(ui));
             ui.collapsing("Controls", |ui| {
                 ui.label("W/S or arrows: throttle, brake    A/D: steer");
-                ui.label("Q/E: shift down/up    G: automatic gearbox    Space: handbrake");
+                ui.label("Q/E: shift down/up    G: automatic gearbox    Space: parking brake");
                 ui.label("I: start the engine (after stalling with a clutch pedal)");
                 ui.label("Stop on a glowing marker to go into a place");
                 ui.label("T: call the tow truck home    K: map    C: chase/driver view");

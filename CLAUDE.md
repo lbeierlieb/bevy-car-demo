@@ -195,6 +195,9 @@ and plays force feedback, both through hid-fanatecff on Linux.
   (otherwise neutral). Without a pedal, the automatic clutch shifts. Paddles shift
   with the automatic clutch even when a pedal is bound.
 - Each H gate is a button held while the lever is in it; neutral is "no gate held".
+- No hill hold (removed at the user's wish): the handbrake is a parking brake toggled
+  by Space or a handbrake button (`Car::parking_brake`, on when a car spawns or resets,
+  a red (P) under the gear); a handbrake lever (an axis) works directly on top of it.
 
 ### Still to check on the real wheel
 

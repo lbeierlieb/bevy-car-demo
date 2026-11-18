@@ -411,7 +411,10 @@ pub struct WheelInput {
     pub brake: Option<f32>,
     /// Clutch pedal travel: 0 released, 1 pressed.
     pub clutch: Option<f32>,
+    /// A handbrake lever's travel (`None` when the handbrake is a button).
     pub handbrake: Option<f32>,
+    /// A handbrake button was pressed this frame: the parking brake goes on or off.
+    pub handbrake_toggle: bool,
     /// Buttons pressed this frame.
     pub shift_up: bool,
     pub shift_down: bool,
@@ -535,9 +538,14 @@ fn read_wheel(
     let value = |action| action_value(&config, &gamepads, action);
     // The axis covers the base's range, which may be wider than the game's.
     let angle = value(Action::Steer).map(|axis| axis * base.range(&config) / 2.0);
+    // A handbrake bound to a button toggles the parking brake, so it counts as a button.
+    let handbrake_button = config
+        .binding(Action::Handbrake)
+        .is_some_and(|binding| matches!(binding.input, GamepadInput::Button(_)));
+    let button = |a: Action| !a.analog() || (a == Action::Handbrake && handbrake_button);
     let held: Vec<Action> = Action::ALL
         .into_iter()
-        .filter(|a| !a.analog() && value(*a).is_some_and(|v| v > 0.5))
+        .filter(|a| button(*a) && value(*a).is_some_and(|v| v > 0.5))
         .collect();
     let pressed = |action| held.contains(&action) && !wheel.held.contains(&action);
     // Each gate is a button held while the lever is in it: the gear is whichever is held.
@@ -560,7 +568,8 @@ fn read_wheel(
         throttle: value(Action::Throttle),
         brake: value(Action::Brake),
         clutch: value(Action::Clutch),
-        handbrake: value(Action::Handbrake),
+        handbrake: value(Action::Handbrake).filter(|_| !handbrake_button),
+        handbrake_toggle: pressed(Action::Handbrake),
         shift_up: pressed(Action::ShiftUp),
         shift_down: pressed(Action::ShiftDown),
         ignition: pressed(Action::Ignition),

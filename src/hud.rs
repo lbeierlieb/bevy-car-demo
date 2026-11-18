@@ -110,6 +110,16 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
                 FontId::proportional(26.0),
                 Color32::from_rgb(255, 196, 60),
             );
+            // The parking brake's warning lamp, under the gear.
+            if car.parking_brake {
+                painter.text(
+                    center + vec2(0.0, 56.0),
+                    Align2::CENTER_CENTER,
+                    "(P)",
+                    FontId::proportional(15.0),
+                    RED,
+                );
+            }
             let cylinders = engine.build.hardware.cylinders as usize;
             let failure = car.drivetrain.engine.damage.failures(cylinders).pop();
             if !car.drivetrain.running {
