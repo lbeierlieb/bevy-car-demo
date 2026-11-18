@@ -638,6 +638,15 @@ fn shelf(ui: &mut egui::Ui, career: &mut Career, i: usize, view: &mut GarageView
             fitted.push(format!("{} at the {place}", build.wheels[axle].label()));
         }
     }
+    for axle in 0..2 {
+        if build.bars[axle] != stock.bars[axle] {
+            fitted.push(fitting::name(super::Item::RollBar {
+                chassis: build.chassis,
+                axle,
+                diameter: build.chassis().bars[axle].sizes[build.bars[axle]],
+            }));
+        }
+    }
     for (differs, item) in [
         (
             build.clutch != stock.clutch,

@@ -359,7 +359,22 @@ fn parts_shop(ui: &mut egui::Ui, visit: &mut Visit) {
             ui.collapsing("Rims and tires", |ui| {
                 order = order.or(rims_and_tires(ui, visit));
             });
-            for (kind, items) in super::catalog::stock() {
+            let mut shelves = super::catalog::stock();
+            // Anti-roll bars are made for one car: those for the player's.
+            let mut chassis: Vec<usize> = (visit.career.cars.iter())
+                .map(|car| car.setup.build.chassis)
+                .collect();
+            chassis.sort_unstable();
+            chassis.dedup();
+            for chassis in chassis {
+                let name = crate::chassis::CHASSIS[chassis].name;
+                let shelf = (
+                    format!("Anti-roll bars: {name}"),
+                    super::catalog::roll_bars(chassis),
+                );
+                shelves.insert(2, shelf);
+            }
+            for (kind, items) in shelves {
                 ui.collapsing(kind, |ui| {
                     for item in items {
                         let Some(price) = super::catalog::price(item) else {

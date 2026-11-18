@@ -176,6 +176,13 @@ pub enum Item {
     Tires(crate::wheels::TireSize, usize),
     Clutch(usize),
     Suspension(usize),
+    /// An anti-roll bar made for one axle (0 front, 1 rear) of a chassis (in `CHASSIS`), by
+    /// its diameter (mm, one of the chassis' `bars` sizes).
+    RollBar {
+        chassis: usize,
+        axle: usize,
+        diameter: u8,
+    },
     Gearbox(usize),
     LimitedSlip,
 }

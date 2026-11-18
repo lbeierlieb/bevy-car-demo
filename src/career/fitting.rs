@@ -5,7 +5,7 @@
 
 use super::{Item, OwnedCar};
 use crate::car::CarSetup;
-use crate::chassis::{CLUTCHES, CarBuild, GEARBOXES, SUSPENSIONS};
+use crate::chassis::{CHASSIS, CLUTCHES, CarBuild, GEARBOXES, SUSPENSIONS};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::maps::{self, EngineMaps};
 use crate::physics::engine::parts::{Parts, SLOTS};
@@ -27,6 +27,15 @@ pub fn name(item: Item) -> String {
         ),
         Item::Clutch(i) => format!("{} clutch", CLUTCHES[i].0),
         Item::Suspension(i) => format!("{} suspension kit", SUSPENSIONS[i].0),
+        Item::RollBar {
+            chassis,
+            axle,
+            diameter,
+        } => format!(
+            "{} {} anti-roll bar, {diameter} mm",
+            CHASSIS[chassis].name,
+            ["front", "rear"][axle]
+        ),
         Item::Gearbox(i) => format!("Gearbox: {}", GEARBOXES[i].name),
         Item::LimitedSlip => "Limited-slip differentials".to_string(),
     }
@@ -76,6 +85,23 @@ pub fn fit(car: &mut OwnedCar, item: Item, axle: usize) -> Result<Fitted, String
             let old = build.suspension;
             build.set_suspension(i);
             Some(Item::Suspension(old))
+        }
+        Item::RollBar {
+            chassis,
+            axle,
+            diameter,
+        } => {
+            let bars = &build.chassis().bars[axle];
+            let bar = (chassis == build.chassis)
+                .then(|| bars.find(diameter))
+                .flatten()
+                .ok_or_else(|| format!("It's made for the {}.", CHASSIS[chassis].name))?;
+            let old = std::mem::replace(&mut build.bars[axle], bar);
+            Some(Item::RollBar {
+                chassis,
+                axle,
+                diameter: bars.sizes[old],
+            })
         }
         Item::Gearbox(i) => {
             if !build.chassis().gearboxes().any(|g| g == i) {
@@ -226,6 +252,26 @@ mod tests {
         fit(&mut car, Item::LimitedSlip, 0).unwrap();
         assert!(car.setup.build.limited_slip);
         fit(&mut car, Item::LimitedSlip, 0).unwrap_err();
+    }
+
+    #[test]
+    fn anti_roll_bars_go_on_the_car_they_are_made_for() {
+        let mut car = coupe();
+        let bar = |chassis, axle, diameter| Item::RollBar {
+            chassis,
+            axle,
+            diameter,
+        };
+        let roll_bar = car.setup.front.roll_bar;
+        // The coupé's front bar is 24 mm from the factory.
+        let fitted = fit(&mut car, bar(3, 0, 28), 0).unwrap();
+        assert_eq!(fitted.off, Some(bar(3, 0, 24)));
+        assert_eq!(car.setup.build.bars, [3, 1]);
+        assert!(car.setup.front.roll_bar > 1.8 * roll_bar);
+        // Not the saloon's, nor a size not made for the coupé.
+        assert!(fit(&mut car, bar(4, 0, 24), 0).is_err());
+        assert!(fit(&mut car, bar(3, 1, 30), 0).is_err());
+        assert_eq!(car.setup.build.bars, [3, 1]);
     }
 
     #[test]

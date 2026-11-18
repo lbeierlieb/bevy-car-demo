@@ -137,6 +137,11 @@ fn item_words(item: &Item) -> String {
         ),
         Item::Clutch(i) => format!("clutch {i}"),
         Item::Suspension(i) => format!("suspension {i}"),
+        Item::RollBar {
+            chassis,
+            axle,
+            diameter,
+        } => format!("rollbar {chassis} {axle} {diameter}"),
         Item::Gearbox(i) => format!("gearbox {i}"),
         Item::LimitedSlip => "lsd".to_string(),
     }
@@ -170,6 +175,16 @@ fn read_item(words: &[&str]) -> Option<Item> {
         }
         "clutch" => Item::Clutch(number(1).filter(|&i| i < CLUTCHES.len())?),
         "suspension" => Item::Suspension(number(1).filter(|&i| i < SUSPENSIONS.len())?),
+        "rollbar" => {
+            let (chassis, axle) = (number(1)?, number(2)?);
+            let diameter = u8::try_from(number(3)?).ok()?;
+            (CHASSIS.get(chassis)?.bars.get(axle)?.find(diameter))?;
+            Item::RollBar {
+                chassis,
+                axle,
+                diameter,
+            }
+        }
         "gearbox" => Item::Gearbox(number(1).filter(|&i| i < GEARBOXES.len())?),
         "lsd" => Item::LimitedSlip,
         _ => return None,
@@ -238,6 +253,9 @@ fn write_car(text: &mut String, car: &OwnedCar) {
     let [cf, cr] = b.camber;
     let [pf, pr] = b.pressure;
     *text += &format!("align {cf} {cr} {pf} {pr}\n");
+    // The anti-roll bars' diameters front and rear (mm).
+    let bars = [0, 1].map(|axle| b.chassis().bars[axle].sizes[b.bars[axle]]);
+    *text += &format!("bars {} {}\n", bars[0], bars[1]);
     let chosen: Vec<String> = p.chosen.iter().map(usize::to_string).collect();
     *text += &format!(
         "parts {} {} {} {} {} {} {} {}\n",
@@ -323,7 +341,7 @@ pub fn read(career: &mut Career, text: &str) {
 
 fn read_car(block: &[&str]) -> Option<OwnedCar> {
     let (mut build, mut parts, mut octane, mut age) = (None, None, 95.0, 0.0);
-    let (mut wheels, mut align) = (None, None);
+    let (mut wheels, mut align, mut bars) = (None, None, None);
     let (mut fuel, mut treads, mut damage) = (0.0, [Tread::default(); 4], Damage::default());
     let mut tune = String::new();
     let mut lines = block.iter();
@@ -339,6 +357,7 @@ fn read_car(block: &[&str]) -> Option<OwnedCar> {
             "align" if numbers.len() == 4 && numbers.iter().all(|n| n.is_finite()) => {
                 align = Some([[numbers[0], numbers[1]], [numbers[2], numbers[3]]]);
             }
+            "bars" if numbers.len() == 2 => bars = Some([numbers[0], numbers[1]]),
             "parts" => parts = read_parts(rest),
             "octane" => octane = numbers.first().copied().unwrap_or(octane),
             "age" => {
@@ -386,6 +405,16 @@ fn read_car(block: &[&str]) -> Option<OwnedCar> {
         (build.camber, build.pressure) = (camber, pressure);
     }
     build.clamp_alignment();
+    // Saves from before anti-roll bars have the factory's; a size no longer made too.
+    for (axle, diameter) in bars.into_iter().flatten().enumerate() {
+        let made = &build.chassis().bars[axle];
+        if let Some(bar) = u8::try_from(diameter as u32)
+            .ok()
+            .and_then(|d| made.find(d))
+        {
+            build.bars[axle] = bar;
+        }
+    }
     let parts = build.install(parts).ok()?;
     let hardware = parts.hardware();
     let maps = workshop::at_hand(&hardware).unwrap_or_else(|| {
@@ -502,6 +531,11 @@ mod tests {
                 SPORT,
             ),
             Item::LimitedSlip,
+            Item::RollBar {
+                chassis: 3,
+                axle: 1,
+                diameter: 22,
+            },
         ];
         // A turbo city car with a worn engine and a little fuel, and a stock coupé.
         let mut minim = CarSetup::factory(0, 1);
@@ -524,6 +558,7 @@ mod tests {
             compound: 2,
         };
         (minim.build.camber, minim.build.pressure) = ([-1.2, -0.9], [2.45, 1.95]);
+        minim.build.bars = [4, 0];
         career.cars.push(OwnedCar {
             setup: minim,
             wear,

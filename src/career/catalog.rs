@@ -2,6 +2,7 @@
 
 use super::{Item, Wear};
 use crate::car::CarSetup;
+use crate::chassis::CHASSIS;
 use crate::physics::engine::damage::Damage;
 use crate::physics::engine::ecu::EcuModel;
 use crate::physics::engine::parts::SLOTS;
@@ -27,6 +28,8 @@ pub const GEARBOXES: [f64; 8] = [
     900.0, 1_600.0, 1_000.0, 1_300.0, 2_600.0, 1_500.0, 2_200.0, 3_900.0,
 ];
 pub const LIMITED_SLIP: f64 = 750.0;
+/// An anti-roll bar: a base, and a share per mm of diameter.
+const ROLL_BAR: [f64; 2] = [60.0, 7.0];
 const ECUS: [f64; 2] = [300.0, 1_400.0];
 /// Engine parts by slot (in `SLOTS` order) and part; nothing for what isn't sold ("None").
 const ENGINE_PARTS: [&[f64]; SLOTS.len()] = [
@@ -150,6 +153,19 @@ pub fn stock() -> Vec<(String, Vec<Item>)> {
     shelves
 }
 
+/// The anti-roll bars made for a chassis (in `CHASSIS`), front ones first.
+pub fn roll_bars(chassis: usize) -> Vec<Item> {
+    (0..2)
+        .flat_map(|axle| {
+            (CHASSIS[chassis].bars[axle].sizes.iter()).map(move |&diameter| Item::RollBar {
+                chassis,
+                axle,
+                diameter,
+            })
+        })
+        .collect()
+}
+
 /// What a part costs at the parts shop, if it's sold at all.
 pub fn price(item: Item) -> Option<f64> {
     let price = match item {
@@ -161,6 +177,14 @@ pub fn price(item: Item) -> Option<f64> {
         }
         Item::Clutch(i) => *CLUTCHES.get(i)?,
         Item::Suspension(i) => *SUSPENSIONS.get(i)?,
+        Item::RollBar {
+            chassis,
+            axle,
+            diameter,
+        } => {
+            CHASSIS.get(chassis)?.bars.get(axle)?.find(diameter)?;
+            ROLL_BAR[0] + ROLL_BAR[1] * f64::from(diameter)
+        }
         Item::Gearbox(i) => *GEARBOXES.get(i)?,
         Item::LimitedSlip => LIMITED_SLIP,
     };

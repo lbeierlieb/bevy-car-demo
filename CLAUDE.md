@@ -78,7 +78,8 @@ the frames until the shot (`k` opens the map, `2` hides the panel, `3` the ECU w
 `4` the garage, `5` the dyno, `6` the showroom, `f` shows the gizmos (off by default), `c` the driver's view),
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
 The keys `3`–`6` don't expand the F3–F6 windows in screenshots (seen 2026-11-17, also on
-the code before the app split): click their title bars instead.
+the code before the app split): click their title bars instead. (2026-11-18: neither
+`CLICK` nor `UICLICK` on the "Garage (F4)" bar at (1190, 57) or its arrow expanded it.)
 `PLACE="x,z,frame"`The editor (`BIN=editor`, hooked by `EditorShotPlugin`): `EDITCAM="x,z,height,yaw,pitch"`
 (degrees, the first 20 frames), `CLICK="x,y,frame[,x2,y2]"` sets the window's cursor and
 holds the left button (a drag with x2, y2), `UICLICK` is the window-event click for
@@ -291,6 +292,18 @@ catalogue entries, and things like swap subframes are named so they can be price
   70 % grip; `cornering_temperatures` (ignored) prints every car. Sandbox: per axle in
   F4 (another rim diameter or tire width keeps the outside diameter). Career: rims and
   tire pairs by size in the parts shop, fitted to the front or rear.
+- **Anti-roll bars** (asked for by the user: a part, never adjustable; each chassis has
+  its own sizes per axle, `Chassis::bars`, `RollBars`; picked in F4 and sold per car in
+  the career shop for the player's cars, `Item::RollBar`; the suspension kits are only
+  springs, dampers and camber): solid bars, roll stiffness ∝ diameter⁴ from a 20 mm
+  rate. In the sim each axle's bar is a force ±rate × the travel difference on the two
+  corners' arm equations (`Corner::bar_force`, set every substep, so the substep loop
+  runs over substeps outside and corners inside). Factory bars (real-car style, agreed):
+  roll 1.4–5 °/g at 0.5 g, load transfer front-biased on RWD, rear-biased on FWD
+  (`roll_stiffness` prints every car; before the bars, roll was 2.5–9.4 °/g with the
+  transfer following the springs). The power-slide bot got shallower slides with less
+  snap back on most cars (Halden W20T and Rheon H30 now caught), but the Tarn S30 now
+  spins and the Wisp B16 snaps back 28° (was 6°). Not done: hollow bars, a bar's mass.
 - **What fits** (`Chassis::fit`): the engine's length, width and height against the
   bay's (a transverse engine needs its length plus 36 cm for the gearbox across the
   car). That's all that can stop a swap. An engine family the factory never offered in
