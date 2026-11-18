@@ -245,7 +245,8 @@ enough to smooth out bumps shorter than 80 m on main roads down to 25 m on track
 Roads share their height where they meet and bend smoothly where one runs on into
 another, and lidar heights far off the profile count less. Bridges get next to no
 lidar weight, since lidar shows the ground under them, so their decks span smoothly
-between the approaches, over the untouched ground. The game draws them as a slab with
+between the approaches, over the ground (lowered to below the slab where it would
+come up through it). The game draws them as a slab with
 parapets (which cars collide with), and its ground query has levels: something at
 height y stands on the highest surface at most a metre above it, so cars on a deck
 stay on it and roads under it pass beneath. The surface has a crown

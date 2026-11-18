@@ -594,6 +594,7 @@ fn bake(
         cell: CELL,
     };
     roads::conform(&roads, &mut heights, &grid);
+    roads::carve_under_bridges(&roads, &mut heights, &grid);
 
     // Raised rim so cars stay on the map.
     for (i, h) in heights.iter_mut().enumerate() {

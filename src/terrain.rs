@@ -1061,6 +1061,32 @@ mod tests {
     }
 
     #[test]
+    fn the_terrain_stays_under_bridge_decks() {
+        let terrain = Terrain::baked();
+        for road in terrain
+            .roads
+            .iter()
+            .filter(|r| r.bridge && r.kind != RoadKind::Water)
+        {
+            let n = road.points.len();
+            // Not at the ends, where the approaches carry on.
+            for i in 1..n - 1 {
+                let p = road.points[i];
+                let across = (road.points[i + 1] - road.points[i - 1]).normalize().perp();
+                for u in [-0.45, -0.25, 0.0, 0.25, 0.45] {
+                    let q = p + across * u * road.width;
+                    let deck = road.heights[i] - road.crown * (u * road.width).abs();
+                    let land = terrain.land(q.x, q.y).0;
+                    assert!(
+                        land < deck - 0.05,
+                        "terrain {land} through a deck at {deck}, at {q}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn physics_matches_coarse_render_triangles() {
         let terrain = Terrain::baked();
         let per_side = terrain.chunks_x();

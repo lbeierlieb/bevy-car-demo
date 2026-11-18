@@ -17,6 +17,11 @@ const EMBANKMENT_REACH: f64 = 12.0;
 /// The terrain under a road and its shoulders lies this far below the road's edge (m),
 /// out of sight under the road's own surface.
 const SINK: f64 = 0.08;
+/// Under a bridge the ground stays this far below the deck's edges at least: the slab's
+/// depth (`DECK_DEPTH` in the game's `terrain.rs`) and a little room (m)...
+const UNDER_DECK: f64 = 1.05;
+/// ...out to this far beyond the deck's edges (the parapets and a margin; m).
+const UNDER_DECK_REACH: f64 = 0.8;
 /// Weight of the lidar on a bridge, where it shows the ground under the deck.
 const BRIDGE_TRUST: f64 = 1e-4;
 
@@ -394,5 +399,34 @@ pub fn conform(roads: &[Road], heights: &mut [f64], grid: &Grid) {
         let level = surface - SINK;
         let run = (edge - SHOULDER).max(0.0);
         *h = level + (*h - level).clamp(-run * EMBANKMENT, run * EMBANKMENT);
+    }
+}
+
+/// Lowers the terrain under bridges to `UNDER_DECK` below their decks, where it would
+/// otherwise come up through them: approach embankments reaching under a deck's ends, and
+/// small bridges over ditches, whose lidar is at road level but for the ditch. Only
+/// alongside the deck, not beyond its ends, where the approaches carry on.
+pub fn carve_under_bridges(roads: &[Road], heights: &mut [f64], grid: &Grid) {
+    let n = grid.cells_x + 1;
+    for road in roads.iter().filter(|r| r.drivable() && r.bridge) {
+        let reach = road.width / 2.0 + UNDER_DECK_REACH;
+        let edge = |i: usize| road.heights[i] - road.crown() * road.width / 2.0;
+        for (i, pair) in road.points.windows(2).enumerate() {
+            let ((x0, z0), (x1, z1)) = (pair[0], pair[1]);
+            let (dx, dz) = (x1 - x0, z1 - z0);
+            let len2 = (dx * dx + dz * dz).max(1e-9);
+            for iz in grid.span(z0.min(z1) - reach, z0.max(z1) + reach, true) {
+                for ix in grid.span(x0.min(x1) - reach, x0.max(x1) + reach, false) {
+                    let (px, pz) = grid.vertex(ix, iz);
+                    let t = ((px - x0) * dx + (pz - z0) * dz) / len2;
+                    let off = (px - x0 - dx * t).hypot(pz - z0 - dz * t);
+                    if (0.0..=1.0).contains(&t) && off <= reach {
+                        let limit = edge(i) * (1.0 - t) + edge(i + 1) * t - UNDER_DECK;
+                        let h = &mut heights[iz * n + ix];
+                        *h = h.min(limit);
+                    }
+                }
+            }
+        }
     }
 }
