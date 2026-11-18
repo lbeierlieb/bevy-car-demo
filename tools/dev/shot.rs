@@ -391,3 +391,31 @@ fn place_car(
         car.place(&terrain, spot, yaw);
     }
 }
+
+/// The map editor's hook: screenshots and clicks, and `EDITCAM="x,z,height,yaw,pitch"`
+/// (degrees; yaw 0 looks north, pitch negative looks down) placing the fly camera.
+pub struct EditorShotPlugin;
+impl Plugin for EditorShotPlugin {
+    fn build(&self, app: &mut App) {
+        if std::env::var("SHOT").is_ok() {
+            app.add_systems(PreUpdate, shot.after(bevy::input::InputSystems));
+            app.add_systems(PreUpdate, click.before(bevy::input::InputSystems));
+            app.add_systems(PreUpdate, edit_cam);
+        }
+    }
+}
+
+fn edit_cam(
+    terrain: Res<crate::terrain::Terrain>,
+    mut cams: Query<(&mut crate::editor::camera::FlyCamera, &mut Transform)>,
+) {
+    let Ok(spec) = std::env::var("EDITCAM") else {
+        return;
+    };
+    let v: Vec<f32> = spec.split(',').map(|s| s.parse().unwrap()).collect();
+    for (mut cam, mut transform) in &mut cams {
+        cam.yaw = v[3].to_radians();
+        cam.pitch = v[4].to_radians();
+        transform.translation = Vec3::new(v[0], terrain.sample(v[0], v[1]).0 + v[2], v[1]);
+    }
+}

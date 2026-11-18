@@ -5,4 +5,5 @@ cp /repo/tools/dev/shot.rs /repo/src/shot.rs
 sed -i "s/^pub mod scenery;\$/pub mod scenery;\npub mod shot;/" /repo/src/lib.rs
 for app in /repo/src/main.rs /repo/src/bin/*.rs; do
     sed -i "s/^        .add_plugins(CorePlugin)\$/        .add_plugins(CorePlugin)\n        .add_plugins((shot::ShotPlugin, shot::WheelLogPlugin))/" "$app"
+    sed -i "s/^        .add_plugins(editor::EditorPlugin)\$/        .add_plugins(editor::EditorPlugin)\n        .add_plugins(shot::EditorShotPlugin)/" "$app"
 done

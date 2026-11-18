@@ -1,7 +1,7 @@
-//! The game's library, shared by its two apps: the sandbox (`main.rs`: every car and part
-//! free, with the developer tools) and the career (`bin/career.rs`). Each app is the
-//! plugins it adds; `CorePlugin` is what both have: the world, driving a car, and seeing
-//! and hearing it.
+//! The game's library, shared by its apps: the sandbox (`main.rs`: every car and part
+//! free, with the developer tools), the career (`bin/career.rs`) and the map editor
+//! (`bin/editor.rs`, native only, no cars). Each app is the plugins it adds; `CorePlugin`
+//! is what the two driving apps have: the world, driving a car, and seeing and hearing it.
 
 pub mod audio;
 pub mod body;
@@ -14,6 +14,8 @@ pub mod cockpit;
 pub mod debug;
 pub mod dyno;
 pub mod ecu_ui;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod editor;
 pub mod fences;
 pub mod garage;
 pub mod hud;
@@ -90,6 +92,12 @@ impl Plugin for CorePlugin {
 }
 
 fn setup(mut commands: Commands) {
+    spawn_sun(&mut commands);
+    commands.spawn((Camera3d::default(), camera::ChaseCamera::default(), fog()));
+}
+
+/// The sun, with shadows near the camera.
+pub fn spawn_sun(commands: &mut Commands) {
     commands.spawn((
         DirectionalLight {
             illuminance: 5_000.0,
@@ -103,16 +111,16 @@ fn setup(mut commands: Commands) {
         }
         .build(),
     ));
-    commands.spawn((
-        Camera3d::default(),
-        camera::ChaseCamera::default(),
-        DistanceFog {
-            color: sky::HAZE,
-            falloff: FogFalloff::Linear {
-                start: 180.0,
-                end: 480.0,
-            },
-            ..default()
+}
+
+/// The haze the land fades into, ending before the scenery stops being loaded.
+pub fn fog() -> DistanceFog {
+    DistanceFog {
+        color: sky::HAZE,
+        falloff: FogFalloff::Linear {
+            start: 180.0,
+            end: 480.0,
         },
-    ));
+        ..default()
+    }
 }
