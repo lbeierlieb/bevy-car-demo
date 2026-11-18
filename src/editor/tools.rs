@@ -38,12 +38,11 @@ pub struct Selection {
     pub node: Option<i64>,
 }
 
-/// Something under the cursor: a node, or a point on a way's segment (after its
-/// `index`th node).
+/// Something under the cursor: a node, or the nearest point on a way.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Target {
     Node(i64),
-    Segment { way: i64, index: usize, at: Vec2 },
+    Segment { way: i64, at: Vec2 },
 }
 
 #[derive(Resource, Default)]
@@ -376,11 +375,11 @@ pub fn run(
             Err(e) => format!("Couldn't save: {e}"),
         }),
         Command::Delete => {
-            if let Some(node) = selection.node {
+            if let Some(node) = selection.node.filter(|&n| doc.node(n).is_some()) {
                 doc.edit("delete node", |e| e.delete_node(node));
                 selection.node = None;
                 Some("Deleted the node".into())
-            } else if let Some(way) = selection.way {
+            } else if let Some(way) = selection.way.filter(|&w| doc.way(w).is_some()) {
                 doc.edit("delete way", |e| e.delete_way(way));
                 selection.way = None;
                 Some(format!("Deleted way {way}"))
@@ -448,8 +447,8 @@ fn select(
     if buttons.just_pressed(MouseButton::Left) {
         let start = hover.screen.unwrap_or_default();
         match hover.target {
-            Some(Target::Segment { way, index, at }) if ctrl => {
-                let node = doc.edit("add node", |e| e.insert_node(way, index, at, Tags::new()));
+            Some(Target::Segment { way, at }) if ctrl => {
+                let node = doc.edit("add node", |e| insert_on_way(e, way, at, Tags::new()));
                 *selection = Selection {
                     way: Some(way),
                     node: Some(node),
@@ -697,11 +696,9 @@ fn place(
             });
             Some(id)
         }
-        Some(Target::Segment { way, index, at })
-            if wanted.is_none() || class_of(doc, way) == wanted =>
-        {
+        Some(Target::Segment { way, at }) if wanted.is_none() || class_of(doc, way) == wanted => {
             let tags = Tags::from([(key.to_string(), tag_value(at))]);
-            Some(doc.edit(kind.name(), |e| e.insert_node(way, index, at, tags)))
+            Some(doc.edit(kind.name(), |e| insert_on_way(e, way, at, tags)))
         }
         _ if matches!(
             kind,

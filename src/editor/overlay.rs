@@ -199,17 +199,13 @@ fn hover(
         for &(id, p) in &points {
             consider_node(id, p);
         }
-        for (i, pair) in points.windows(2).enumerate() {
+        for pair in points.windows(2) {
             let (a, b) = (pair[0].1, pair[1].1);
             let t = ((g - a).dot(b - a) / (b - a).length_squared().max(1e-6)).clamp(0.0, 1.0);
             let at = a.lerp(b, t);
             let d = at.distance(g);
             if d < tolerance && best_segment.as_ref().is_none_or(|(bd, _)| d < *bd) {
-                let target = Target::Segment {
-                    way: way_id,
-                    index: i,
-                    at,
-                };
+                let target = Target::Segment { way: way_id, at };
                 best_segment = Some((d, target));
             }
         }
