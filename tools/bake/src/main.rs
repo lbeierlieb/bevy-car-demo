@@ -11,6 +11,7 @@
 //! data. The map frame is aligned with UTM zone 32 (x east, z south), the grid the DGM1
 //! tiles use.
 
+mod clearance;
 mod osm;
 mod profile;
 mod roads;
@@ -122,6 +123,62 @@ impl Frame {
         let (e, n) = utm32(lat, lon);
         (e - self.east, self.north - n)
     }
+
+    /// Latitude and longitude of a local point (Newton's method on `to_local`).
+    fn to_geo(&self, p: Point) -> Point {
+        let mut geo = (50.0, 10.0);
+        let step = 1e-6;
+        for _ in 0..6 {
+            let at = self.to_local(geo.0, geo.1);
+            let (dx, dz) = (p.0 - at.0, p.1 - at.1);
+            let by_lat = self.to_local(geo.0 + step, geo.1);
+            let by_lon = self.to_local(geo.0, geo.1 + step);
+            let (a, c) = ((by_lat.0 - at.0) / step, (by_lat.1 - at.1) / step);
+            let (b, d) = ((by_lon.0 - at.0) / step, (by_lon.1 - at.1) / step);
+            let det = a * d - b * c;
+            geo.0 += (d * dx - b * dz) / det;
+            geo.1 += (a * dz - c * dx) / det;
+        }
+        geo
+    }
+}
+
+/// Writes the roads still running into buildings as GPX waypoints (JOSM opens them as a
+/// marker layer), deepest first.
+fn write_conflicts(
+    path: &str,
+    conflicts: &[clearance::Conflict],
+    roads: &[Road],
+    road_ways: &[i64],
+    buildings: &[Building],
+    frame: &Frame,
+) -> Result<(), Error> {
+    let mut sorted: Vec<&clearance::Conflict> = conflicts.iter().collect();
+    sorted.sort_by(|a, b| b.overlap.total_cmp(&a.overlap));
+    let mut gpx = String::from(
+        "<?xml version='1.0' encoding='UTF-8'?>\n<gpx version='1.1' creator='bake' xmlns='http://www.topografix.com/GPX/1/1'>\n",
+    );
+    for c in sorted {
+        let (lat, lon) = frame.to_geo(c.at);
+        let road = &roads[c.road];
+        let mut what = format!(
+            "way {} ({:.1} m wide) {:.1} m into building {}",
+            road_ways[c.road], road.width, c.overlap, buildings[c.building].way
+        );
+        if let Some(gap) = c.gap {
+            what += &format!(", {gap:.1} m between the houses");
+        }
+        if c.junction {
+            what += ", near a junction";
+        }
+        gpx += &format!(
+            "  <wpt lat='{lat:.7}' lon='{lon:.7}'><name>{:.1} m</name><desc>{what}</desc></wpt>\n",
+            c.overlap
+        );
+    }
+    gpx += "</gpx>\n";
+    std::fs::write(path, gpx)?;
+    Ok(())
 }
 
 /// The cached file `name`, or else the result of `fetch`, which is then cached.
@@ -258,6 +315,7 @@ fn road_style(tags: &Tags) -> Option<(RoadKind, f64)> {
 }
 
 struct Building {
+    way: i64,
     /// `building:levels` from OSM, or 0 if not tagged.
     levels: f64,
     /// Outline in local metres, not closed.
@@ -475,9 +533,12 @@ fn bake(
     // Roads, waterways, buildings and land use areas. Elements are visited in ID order, so
     // the same data always bakes to the same file.
     let mut roads = Vec::new();
+    // Per road: its way, and whether it's off the ground (a bridge or a tunnel).
+    let mut road_ways = Vec::new();
+    let mut off_ground = Vec::new();
     let mut buildings = Vec::new();
     let mut areas = Vec::new();
-    for way in osm.ways.values().filter(|w| !w.meta.deleted()) {
+    for (&id, way) in osm.ways.iter().filter(|(_, w)| !w.meta.deleted()) {
         let (refs, tags) = (&way.refs, &way.meta.tags);
         let mut points = points(&osm, refs, &frame);
         if tags.contains_key("building") {
@@ -487,7 +548,11 @@ fn bake(
                     .get("building:levels")
                     .and_then(|l| l.parse().ok())
                     .unwrap_or(0.0);
-                buildings.push(Building { levels, points });
+                buildings.push(Building {
+                    way: id,
+                    levels,
+                    points,
+                });
             }
         } else if let Some(class) = land_class(tags).filter(|_| refs.first() == refs.last()) {
             areas.push(Area {
@@ -516,6 +581,8 @@ fn bake(
                     road.roughness =
                         roads::roughness(kind, tags.get("smoothness").map(String::as_str));
                     roads.push(road);
+                    road_ways.push(id);
+                    off_ground.push(bridge || tags.contains_key("tunnel"));
                 }
             }
         }
@@ -585,6 +652,17 @@ fn bake(
             }
         }
     }
+
+    // Roads off the houses, and a list of where they still run into one, as waypoints
+    // for JOSM next to the map file.
+    let outlines: Vec<&[Point]> = buildings.iter().map(|b| b.points.as_slice()).collect();
+    let (conflicts, moved, farthest) = clearance::nudge(&mut roads, &off_ground, &outlines);
+    let report = format!("{}.conflicts.gpx", map.trim_end_matches(".osm"));
+    write_conflicts(&report, &conflicts, &roads, &road_ways, &buildings, &frame)?;
+    eprintln!(
+        "moved {moved} roads off buildings (up to {farthest:.1} m); {} conflicts left, see {report}",
+        conflicts.len()
+    );
 
     // Road heights: smooth profiles along the lidar; the terrain cut and filled to them
     // (not under bridges: lidar shows the ground there, and the decks span over it).

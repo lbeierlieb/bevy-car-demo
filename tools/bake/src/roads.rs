@@ -43,7 +43,7 @@ pub struct Road {
     /// Smoothed centreline, at most `STEP` apart, through every mapped point.
     pub points: Vec<Point>,
     /// The OSM node each point is, if it's a mapped one.
-    nodes: Vec<Option<i64>>,
+    pub nodes: Vec<Option<i64>>,
     /// Height of the centreline at each point (waterways: none).
     pub heights: Vec<f64>,
     /// How bumpy the surface is: the displacement spectrum at 0.1 cycles per metre, in
@@ -219,7 +219,7 @@ impl Road {
         }
     }
 
-    fn drivable(&self) -> bool {
+    pub fn drivable(&self) -> bool {
         self.kind != RoadKind::Water
     }
 }

@@ -576,7 +576,10 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
 4. Road condition (done): `relief.rs`, OSM `smoothness` to ISO 8608 roughness (waves
    0.5–20 m), features from `traffic_calming=bump|hump|table` and `hazard=pothole`
    nodes. The baked file is zlib-compressed, heights predicted from neighbours.
-5. Nudging roads off building footprints and listing the conflicts left.
+5. Roads off buildings (done): bake `clearance.rs` moves roads sideways (≤ 2 m, tapered,
+   shared points pinned) and writes what's left to `map/gerach.conflicts.gpx`
+   (gitignored), for JOSM. 303 overlaps → 106: 50 near junctions, 46 between houses
+   narrower than the road (wants a `width` tag), a few needing more than 2 m.
 6. Fences (meshes and collision boxes) and trenches (terrain cuts).
 7. Maybe in-game tools for 3D edits.
 

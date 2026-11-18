@@ -266,6 +266,18 @@ node on (or next to) a road tagged `traffic_calming=bump` (0.6 m long, 8 cm high
 across, 6 cm deep), builds that into the road; `height`, `diameter` and `depth` in
 metres change the sizes.
 
+Mapped centrelines are often a metre or two off, and road widths are guesses where
+`width` isn't tagged, so roads ran into houses. The bake moves each road sideways off
+the building outlines (`tools/bake/src/clearance.rs`), by up to 2 m, tapering
+smoothly along it, until its edges clear the walls by 30 cm. Points shared with
+other roads stay put, so roads still meet. Bridges and tunnels aren't moved. On the
+current map this moves 217 roads and clears 197 of the 303 overlaps. What's left
+is written next to the map file as `map/gerach.conflicts.gpx` (not committed),
+deepest first. Open it in JOSM (File → Open) as a layer of markers beside the map,
+then move the way or tag a narrower `width`. Each marker says the way and the
+building, how far the road reaches in, the room between the houses where that's
+narrower than the road, and whether it's at a junction (where the road can't move).
+
 Each 96 m chunk is then given a resolution. It gets 2 m within 20 m of a building
 or 14 m of a road, and next to paved areas. Everything else gets 8 m, with each coarse vertex averaging the terrain around it. Along seams
 between resolutions, the finer side's edge is bent onto the coarser side's straight
