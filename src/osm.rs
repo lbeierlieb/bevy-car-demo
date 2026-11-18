@@ -63,6 +63,7 @@ const KEEP: &[&str] = &[
 /// What every element has besides its own data.
 #[derive(Clone, Default)]
 pub struct Meta {
+    /// 0 for new elements, which JOSM writes without one.
     pub version: u32,
     /// JOSM's `action` attribute (`modify`, `delete`), if any.
     pub action: Option<String>,
@@ -159,7 +160,8 @@ impl Osm {
             }
             let attr = |key: &str| attrs.get(key).map(String::as_str).unwrap_or_default();
             let meta = || Meta {
-                version: attr("version").parse().unwrap_or(1),
+                // New elements (negative ids) have none.
+                version: attr("version").parse().unwrap_or(0),
                 action: attrs.get("action").cloned(),
                 tags: Tags::new(),
             };
@@ -268,7 +270,10 @@ impl Osm {
             if let Some(action) = &meta.action {
                 let _ = write!(out, " action='{}'", escape(action));
             }
-            let _ = write!(out, " version='{}' visible='true'", meta.version);
+            if meta.version > 0 {
+                let _ = write!(out, " version='{}'", meta.version);
+            }
+            *out += " visible='true'";
         };
         let tags = |out: &mut String, meta: &Meta| {
             for (k, v) in &meta.tags {
