@@ -309,6 +309,31 @@ fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
             draft.set_suspension(kit);
         }
         ui.end_row();
+        for (axle, place) in ["Front", "Rear"].into_iter().enumerate() {
+            ui.label(format!("{place} anti-roll bar")).on_hover_text(
+                "A stiffer bar rolls the body less and moves more of the load across this \
+                 axle in a corner: stiffer at the front makes the car push wider, at the \
+                 rear makes it turn in more and step out sooner",
+            );
+            let bars = &chassis.bars[axle];
+            let factory = |bar: usize| {
+                let label = bars.label(bar);
+                if bar == bars.factory {
+                    format!("{label}, factory")
+                } else {
+                    label
+                }
+            };
+            egui::ComboBox::from_id_salt(("bar", axle))
+                .width(220.0)
+                .selected_text(factory(draft.bars[axle]))
+                .show_ui(ui, |ui| {
+                    for bar in 0..bars.sizes.len() {
+                        ui.selectable_value(&mut draft.bars[axle], bar, factory(bar));
+                    }
+                });
+            ui.end_row();
+        }
     });
 }
 

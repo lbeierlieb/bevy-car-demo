@@ -137,6 +137,9 @@ impl CarSetup {
                 geometry,
                 spring_rate: 0.0,
                 damping: 0.0,
+                // Rolling the body by φ moves one wheel up by track × φ against the other.
+                roll_bar: chassis.bars[i].stiffness(build.bars[i]).to_degrees()
+                    / chassis.track[i].powi(2),
                 unsprung_mass,
                 wheel_inertia: wheel.inertia() + HUB_INERTIA * chassis.hub[i],
                 tire: TireParams {

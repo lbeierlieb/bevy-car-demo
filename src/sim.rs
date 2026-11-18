@@ -89,17 +89,29 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     } = car;
     let h = dt / SUBSTEPS as f32;
     let (mut force, mut torque) = (Vec3::ZERO, Vec3::ZERO);
-    for corner in corners.iter_mut() {
-        let axle = setup.axle(corner.front);
-        let rest_length = axle.spring_rest_length(setup.corner_mass(corner.front));
-        for k in 0..SUBSTEPS {
-            let (position, rotation) = body.extrapolate(k as f32 * h);
-            let frame = ChassisFrame {
-                position,
-                rotation,
-                velocity: body.velocity,
-                angular_velocity: body.angular_velocity,
-            };
+    let rest_length = [true, false].map(|front| {
+        let axle = setup.axle(front);
+        axle.spring_rest_length(setup.corner_mass(front))
+    });
+    for k in 0..SUBSTEPS {
+        let (position, rotation) = body.extrapolate(k as f32 * h);
+        let frame = ChassisFrame {
+            position,
+            rotation,
+            velocity: body.velocity,
+            angular_velocity: body.angular_velocity,
+        };
+        // Each axle's anti-roll bar twists by how far one wheel is up relative to the
+        // other, and pushes them back level.
+        for (left, right) in [(0, 1), (2, 3)] {
+            let rate = setup.axle(corners[left].front).roll_bar;
+            let push = rate * (corners[right].travel - corners[left].travel);
+            corners[left].bar_force = push;
+            corners[right].bar_force = -push;
+        }
+        for corner in corners.iter_mut() {
+            let axle = setup.axle(corner.front);
+            let rest_length = rest_length[usize::from(!corner.front)];
             corner.step(
                 h,
                 axle,

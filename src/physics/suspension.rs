@@ -135,6 +135,9 @@ pub struct AxleSetup {
     /// Coilover spring rate (N/m) and damping (N·s/m), measured along the coilover.
     pub spring_rate: f32,
     pub damping: f32,
+    /// The anti-roll bar's rate at the wheels (N/m): the force on each wheel per metre one
+    /// wheel has moved up relative to the other. 0 without a bar.
+    pub roll_bar: f32,
     pub unsprung_mass: f32,
     pub wheel_inertia: f32,
     pub tire: TireParams,
@@ -261,6 +264,9 @@ pub struct Corner {
     // Inputs, set by the car before each step.
     pub steer: f32,
     pub drive_torque: f32,
+    /// What the anti-roll bar pushes the wheel up with (N, in the chassis frame), from how
+    /// far this wheel is up relative to the other one on the axle.
+    pub bar_force: f32,
     /// Extra inertia coupled to the wheel by the drivetrain (the engine, through the gears).
     pub drive_inertia: f32,
     pub brake_torque: f32,
@@ -285,6 +291,7 @@ impl Corner {
             slips: [0.0; 2],
             steer: 0.0,
             drive_torque: 0.0,
+            bar_force: 0.0,
             drive_inertia: 0.0,
             brake_torque: 0.0,
             pose: axle.pose(theta, 0.0, side, axle_z),
@@ -452,6 +459,7 @@ impl Corner {
             + (to_local * GRAVITY * axle.unsprung_mass).dot(d.center)
             + spring * d.length
             - axle.damping * d.length * d.length * self.theta_dot
+            + self.bar_force * d.center.y
             + bump_stop;
         let inertia = axle.unsprung_mass * d.center.length_squared();
         let theta_ddot = q / inertia;
@@ -487,6 +495,7 @@ mod tests {
             geometry: ArmGeometry::default(),
             spring_rate: 80_000.0,
             damping: 5_000.0,
+            roll_bar: 0.0,
             unsprung_mass: 40.0,
             wheel_inertia: 1.2,
             tire: TireParams::default(),

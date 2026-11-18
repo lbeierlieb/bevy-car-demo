@@ -10,7 +10,9 @@ A small Bevy demo of car simulation techniques:
   intersection, so camber gain, track change and roll centre come out of the arm
   geometry. Steering rotates the upright about the kingpin axis. θ is integrated
   with a generalised force from virtual work (tire force at the contact patch,
-  coilover spring and damper, bump stops). Whatever part of the hub force doesn't
+  coilover spring and damper, anti-roll bar, bump stops). Each axle's anti-roll bar
+  pushes its two wheels by how far one is up against the other, so it stiffens roll
+  without touching the ride. Whatever part of the hub force doesn't
   move the linkage goes straight into the chassis. Each chassis step, every corner
   runs 10 substeps against the chassis extrapolated at constant velocity, and the
   average force is applied to the chassis.

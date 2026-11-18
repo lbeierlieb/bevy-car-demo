@@ -203,6 +203,8 @@ pub struct Chassis {
     /// Ride frequency front and rear (Hz), and damping ratio.
     pub ride: [f32; 2],
     pub damping: f32,
+    /// The anti-roll bars made for the front and the rear.
+    pub bars: [RollBars; 2],
     /// Static camber front and rear (degrees).
     pub camber: [f32; 2],
     /// Cold tire pressures front and rear (bar): what suits the factory tires under the
@@ -232,6 +234,45 @@ pub struct Chassis {
     pub body: Body,
     /// The driver's eyes: behind the nose, above the ground, and left of the centreline.
     pub eye: [f32; 3],
+}
+
+/// The anti-roll bars made for one axle of a chassis: solid bars of these diameters (mm),
+/// the factory's among them. They all sit on the same links, so a bar's roll stiffness
+/// goes with its diameter to the fourth.
+#[derive(Clone, Copy, Debug)]
+pub struct RollBars {
+    pub sizes: &'static [u8],
+    /// The factory's (in `sizes`).
+    pub factory: usize,
+    /// The roll stiffness a 20 mm bar gives the axle (N·m per degree of body roll).
+    pub rate: f32,
+}
+
+impl RollBars {
+    /// The roll stiffness bar `bar` (in `sizes`) gives the axle (N·m per degree).
+    pub fn stiffness(&self, bar: usize) -> f32 {
+        self.rate * (f32::from(self.sizes[bar]) / 20.0).powi(4)
+    }
+
+    /// A bar (in `sizes`) by its diameter and stiffness.
+    pub fn label(&self, bar: usize) -> String {
+        format!("{} mm ({:.0} N·m/°)", self.sizes[bar], self.stiffness(bar))
+    }
+
+    /// The bar (in `sizes`) of `diameter` (mm), if there's one.
+    pub fn find(&self, diameter: u8) -> Option<usize> {
+        self.sizes.iter().position(|&size| size == diameter)
+    }
+}
+
+/// Anti-roll bars of `sizes` (mm), the factory's at `factory` in them, and a 20 mm one
+/// giving the axle `rate` (N·m per degree of roll).
+const fn bars(sizes: &'static [u8], factory: usize, rate: f32) -> RollBars {
+    RollBars {
+        sizes,
+        factory,
+        rate,
+    }
 }
 
 /// Why an engine doesn't go into a bay.
@@ -335,6 +376,8 @@ pub struct CarBuild {
     pub final_drive: f32,
     pub limited_slip: bool,
     pub suspension: usize,
+    /// The anti-roll bars front and rear (in the chassis' `bars`).
+    pub bars: [usize; 2],
     /// Front and rear.
     pub wheels: [Wheel; 2],
     /// Static camber (degrees) and cold tire pressure (bar), front and rear.
@@ -354,6 +397,7 @@ impl CarBuild {
             final_drive: made.final_drive,
             limited_slip: made.limited_slip,
             suspension: 0,
+            bars: made.bars.map(|bars| bars.factory),
             wheels: made.wheels,
             camber: made.camber,
             pressure: made.pressure,
@@ -495,6 +539,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [17.0, 15.0],
         ride: [1.3, 1.45],
         damping: 0.3,
+        bars: [
+            bars(&[16, 18, 20, 22, 24], 2, 240.0),
+            bars(&[14, 16, 18, 20], 1, 590.0),
+        ],
         camber: [-0.8, -1.2],
         pressure: [2.3, 2.1],
         max_steer: 0.56,
@@ -580,6 +628,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [18.0, 15.0],
         ride: [1.6, 1.85],
         damping: 0.34,
+        bars: [
+            bars(&[20, 22, 24, 26], 1, 270.0),
+            bars(&[18, 20, 22, 24, 26], 2, 340.0),
+        ],
         camber: [-1.5, -1.5],
         pressure: [2.4, 2.1],
         max_steer: 0.52,
@@ -668,6 +720,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [16.0, 18.0],
         ride: [1.5, 1.65],
         damping: 0.32,
+        bars: [
+            bars(&[18, 20, 22, 24], 1, 430.0),
+            bars(&[14, 16, 18, 20], 1, 700.0),
+        ],
         camber: [-1.2, -1.5],
         pressure: [2.2, 2.1],
         max_steer: 0.54,
@@ -752,6 +808,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [19.0, 20.0],
         ride: [1.65, 1.8],
         damping: 0.33,
+        bars: [
+            bars(&[22, 24, 26, 28, 30], 1, 260.0),
+            bars(&[16, 18, 20, 22], 1, 430.0),
+        ],
         camber: [-1.2, -1.4],
         pressure: [2.2, 2.1],
         max_steer: 0.5,
@@ -838,6 +898,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [22.0, 24.0],
         ride: [1.35, 1.5],
         damping: 0.32,
+        bars: [
+            bars(&[22, 24, 26, 28], 1, 310.0),
+            bars(&[16, 18, 20, 22], 1, 500.0),
+        ],
         camber: [-0.8, -1.2],
         pressure: [2.5, 2.4],
         max_steer: 0.52,
@@ -924,6 +988,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [21.0, 21.0],
         ride: [1.7, 1.8],
         damping: 0.36,
+        bars: [
+            bars(&[20, 22, 24, 26, 28], 2, 210.0),
+            bars(&[18, 20, 22, 24], 1, 320.0),
+        ],
         camber: [-1.5, -1.5],
         pressure: [2.4, 2.2],
         max_steer: 0.52,
@@ -1019,6 +1087,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [22.0, 25.0],
         ride: [1.4, 1.5],
         damping: 0.3,
+        bars: [
+            bars(&[26, 28, 30, 32], 1, 170.0),
+            bars(&[18, 20, 22, 24], 1, 280.0),
+        ],
         camber: [-0.8, -1.0],
         pressure: [2.4, 2.3],
         max_steer: 0.5,
@@ -1106,6 +1178,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [18.0, 20.0],
         ride: [1.9, 2.1],
         damping: 0.36,
+        bars: [
+            bars(&[22, 24, 26, 28], 1, 220.0),
+            bars(&[18, 20, 22, 24], 1, 230.0),
+        ],
         camber: [-1.5, -1.8],
         pressure: [2.0, 2.0],
         max_steer: 0.5,
@@ -1197,6 +1273,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [18.0, 21.0],
         ride: [1.8, 2.0],
         damping: 0.36,
+        bars: [
+            bars(&[20, 22, 24, 26], 1, 310.0),
+            bars(&[16, 18, 20, 22], 1, 350.0),
+        ],
         camber: [-1.0, -1.8],
         pressure: [2.0, 2.2],
         max_steer: 0.5,
@@ -1287,6 +1367,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [18.0, 22.0],
         ride: [2.2, 2.4],
         damping: 0.4,
+        bars: [
+            bars(&[26, 28, 30, 32], 1, 140.0),
+            bars(&[20, 22, 24, 26], 1, 120.0),
+        ],
         camber: [-1.8, -2.0],
         pressure: [2.1, 2.1],
         max_steer: 0.46,
@@ -1380,6 +1464,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [9.0, 10.0],
         ride: [2.0, 2.2],
         damping: 0.38,
+        bars: [
+            bars(&[16, 18, 20, 22, 24], 1, 220.0),
+            bars(&[12, 14, 16, 18, 20], 1, 200.0),
+        ],
         camber: [-1.8, -1.8],
         pressure: [1.7, 1.6],
         max_steer: 0.5,
@@ -1465,6 +1553,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [33.0, 37.0],
         ride: [1.25, 1.5],
         damping: 0.3,
+        bars: [
+            bars(&[26, 28, 30, 32], 1, 250.0),
+            bars(&[18, 20, 22], 1, 520.0),
+        ],
         camber: [-0.3, -0.3],
         pressure: [2.5, 2.3],
         max_steer: 0.54,
@@ -1555,6 +1647,10 @@ pub static CHASSIS: [Chassis; 13] = [
         hub: [24.5, 24.5],
         ride: [1.3, 1.6],
         damping: 0.3,
+        bars: [
+            bars(&[22, 24, 26, 28], 1, 420.0),
+            bars(&[18, 20, 22], 1, 590.0),
+        ],
         camber: [-0.3, -0.5],
         pressure: [2.6, 2.5],
         max_steer: 0.56,
