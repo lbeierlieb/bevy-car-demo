@@ -352,7 +352,7 @@ fn wheel_parts(ui: &mut egui::Ui, draft: &mut CarBuild, same: &mut bool) {
 
 /// Rim diameter and width, tire width and sidewall, and compound. Another rim diameter or
 /// tire width keeps the outside diameter as near as it goes, on a rim that suits the tire.
-fn wheel_picker(ui: &mut egui::Ui, axle: usize, wheel: &mut Wheel) {
+pub fn wheel_picker(ui: &mut egui::Ui, axle: usize, wheel: &mut Wheel) {
     fn pick<T: Copy + PartialEq>(
         ui: &mut egui::Ui,
         id: (&str, usize),

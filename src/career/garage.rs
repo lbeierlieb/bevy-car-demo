@@ -14,11 +14,11 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use super::fitting::{self, finish_engine};
 use super::hud::News;
 use super::places::PlaceKind;
-use super::{Career, GARAGE_BAYS, OwnedCar, Places, Ride, Scene, Wear, catalog, euros};
+use super::{Career, GARAGE_BAYS, Item, OwnedCar, Places, Ride, Scene, catalog, euros};
 use crate::camera::{ChaseCamera, OrbitInput};
 use crate::physics::engine::families::Version;
 use crate::physics::engine::parts::{Parts, SLOTS};
-use crate::physics::tire::COMPOUNDS;
+use crate::physics::tire::Tread;
 use crate::terrain::Terrain;
 use crate::visuals::spawn_model;
 use crate::workshop::{self, Work};
@@ -496,12 +496,33 @@ fn condition(ui: &mut egui::Ui, career: &mut Career, i: usize, news: &mut News) 
         "{:.0} of {:.0} L in the tank",
         wear.fuel, setup.tank.litres
     ));
-    let worn = wear.treads.iter().map(|t| t.wear).fold(0.0, f32::max);
-    ui.label(format!(
-        "{} tires, {:.0} % worn",
-        COMPOUNDS[setup.build.wheels[0].compound].name,
-        worn * 100.0
-    ));
+    // Each axle's tires and the most worn of the pair.
+    let worn = |axle: usize| {
+        wear.treads[2 * axle]
+            .wear
+            .max(wear.treads[2 * axle + 1].wear)
+    };
+    let wheels = setup.build.wheels;
+    for axle in 0..2 {
+        if axle == 1 && wheels[0] == wheels[1] {
+            break;
+        }
+        let place = if wheels[0] == wheels[1] {
+            "All round"
+        } else {
+            ["Front", "Rear"][axle]
+        };
+        let worn = if wheels[0] == wheels[1] {
+            worn(0).max(worn(1))
+        } else {
+            worn(axle)
+        };
+        ui.label(format!(
+            "{place}: {}, {:.0} % worn",
+            wheels[axle].label(),
+            worn * 100.0
+        ));
+    }
     let damage = &wear.damage;
     let failures = damage.failures(cylinders);
     if damage.worst(cylinders) < 0.005 {
@@ -524,11 +545,18 @@ fn condition(ui: &mut egui::Ui, career: &mut Career, i: usize, news: &mut News) 
             done = Some((repair, "The engine is repaired.".to_string()));
         }
     }
-    let tires = catalog::TIRES[setup.build.wheels[0].compound];
-    if worn > 0.05 {
+    // New tires of the same kind on the axles whose tires are worn.
+    let axles: Vec<usize> = (0..2).filter(|&axle| worn(axle) > 0.05).collect();
+    let tires: f64 = axles
+        .iter()
+        .map(|&axle| catalog::new_tires(setup, axle))
+        .sum();
+    if !axles.is_empty() {
         let button = egui::Button::new(format!("New tires: {}", euros(tires)));
         if ui.add_enabled(money >= tires, button).clicked() {
-            wear.treads = Wear::new(setup).treads;
+            for &axle in &axles {
+                wear.treads[2 * axle..2 * axle + 2].fill(Tread::default());
+            }
             done = Some((tires, "New tires are on.".to_string()));
         }
     }
@@ -592,11 +620,13 @@ fn shelf(ui: &mut egui::Ui, career: &mut Career, i: usize, view: &mut GarageView
         })
         .collect();
     let stock = crate::chassis::CarBuild::factory(build.chassis);
+    for axle in 0..2 {
+        if build.wheels[axle] != stock.wheels[axle] {
+            let place = ["front", "rear"][axle];
+            fitted.push(format!("{} at the {place}", build.wheels[axle].label()));
+        }
+    }
     for (differs, item) in [
-        (
-            build.wheels != stock.wheels,
-            super::Item::Tires(build.wheels[0].compound),
-        ),
         (
             build.clutch != stock.clutch,
             super::Item::Clutch(build.clutch),
@@ -643,8 +673,15 @@ fn shelf(ui: &mut egui::Ui, career: &mut Career, i: usize, view: &mut GarageView
         .show(ui, |ui| {
             for (k, &item) in career.items.iter().enumerate() {
                 ui.horizontal(|ui| {
-                    if ui.small_button("Fit").clicked() {
-                        fit = Some(k);
+                    if matches!(item, Item::Rims(_) | Item::Tires(..)) {
+                        // Rims and tires go on an axle.
+                        for (axle, name) in ["Front", "Rear"].into_iter().enumerate() {
+                            if ui.small_button(name).clicked() {
+                                fit = Some((k, axle));
+                            }
+                        }
+                    } else if ui.small_button("Fit").clicked() {
+                        fit = Some((k, 0));
                     }
                     ui.label(fitting::name(item));
                 });
@@ -658,16 +695,45 @@ fn shelf(ui: &mut egui::Ui, career: &mut Career, i: usize, view: &mut GarageView
         .weak()
         .small(),
     );
-    let Some(k) = fit else {
+    let Some((k, axle)) = fit else {
         return;
     };
     let item = career.items[k];
-    match fitting::fit(&mut career.cars[i], item) {
+    // Rims the tires on the axle don't go on take a pair from the shelf that does.
+    let car = &mut career.cars[i];
+    let with_tires = match item {
+        Item::Rims(rim) if !car.setup.build.wheels[axle].tire.fits(&rim) => {
+            career.items.iter().position(|other| match *other {
+                Item::Tires(size, _) => size.fits(&rim),
+                _ => false,
+            })
+        }
+        _ => None,
+    };
+    let result = match (item, with_tires) {
+        (Item::Rims(rim), Some(t)) => {
+            let Item::Tires(size, compound) = career.items[t] else {
+                unreachable!("a pair of tires");
+            };
+            fitting::fit_wheels(car, axle, rim, (size, compound))
+        }
+        _ => fitting::fit(car, item, axle),
+    };
+    match result {
         Err(why) => view.status = why,
         Ok(fitted) => {
-            career.items.remove(k);
+            let mut name = fitting::name(item);
+            if let Some(t) = with_tires {
+                name = format!("{name} with {}", fitting::name(career.items[t]));
+            }
+            // Off the shelf, the later one first.
+            let mut used: Vec<usize> = [Some(k), with_tires].into_iter().flatten().collect();
+            used.sort_unstable();
+            for at in used.into_iter().rev() {
+                career.items.remove(at);
+            }
             career.items.extend(fitted.off);
-            view.status = format!("{} fitted.", fitting::name(item));
+            view.status = format!("{name} fitted.");
             if let Some(parts) = fitted.engine {
                 let car = &mut career.cars[i];
                 let hardware = parts.hardware();

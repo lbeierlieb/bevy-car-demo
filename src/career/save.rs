@@ -127,7 +127,14 @@ fn item_words(item: &Item) -> String {
     match *item {
         Item::Engine { slot, part } => format!("engine {slot} {part}"),
         Item::Ecu(model) => format!("ecu {}", model.key()),
-        Item::Tires(i) => format!("tires {}", compound_key(i)),
+        Item::Rims(rim) => format!("rims {} {}", rim.diameter, rim.width),
+        Item::Tires(size, compound) => format!(
+            "tires {} {} {} {}",
+            size.width,
+            size.aspect,
+            size.rim,
+            compound_key(compound)
+        ),
         Item::Clutch(i) => format!("clutch {i}"),
         Item::Suspension(i) => format!("suspension {i}"),
         Item::Gearbox(i) => format!("gearbox {i}"),
@@ -143,7 +150,24 @@ fn read_item(words: &[&str]) -> Option<Item> {
             (part < SLOTS.get(slot)?.parts.len()).then_some(Item::Engine { slot, part })?
         }
         "ecu" => Item::Ecu(ecu_model(words.get(1)?)?),
-        "tires" => Item::Tires(compound(words.get(1)?)?),
+        "rims" => {
+            let rim = Rim {
+                diameter: number(1)?.try_into().ok()?,
+                width: number(2)?.try_into().ok()?,
+            };
+            Rim::all().any(|r| r == rim).then_some(Item::Rims(rim))?
+        }
+        "tires" => {
+            let size = TireSize {
+                width: number(1)?.try_into().ok()?,
+                aspect: number(2)?.try_into().ok()?,
+                rim: number(3)?.try_into().ok()?,
+            };
+            let compound = compound(words.get(4)?)?;
+            TireSize::all()
+                .any(|s| s == size)
+                .then_some(Item::Tires(size, compound))?
+        }
         "clutch" => Item::Clutch(number(1).filter(|&i| i < CLUTCHES.len())?),
         "suspension" => Item::Suspension(number(1).filter(|&i| i < SUSPENSIONS.len())?),
         "gearbox" => Item::Gearbox(number(1).filter(|&i| i < GEARBOXES.len())?),
@@ -151,6 +175,16 @@ fn read_item(words: &[&str]) -> Option<Item> {
         _ => return None,
     };
     Some(item)
+}
+
+/// What a set of tires of a compound cost before tires had sizes: an old save's set on the
+/// shelf (`tires <compound>`) is paid back, not knowing which car it was for.
+fn old_tires_refund(words: &[&str]) -> Option<f64> {
+    let [kind, which] = words else {
+        return None;
+    };
+    let compound = compound(which).filter(|_| *kind == "tires")?;
+    Some([260.0, 320.0, 650.0, 1_100.0][compound])
 }
 
 /// A compound by its name in lower case.
@@ -253,7 +287,10 @@ pub fn read(career: &mut Career, text: &str) {
                     None => Ride::Mom,
                 }
             }
-            "item" => career.items.extend(read_item(rest)),
+            "item" => match read_item(rest) {
+                Some(item) => career.items.push(item),
+                None => career.money += old_tires_refund(rest).unwrap_or(0.0),
+            },
             "car" => {
                 let block: Vec<&str> = lines
                     .by_ref()
@@ -433,7 +470,18 @@ mod tests {
         career.items = vec![
             Item::Engine { slot: 12, part: 2 },
             Item::Ecu(EcuModel::Programmable),
-            Item::Tires(1),
+            Item::Rims(Rim {
+                diameter: 18,
+                width: 85,
+            }),
+            Item::Tires(
+                TireSize {
+                    width: 245,
+                    aspect: 40,
+                    rim: 18,
+                },
+                SPORT,
+            ),
             Item::LimitedSlip,
         ];
         // A turbo city car with a worn engine and a little fuel, and a stock coupé.
@@ -535,9 +583,10 @@ mod tests {
             &mut career,
             "money 99\nitem engine 99 1\nitem tires 1\ncar\nbuild 99\nendcar\nride 3\n",
         );
-        assert_eq!(career.money, 99.0);
-        // Old saves name compounds by their place among street, sport and race.
-        assert_eq!(career.items, [Item::Tires(SPORT)]);
+        // A set of tires from before they had sizes is paid back (sport tires, as old
+        // saves name compounds by their place among street, sport and race).
+        assert_eq!(career.money, 99.0 + 650.0);
+        assert!(career.items.is_empty());
         assert!(career.cars.is_empty());
         assert_eq!(career.ride, Ride::Mom);
     }

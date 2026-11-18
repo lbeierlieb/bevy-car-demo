@@ -170,8 +170,10 @@ pub enum Item {
         part: usize,
     },
     Ecu(crate::physics::engine::ecu::EcuModel),
-    /// A set of tires of a compound in `tire::COMPOUNDS`.
-    Tires(usize),
+    /// A pair of rims.
+    Rims(crate::wheels::Rim),
+    /// A pair of tires of a size and a compound (in `tire::COMPOUNDS`).
+    Tires(crate::wheels::TireSize, usize),
     Clutch(usize),
     Suspension(usize),
     Gearbox(usize),

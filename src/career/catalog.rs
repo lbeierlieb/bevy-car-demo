@@ -5,6 +5,7 @@ use crate::car::CarSetup;
 use crate::physics::engine::damage::Damage;
 use crate::physics::engine::ecu::EcuModel;
 use crate::physics::engine::parts::SLOTS;
+use crate::wheels::TireSize;
 
 /// Each chassis new with its base engine (€, in `CHASSIS` order).
 const CHASSIS_PRICES: [f64; 13] = [
@@ -16,7 +17,10 @@ const OPTION_PRICE: f64 = 0.2;
 /// A used car sells for this share of its price new, before its wear.
 const RESALE: f64 = 0.45;
 
-pub const TIRES: [f64; 4] = [260.0, 320.0, 650.0, 1_100.0];
+/// A pair of rims (€ per inch of diameter times inch of width).
+const RIMS: f64 = 2.4;
+/// A pair of tires (€ per mm of width times inch of rim diameter), by compound.
+const TIRES: [f64; 4] = [0.04, 0.05, 0.1, 0.17];
 pub const CLUTCHES: [f64; 3] = [180.0, 450.0, 900.0];
 pub const SUSPENSIONS: [f64; 3] = [400.0, 950.0, 1_800.0];
 pub const GEARBOXES: [f64; 8] = [
@@ -81,8 +85,22 @@ fn factory_code(setup: &CarSetup) -> &'static str {
 
 /// What putting new tires of the same kind on a car costs, by how worn they are.
 pub fn tires_worn(setup: &CarSetup, wear: &Wear) -> f64 {
-    let worn = wear.treads.iter().map(|t| t.wear).sum::<f32>() / 4.0;
-    TIRES[setup.build.wheels[0].compound] * f64::from(worn)
+    (0..2)
+        .map(|axle| {
+            let worn = (wear.treads[2 * axle].wear + wear.treads[2 * axle + 1].wear) / 2.0;
+            new_tires(setup, axle) * f64::from(worn)
+        })
+        .sum()
+}
+
+/// What a new pair of the tires on an axle (0 front, 1 rear) of a car costs.
+pub fn new_tires(setup: &CarSetup, axle: usize) -> f64 {
+    let wheel = setup.build.wheels[axle];
+    tire_price(&wheel.tire, wheel.compound)
+}
+
+fn tire_price(size: &TireSize, compound: usize) -> f64 {
+    TIRES[compound] * f64::from(size.width) * f64::from(size.rim)
 }
 
 /// What repairing an engine of `cylinders` costs.
@@ -100,13 +118,10 @@ pub fn repair(damage: &Damage, cylinders: usize) -> f64 {
     if parts < 1.0 { 0.0 } else { parts + LABOUR }
 }
 
-/// What the parts shop sells, by kind.
+/// What the parts shop sells, by kind, apart from rims and tires, which come in every
+/// size on offer (see `wheels`).
 pub fn stock() -> Vec<(String, Vec<Item>)> {
     let mut shelves = vec![
-        (
-            "Tires".to_string(),
-            (0..TIRES.len()).map(Item::Tires).collect(),
-        ),
         (
             "Clutches".to_string(),
             (0..CLUTCHES.len()).map(Item::Clutch).collect(),
@@ -140,7 +155,10 @@ pub fn price(item: Item) -> Option<f64> {
     let price = match item {
         Item::Engine { slot, part } => *ENGINE_PARTS.get(slot)?.get(part)?,
         Item::Ecu(model) => ECUS[EcuModel::ALL.iter().position(|&m| m == model)?],
-        Item::Tires(i) => *TIRES.get(i)?,
+        Item::Rims(rim) => RIMS * f64::from(rim.diameter) * f64::from(rim.width_inches()),
+        Item::Tires(size, compound) => {
+            (compound < TIRES.len()).then(|| tire_price(&size, compound))?
+        }
         Item::Clutch(i) => *CLUTCHES.get(i)?,
         Item::Suspension(i) => *SUSPENSIONS.get(i)?,
         Item::Gearbox(i) => *GEARBOXES.get(i)?,
@@ -159,6 +177,10 @@ mod tests {
     fn everything_has_a_price() {
         assert_eq!(CHASSIS_PRICES.len(), CHASSIS.len());
         assert_eq!(TIRES.len(), COMPOUNDS.len());
+        // A pair of street tires for the coupé's front costs about what it would.
+        let coupe = CarSetup::factory(3, 0);
+        let pair = new_tires(&coupe, 0);
+        assert!(pair > 150.0 && pair < 250.0, "{pair}");
         assert_eq!(CLUTCHES.len(), chassis::CLUTCHES.len());
         assert_eq!(SUSPENSIONS.len(), chassis::SUSPENSIONS.len());
         assert_eq!(GEARBOXES.len(), BOXES.len());

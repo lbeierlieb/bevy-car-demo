@@ -11,10 +11,11 @@ use super::hud::News;
 use super::jobs::{JobKind, Jobs, TIERS, start_delivery, take_offer};
 use super::lot::{self, Lot};
 use super::places::{AtPlace, Place, PlaceKind, Places};
-use super::{Career, PLAYER, Scene, euros};
+use super::{Career, Item, PLAYER, Ride, Scene, euros};
 use crate::car::{ActiveCar, Car};
 use crate::physics::fuel::Fuel;
 use crate::terrain::Terrain;
+use crate::wheels::Wheel;
 
 const WARNING: egui::Color32 = egui::Color32::from_rgb(255, 170, 60);
 
@@ -49,6 +50,8 @@ pub struct Visit<'w, 's> {
     pub meshes: ResMut<'w, Assets<Mesh>>,
     pub materials: ResMut<'w, Assets<StandardMaterial>>,
     pub booked: ResMut<'w, DynoBooked>,
+    /// The rims and tires looked at in the parts shop.
+    pub shop_wheel: Local<'s, Option<Wheel>>,
 }
 
 impl Visit<'_, '_> {
@@ -353,6 +356,9 @@ fn parts_shop(ui: &mut egui::Ui, visit: &mut Visit) {
     egui::ScrollArea::vertical()
         .max_height(330.0)
         .show(ui, |ui| {
+            ui.collapsing("Rims and tires", |ui| {
+                order = order.or(rims_and_tires(ui, visit));
+            });
             for (kind, items) in super::catalog::stock() {
                 ui.collapsing(kind, |ui| {
                     for item in items {
@@ -382,6 +388,59 @@ fn parts_shop(ui: &mut egui::Ui, visit: &mut Visit) {
             euros(price)
         ));
     }
+}
+
+/// Rims and tires of any size on offer, by the pair: which of the player's cars they fit
+/// together, and the one ordered, if one is.
+fn rims_and_tires(ui: &mut egui::Ui, visit: &mut Visit) -> Option<(Item, f64)> {
+    let career = &visit.career;
+    let ride = match career.ride {
+        Ride::Own(i) => &career.cars[i].setup,
+        Ride::Mom => &career.mom,
+    };
+    let wheel = visit.shop_wheel.get_or_insert(ride.build.wheels[0]);
+    crate::garage::wheel_picker(ui, 0, wheel);
+    let wheel = *wheel;
+    // Where the rims with these tires on them would go.
+    let fits: Vec<String> = (career.cars.iter())
+        .flat_map(|car| {
+            let chassis = car.setup.build.chassis();
+            (0..2)
+                .filter(move |&axle| chassis.room[axle].misfit(&wheel).is_none())
+                .map(move |axle| format!("{} {}", chassis.name, ["front", "rear"][axle]))
+        })
+        .collect();
+    ui.label(
+        RichText::new(if career.cars.is_empty() {
+            "You have no car of your own to fit them to yet.".to_string()
+        } else if fits.is_empty() {
+            "Fits none of your cars.".to_string()
+        } else {
+            format!("Fits: {}", fits.join(", "))
+        })
+        .weak(),
+    );
+    if !wheel.tire.fits(&wheel.rim) {
+        ui.colored_label(WARNING, "These tires don't suit these rims.");
+    }
+    let mut order = None;
+    for item in [
+        Item::Rims(wheel.rim),
+        Item::Tires(wheel.tire, wheel.compound),
+    ] {
+        let price = super::catalog::price(item)?;
+        ui.horizontal(|ui| {
+            let afford = career.money >= price;
+            if ui
+                .add_enabled(afford, egui::Button::new(euros(price)))
+                .clicked()
+            {
+                order = Some((item, price));
+            }
+            ui.label(format!("{} (a pair)", super::fitting::name(item)));
+        });
+    }
+    order
 }
 
 /// The dyno: a paid run, or a look at the runs on file.

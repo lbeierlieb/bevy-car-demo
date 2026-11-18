@@ -3,13 +3,14 @@
 //! changing the engine, the tune is still the one made for the old parts until it's
 //! changed by hand.
 
-use super::{Item, OwnedCar, Wear};
+use super::{Item, OwnedCar};
 use crate::car::CarSetup;
-use crate::chassis::{CLUTCHES, GEARBOXES, SUSPENSIONS};
+use crate::chassis::{CLUTCHES, CarBuild, GEARBOXES, SUSPENSIONS};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::maps::{self, EngineMaps};
 use crate::physics::engine::parts::{Parts, SLOTS};
-use crate::physics::tire::COMPOUNDS;
+use crate::physics::tire::{COMPOUNDS, Tread};
+use crate::wheels::{Rim, TireSize, Wheel};
 
 /// What a part is called on the shelf and in the shop.
 pub fn name(item: Item) -> String {
@@ -18,7 +19,12 @@ pub fn name(item: Item) -> String {
             format!("{}: {}", SLOTS[slot].name, SLOTS[slot].parts[part].name)
         }
         Item::Ecu(model) => format!("ECU: {}", model.name()),
-        Item::Tires(i) => format!("{} tires", COMPOUNDS[i].name),
+        Item::Rims(rim) => format!("{} rims", rim.label()),
+        Item::Tires(size, compound) => format!(
+            "{} {} tires",
+            size.label(),
+            COMPOUNDS[compound].name.to_lowercase()
+        ),
         Item::Clutch(i) => format!("{} clutch", CLUTCHES[i].0),
         Item::Suspension(i) => format!("{} suspension kit", SUSPENSIONS[i].0),
         Item::Gearbox(i) => format!("Gearbox: {}", GEARBOXES[i].name),
@@ -34,18 +40,35 @@ pub struct Fitted {
     pub engine: Option<Parts>,
 }
 
-/// Fits `item` to `car`, or says why it doesn't go on.
-pub fn fit(car: &mut OwnedCar, item: Item) -> Result<Fitted, String> {
+/// Fits `item` to `car` (rims and tires to the front or rear `axle`, 0 or 1), or says why
+/// it doesn't go on.
+pub fn fit(car: &mut OwnedCar, item: Item, axle: usize) -> Result<Fitted, String> {
     let mut build = car.setup.build.clone();
     let mut parts = car.setup.engine.parts.clone();
+    let mut new_tires = false;
     let off = match item {
-        Item::Tires(i) => {
-            if build.wheels.iter().all(|wheel| wheel.compound == i) {
-                car.wear.treads = Wear::new(&car.setup).treads;
+        Item::Rims(rim) => {
+            let wheel = &mut build.wheels[axle];
+            if !wheel.tire.fits(&rim) {
+                return Err(format!(
+                    "Its {} tires don't go on {} rims: fit them with tires for them.",
+                    wheel.tire.label(),
+                    rim.label()
+                ));
             }
-            for wheel in &mut build.wheels {
-                wheel.compound = i;
+            Some(Item::Rims(std::mem::replace(&mut wheel.rim, rim)))
+        }
+        Item::Tires(size, compound) => {
+            let wheel = &mut build.wheels[axle];
+            if !size.fits(&wheel.rim) {
+                return Err(format!(
+                    "{} tires don't go on its {} rims.",
+                    size.label(),
+                    wheel.rim.label()
+                ));
             }
+            (wheel.tire, wheel.compound) = (size, compound);
+            new_tires = true;
             None
         }
         Item::Clutch(i) => Some(Item::Clutch(std::mem::replace(&mut build.clutch, i))),
@@ -77,14 +100,13 @@ pub fn fit(car: &mut OwnedCar, item: Item) -> Result<Fitted, String> {
             super::catalog::price(off).map(|_| off)
         }
     };
+    if let Some(why) = build.wheel_misfit() {
+        return Err(format!("{why}."));
+    }
     let engine_changed = parts != car.setup.engine.parts;
-    if build != car.setup.build {
-        let tires_changed = build.wheels != car.setup.build.wheels;
-        let engine = car.setup.engine.build.clone();
-        car.setup = CarSetup::new(build, car.setup.engine.parts.clone(), engine);
-        if tires_changed {
-            car.wear.treads = Wear::new(&car.setup).treads;
-        }
+    rebuild(car, build);
+    if new_tires {
+        fresh_treads(car, axle);
     }
     let engine = if !engine_changed {
         None
@@ -96,6 +118,55 @@ pub fn fit(car: &mut OwnedCar, item: Item) -> Result<Fitted, String> {
         Some(parts)
     };
     Ok(Fitted { off, engine })
+}
+
+/// Fits `rim`s with tires of `size` and `compound` on them to the front or rear `axle` at
+/// once (when the tires on it don't go on the new rims): the old rims go on the shelf, the
+/// old tires to the bin.
+pub fn fit_wheels(
+    car: &mut OwnedCar,
+    axle: usize,
+    rim: Rim,
+    (size, compound): (TireSize, usize),
+) -> Result<Fitted, String> {
+    if !size.fits(&rim) {
+        return Err(format!(
+            "{} tires don't go on {} rims.",
+            size.label(),
+            rim.label()
+        ));
+    }
+    let mut build = car.setup.build.clone();
+    let wheel = Wheel {
+        rim,
+        tire: size,
+        compound,
+    };
+    let old = std::mem::replace(&mut build.wheels[axle], wheel);
+    if let Some(why) = build.wheel_misfit() {
+        return Err(format!("{why}."));
+    }
+    rebuild(car, build);
+    fresh_treads(car, axle);
+    Ok(Fitted {
+        off: Some(Item::Rims(old.rim)),
+        engine: None,
+    })
+}
+
+/// The car as `build`, with its engine as it is.
+fn rebuild(car: &mut OwnedCar, build: CarBuild) {
+    if build != car.setup.build {
+        let engine = car.setup.engine.build.clone();
+        car.setup = CarSetup::new(build, car.setup.engine.parts.clone(), engine);
+    }
+}
+
+/// New treads on the front or rear `axle`.
+fn fresh_treads(car: &mut OwnedCar, axle: usize) {
+    for tread in &mut car.wear.treads[2 * axle..2 * axle + 2] {
+        *tread = Tread::default();
+    }
 }
 
 /// Whether `parts` make the same engine as the car's (apart from the ECU).
@@ -124,9 +195,10 @@ pub fn finish_engine(car: &mut OwnedCar, parts: Parts, maps: EngineMaps) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::career::Wear;
     use crate::physics::engine::ecu::EcuModel;
     use crate::physics::engine::parts::TURBO;
-    use crate::physics::tire::SPORT;
+    use crate::physics::tire::{SPORT, STREET};
 
     fn coupe() -> OwnedCar {
         let setup = CarSetup::factory(3, 0);
@@ -141,28 +213,45 @@ mod tests {
     #[test]
     fn chassis_parts_swap_and_the_old_ones_go_on_the_shelf() {
         let mut car = coupe();
-        let fitted = fit(&mut car, Item::Clutch(2)).unwrap();
+        let fitted = fit(&mut car, Item::Clutch(2), 0).unwrap();
         assert_eq!(fitted.off, Some(Item::Clutch(0)));
         assert_eq!(car.setup.build.clutch, 2);
-        car.wear.treads[0].wear = 0.5;
-        let fitted = fit(&mut car, Item::Tires(SPORT)).unwrap();
-        assert_eq!(
-            fitted,
-            Fitted {
-                off: None,
-                engine: None
-            }
+        assert!(
+            fit(&mut car, Item::Gearbox(0), 0).is_err(),
+            "a transverse box"
         );
-        assert_eq!(
-            car.setup.build.wheels.map(|wheel| wheel.compound),
-            [SPORT; 2]
-        );
-        assert_eq!(car.wear.treads[0].wear, 0.0);
-        assert!(fit(&mut car, Item::Gearbox(0)).is_err(), "a transverse box");
         // The coupé comes with open differentials.
-        fit(&mut car, Item::LimitedSlip).unwrap();
+        fit(&mut car, Item::LimitedSlip, 0).unwrap();
         assert!(car.setup.build.limited_slip);
-        fit(&mut car, Item::LimitedSlip).unwrap_err();
+        fit(&mut car, Item::LimitedSlip, 0).unwrap_err();
+    }
+
+    #[test]
+    fn rims_and_tires_go_on_an_axle() {
+        let mut car = coupe();
+        let size = |width, aspect, rim| TireSize { width, aspect, rim };
+        let rim = |diameter, width| Rim { diameter, width };
+        car.wear.treads[0].wear = 0.5;
+        car.wear.treads[2].wear = 0.5;
+        // New tires at the front: fresh treads there, the worn ones go to the bin.
+        let fitted = fit(&mut car, Item::Tires(size(225, 45, 17), SPORT), 0).unwrap();
+        assert_eq!(fitted.off, None);
+        let compounds = car.setup.build.wheels.map(|wheel| wheel.compound);
+        assert_eq!(compounds, [SPORT, STREET]);
+        assert_eq!(
+            (car.wear.treads[0].wear, car.wear.treads[2].wear),
+            (0.0, 0.5)
+        );
+        // Bigger rims need tires for them.
+        assert!(fit(&mut car, Item::Rims(rim(18, 80)), 0).is_err());
+        let fitted = fit_wheels(&mut car, 0, rim(18, 80), (size(235, 40, 18), SPORT)).unwrap();
+        assert_eq!(fitted.off, Some(Item::Rims(rim(17, 75))));
+        assert_eq!(car.setup.build.wheels[0].tire, size(235, 40, 18));
+        assert_eq!(car.setup.front.tire.radius, size(235, 40, 18).radius());
+        // Smaller ones don't clear the coupé's brakes, nor do tall tires fit the wells.
+        assert!(fit_wheels(&mut car, 0, rim(15, 75), (size(225, 50, 15), SPORT)).is_err());
+        assert!(fit(&mut car, Item::Tires(size(235, 55, 18), SPORT), 0).is_err());
+        assert_eq!(car.setup.build.wheels[0].tire, size(235, 40, 18));
     }
 
     #[test]
@@ -175,6 +264,7 @@ mod tests {
                 slot: TURBO,
                 part: 2,
             },
+            0,
         )
         .unwrap();
         // The turbo slot had none: nothing for the shelf.
@@ -186,7 +276,7 @@ mod tests {
         assert!(car.setup.engine.build.hardware.turbo.is_some());
         assert_eq!(car.setup.engine.build.ecu.rev_limit, 5000.0);
         // Another ECU box keeps the tune too, and the maps.
-        let fitted = fit(&mut car, Item::Ecu(EcuModel::Programmable)).unwrap();
+        let fitted = fit(&mut car, Item::Ecu(EcuModel::Programmable), 0).unwrap();
         assert_eq!(
             fitted,
             Fitted {
