@@ -16,7 +16,7 @@ const OPTION_PRICE: f64 = 0.2;
 /// A used car sells for this share of its price new, before its wear.
 const RESALE: f64 = 0.45;
 
-pub const TIRES: [f64; 3] = [320.0, 650.0, 1_100.0];
+pub const TIRES: [f64; 4] = [260.0, 320.0, 650.0, 1_100.0];
 pub const CLUTCHES: [f64; 3] = [180.0, 450.0, 900.0];
 pub const SUSPENSIONS: [f64; 3] = [400.0, 950.0, 1_800.0];
 pub const GEARBOXES: [f64; 8] = [

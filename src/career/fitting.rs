@@ -126,6 +126,7 @@ mod tests {
     use super::*;
     use crate::physics::engine::ecu::EcuModel;
     use crate::physics::engine::parts::TURBO;
+    use crate::physics::tire::SPORT;
 
     fn coupe() -> OwnedCar {
         let setup = CarSetup::factory(3, 0);
@@ -144,7 +145,7 @@ mod tests {
         assert_eq!(fitted.off, Some(Item::Clutch(0)));
         assert_eq!(car.setup.build.clutch, 2);
         car.wear.treads[0].wear = 0.5;
-        let fitted = fit(&mut car, Item::Tires(1)).unwrap();
+        let fitted = fit(&mut car, Item::Tires(SPORT)).unwrap();
         assert_eq!(
             fitted,
             Fitted {
@@ -152,7 +153,10 @@ mod tests {
                 engine: None
             }
         );
-        assert_eq!(car.setup.build.wheels.map(|wheel| wheel.compound), [1, 1]);
+        assert_eq!(
+            car.setup.build.wheels.map(|wheel| wheel.compound),
+            [SPORT; 2]
+        );
         assert_eq!(car.wear.treads[0].wear, 0.0);
         assert!(fit(&mut car, Item::Gearbox(0)).is_err(), "a transverse box");
         // The coupé comes with open differentials.

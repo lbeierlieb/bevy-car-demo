@@ -258,6 +258,7 @@ mod tests {
     use super::*;
     use crate::car::{CarSetup, Controls, heading};
     use crate::chassis::{CHASSIS, CarBuild, SUSPENSIONS};
+    use crate::physics::tire::RACE;
     use std::f32::consts::{PI, TAU};
 
     fn run(car: &mut Car, terrain: &Terrain, seconds: f32) {
@@ -580,7 +581,7 @@ mod tests {
                 suspension: 2,
                 ..stock.build
             }
-            .on_compound(2);
+            .on_compound(RACE);
             CarSetup::new(build, stock.engine.parts, stock.engine.build)
         });
         for setup in factory.chain(track) {

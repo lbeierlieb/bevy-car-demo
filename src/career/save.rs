@@ -127,7 +127,7 @@ fn item_words(item: &Item) -> String {
     match *item {
         Item::Engine { slot, part } => format!("engine {slot} {part}"),
         Item::Ecu(model) => format!("ecu {}", model.key()),
-        Item::Tires(i) => format!("tires {i}"),
+        Item::Tires(i) => format!("tires {}", compound_key(i)),
         Item::Clutch(i) => format!("clutch {i}"),
         Item::Suspension(i) => format!("suspension {i}"),
         Item::Gearbox(i) => format!("gearbox {i}"),
@@ -143,7 +143,7 @@ fn read_item(words: &[&str]) -> Option<Item> {
             (part < SLOTS.get(slot)?.parts.len()).then_some(Item::Engine { slot, part })?
         }
         "ecu" => Item::Ecu(ecu_model(words.get(1)?)?),
-        "tires" => Item::Tires(number(1).filter(|&i| i < COMPOUNDS.len())?),
+        "tires" => Item::Tires(compound(words.get(1)?)?),
         "clutch" => Item::Clutch(number(1).filter(|&i| i < CLUTCHES.len())?),
         "suspension" => Item::Suspension(number(1).filter(|&i| i < SUSPENSIONS.len())?),
         "gearbox" => Item::Gearbox(number(1).filter(|&i| i < GEARBOXES.len())?),
@@ -151,6 +151,21 @@ fn read_item(words: &[&str]) -> Option<Item> {
         _ => return None,
     };
     Some(item)
+}
+
+/// A compound by its name in lower case.
+fn compound_key(compound: usize) -> String {
+    COMPOUNDS[compound].name.to_lowercase()
+}
+
+/// A compound by its name in lower case, or by its place among the first three (street,
+/// sport, race), as saves had it before there were touring tires.
+fn compound(word: &str) -> Option<usize> {
+    let name = match word.parse::<usize>() {
+        Ok(old) => ["street", "sport", "race"].get(old)?.to_string(),
+        Err(_) => word.to_string(),
+    };
+    (0..COMPOUNDS.len()).find(|&i| compound_key(i) == name)
 }
 
 fn ecu_model(key: &str) -> Option<EcuModel> {
@@ -176,7 +191,11 @@ fn write_car(text: &mut String, car: &OwnedCar) {
             let (rim, tire) = (w.rim, w.tire);
             format!(
                 "{} {} {} {} {}",
-                rim.diameter, rim.width, tire.width, tire.aspect, w.compound
+                rim.diameter,
+                rim.width,
+                tire.width,
+                tire.aspect,
+                compound_key(w.compound)
             )
         })
         .collect();
@@ -353,7 +372,7 @@ fn read_build(words: &[&str]) -> Option<CarBuild> {
     };
     // Saves from before rims and tire sizes have the compound here, on factory sizes.
     let mut build = build;
-    if let Some(compound) = n(7).filter(|&t| t < COMPOUNDS.len()) {
+    if let Some(compound) = words.get(7).and_then(|word| compound(word)) {
         for wheel in &mut build.wheels {
             wheel.compound = compound;
         }
@@ -376,9 +395,9 @@ fn read_wheels(words: &[&str]) -> Option<[Wheel; 2]> {
                 aspect: byte(at + 3)?,
                 rim: byte(at)?,
             },
-            compound: usize::from(n(at + 4)?),
+            compound: compound(words.get(at + 4)?)?,
         };
-        (wheel.compound < COMPOUNDS.len() && wheel.tire.fits(&wheel.rim)).then_some(wheel)
+        wheel.tire.fits(&wheel.rim).then_some(wheel)
     };
     Some([wheel(0)?, wheel(5)?])
 }
@@ -474,12 +493,14 @@ mod tests {
         );
     }
 
+    use crate::physics::tire::SPORT;
+
     #[test]
     fn old_saves_put_their_compound_on_factory_sizes() {
         let build = read_build(&["3", "0", "6", "0", "3.9", "0", "0", "1"]).unwrap();
         let factory = CarBuild::factory(3).wheels;
         assert_eq!(build.wheels.map(|w| w.tire), factory.map(|w| w.tire));
-        assert_eq!(build.wheels.map(|w| w.compound), [1, 1]);
+        assert_eq!(build.wheels.map(|w| w.compound), [SPORT; 2]);
     }
 
     #[test]
@@ -515,7 +536,8 @@ mod tests {
             "money 99\nitem engine 99 1\nitem tires 1\ncar\nbuild 99\nendcar\nride 3\n",
         );
         assert_eq!(career.money, 99.0);
-        assert_eq!(career.items, [Item::Tires(1)]);
+        // Old saves name compounds by their place among street, sport and race.
+        assert_eq!(career.items, [Item::Tires(SPORT)]);
         assert!(career.cars.is_empty());
         assert_eq!(career.ride, Ride::Mom);
     }

@@ -69,8 +69,28 @@ impl Compound {
     }
 }
 
+/// The compounds by their place in `COMPOUNDS`.
+pub const TOURING: usize = 0;
+pub const STREET: usize = 1;
+pub const SPORT: usize = 2;
+pub const RACE: usize = 3;
+
 /// The tires in the catalogue, by their place.
-pub const COMPOUNDS: [Compound; 3] = [
+pub const COMPOUNDS: [Compound; 4] = [
+    Compound {
+        name: "Touring",
+        about: "Made to last and to roll easily: grips from cold and never overheats on the \
+                road, but has the least grip and lets go early",
+        grip: 0.9,
+        peak_angle: 0.2,
+        peak_ratio: 0.13,
+        c_lat: 1.3,
+        c_long: 1.45,
+        best: 50.0,
+        cold: 0.95,
+        overheat: 25.0,
+        life: 100e6,
+    },
     Compound {
         name: "Street",
         about: "Grips from cold and lasts, and lets go gently past the limit, but overheats \
@@ -139,7 +159,7 @@ impl Default for TireParams {
             radius: 0.33,
             stiffness: 200_000.0,
             damping: 1_500.0,
-            compound: COMPOUNDS[0],
+            compound: COMPOUNDS[STREET],
             mu: 1.1,
             nominal_load: 3500.0,
             load_sensitivity: 0.1,
@@ -333,7 +353,8 @@ mod tests {
 
     #[test]
     fn street_tires_let_go_gently_and_race_tires_drop_off() {
-        let [street, sport, race] = COMPOUNDS;
+        let [touring, street, sport, race] = COMPOUNDS;
+        assert!(touring.grip < street.grip && touring.peak_angle > street.peak_angle);
         // Twice the peak slip angle, and sliding at 45°.
         for angle in [2.0, 0.0] {
             let at = |compound: Compound| {
@@ -353,7 +374,9 @@ mod tests {
 
     #[test]
     fn grip_by_temperature() {
-        let [street, sport, race] = COMPOUNDS;
+        let [touring, street, sport, race] = COMPOUNDS;
+        // Touring tires are at their best soonest.
+        assert!(touring.best < street.best && touring.cold > street.cold);
         for compound in COMPOUNDS {
             assert_eq!(compound.warmth(compound.best), 1.0);
             assert!((compound.warmth(AMBIENT) - compound.cold).abs() < 1e-6);

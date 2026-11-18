@@ -15,6 +15,7 @@ use crate::physics::drivetrain::Drive;
 use crate::physics::engine::families::{FAMILIES, Family};
 use crate::physics::engine::parts::Parts;
 use crate::physics::fuel::Tank;
+use crate::physics::tire::STREET;
 use crate::wheels::{Rim, TireSize, Wheel, WheelRoom};
 
 /// Width a transverse engine's gearbox takes up at the end of its crank (m).
@@ -400,7 +401,7 @@ const fn wheel(diameter: u8, rim_width: u8, width: u16, aspect: u8) -> Wheel {
             aspect,
             rim: diameter,
         },
-        compound: 0,
+        compound: STREET,
     }
 }
 
