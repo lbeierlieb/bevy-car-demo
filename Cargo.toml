@@ -11,6 +11,8 @@ bevy = { version = "0.20", default-features = false, features = ["3d", "keyboard
 bevy_egui = { version = "0.43", default-features = false, features = ["render", "default_fonts"] }
 # The baked terrain file is zlib-compressed.
 miniz_oxide = "0.9"
+# The map file (`osm.rs`, shared with the bake).
+quick-xml = "0.42"
 
 # Force feedback for steering wheels goes straight to the kernel's evdev interface.
 [target.'cfg(target_os = "linux")'.dependencies]

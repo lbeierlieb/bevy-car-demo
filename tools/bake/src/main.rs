@@ -13,13 +13,14 @@
 
 mod clearance;
 mod fences;
+#[path = "../../../src/osm.rs"]
 mod osm;
 mod profile;
 mod roads;
 
 use std::io::Cursor;
 
-use osm::{Osm, Tags};
+use osm::{Frame, Osm, Tags};
 use roads::{Feature, Grid, Road, RoadKind};
 
 /// Terrain grid spacing in metres, at full detail.
@@ -86,62 +87,6 @@ fn land_class(tags: &Tags) -> Option<u8> {
         ) => class::RESIDENTIAL,
         _ => return None,
     })
-}
-
-/// WGS84/ETRS89 latitude and longitude to UTM zone 32N metres (Krüger series, which is
-/// millimetre-accurate within the zone).
-fn utm32(lat: f64, lon: f64) -> Point {
-    let (a, f): (f64, f64) = (6_378_137.0, 1.0 / 298.257_222_101);
-    let n = f / (2.0 - f);
-    let big_a = a / (1.0 + n) * (1.0 + n * n / 4.0 + n.powi(4) / 64.0);
-    let alpha = [
-        n / 2.0 - 2.0 * n * n / 3.0 + 5.0 * n.powi(3) / 16.0,
-        13.0 * n * n / 48.0 - 3.0 * n.powi(3) / 5.0,
-        61.0 * n.powi(3) / 240.0,
-    ];
-    let (phi, dlambda) = (lat.to_radians(), (lon - 9.0).to_radians());
-    let e = 2.0 * n.sqrt() / (1.0 + n);
-    let t = (phi.sin().atanh() - e * (e * phi.sin()).atanh()).sinh();
-    let xi = (t / dlambda.cos()).atan();
-    let eta = (dlambda.sin() / (1.0 + t * t).sqrt()).atanh();
-    let (mut east, mut north) = (eta, xi);
-    for (j, a) in alpha.iter().enumerate() {
-        let k = 2.0 * (j + 1) as f64;
-        east += a * (k * xi).cos() * (k * eta).sinh();
-        north += a * (k * xi).sin() * (k * eta).cosh();
-    }
-    (500_000.0 + 0.9996 * big_a * east, 0.9996 * big_a * north)
-}
-
-/// The map frame: UTM shifted to the map centre, with z pointing south.
-struct Frame {
-    east: f64,
-    north: f64,
-}
-
-impl Frame {
-    fn to_local(&self, lat: f64, lon: f64) -> Point {
-        let (e, n) = utm32(lat, lon);
-        (e - self.east, self.north - n)
-    }
-
-    /// Latitude and longitude of a local point (Newton's method on `to_local`).
-    fn to_geo(&self, p: Point) -> Point {
-        let mut geo = (50.0, 10.0);
-        let step = 1e-6;
-        for _ in 0..6 {
-            let at = self.to_local(geo.0, geo.1);
-            let (dx, dz) = (p.0 - at.0, p.1 - at.1);
-            let by_lat = self.to_local(geo.0 + step, geo.1);
-            let by_lon = self.to_local(geo.0, geo.1 + step);
-            let (a, c) = ((by_lat.0 - at.0) / step, (by_lat.1 - at.1) / step);
-            let (b, d) = ((by_lon.0 - at.0) / step, (by_lon.1 - at.1) / step);
-            let det = a * d - b * c;
-            geo.0 += (d * dx - b * dz) / det;
-            geo.1 += (a * dz - c * dx) / det;
-        }
-        geo
-    }
 }
 
 /// Something in the map to fix: where, a short label and what it is.
@@ -509,12 +454,7 @@ fn bake(
 ) -> Result<(), Error> {
     let spawn: Vec<f64> = spawn.iter().map(|v| v.parse()).collect::<Result<_, _>>()?;
     let (center, chunks_x, chunks_z) = extent(lat, lon, size)?;
-    let (east, north) = utm32(center.0, center.1);
-    // Centre on a whole metre so grid vertices line up with lidar pixel edges.
-    let frame = Frame {
-        east: east.round(),
-        north: north.round(),
-    };
+    let frame = Frame::around(center.0, center.1);
     let (cells_x, cells_z) = (chunks_x * CHUNK_CELLS, chunks_z * CHUNK_CELLS);
     let (half_x, half_z) = (cells_x as f64 * CELL / 2.0, cells_z as f64 * CELL / 2.0);
     // Grid vertices per row, and conversions between vertex indices and local metres.

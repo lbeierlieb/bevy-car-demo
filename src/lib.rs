@@ -20,6 +20,7 @@ pub mod hud;
 pub mod input;
 pub mod map;
 pub mod obstacles;
+pub mod osm;
 pub mod physics;
 pub mod relief;
 pub mod scenery;
