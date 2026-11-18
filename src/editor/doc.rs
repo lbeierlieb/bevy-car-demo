@@ -409,7 +409,7 @@ impl Edit<'_> {
     /// Splits a way at one of its inner nodes; the second half becomes a new way with
     /// the same tags. Returns it.
     pub fn split_way(&mut self, way_id: i64, node: i64) -> Option<i64> {
-        let way = self.doc.way(way_id)?.clone();
+        let way = self.doc.way(way_id).filter(|w| w.refs.len() > 2)?.clone();
         let at = way.refs[1..way.refs.len() - 1]
             .iter()
             .position(|&r| r == node)?

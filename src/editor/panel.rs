@@ -408,7 +408,7 @@ fn selected(ui: &mut egui::Ui, s: &mut State) {
             }
             let inner = way
                 .and_then(|w| s.doc.way(w))
-                .is_some_and(|w| w.refs[1..w.refs.len().saturating_sub(1)].contains(&id));
+                .is_some_and(|w| w.refs.len() > 2 && w.refs[1..w.refs.len() - 1].contains(&id));
             if ui
                 .add_enabled(inner, egui::Button::new("Split way here"))
                 .on_hover_text("X")
