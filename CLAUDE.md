@@ -265,7 +265,7 @@ catalogue entries, and things like swap subframes are named so they can be price
   (14.5 kN per metre of width, × √(diameter/0.64)), at which it grips its compound's
   friction (`tire::GRIP` 1.05 × compound), with load sensitivity 0.27 (wider grips
   more, about 5 % for a fifth more width; there's no per-chassis grip any more); tread
-  heat capacity, cooling and life ∝ tread area; rolling resistance per compound ×
+  heat capacities, cooling and life ∝ tread area; rolling resistance per compound ×
   √(width/215 mm); a lower sidewall is stiffer and peaks at a smaller slip angle; extra
   tire front adds drag. Factory compounds: Minim and Drover touring, Calder, Rheon and
   Vespera sport, the rest street. `tires_are_sized_for_their_cars` holds three cars at
@@ -382,9 +382,9 @@ and without traction control; `trace_power_slide` prints one step by step
   saturated; the rear keeps yawing the car until it swings the other way. Real drivers
   unwind early, helped by the caster pulling the wheel: mechanical trail is now 30 mm
   (was 15) and the force feedback may change faster.
-- Load sensitivity (`TireParams::load_sensitivity`, 0.1) made slides slightly deeper,
-  not easier, but makes axle balance matter. Relaxation length wasn't added: at speed it
-  lags by only ~20 ms, so it matters only at low speed.
+- Load sensitivity (`TireParams::load_sensitivity`, then 0.1, now 0.27) made slides
+  slightly deeper, not easier, but makes axle balance matter. Relaxation length wasn't
+  added: at speed it lags by only ~20 ms, so it matters only at low speed.
 - With the bot, mid- and rear-engined cars still spin (plausible), as does the 6.2 V8
   Harrow floored in second, and the 5-litre V8s snap back; the other front-engined cars
   are caught (asserted by `a_power_slide_can_be_caught`).
@@ -393,17 +393,41 @@ and without traction control; `trace_power_slide` prints one step by step
   best at 65 °C, lets go gently past the peak, overheats when driven hard), sport, race
   (needs heat, best at 95 °C, peaks early and drops off, wears fast). Each has grip,
   peak slip angle/ratio with the Magic Formula C (stiffness B follows from the peak), a
-  temperature window and a tread life (sliding energy). One tread lump per corner
-  (`Corner::tread`): heated by 0.8 of the sliding power plus rolling hysteresis, cooled
-  by the air (time constant about a minute); wear with sliding, faster overheated, a
-  quarter less grip worn through. Cars start on cold tires; R gives fresh ones. Near the
-  limit on a circle the outside treads reach about 55 °C in 30 s and 95 °C in 2 min
-  (`tire_temperatures`, ignored, prints it). A car's tire state survives an engine swap.
-  Tests about other things call `Car::warm_tires`. A burnout overheats street tires
-  within seconds, and then they can't stop spinning.
-- Not tuned by driving yet: the heating rates, the windows, how much grip overheating
-  costs, wear rates. Possible next steps: tread and carcass as two lumps, tire pressure,
-  camber spreading heat across the tread.
+  temperature window and a tread life (sliding energy). Cars start on cold tires; R
+  gives fresh ones. A car's tire state survives an engine swap. Tests about other things
+  call `Car::warm_tires`.
+- Ribs, heat and pressure (`tire.rs`, asked for by the user: grip from the surface, a
+  spin must not cook the tire, temperatures across the width, pressure, adjustable camber,
+  no permanent overheating damage): each tire is 5 ribs (`RIBS`, inside to outside
+  everywhere, also the HUD and F2). `Corner::step` samples the ground under each rib's
+  lowest point (no raycast any more); `TireParams::patch` turns the depths into rib loads:
+  the belts pass on 0.6 of a tilt, the sideways force rolls the carcass under (load to
+  the outside shoulder of the outside tire), and pressure against what the load wants
+  (`DESIGN_PRESSURE` 2.5 bar hot at the design load, × √load) loads the shoulders
+  (under-inflated) or the middle (over). Each rib grips by its own load (load
+  sensitivity punishes an uneven patch: that's what makes camber and pressure have an
+  optimum), surface temperature and wear; the forces are the ribs' grip summed on one
+  Magic Formula curve. Camber thrust as an equivalent slip angle (0.06 × lean). Heat:
+  surface per rib (small; sliding heat, the road's share growing with √slide speed; cools
+  into the core, the air, and the road only while sliding over it), core per rib (rolling
+  resistance's flex power × (load + grip force), 0.7 of it; rubber conducts poorly, so it
+  warms by flexing more than from the surface), carcass and air (0.3 of the flex, from the
+  cores; sets the pressure by the gas law from `inflation`, the cold pressure). Pressure
+  also sets the vertical stiffness ((p + 0.6)/(2.5 + 0.6)), the peak slip angle and
+  rolling resistance. A 3 s spin at 12 m/s flashes the surface over 100 °C and back
+  within seconds, the core a few K; steady cornering keeps the outside tire's surface
+  near its core, hottest on the outside shoulder; on a straight the surface cools below
+  the core. Near the limit on a 40 m circle (`tire_temperatures`, ignored) the outside
+  cores reach about 50 °C in 30 s and 80 °C in 2 min on street tires. `CarBuild` has
+  `camber` and `pressure` per axle (factory: `Chassis::camber`, `Chassis::pressure`,
+  checked against `suited_pressure` by `factory_pressures_suit_the_tires`); a suspension
+  kit comes aligned to its extra camber and allows ± its reach (`SUSPENSIONS`). Set in F4
+  and the career garage (`garage::alignment`, free). Saves keep wear per rib (temperatures
+  not: a parked car cools) and an `align` line.
+- Not tuned by driving yet: the heating rates, the windows (now surface temperatures),
+  how much grip overheating costs, wear rates, how strongly camber and pressure matter.
+  Possible next steps: relaxation length (a lateral carcass state), rim width affecting
+  the sidewall, brake heat into the rim and the tire's air, toe settings.
 
 ## Engine model
 
