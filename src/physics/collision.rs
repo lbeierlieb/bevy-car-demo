@@ -190,20 +190,17 @@ impl Obb {
     }
 }
 
-/// Where the ground pushes on the box: the test points below it.
-pub fn ground_contacts(
-    shape: &Obb,
-    ground: impl Fn(f32, f32) -> (f32, Vec3),
-    out: &mut Vec<Contact>,
-) {
+/// Where the ground pushes on the box: the test points below it. `ground` gives the
+/// ground's height and normal under a point, for something at that point.
+pub fn ground_contacts(shape: &Obb, ground: impl Fn(Vec3) -> (f32, Vec3), out: &mut Vec<Contact>) {
     let lowest = shape.center.y - shape.reach(Vec3::Y);
-    let (height, _) = ground(shape.center.x, shape.center.z);
+    let (height, _) = ground(shape.center.with_y(lowest));
     // Well clear of the ground under its middle: nothing can touch (slopes aside).
     if lowest > height + shape.radius() {
         return;
     }
     for point in shape.surface_points() {
-        let (height, normal) = ground(point.x, point.z);
+        let (height, normal) = ground(point);
         let depth = (height - point.y) * normal.y;
         if depth > 0.0 {
             out.push(Contact {
@@ -545,7 +542,7 @@ mod tests {
             contacts.clear();
             ground_contacts(
                 &shape.placed(body.position, body.rotation),
-                |_, _| (0.0, Vec3::Y),
+                |_| (0.0, Vec3::Y),
                 &mut contacts,
             );
             resolve(&mut body, None, &contacts, GROUND, dt);

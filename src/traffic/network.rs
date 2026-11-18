@@ -41,6 +41,8 @@ pub struct Edge {
     pub lanes: [Lane; 2],
     /// Speed limit (m/s) every `LIMIT_STEP` along the centreline from `ends[0]`.
     pub limits: Vec<f32>,
+    /// Whether it's on a bridge.
+    pub bridge: bool,
 }
 
 impl Edge {
@@ -114,23 +116,23 @@ pub struct Network {
 
 impl Network {
     pub fn new(terrain: &Terrain) -> Self {
-        // (width, unpaved, centreline)
-        let roads: Vec<(f32, bool, Vec<Vec2>)> = terrain
+        // (width, unpaved, bridge, centreline)
+        let roads: Vec<(f32, bool, bool, Vec<Vec2>)> = terrain
             .roads
             .iter()
             .filter(|road| road.kind != RoadKind::Water && road.width >= MIN_WIDTH)
             .map(|road| {
                 let mut points = road.points.clone();
                 points.dedup();
-                (road.width, !road.kind.paved(), points)
+                (road.width, !road.kind.paved(), road.bridge, points)
             })
-            .filter(|(_, _, points)| points.len() >= 2)
+            .filter(|(_, _, _, points)| points.len() >= 2)
             .collect();
 
         // Points on more than one road, or used twice, and every road's ends are nodes.
         let key = |p: Vec2| ((p.x * 100.0).round() as i32, (p.y * 100.0).round() as i32);
         let mut uses: HashMap<(i32, i32), u32> = HashMap::new();
-        for (_, _, points) in &roads {
+        for (_, _, _, points) in &roads {
             for (i, &p) in points.iter().enumerate() {
                 let end = i == 0 || i == points.len() - 1;
                 *uses.entry(key(p)).or_default() += if end { 2 } else { 1 };
@@ -145,7 +147,7 @@ impl Network {
             })
         };
         let houses = Houses::new(terrain);
-        for &(width, unpaved, ref points) in &roads {
+        for &(width, unpaved, bridge, ref points) in &roads {
             let mut start = 0;
             for i in 1..points.len() {
                 if uses[&key(points[i])] < 2 {
@@ -177,6 +179,7 @@ impl Network {
                     length,
                     lanes: [Lane::new(forward), Lane::new(backward)],
                     limits,
+                    bridge,
                 });
             }
         }

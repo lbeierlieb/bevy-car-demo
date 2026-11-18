@@ -565,6 +565,12 @@ impl TrafficCar {
             steer: 0.0,
             still: 0.0,
         };
+        // On a bridge's deck, or under any.
+        car.body.position.y = if network.edges[leg.edge as usize].bridge {
+            f32::INFINITY
+        } else {
+            f32::NEG_INFINITY
+        };
         car.place(terrain, front, driver.rear, driver.speed, 0.0);
         car.driver = Some(driver);
         car
@@ -576,7 +582,9 @@ impl TrafficCar {
         let forward = (front - rear).normalize_or(Vec2::NEG_Y);
         let right = Vec2::new(-forward.y, forward.x);
         let middle = (front + rear) / 2.0;
-        let height = |p: Vec2| terrain.sample(p.x, p.y).0;
+        // On the level the car is on (from the last step, or where it was spawned).
+        let level = self.body.position.y;
+        let height = |p: Vec2| terrain.ground(p.x, p.y, level).height;
         let track = (self.wheels.track[0] + self.wheels.track[1]) / 2.0;
         let (hf, hr) = (height(front), height(rear));
         let (hl, hrt) = (
@@ -830,7 +838,7 @@ fn tumble(car: &mut TrafficCar, terrain: &Terrain, contacts: &mut Vec<Contact>, 
     body.integrate_velocity(dt);
     let hull = car.hull.placed(body.position, body.rotation);
     contacts.clear();
-    collision::ground_contacts(&hull, |x, z| terrain.sample(x, z), contacts);
+    collision::ground_contacts(&hull, |p| terrain.ground_under(p), contacts);
     collision::resolve(body, None, contacts, GROUND, dt);
     contacts.clear();
     terrain.obstacles.contacts(&hull, contacts);

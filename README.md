@@ -245,7 +245,10 @@ enough to smooth out bumps shorter than 80 m on main roads down to 25 m on track
 Roads share their height where they meet and bend smoothly where one runs on into
 another, and lidar heights far off the profile count less. Bridges get next to no
 lidar weight, since lidar shows the ground under them, so their decks span smoothly
-between the approaches; the terrain is raised beside them. The surface has a crown
+between the approaches, over the untouched ground. The game draws them as a slab with
+parapets (which cars collide with), and its ground query has levels: something at
+height y stands on the highest surface at most a metre above it, so cars on a deck
+stay on it and roads under it pass beneath. The surface has a crown
 (2.5 % on paved roads, 3 % on tracks), and the terrain is cut and filled to it: 8 cm
 under the road and a metre of shoulder, then sloping at 0.6 to the natural ground.
 In the game, a road's surface (blended where roads overlap, so junctions have no
@@ -288,7 +291,7 @@ Massless arms with a point unsprung mass. No anti-roll bars or tire relaxation
 length. Every car has double A-arms all round. Without a clutch pedal the clutch is
 automatic, and the engine stays coupled to the driven wheels' average speed. No render interpolation between chassis steps. At very
 low speed, slips are computed against a 3 m/s floor, so a parked car can creep
-slowly down steep slopes. Bridges become plain embankments. Land use is coloured
+slowly down steep slopes. Bridges have no piers. Land use is coloured
 per cell (2–8 m), so area edges are stepped, most visibly in coarse chunks.
 
 ## Data attribution

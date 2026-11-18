@@ -33,10 +33,6 @@ const RIM: f64 = 30.0;
 const USER_AGENT: &str = "car-sim-bake/0.3 (Bevy car simulation demo)";
 const CACHE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/cache");
 const OVERPASS: &str = "https://overpass-api.de/api/interpreter";
-/// Bridges: lidar shows the ground under them, so the terrain is raised to their decks,
-/// beside them over `BLEND` metres.
-const SHOULDER: f64 = 1.0;
-const BLEND: f64 = 6.0;
 
 type Error = Box<dyn std::error::Error>;
 type Point = (f64, f64);
@@ -374,11 +370,6 @@ fn fetch_osm(center: Point, (half_x, half_z): Point) -> Result<Osm, Error> {
     Ok(osm)
 }
 
-fn smoothstep(t: f64) -> f64 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 const USAGE: &str = "usage:
   bake import <lat> <lon> <width_m>[x<height_m>] <map.osm>
   bake <map.osm> <lat> <lon> <width_m>[x<height_m>] <out_file> [<spawn_lat> <spawn_lon> [<spawn_heading>]]";
@@ -592,7 +583,8 @@ fn bake(
         }
     }
 
-    // Road heights: smooth profiles along the lidar; the terrain cut and filled to them.
+    // Road heights: smooth profiles along the lidar; the terrain cut and filled to them
+    // (not under bridges: lidar shows the ground there, and the decks span over it).
     roads::profiles(&mut roads, |(x, z)| {
         dgm.sample(frame.east + x, frame.north - z)
     });
@@ -602,38 +594,6 @@ fn bake(
         cell: CELL,
     };
     roads::conform(&roads, &mut heights, &grid);
-
-    // Bridges: the terrain raised up to their decks.
-    let mut nearest = vec![(f64::INFINITY, 0.0); heights.len()];
-    for road in roads
-        .iter()
-        .filter(|r| r.bridge && r.kind != RoadKind::Water)
-    {
-        let deck = &road.heights;
-        let reach = road.width / 2.0 + SHOULDER + BLEND;
-        for (i, pair) in road.points.windows(2).enumerate() {
-            let ((x0, z0), (x1, z1)) = (pair[0], pair[1]);
-            let (dx, dz) = (x1 - x0, z1 - z0);
-            let len2 = (dx * dx + dz * dz).max(1e-9);
-            for gz in index_z(z0.min(z1) - reach)..=index_z(z0.max(z1) + reach) {
-                for gx in index_x(x0.min(x1) - reach)..=index_x(x0.max(x1) + reach) {
-                    let (px, pz) = (grid_x(gx), grid_z(gz));
-                    let t = (((px - x0) * dx + (pz - z0) * dz) / len2).clamp(0.0, 1.0);
-                    let edge = (px - x0 - dx * t).hypot(pz - z0 - dz * t) - road.width / 2.0;
-                    let slot = &mut nearest[gz * n + gx];
-                    if edge < slot.0 {
-                        let centre = deck[i] * (1.0 - t) + deck[i + 1] * t;
-                        *slot = (edge, centre - road.crown() * road.width / 2.0 - 0.08);
-                    }
-                }
-            }
-        }
-    }
-    for (h, &(edge, deck)) in heights.iter_mut().zip(&nearest) {
-        let w = 1.0 - smoothstep((edge - SHOULDER) / BLEND);
-        // Only ever raise the ground (stream valleys under the deck get filled).
-        *h += (deck - *h).max(0.0) * w;
-    }
 
     // Raised rim so cars stay on the map.
     for (i, h) in heights.iter_mut().enumerate() {

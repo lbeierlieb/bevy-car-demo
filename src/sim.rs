@@ -140,7 +140,7 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     // The body's box against the ground, then against houses and trees, before it moves.
     let hull = setup.hull.placed(body.position, body.rotation);
     let mut contacts = Vec::new();
-    collision::ground_contacts(&hull, |x, z| terrain.sample(x, z), &mut contacts);
+    collision::ground_contacts(&hull, |p| terrain.ground_under(p), &mut contacts);
     collision::resolve(body, None, &contacts, GROUND, dt);
     contacts.clear();
     terrain.obstacles.contacts(&hull, &mut contacts);

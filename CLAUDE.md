@@ -562,8 +562,10 @@ as `action='delete'`). Plan, in this order: (1) map file (done), (2) surfaces (d
 `physics/surface.rs`, grip share and rolling resistance factor per `Surface`; roads by
 their ribbon via `Terrain::surface` (a grid of road segments), else by land use; road
 kinds from OSM `surface`, untagged tracks by `tracktype`; `Terrain::flat` is paved, so
-driving tests that would leave a road use it), (3, done but bridges: bake
-`roads.rs`/`profile.rs`, game `Terrain::ground`; `land` is the bare terrain) roads as their own geometry (smoothed
+driving tests that would leave a road use it), (3, done: bake
+`roads.rs`/`profile.rs`; game `Terrain::ground(x, z, y)` with levels (a deck carries
+what's within a metre below its surface), `sample` the level beneath any bridge, `land`
+the bare terrain; bridges drawn as slab and parapets, parapets are obstacles) roads as their own geometry (smoothed
 height profile, crown, embankments cut into the terrain, own 0.5 m mesh, layered ground
 query so bridges have an underpass), (4) a per-road `condition` making small bumps
 (ISO 8608-like) plus placed potholes/patches, (5) nudging roads off building footprints

@@ -24,6 +24,9 @@ const ROAD_CELL: f32 = 4.0;
 /// edge the point is, fading out over this distance towards the road's ends (m), so the
 /// surface stays continuous where a side road's crown meets a main road's camber.
 const ROAD_FADE: f32 = 3.0;
+/// A surface carries something at most this far below it (m): a car on a bridge is on the
+/// deck, one under it on the road below.
+const LEVEL_REACH: f32 = 1.0;
 
 pub struct TerrainPlugin;
 
@@ -330,21 +333,30 @@ impl Terrain {
         chunk.classes[local(iz) * m + local(ix)]
     }
 
-    /// Height and upward normal of the ground at (x, z): the roads where there are any,
-    /// else the terrain.
+    /// Height and upward normal of the ground at (x, z) beneath any bridge: the roads
+    /// where there are any, else the terrain.
     pub fn sample(&self, x: f32, z: f32) -> (f32, Vec3) {
-        let ground = self.ground(x, z);
+        let ground = self.ground(x, z, f32::NEG_INFINITY);
         (ground.height, ground.normal)
     }
 
-    /// What the ground at (x, z) is.
+    /// What the ground at (x, z) beneath any bridge is.
     pub fn surface(&self, x: f32, z: f32) -> Surface {
-        self.ground(x, z).surface
+        self.ground(x, z, f32::NEG_INFINITY).surface
     }
 
-    /// The ground at (x, z): the roads covering it (blended where they overlap, see
-    /// `ROAD_FADE`), else the terrain (and its land use, or a waterway on it).
-    pub fn ground(&self, x: f32, z: f32) -> Ground {
+    /// Height and normal of the ground under `p` (see `ground`).
+    pub fn ground_under(&self, p: Vec3) -> (f32, Vec3) {
+        let ground = self.ground(p.x, p.z, p.y);
+        (ground.height, ground.normal)
+    }
+
+    /// The ground at (x, z) for something at height `y`: the highest surface at most
+    /// `LEVEL_REACH` above it (or the lowest, if none is), so a bridge's deck carries what's
+    /// on it and lets what's under it pass. The surfaces are the bridges' decks, and the
+    /// roads covering the point (blended where they overlap, see `ROAD_FADE`), else the
+    /// terrain (and its land use, or a waterway on it).
+    pub fn ground(&self, x: f32, z: f32, y: f32) -> Ground {
         let p = Vec2::new(x, z);
         // Per road covering it: (road, weight, height, slope as d height / d (x, z)).
         let mut covering: [(usize, f32, f32, Vec2); 8] = [(usize::MAX, 0.0, 0.0, Vec2::ZERO); 8];
@@ -384,28 +396,44 @@ impl Terrain {
                 None => {}
             }
         }
-        if count == 0 {
+        let covering = &covering[..count];
+        // The roads on the ground, and the bridges, each blended among themselves (or all
+        // together: `None`).
+        let blend = |bridges: Option<bool>| {
+            let layer = || {
+                covering
+                    .iter()
+                    .filter(move |c| bridges.is_none_or(|b| self.roads[c.0].bridge == b))
+            };
+            let total: f32 = layer().map(|c| c.1).sum();
+            let main = layer().max_by(|a, b| a.1.total_cmp(&b.1))?;
+            let slope = layer().map(|c| c.1 * c.3).sum::<Vec2>() / total;
+            Some(Ground {
+                height: layer().map(|c| c.1 * c.2).sum::<f32>() / total,
+                normal: Vec3::new(-slope.x, 1.0, -slope.y).normalize(),
+                surface: self.roads[main.0].kind.surface(),
+            })
+        };
+        let below = blend(Some(false)).unwrap_or_else(|| {
             let (height, normal) = self.land(x, z);
             let surface = if water {
                 Surface::Water
             } else {
                 land_surface(self.land_class(x, z))
             };
-            return Ground {
+            Ground {
                 height,
                 normal,
                 surface,
-            };
-        }
-        let covering = &covering[..count];
-        let total: f32 = covering.iter().map(|c| c.1).sum();
-        let height = covering.iter().map(|c| c.1 * c.2).sum::<f32>() / total;
-        let slope = covering.iter().map(|c| c.1 * c.3).sum::<Vec2>() / total;
-        let main = covering.iter().max_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
-        Ground {
-            height,
-            normal: Vec3::new(-slope.x, 1.0, -slope.y).normalize(),
-            surface: self.roads[main.0].kind.surface(),
+            }
+        });
+        match blend(Some(true)) {
+            // Level with the roads on the ground (where they meet a bridge's end): one.
+            Some(deck) if (deck.height - below.height).abs() < LEVEL_REACH / 2.0 => {
+                blend(None).unwrap()
+            }
+            Some(deck) if deck.height <= y + LEVEL_REACH && deck.height > below.height => deck,
+            _ => below,
         }
     }
 
@@ -649,91 +677,137 @@ impl RoadGrid {
     }
 }
 
-/// Ribbons along the road centrelines, draped onto the terrain and meshed per chunk.
+/// Ribbons along the roads, set on the ground as the physics sees it and meshed per chunk,
+/// and the bridges' structure under and beside their decks.
 pub struct RoadRibbons {
-    /// Each road's runs inside the map, resampled to `DRAPE_STEP`.
-    ribbons: Vec<Ribbon>,
-    /// Per chunk, the (ribbon, row) pairs whose quads start there.
+    /// Per chunk, the (road, point) pairs whose quads start there.
     by_chunk: Vec<Vec<(usize, usize)>>,
-}
-
-struct Ribbon {
-    kind: RoadKind,
-    width: f32,
-    points: Vec<Vec2>,
 }
 
 impl RoadRibbons {
     pub fn new(terrain: &Terrain) -> Self {
-        let mut ribbons = Vec::new();
-        for road in &terrain.roads {
-            // Skip where the road climbs the rim at the map edge.
-            for run in road
-                .points
-                .split(|p| !terrain.inside(p.x, p.y))
-                .filter(|run| run.len() >= 2)
-            {
-                ribbons.push(Ribbon {
-                    kind: road.kind,
-                    width: road.width,
-                    points: resample(run, DRAPE_STEP),
-                });
-            }
-        }
         let mut by_chunk = vec![Vec::new(); terrain.chunk_count()];
-        for (r, ribbon) in ribbons.iter().enumerate() {
-            for (i, p) in ribbon.points[..ribbon.points.len() - 1].iter().enumerate() {
+        for (r, road) in terrain.roads.iter().enumerate() {
+            for (i, p) in road.points[..road.points.len() - 1].iter().enumerate() {
                 by_chunk[terrain.chunk_at(*p)].push((r, i));
             }
         }
-        Self { ribbons, by_chunk }
+        Self { by_chunk }
     }
 
-    /// The ribbon quads starting in one chunk. Vertices are at most `DRAPE_STEP` apart
-    /// along and across the road (with one on the crown), each set onto the ground as the
-    /// physics sees it: roads on their own surface (blended where they overlap), waterways
-    /// on the terrain.
-    pub fn mesh(&self, terrain: &Terrain, index: usize, mesh: &mut FlatMesh) {
+    /// The ribbon quads starting in one chunk, into `mesh`, and the bridges' slabs and
+    /// parapets into `structure`. Ribbon vertices are at most `DRAPE_STEP` apart across
+    /// the road (with one on the crown), each on the ground at the road's own level (its
+    /// surface blended with overlapping roads; a bridge's deck, or what passes under it);
+    /// waterways lie on the terrain.
+    pub fn mesh(
+        &self,
+        terrain: &Terrain,
+        index: usize,
+        mesh: &mut FlatMesh,
+        structure: &mut FlatMesh,
+    ) {
         for &(r, i) in &self.by_chunk[index] {
-            let ribbon = &self.ribbons[r];
-            let lift = |p: Vec2| {
-                let ground = if ribbon.kind == RoadKind::Water {
-                    terrain.land(p.x, p.y).0
-                } else {
-                    terrain.sample(p.x, p.y).0
-                };
-                Vec3::new(p.x, ground + ribbon.kind.lift(), p.y)
-            };
-            let (points, n) = (&ribbon.points, ribbon.points.len());
-            let across = 2 * (ribbon.width / 2.0 / DRAPE_STEP).ceil().max(1.0) as usize;
-            let row = |i: usize| -> Vec<Vec3> {
+            let road = &terrain.roads[r];
+            let (points, n) = (&road.points, road.points.len());
+            let across = 2 * (road.width / 2.0 / DRAPE_STEP).ceil().max(1.0) as usize;
+            // Half the road across at point `i`, and the vertices across it.
+            let side = |i: usize| {
                 let tangent =
                     (points[(i + 1).min(n - 1)] - points[i.saturating_sub(1)]).normalize_or_zero();
-                let side = Vec2::new(-tangent.y, tangent.x) * ribbon.width / 2.0;
+                Vec2::new(-tangent.y, tangent.x) * road.width / 2.0
+            };
+            let row = |i: usize| -> Vec<Vec3> {
+                let side = side(i);
                 (0..=across)
-                    .map(|j| lift(points[i] - side + side * (2.0 * j as f32 / across as f32)))
+                    .map(|j| {
+                        let u = 2.0 * j as f32 / across as f32 - 1.0;
+                        let p = points[i] + side * u;
+                        // Looked up a little inside the edge, which may lie just outside
+                        // the segments' cover on a bend (and would drop off a bridge).
+                        let q = points[i] + side * u * 0.98;
+                        let ground = if road.kind == RoadKind::Water {
+                            terrain.land(p.x, p.y).0
+                        } else {
+                            terrain.ground(q.x, q.y, road.heights[i]).height
+                        };
+                        Vec3::new(p.x, ground + road.kind.lift(), p.y)
+                    })
                     .collect()
             };
             let (near, far) = (row(i), row(i + 1));
+            let color = road.kind.color();
             for j in 0..across {
                 let (a, b) = (near[j], near[j + 1]);
                 let (c, d) = (far[j], far[j + 1]);
-                mesh.triangle([a, b, c], ribbon.kind.color());
-                mesh.triangle([b, d, c], ribbon.kind.color());
+                mesh.triangle([a, b, c], color);
+                mesh.triangle([b, d, c], color);
+            }
+            if road.bridge && road.kind != RoadKind::Water {
+                let edges = |row: &[Vec3], i: usize| [(row[0], -side(i)), (row[across], side(i))];
+                bridge_segment(
+                    edges(&near, i),
+                    edges(&far, i + 1),
+                    (i == 0, i + 2 == n),
+                    structure,
+                );
             }
         }
     }
 }
 
-/// Resamples a polyline so consecutive points are at most `step` apart, keeping the
-/// original vertices.
-fn resample(points: &[Vec2], step: f32) -> Vec<Vec2> {
-    let mut out = vec![points[0]];
-    for pair in points.windows(2) {
-        let steps = (pair[0].distance(pair[1]) / step).ceil().max(1.0) as usize;
-        out.extend((1..=steps).map(|i| pair[0].lerp(pair[1], i as f32 / steps as f32)));
+/// How far a bridge's slab reaches below its deck's edges (m).
+pub const DECK_DEPTH: f32 = 0.9;
+/// A bridge's parapets: their height above the deck and their thickness (m).
+pub const PARAPET_HEIGHT: f32 = 0.9;
+pub const PARAPET_WIDTH: f32 = 0.3;
+const CONCRETE: [f32; 4] = [0.55, 0.54, 0.51, 1.0];
+
+/// One piece of a bridge between two rows across it: for each row the deck's left and
+/// right edge with a horizontal vector pointing out of that edge, and whether the piece
+/// starts or ends the bridge (which then gets an end face).
+fn bridge_segment(
+    near: [(Vec3, Vec2); 2],
+    far: [(Vec3, Vec2); 2],
+    (start, end): (bool, bool),
+    mesh: &mut FlatMesh,
+) {
+    let up = Vec3::Y;
+    // Per side and row: deck edge, parapet's outer top, outer bottom, inner top.
+    let corners = |(edge, out): (Vec3, Vec2)| {
+        let out = out.normalize_or_zero().extend(0.0).xzy() * PARAPET_WIDTH;
+        let outer = edge + out;
+        [
+            edge,
+            outer + up * PARAPET_HEIGHT,
+            outer - up * DECK_DEPTH,
+            edge + up * PARAPET_HEIGHT,
+        ]
+    };
+    let mut quad = |a: Vec3, b: Vec3, c: Vec3, d: Vec3, outward: Vec3| {
+        mesh.facing([a, b, c], CONCRETE, outward);
+        mesh.facing([b, d, c], CONCRETE, outward);
+    };
+    let sides = [0, 1].map(|k| (corners(near[k]), corners(far[k]), near[k].1));
+    for &(n, f, out) in &sides {
+        let out = out.extend(0.0).xzy();
+        // Outer face, top, inner face.
+        quad(n[2], n[1], f[2], f[1], out);
+        quad(n[3], n[1], f[3], f[1], up);
+        quad(n[0], n[3], f[0], f[3], -out);
     }
-    out
+    // Underside, between the outer bottoms.
+    let ((ln, lf, _), (rn, rf, _)) = (sides[0], sides[1]);
+    quad(ln[2], rn[2], lf[2], rf[2], -up);
+    // End faces: the slab under the deck.
+    for (cap, (l, r), toward) in [
+        (start, (ln, rn), lf[0] - ln[0]),
+        (end, (lf, rf), ln[0] - lf[0]),
+    ] {
+        if cap {
+            quad(l[2], r[2], l[0], r[0], -toward);
+        }
+    }
 }
 
 /// Height at full-detail vertex (`lx`, `lz`) of a chunk stored at `step`, from its
@@ -954,6 +1028,36 @@ mod tests {
             .find(|&p| terrain.land_class(p.x, p.y) == 8 && terrain.road_grid.near(p).is_empty())
             .unwrap();
         assert_eq!(terrain.surface(forest.x, forest.y), Surface::Forest);
+    }
+
+    #[test]
+    fn bridges_carry_whats_on_them_and_let_roads_pass_under() {
+        let terrain = Terrain::baked();
+        let mut underpasses = 0;
+        for road in terrain
+            .roads
+            .iter()
+            .filter(|r| r.bridge && r.kind != RoadKind::Water)
+        {
+            for (i, (&p, &centre)) in road.points.iter().zip(&road.heights).enumerate() {
+                let deck = terrain.ground(p.x, p.y, centre).height;
+                assert!(
+                    (deck - centre).abs() < 0.2,
+                    "deck at {deck}, road at {centre}, {i} of {} at {p}, top {}, under {}",
+                    road.points.len(),
+                    terrain.ground(p.x, p.y, f32::INFINITY).height,
+                    terrain.sample(p.x, p.y).0
+                );
+                let (under, _) = terrain.sample(p.x, p.y);
+                // Well below, and a road there (where the terrain lies a little lower).
+                if deck - under > 4.0 && under > terrain.land(p.x, p.y).0 + 0.02 {
+                    underpasses += 1;
+                    assert_eq!(terrain.ground(p.x, p.y, under + 0.3).height, under);
+                    assert_eq!(terrain.ground(p.x, p.y, deck + 0.3).height, deck);
+                }
+            }
+        }
+        assert!(underpasses > 10, "{underpasses} points over roads");
     }
 
     #[test]

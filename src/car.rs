@@ -351,7 +351,8 @@ impl Car {
         yaw: f32,
     ) -> Self {
         let height = setup.build.chassis().cg_height + 0.15;
-        let position = Vec3::new(x, terrain.sample(x, z).0 + height, z);
+        // On top of whatever is there (a bridge's deck).
+        let position = Vec3::new(x, terrain.ground(x, z, f32::INFINITY).height + height, z);
         Self::new(index, setup, position, Quat::from_rotation_y(yaw))
     }
 

@@ -320,12 +320,13 @@ impl Corner {
         // it reaches into the ground below it along the road's normal.
         let up = chassis.rotation * Vec3::Y;
         let below = center - (up - axle_dir * axle_dir.dot(up)).normalize() * tire.radius;
-        let (_, n) = terrain.sample(below.x, below.z);
-        let surface = terrain.surface(below.x, below.z);
+        let ground = terrain.ground(below.x, below.z, below.y);
+        let (n, surface) = (ground.normal, ground.surface);
         let down = -(n - axle_dir * axle_dir.dot(n)).normalize();
         let outside = axle_dir * self.side;
         let ribs = RIB_AT.map(|u| center + outside * (u * tire.width / 2.0) + down * tire.radius);
-        let depth = ribs.map(|q| ((terrain.sample(q.x, q.z).0 - q.y) * n.y).min(tire.radius));
+        let depth =
+            ribs.map(|q| ((terrain.ground(q.x, q.z, q.y).height - q.y) * n.y).min(tire.radius));
 
         // Without ground contact the wheel just spins up under drive torque.
         let inertia = axle.wheel_inertia + self.drive_inertia;
