@@ -57,8 +57,8 @@ the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars)
   `ls -d /nix/store/*cargo-src-egui-0.36*`; unpack into the scratchpad with `tar xzf`.
 - Terrain bake tool: `cd tools/bake; nix develop /repo -c cargo build --release; ./target/release/bake …`
   (commands in README, "The map and baking it"; a bake takes about 20 s). The native
-apps load `assets/gerach.terrain` at startup, so tests and apps see a re-bake at once;
-the embedded copy (`include_bytes!`) is only the fallback, but commit the re-baked file.
+apps load `assets/gerach.terrain` at startup, so they see a re-bake at once (tests use
+the embedded copy, `Terrain::baked`, the fallback otherwise); commit the re-baked file.
 - Engine maps of every factory engine (22, see `families.rs`) are baked into
   `src/physics/engine/baked/<code>.maps`. After changing `cycle.rs`, `maps.rs` (outside
   their tests; any edit counts, their text is in the fingerprint) or a factory engine's
