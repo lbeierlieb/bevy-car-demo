@@ -587,7 +587,37 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    file) into format v12; the game's `src/fences.rs` draws six kinds in pieces ≤ 2.5 m
    on `Terrain::sample` and puts a solid box per piece in the obstacle grid. Agreed:
    solid (not breakable), gates open, only what's in the map (no generated rails).
-7. Maybe in-game tools for 3D edits.
+7. Map editor (agreed 2026-11-18, being built): see "Map editor" below.
+
+### Map editor (step 7, agreed with the user)
+
+A third app, `src/bin/editor.rs` (`cargo run --bin editor`), native only, its own
+plugin list on `CorePlugin`'s shared pieces but **no cars** (no simulation, traffic,
+HUD, sound). Decisions:
+
+- **Edits go straight into `map/gerach.osm`**: the editor reads and writes it itself
+  (the bake's `osm.rs` model and JOSM-style writer, shared), with its own undo/redo and
+  Save. No JOSM connection at all. Written the way JOSM writes: new elements get
+  negative ids, changed ones `action='modify'`, deleted ones stay as
+  `action='delete'`, so JOSM can still open the file and `bake import` still merges.
+- **Camera**: fly. Hold RMB to look, WASD to move, Q/E down/up, Shift faster, mouse wheel
+  sets the speed. Left click selects and edits. Teleport via the 2D map (M, click).
+- **Edits, all of them**: tags on ways (roads: smoothness, width, surface, highway,
+  bridge…; fences: barrier, fence_type, height; buildings: levels; areas: kind), point
+  features (bumps, humps, tables, potholes, gates: place, move, delete), geometry (move,
+  add, delete nodes; draw new roads, fences, buildings, areas; split and delete ways),
+  road heights (`ele` on a node pins the road's height: a hard constraint in the bake's
+  profile solve; raised and lowered in 3D), land-use areas (draw and edit closed ways for
+  paved areas, forest, fields, meadows, water…).
+- **Terrain areas** (closed ways with our own tags, applied by the bake to the lidar
+  before roads are fitted): flatten to a height, raise/lower by an amount (faded at the
+  edge), smooth, and slope (a plane through heights set at its corners).
+- **Re-bake on a key/button**: save, run the full bake (~20 s, progress shown) and
+  reload the map in place.
+- **The driving apps load `assets/gerach.terrain` at startup** on native (embedded copy
+  as fallback and for the web), so a bake shows up without recompiling.
+- Inspector: what's under the cursor (way id, tags), and the conflict markers from the
+  bake shown in 3D with next/previous.
 
 ## Sky
 
