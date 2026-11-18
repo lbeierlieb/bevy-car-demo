@@ -17,16 +17,17 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-/// Below this speed, slips are computed against this speed instead, which keeps the
-/// forces bounded and stable when the car is (nearly) standing still.
-const LOW_SPEED: f32 = 3.0;
-/// Below this speed (m/s) the rubber damps sideways motion, fading in from nothing, by
-/// moving the patch as far as this many seconds of the motion would.
+/// Below this speed (m/s) the rubber damps the patch's motion, fading in from nothing, by
+/// slipping it as far as this many seconds of the motion would, along and across (the
+/// tread is much stiffer along, and needs less).
 const LOW_DAMPING_SPEED: f32 = 4.0;
-const LOW_DAMPING: f32 = 0.03;
+const LOW_DAMPING: [f32; 2] = [0.01, 0.03];
 /// Relaxation length (m) of the reference tire under its design load at the design
 /// pressure: how far it rolls for its sideways force to catch up with a new slip angle.
 pub const RELAXATION: f32 = 0.5;
+/// The relaxation length along the tire (spinning up or braking) as a share of the one
+/// across: the tread is much stiffer that way.
+const ALONG: f32 = 0.15;
 /// The shortest relaxation length, sliding, as a share of the full one.
 const SLIDING_LAG: f32 = 0.1;
 /// Air and road temperature (°C): where the tire starts and cools towards, and where its
@@ -280,6 +281,15 @@ pub struct TireForce {
     pub slip_angle: f32,
 }
 
+/// How far the tire rolls to take up its slips (see `TireParams::relaxation`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Relaxation {
+    /// Along and across (m), shorter as the tire saturates.
+    pub lengths: [f32; 2],
+    /// Along and across (m), the carcass' own.
+    pub carcass: [f32; 2],
+}
+
 /// How the tire meets the road: what each rib carries and grips.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Patch {
@@ -513,66 +523,98 @@ impl TireParams {
         self.pneumatic_trail * (1.0 - slip).max(0.0)
     }
 
-    /// Relaxation length (m) with `patch` under the tire, as warm as `tread` is, slipping
-    /// sideways at `slip` (the slip angle's tangent): longer under more load, shorter the
+    /// Relaxation lengths (m) along and across with `patch` under the tire, as warm as
+    /// `tread` is, acting on `slips` (see `relax`): longer under more load, shorter the
     /// harder it's pumped up, and shorter as the tire saturates (the carcass carries the
     /// force, and past the peak the force no longer grows with the slip, so there's
     /// nothing more to build up: a sliding tire answers at once).
-    pub fn relaxation_length(&self, patch: &Patch, tread: &Tread, slip: f32) -> f32 {
+    pub fn relaxation(&self, patch: &Patch, tread: &Tread, slips: [f32; 2]) -> Relaxation {
         let loaded = (patch.load() / self.nominal_load).clamp(0.25, 2.5).sqrt();
-        let peak = self.peak_angle() * patch.peak;
-        let c = self.compound.c_lat;
-        let x = stiffness_for_peak(peak, c) * (slip.atan() - CAMBER_SLIP * patch.camber);
-        let slope = (c * x.atan()).cos() / (1.0 + x * x);
-        self.relaxation * loaded / self.inflated(self.pressure(tread)) * slope.max(SLIDING_LAG)
+        let length = self.relaxation * loaded / self.inflated(self.pressure(tread));
+        let carcass = [length * ALONG, length];
+        let slope = |slip: f32, peak: f32, c: f32| {
+            let x = stiffness_for_peak(peak, c) * slip;
+            ((c * x.atan()).cos() / (1.0 + x * x)).max(SLIDING_LAG)
+        };
+        let compound = &self.compound;
+        let across = slips[1].atan() - CAMBER_SLIP * patch.camber;
+        Relaxation {
+            lengths: [
+                carcass[0] * slope(slips[0], compound.peak_ratio, compound.c_long),
+                carcass[1] * slope(across, self.peak_angle() * patch.peak, compound.c_lat),
+            ],
+            carcass,
+        }
     }
 
-    /// Advances the sideways slip the tire acts on, `slip` (the slip angle's tangent), by
-    /// `dt`, with the patch moving at (`vx` forward, `vy` right) and relaxing over `length`
-    /// (m): rolling, it takes up the patch's slip over `length` of road; standing, the
-    /// carcass just flexes with the sideways creep, like a spring. It's kept to what the
-    /// tire can grip, or the slip it rolls at.
-    pub fn relax(&self, slip: f32, vx: f32, vy: f32, length: f32, dt: f32) -> f32 {
-        let rate = vx.abs() / length;
-        let relaxed = if rate * dt > 1e-5 {
-            let steady = vy / vx.abs();
-            steady + (slip - steady) * (-rate * dt).exp()
-        } else {
-            slip + vy * dt / length
-        };
-        let reach = (1.5 * self.peak_angle()).max(vy.abs() / vx.abs().max(0.5));
-        relaxed.clamp(-reach, reach)
+    /// Advances the slips the tire acts on, `slips` (the slip ratio, and the slip angle's
+    /// tangent), by `dt`, with the patch moving at (`vx` forward, `vy` right) under the
+    /// wheel spinning at `omega` (rad/s), relaxing as `relaxation` says:
+    /// rolling, they take up the patch's slips over that much road; standing, the carcass
+    /// just flexes with the creep, like a spring. They're kept to what the tire can grip,
+    /// or the slips it rolls at.
+    pub fn relax(
+        &self,
+        slips: [f32; 2],
+        vx: f32,
+        vy: f32,
+        omega: f32,
+        relaxation: &Relaxation,
+        dt: f32,
+    ) -> [f32; 2] {
+        let lengths = relaxation.lengths;
+        let speeds = [omega * self.radius - vx, vy];
+        let peaks = [self.compound.peak_ratio, self.peak_angle()];
+        std::array::from_fn(|i| {
+            let rate = vx.abs() / lengths[i];
+            let relaxed = if rate * dt > 1e-5 {
+                let steady = speeds[i] / vx.abs();
+                steady + (slips[i] - steady) * (-rate * dt).exp()
+            } else {
+                slips[i] + speeds[i] * dt / lengths[i]
+            };
+            let reach = (1.5 * peaks[i]).max(speeds[i].abs() / vx.abs().max(0.5));
+            relaxed.clamp(-reach, reach)
+        })
     }
 
     /// Tire forces for a contact patch moving at (`vx` forward, `vy` right) with the wheel
     /// spinning at `omega` (rad/s, positive rolls forward), meeting the road as `patch`,
-    /// in a steady state.
+    /// in a steady state (rolling).
+    #[cfg(test)]
     pub fn force(&self, vx: f32, vy: f32, omega: f32, patch: &Patch) -> TireForce {
-        let denom = vx.abs().max(LOW_SPEED);
-        self.force_at(vx, omega, vy / denom, patch)
+        self.force_at(
+            [(omega * self.radius - vx) / vx.abs(), vy / vx.abs()],
+            patch,
+        )
     }
 
-    /// Tire forces acting on the sideways slip `slip` (see `relax`) with relaxation
-    /// `length` (m), the patch moving sideways at `vy` (m/s): at walking pace and below,
-    /// the rubber also damps the sideways motion, which the relaxing does at speed.
+    /// Tire forces acting on `slips` (see `relax`), the patch moving at (`vx` forward, `vy`
+    /// right) under the wheel spinning at `omega`: at walking pace and below, the rubber
+    /// also damps the motion (against the carcass' stiffness), which the relaxing does at
+    /// speed.
     pub fn relaxed_force(
         &self,
         vx: f32,
         vy: f32,
         omega: f32,
-        slip: f32,
-        length: f32,
+        slips: [f32; 2],
+        relaxation: &Relaxation,
         patch: &Patch,
     ) -> TireForce {
+        let lengths = relaxation.carcass;
         let fade = (1.0 - vx.abs() / LOW_DAMPING_SPEED).max(0.0);
-        self.force_at(vx, omega, slip + LOW_DAMPING * fade * vy / length, patch)
+        let speeds = [omega * self.radius - vx, vy];
+        self.force_at(
+            std::array::from_fn(|i| slips[i] + fade * LOW_DAMPING[i] * speeds[i] / lengths[i]),
+            patch,
+        )
     }
 
-    /// Tire forces with the patch slipping sideways at `slip` (the slip angle's tangent).
-    fn force_at(&self, vx: f32, omega: f32, slip: f32, patch: &Patch) -> TireForce {
-        let denom = vx.abs().max(LOW_SPEED);
-        let slip_ratio = (omega * self.radius - vx) / denom;
-        let slip_angle = slip.atan();
+    /// Tire forces at `slips`: the slip ratio, and the slip angle's tangent.
+    fn force_at(&self, slips: [f32; 2], patch: &Patch) -> TireForce {
+        let slip_ratio = slips[0];
+        let slip_angle = slips[1].atan();
 
         // Combined slip: normalise both slips by their peak, so that the total force follows
         // the direction of the combined slip vector and saturates along a friction ellipse.
@@ -906,15 +948,14 @@ mod tests {
         let tread = Tread::default();
         let patch = tire.even_patch(tire.nominal_load, 1.0);
         let (vx, vy) = (20.0, 20.0 * 0.02);
-        let length = tire.relaxation_length(&patch, &tread, 0.0);
+        let lengths = |slip: f32| tire.relaxation(&patch, &tread, [0.0, slip]);
+        let length = lengths(0.0).lengths[1];
         assert!((length - RELAXATION).abs() < 1e-4, "{length}");
         // Rolled one relaxation length, it's taken up about two thirds of the slip.
         let mut slip = 0.0;
         let dt = 0.001;
-        let step = |slip: f32| {
-            let length = tire.relaxation_length(&patch, &tread, slip);
-            tire.relax(slip, vx, vy, length, dt)
-        };
+        let omega = vx / tire.radius;
+        let step = |slip: f32| tire.relax([0.0, slip], vx, vy, omega, &lengths(slip), dt)[1];
         for _ in 0..(length / vx / dt).round() as usize {
             slip = step(slip);
         }
@@ -924,11 +965,16 @@ mod tests {
         }
         assert!((slip - 0.02).abs() < 1e-5, "{slip}");
         // Sliding, it answers sooner.
-        assert!(tire.relaxation_length(&patch, &tread, 0.3) < 0.2 * length);
-        // Standing, the carcass flexes with the creep and springs back against it.
-        let creep = tire.relax(0.0, 0.0, 0.01, length, 0.1);
-        assert!((creep - 0.001 / length).abs() < 1e-6, "{creep}");
-        let held = tire.relaxed_force(0.0, 0.0, 0.0, creep, length, &patch);
+        assert!(lengths(0.3).lengths[1] < 0.2 * length);
+        // Standing, the carcass flexes with the creep and springs back against it, both
+        // ways.
+        let lengths = lengths(0.0);
+        let creep = tire.relax([0.0; 2], 0.0, 0.01, 0.0, &lengths, 0.1);
+        assert!((creep[1] - 0.001 / length).abs() < 1e-6, "{creep:?}");
+        let held = tire.relaxed_force(0.0, 0.0, 0.0, creep, &lengths, &patch);
         assert!(held.fy < -50.0, "{held:?}");
+        let rolled = tire.relax([0.0; 2], -0.01, 0.0, 0.0, &lengths, 0.1);
+        let held = tire.relaxed_force(0.0, 0.0, 0.0, rolled, &lengths, &patch);
+        assert!(held.fx > 50.0, "{held:?}");
     }
 }

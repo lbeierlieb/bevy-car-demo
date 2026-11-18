@@ -565,8 +565,9 @@ fn factory_pressures_suit_the_tires() {
     }
 }
 
-/// Pushed sideways standing still (as if parked across a slope), the tires hold the car
-/// on their carcasses' flex instead of letting it creep away, and it doesn't rock.
+/// Pushed sideways standing still (as if parked across a slope), or along it on the
+/// brakes, the tires hold the car on their carcasses' flex instead of letting it creep
+/// away, and it doesn't rock.
 #[test]
 fn tires_hold_a_parked_car() {
     let terrain = Terrain::flat();
@@ -587,5 +588,16 @@ fn tires_hold_a_parked_car() {
         }
     }
     assert!(moved.abs() < 0.03, "moved {moved} m");
+    assert!(car.body.velocity.length() < 0.01, "{}", car.body.velocity);
+    // On the brakes, pushed along it (as if parked on a hill), it holds too.
+    car.controls.brake = 1.0;
+    let start = car.body.position;
+    let push = car.body.rotation * Vec3::NEG_Z * 0.15 * 9.81 * car.body.mass;
+    for _ in 0..(5.0 / dt) as usize {
+        car.body.add_force_at_center(push);
+        step_car(&mut car, &terrain, dt);
+    }
+    let moved = (car.body.position - start).length();
+    assert!(moved < 0.03, "rolled {moved} m");
     assert!(car.body.velocity.length() < 0.01, "{}", car.body.velocity);
 }
