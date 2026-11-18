@@ -352,6 +352,15 @@ impl CarBuild {
         &CHASSIS[self.chassis]
     }
 
+    /// Why the wheels don't go on the chassis, if they don't.
+    pub fn wheel_misfit(&self) -> Option<String> {
+        let chassis = self.chassis();
+        (0..2).find_map(|axle| {
+            let why = chassis.room[axle].misfit(&self.wheels[axle])?;
+            Some(format!("{}: {why}", ["Front", "Rear"][axle]))
+        })
+    }
+
     /// The same car on tires of `compound` (in `tire::COMPOUNDS`) all round.
     pub fn on_compound(mut self, compound: usize) -> Self {
         for wheel in &mut self.wheels {

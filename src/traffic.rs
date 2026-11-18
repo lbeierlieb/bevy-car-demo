@@ -523,7 +523,7 @@ impl TrafficCar {
     ) -> Self {
         let model = &CHASSIS[chassis];
         let wheels = model.wheels();
-        let mut hull = body_box(model);
+        let mut hull = body_box(model, &model.wheels);
         let top = hull.center.y + hull.half.y;
         hull.center.y = top / 2.0;
         hull.half.y = top / 2.0;

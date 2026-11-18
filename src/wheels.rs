@@ -2,7 +2,7 @@
 //! what they weigh.
 //!
 //! A tire size is written the usual way, `205/55 R16`: 205 mm wide, its sidewall 55 % of
-//! that high, on a 16″ rim. A rim is a diameter and a width (in inches). Each axle of a car
+//! that high, on a 16" rim. A rim is a diameter and a width (in inches). Each axle of a car
 //! has its own rims and tires, of a compound in `tire::COMPOUNDS`.
 
 use crate::physics::tire::{COMPOUNDS, GRIP, ROLLING, TireParams};
@@ -81,9 +81,9 @@ impl Rim {
         RIM_INERTIA * self.mass() * self.radius().powi(2)
     }
 
-    /// E.g. `16×7.0″`.
+    /// E.g. `16×7.0"`.
     pub fn label(&self) -> String {
-        format!("{}×{:.1}″", self.diameter, self.width_inches())
+        format!("{}×{:.1}\"", self.diameter, self.width_inches())
     }
 
     /// Every rim on offer.
@@ -183,6 +183,31 @@ impl TireSize {
         format!("{}/{} R{}", self.width, self.aspect, self.rim)
     }
 
+    /// The tire of `width` (mm) for rims of `rim` (inches) whose outside diameter is
+    /// nearest `diameter` (m): the same rolling size on other rims or tires.
+    pub fn nearest(width: u16, rim: u8, diameter: f32) -> TireSize {
+        (ASPECTS.step_by(ASPECT_STEP))
+            .map(|aspect| TireSize { width, aspect, rim })
+            .min_by(|a, b| {
+                let off = |tire: &TireSize| (2.0 * tire.radius() - diameter).abs();
+                off(a).total_cmp(&off(b))
+            })
+            .expect("some sizes")
+    }
+
+    /// The rim width on offer (tenths of an inch) that suits this tire nearest `width`.
+    pub fn rim_width_near(&self, width: u8) -> u8 {
+        (RIM_WIDTHS.step_by(RIM_WIDTH_STEP))
+            .filter(|&w| {
+                self.fits(&Rim {
+                    diameter: self.rim,
+                    width: w,
+                })
+            })
+            .min_by_key(|&w| w.abs_diff(width))
+            .unwrap_or(width)
+    }
+
     /// Every tire on offer.
     pub fn all() -> impl Iterator<Item = TireSize> {
         RIM_DIAMETERS.flat_map(|rim| {
@@ -217,7 +242,7 @@ impl Wheel {
         Self { compound, ..self }
     }
 
-    /// E.g. `205/55 R16 street on 16×7.0″`.
+    /// E.g. `205/55 R16 street on 16×7.0"`.
     pub fn label(&self) -> String {
         format!(
             "{} {} on {}",
@@ -243,13 +268,13 @@ impl WheelRoom {
         let (rim, tire) = (&wheel.rim, &wheel.tire);
         if !tire.fits(rim) {
             Some(if tire.rim != rim.diameter {
-                format!("{} tires need {}″ rims", tire.label(), tire.rim)
+                format!("{} tires need {}\" rims", tire.label(), tire.rim)
             } else {
                 format!("{} tires don't suit {} rims", tire.label(), rim.label())
             })
         } else if rim.diameter < self.min_rim {
             Some(format!(
-                "{}″ rims don't clear the brakes (at least {}″)",
+                "{}\" rims don't clear the brakes (at least {}\")",
                 rim.diameter, self.min_rim
             ))
         } else if 2.0 * tire.radius() > self.diameter + 1e-4 {
@@ -342,5 +367,10 @@ mod tests {
             room.misfit(&wheel(rim(16, 80), size(245, 45, 16)))
                 .is_some()
         );
+        // On bigger rims, the tire that rolls the same size has a lower sidewall.
+        let plus = TireSize::nearest(245, 18, 2.0 * size(225, 45, 17).radius());
+        assert_eq!(plus, size(245, 35, 18));
+        assert_eq!(plus.rim_width_near(70), 70);
+        assert_eq!(plus.rim_width_near(55), 65);
     }
 }

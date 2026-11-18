@@ -1,7 +1,7 @@
 //! The showroom (F6) and the garage (F4). The showroom has every car as it leaves the
 //! factory; the garage builds the active car from parts: what's fitted to the chassis
-//! (paint, gearbox, clutch, final drive, differentials, suspension, tires), which engine
-//! (any that fits the engine bay), and the engine's own parts.
+//! (paint, gearbox, clutch, final drive, differentials, suspension, rims and tires on
+//! each axle), which engine (any that fits the engine bay), and the engine's own parts.
 //!
 //! Parts on the cylinder side need the engine's maps baked again (see `workshop`), which
 //! takes a few seconds, while the car keeps its old engine.
@@ -20,6 +20,7 @@ use crate::physics::engine::parts::{HEADERS, INTERCOOLER, Parts, SLOTS};
 use crate::physics::tire::COMPOUNDS;
 use crate::terrain::Terrain;
 use crate::ui::{ToolInput, collapse_tool, tool_window};
+use crate::wheels::{self, TireSize, Wheel};
 use crate::workshop::{self, Work};
 
 const WARNING: egui::Color32 = egui::Color32::from_rgb(255, 170, 60);
@@ -45,6 +46,8 @@ struct Garage {
     /// its engine's parts.
     car: Option<usize>,
     draft: (CarBuild, Parts),
+    /// The same rims and tires front and rear.
+    same_wheels: bool,
     /// Give the new engine a factory tune, rather than keep the ECU's tune.
     retune: bool,
     job: Option<Job>,
@@ -70,6 +73,7 @@ impl Default for Garage {
                 paint: stock.build.paint,
             },
             car: None,
+            same_wheels: stock.build.wheels[0] == stock.build.wheels[1],
             draft: (stock.build, stock.engine.parts),
             retune: true,
             job: None,
@@ -204,18 +208,21 @@ fn window(
     if garage.car != Some(car.index) || garage.draft.0.chassis != car.setup.build.chassis {
         garage.car = Some(car.index);
         garage.draft = (car.setup.build.clone(), car.setup.engine.parts.clone());
+        garage.same_wheels = car.setup.build.wheels[0] == car.setup.build.wheels[1];
     }
     let mut build_now = false;
     window.default_height(680.0).vscroll(true).show(ctx, |ui| {
+        let garage = &mut *garage;
         car_parts(ui, &mut garage.draft.0);
+        wheel_parts(ui, &mut garage.draft.0, &mut garage.same_wheels);
         ui.separator();
-        engine(ui, &mut garage);
-        build_now = build(ui, &mut garage, &car);
+        engine(ui, garage);
+        build_now = build(ui, garage, &car);
         condition(ui, &mut car);
         ui.separator();
         egui::CollapsingHeader::new("Engine parts")
             .default_open(true)
-            .show(ui, |ui| parts(ui, &mut garage));
+            .show(ui, |ui| parts(ui, garage));
     });
     if build_now {
         start(&mut commands, &terrain, &mut garage, entity, &mut car);
@@ -298,20 +305,111 @@ fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
             &SUSPENSIONS.map(|kit| kit.0),
         );
         ui.end_row();
-        ui.label("Tires")
-            .on_hover_text(COMPOUNDS[draft.wheels[0].compound].about);
-        let mut compound = draft.wheels[0].compound;
-        combo(
-            ui,
-            "tires",
-            &mut compound,
-            &COMPOUNDS.map(|compound| compound.name),
-        );
-        for wheel in &mut draft.wheels {
-            wheel.compound = compound;
-        }
-        ui.end_row();
     });
+}
+
+/// The rims and tires on each axle, or the same all round.
+fn wheel_parts(ui: &mut egui::Ui, draft: &mut CarBuild, same: &mut bool) {
+    ui.horizontal(|ui| {
+        ui.strong("Wheels");
+        ui.checkbox(same, "Same front and rear");
+    });
+    if *same {
+        draft.wheels[1] = draft.wheels[0];
+    }
+    let axles: &[usize] = if *same { &[0] } else { &[0, 1] };
+    egui::Grid::new("wheels").num_columns(2).show(ui, |ui| {
+        for &axle in axles {
+            let wheel = &mut draft.wheels[axle];
+            ui.label(if *same {
+                "All round"
+            } else {
+                ["Front", "Rear"][axle]
+            });
+            wheel_picker(ui, axle, wheel);
+            ui.end_row();
+            ui.label("");
+            ui.label(format!(
+                "{}: {:.0} mm across, {:.1} kg a wheel",
+                wheel.tire.label(),
+                2000.0 * wheel.tire.radius(),
+                wheel.mass()
+            ))
+            .on_hover_text(
+                "Wider tires grip more but weigh more and roll heavier; bigger wheels spin up \
+                 slower, and taller tires gear the car longer",
+            );
+            ui.end_row();
+        }
+    });
+    if *same {
+        draft.wheels[1] = draft.wheels[0];
+    }
+    if let Some(why) = draft.wheel_misfit() {
+        ui.colored_label(WARNING, why);
+    }
+}
+
+/// Rim diameter and width, tire width and sidewall, and compound. Another rim diameter or
+/// tire width keeps the outside diameter as near as it goes, on a rim that suits the tire.
+fn wheel_picker(ui: &mut egui::Ui, axle: usize, wheel: &mut Wheel) {
+    fn pick<T: Copy + PartialEq>(
+        ui: &mut egui::Ui,
+        id: (&str, usize),
+        chosen: &mut T,
+        options: impl Iterator<Item = T>,
+        label: impl Fn(T) -> String,
+    ) -> bool {
+        let before = *chosen;
+        egui::ComboBox::from_id_salt(id)
+            .width(52.0)
+            .selected_text(label(*chosen))
+            .show_ui(ui, |ui| {
+                for option in options {
+                    ui.selectable_value(chosen, option, label(option));
+                }
+            });
+        *chosen != before
+    }
+    let diameter = 2.0 * wheel.tire.radius();
+    let resize = |wheel: &mut Wheel| {
+        wheel.tire = TireSize::nearest(wheel.tire.width, wheel.rim.diameter, diameter);
+        wheel.rim.width = wheel.tire.rim_width_near(wheel.rim.width);
+    };
+    ui.horizontal(|ui| {
+        let rims = wheels::RIM_DIAMETERS;
+        if pick(ui, ("rim", axle), &mut wheel.rim.diameter, rims, |d| {
+            format!("{d}\"")
+        }) {
+            resize(wheel);
+        }
+        ui.label("×");
+        let widths = wheels::RIM_WIDTHS.step_by(wheels::RIM_WIDTH_STEP);
+        pick(ui, ("rim width", axle), &mut wheel.rim.width, widths, |w| {
+            format!("{:.1}\"", f32::from(w) / 10.0)
+        });
+        let widths = wheels::TIRE_WIDTHS.step_by(wheels::TIRE_WIDTH_STEP);
+        if pick(ui, ("tire", axle), &mut wheel.tire.width, widths, |w| {
+            w.to_string()
+        }) {
+            resize(wheel);
+        }
+        ui.label("/");
+        let aspects = wheels::ASPECTS.step_by(wheels::ASPECT_STEP);
+        pick(ui, ("aspect", axle), &mut wheel.tire.aspect, aspects, |a| {
+            a.to_string()
+        });
+        let compounds = 0..COMPOUNDS.len();
+        pick(
+            ui,
+            ("compound", axle),
+            &mut wheel.compound,
+            compounds,
+            |c| COMPOUNDS[c].name.to_string(),
+        );
+    })
+    .response
+    .on_hover_text(COMPOUNDS[wheel.compound].about);
 }
 
 /// Which engine: any that fits the chassis' bay.
@@ -526,8 +624,9 @@ fn build(ui: &mut egui::Ui, garage: &mut Garage, car: &Car) -> bool {
         });
     } else {
         ui.horizontal(|ui| {
+            let fits = garage.draft.0.wheel_misfit().is_none();
             build_now = ui
-                .add_enabled(changed, egui::Button::new("Build"))
+                .add_enabled(changed && fits, egui::Button::new("Build"))
                 .clicked();
             if ui
                 .add_enabled(changed, egui::Button::new("Revert"))
@@ -584,6 +683,10 @@ fn start(
     car: &mut Car,
 ) {
     let (build, parts) = garage.draft.clone();
+    if let Some(why) = build.wheel_misfit() {
+        garage.status = format!("{why}.");
+        return;
+    }
     let parts = match build.install(parts) {
         Ok(parts) => parts,
         Err(misfit) => {
@@ -725,6 +828,12 @@ fn brochure(ui: &mut egui::Ui, shown: &mut Showroom) -> bool {
         + GEARBOXES[chassis.gearbox].mass
         + 2.0 * (chassis.unsprung(0) + chassis.unsprung(1));
     ui.label(format!("{mass:.0} kg with it"));
+    let [front, rear] = chassis.wheels.map(|wheel| wheel.label());
+    ui.label(if front == rear {
+        format!("On {front}")
+    } else {
+        format!("On {front} at the front, {rear} at the rear")
+    });
     ui.label("(F4, the garage, fits any engine there's room for)");
     ui.add_space(4.0);
     ui.strong("Paint");

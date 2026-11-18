@@ -168,7 +168,7 @@ impl CarSetup {
         let body_offset = Vec3::new(0.0, -chassis.cg_height, front_z + chassis.wheelbase / 2.0);
         let [eye_x, eye_y, eye_left] = chassis.eye;
         let wheels = chassis.wheels();
-        let mut hull = body_box(chassis);
+        let mut hull = body_box(chassis, &build.wheels);
         hull.center += body_offset;
         Self {
             name: chassis.name,
@@ -265,9 +265,9 @@ fn tire_drag(wheels: &[Wheel; 2], factory: &[Wheel; 2]) -> f32 {
         .sum()
 }
 
-/// The box around a chassis' body (and its wheels, where they stand out), in the body's
-/// design frame: its origin on the ground midway between the axles, forward -z.
-pub fn body_box(chassis: &Chassis) -> Obb {
+/// The box around a chassis' body (and the `fitted` wheels, where they stand out), in the
+/// body's design frame: its origin on the ground midway between the axles, forward -z.
+pub fn body_box(chassis: &Chassis, fitted: &[Wheel; 2]) -> Obb {
     let body = &chassis.body;
     let wheels = chassis.wheels();
     let top = (body.deck.iter().map(|p| p[1]))
@@ -275,7 +275,7 @@ pub fn body_box(chassis: &Chassis) -> Obb {
         .fold(0.0, f32::max);
     let (nose, tail) = (body.z(0.0, &wheels), body.z(body.length, &wheels));
     let half_width = (0..2)
-        .map(|i| (chassis.track[i] + chassis.wheels[i].tire.width_m()) / 2.0)
+        .map(|i| (chassis.track[i] + fitted[i].tire.width_m()) / 2.0)
         .fold(body.width / 2.0, f32::max);
     Obb {
         center: Vec3::new(0.0, (body.floor + top) / 2.0, (nose + tail) / 2.0),
