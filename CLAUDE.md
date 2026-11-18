@@ -54,7 +54,7 @@ pieces are public functions (e.g. `ui::WheelPanel::show`, `workshop`).
 - Dependency sources (no `~/.cargo/registry`): they're tarballs in the store, e.g.
   `ls -d /nix/store/*cargo-src-egui-0.36*`; unpack into the scratchpad with `tar xzf`.
 - Terrain bake tool: `cd tools/bake; nix develop /repo -c cargo build --release; ./target/release/bake …`
-  (commands in README, "The map and baking it"; a bake takes about 4 minutes).
+  (commands in README, "The map and baking it"; a bake takes about 6 s).
 - Engine maps of every factory engine (22, see `families.rs`) are baked into
   `src/physics/engine/baked/<code>.maps`. After changing `cycle.rs`, `maps.rs` (outside
   their tests; any edit counts, their text is in the fingerprint) or a factory engine's

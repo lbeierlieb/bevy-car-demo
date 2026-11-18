@@ -13,7 +13,6 @@
 
 mod osm;
 
-use std::collections::HashMap;
 use std::io::Cursor;
 
 use osm::{Osm, Tags};
@@ -157,13 +156,17 @@ fn get(url: &str) -> Result<Vec<u8>, Error> {
 /// DGM1 lidar terrain: 1 km tiles of 1000×1000 one-metre pixels, named by their
 /// south-west corner in UTM kilometres.
 struct Dgm1 {
-    tiles: HashMap<(i64, i64), Vec<f32>>,
+    /// The south-west tile's name, and the tiles along north.
+    first: (i64, i64),
+    rows: i64,
+    /// Column-major: east, then north.
+    tiles: Vec<Vec<f32>>,
 }
 
 impl Dgm1 {
     fn fetch(east: (f64, f64), north: (f64, f64)) -> Result<Self, Error> {
         let km = |v: f64| (v / 1000.0).floor() as i64;
-        let mut tiles = HashMap::new();
+        let mut tiles = Vec::new();
         for e in km(east.0)..=km(east.1) {
             for n in km(north.0)..=km(north.1) {
                 let url = format!("https://download1.bayernwolke.de/a/dgm/dgm1/{e}_{n}.tif");
@@ -172,15 +175,23 @@ impl Dgm1 {
                 let tiff::decoder::DecodingResult::F32(heights) = decoder.read_image()? else {
                     return Err(format!("{url}: expected float32 heights").into());
                 };
-                tiles.insert((e, n), heights);
+                tiles.push(heights);
             }
         }
-        Ok(Self { tiles })
+        Ok(Self {
+            first: (km(east.0), km(north.0)),
+            rows: km(north.1) - km(north.0) + 1,
+            tiles,
+        })
     }
 
     /// Height of the one-metre pixel whose south-west corner is (east, north).
     fn pixel(&self, east: i64, north: i64) -> f64 {
-        let tile = &self.tiles[&(east.div_euclid(1000), north.div_euclid(1000))];
+        let (e, n) = (
+            east.div_euclid(1000) - self.first.0,
+            north.div_euclid(1000) - self.first.1,
+        );
+        let tile = &self.tiles[(e * self.rows + n) as usize];
         // Rows run from north to south.
         let (col, row) = (east.rem_euclid(1000), 999 - north.rem_euclid(1000));
         tile[(row * 1000 + col) as usize] as f64
@@ -399,20 +410,6 @@ fn smoothstep(t: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Even-odd point-in-polygon test over all rings.
-fn inside_rings(rings: &[Vec<Point>], (px, pz): Point) -> bool {
-    let mut inside = false;
-    for ring in rings {
-        for (i, &(x0, z0)) in ring.iter().enumerate() {
-            let (x1, z1) = ring[(i + 1) % ring.len()];
-            if (z0 > pz) != (z1 > pz) && px < x0 + (pz - z0) / (z1 - z0) * (x1 - x0) {
-                inside = !inside;
-            }
-        }
-    }
-    inside
-}
-
 const USAGE: &str = "usage:
   bake import <lat> <lon> <width_m>[x<height_m>] <map.osm>
   bake <map.osm> <lat> <lon> <width_m>[x<height_m>] <out_file> [<spawn_lat> <spawn_lon> [<spawn_heading>]]";
@@ -576,13 +573,38 @@ fn bake(
         let (z0, z1) = all.fold((f64::MAX, f64::MIN), |(lo, hi), p| {
             (lo.min(p.1), hi.max(p.1))
         });
-        for gz in index_z(z0)..index_z(z1).min(cells_z) {
-            for gx in index_x(x0)..index_x(x1).min(cells_x) {
+        // Scanlines through the cell centres: a centre is inside if an odd number of
+        // edges cross its row to its right.
+        let (rows, cols) = (
+            index_z(z0)..index_z(z1).min(cells_z),
+            index_x(x0)..index_x(x1).min(cells_x),
+        );
+        let mut crossings = vec![Vec::new(); rows.len()];
+        for ring in &area.rings {
+            for (i, &(xa, za)) in ring.iter().enumerate() {
+                let (xb, zb) = ring[(i + 1) % ring.len()];
+                // The rows with za.min(zb) <= centre < za.max(zb), give or take one.
+                let row = |z: f64| ((z + half_z) / CELL - 0.5).floor() as isize;
+                let first = (row(za.min(zb))).max(rows.start as isize) as usize;
+                let last = (row(za.max(zb)) + 1).clamp(0, rows.end as isize) as usize;
+                for gz in first..last {
+                    let pz = grid_z(gz) + CELL / 2.0;
+                    if (za > pz) != (zb > pz) {
+                        crossings[gz - rows.start].push(xa + (pz - za) / (zb - za) * (xb - xa));
+                    }
+                }
+            }
+        }
+        for (gz, xs) in rows.zip(&mut crossings) {
+            xs.sort_by(f64::total_cmp);
+            let mut passed = 0;
+            for gx in cols.clone() {
+                let px = grid_x(gx) + CELL / 2.0;
+                while passed < xs.len() && xs[passed] <= px {
+                    passed += 1;
+                }
                 let slot = &mut classes[gz * cells_x + gx];
-                let centre = (grid_x(gx) + CELL / 2.0, grid_z(gz) + CELL / 2.0);
-                if class::priority(class) > class::priority(*slot)
-                    && inside_rings(&area.rings, centre)
-                {
+                if (xs.len() - passed) % 2 == 1 && class::priority(class) > class::priority(*slot) {
                     *slot = class;
                 }
             }

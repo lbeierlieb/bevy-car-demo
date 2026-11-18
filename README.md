@@ -261,7 +261,7 @@ cargo build --release
 
 The map was imported with `import 50.0118569 10.8455963 9600x8448 ../../map/gerach.osm`
 and is baked with `../../map/gerach.osm 50.0118569 10.8455963 9600x8448
-../../assets/gerach.terrain 50.0305556 10.8046389 180` (about 4 minutes), which starts the cars on the road nearest that point in
+../../assets/gerach.terrain 50.0305556 10.8046389 180` (a few seconds), which starts the cars on the road nearest that point in
 Gerach, facing as close to south (180°) as the road allows, one behind the other. To use a different file,
 change `BAKED` in `src/terrain.rs`. To make the map bigger, import the bigger
 rectangle into the same file and bake with the new size. The public Overpass server sometimes answers
