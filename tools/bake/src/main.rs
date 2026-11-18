@@ -769,7 +769,7 @@ fn bake(
     // chunk cells u32, spawn point (x, z) f32, spawn heading as a direction (x, z) f32
     // ((0, 0) if not given),
     // then per chunk (row-major, rows along z): step u8 (in cells), the chunk's
-    // (chunk cells / step + 1)² vertex heights f32 relative to the lowest point and
+    // (chunk cells / step + 1)² vertex heights u16 in centimetres above the lowest point and
     // (chunk cells / step)² land use classes u8 (row-major),
     // road count u32, then per road: kind u8 (0 asphalt, 1 gravel, 2 water, 3 cobbles,
     // 4 dirt), width f32,
@@ -777,6 +777,14 @@ fn bake(
     // building count u32, then per building: levels f32 (0: unknown), point count u32,
     // outline points (x, z) f32.
     let base = heights.iter().copied().fold(f64::INFINITY, f64::min);
+    let top = heights.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if top - base > u16::MAX as f64 / 100.0 {
+        return Err(format!(
+            "relief {:.0} m doesn't fit in centimetres as u16",
+            top - base
+        )
+        .into());
+    }
     let (spawn, heading) = match spawn[..] {
         [lat, lon, ref heading @ ..] => (
             frame.to_local(lat, lon),
@@ -790,7 +798,7 @@ fn bake(
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&7u32.to_le_bytes());
+    put(&8u32.to_le_bytes());
     put(&(cells_x as u32).to_le_bytes());
     put(&(cells_z as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
@@ -807,7 +815,8 @@ fn bake(
             put(&[s as u8]);
             for j in 0..=m {
                 for i in 0..=m {
-                    put(&((heights[(j0 + j * s) * n + i0 + i * s] - base) as f32).to_le_bytes());
+                    let h = heights[(j0 + j * s) * n + i0 + i * s] - base;
+                    put(&((h * 100.0).round() as u16).to_le_bytes());
                 }
             }
             for j in 0..m {

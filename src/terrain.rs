@@ -144,7 +144,7 @@ impl Terrain {
     pub fn baked() -> Self {
         let mut r = Bytes(BAKED);
         assert_eq!(r.take(4), b"CSTR", "not a baked terrain file");
-        assert_eq!(r.u32(), 7, "unsupported terrain version");
+        assert_eq!(r.u32(), 8, "unsupported terrain version");
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
         let cell = r.f32();
         let chunk_cells = r.u32() as usize;
@@ -157,7 +157,9 @@ impl Terrain {
             for cx in 0..cells_x / chunk_cells {
                 let step = r.take(1)[0] as usize;
                 let m = chunk_cells / step;
-                let coarse: Vec<f32> = (0..(m + 1) * (m + 1)).map(|_| r.f32()).collect();
+                let coarse: Vec<f32> = (0..(m + 1) * (m + 1))
+                    .map(|_| r.u16() as f32 / 100.0)
+                    .collect();
                 for lz in 0..=chunk_cells {
                     for lx in 0..=chunk_cells {
                         let i = (cz * chunk_cells + lz) * n + cx * chunk_cells + lx;
@@ -648,6 +650,10 @@ impl Bytes {
         let (head, rest) = self.0.split_at(n);
         self.0 = rest;
         head
+    }
+
+    fn u16(&mut self) -> u16 {
+        u16::from_le_bytes(self.take(2).try_into().unwrap())
     }
 
     fn u32(&mut self) -> u32 {

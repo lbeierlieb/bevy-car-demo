@@ -266,7 +266,7 @@ Gerach, facing as close to south (180°) as the road allows, one behind the othe
 change `BAKED` in `src/terrain.rs`. To make the map bigger, import the bigger
 rectangle into the same file and bake with the new size. The public Overpass server sometimes answers
 that it's busy; the tool then retries every minute, up to five times. Only chunks near the camera are on the GPU, so map size is limited by
-the size of the baked file, which is embedded in the program (about 0.65 MB per km²
+the size of the baked file, which is embedded in the program (about 0.35 MB per km²
 with the current mix of resolutions).
 
 ## Deliberate simplifications
