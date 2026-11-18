@@ -7,6 +7,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
 use crate::physics::collision::Obstacles;
+use crate::physics::surface::Surface;
 
 /// From Gerach (96161, Bavaria) to Rattelsdorf, Ebing and Baunach: 9.6 × 8.4 km.
 const BAKED: &[u8] = include_bytes!("../assets/gerach.terrain");
@@ -16,6 +17,8 @@ const RIM: f32 = 30.0;
 const ROAD_LIFT: f32 = 0.05;
 /// Maximum spacing of road ribbon vertices, along and across the road.
 const DRAPE_STEP: f32 = 1.0;
+/// Cell size of the grid of road segments, for looking up the surface (m).
+const ROAD_CELL: f32 = 8.0;
 
 pub struct TerrainPlugin;
 
@@ -25,19 +28,58 @@ impl Plugin for TerrainPlugin {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// A road's surface, or a waterway (numbered as in the baked file).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RoadKind {
-    Paved,
-    Unpaved,
+    Asphalt,
+    Gravel,
     Water,
+    Cobbles,
+    Dirt,
 }
 
 impl RoadKind {
+    /// Bottom to top, as the map draws them.
+    pub const ALL: [RoadKind; 5] = [
+        RoadKind::Water,
+        RoadKind::Dirt,
+        RoadKind::Gravel,
+        RoadKind::Cobbles,
+        RoadKind::Asphalt,
+    ];
+
+    fn from_byte(byte: u8) -> Self {
+        [
+            RoadKind::Asphalt,
+            RoadKind::Gravel,
+            RoadKind::Water,
+            RoadKind::Cobbles,
+            RoadKind::Dirt,
+        ][byte as usize]
+    }
+
+    /// Asphalt or stones.
+    pub fn paved(self) -> bool {
+        matches!(self, RoadKind::Asphalt | RoadKind::Cobbles)
+    }
+
+    pub fn surface(self) -> Surface {
+        match self {
+            RoadKind::Asphalt => Surface::Asphalt,
+            RoadKind::Cobbles => Surface::Cobbles,
+            RoadKind::Gravel => Surface::Gravel,
+            RoadKind::Dirt => Surface::Dirt,
+            RoadKind::Water => Surface::Water,
+        }
+    }
+
     /// Vertex colour of the ribbon (linear).
     pub fn color(self) -> [f32; 4] {
         match self {
-            RoadKind::Paved => [0.24, 0.24, 0.26, 1.0],
-            RoadKind::Unpaved => [0.56, 0.49, 0.38, 1.0],
+            RoadKind::Asphalt => [0.24, 0.24, 0.26, 1.0],
+            RoadKind::Cobbles => [0.36, 0.34, 0.33, 1.0],
+            RoadKind::Gravel => [0.56, 0.49, 0.38, 1.0],
+            RoadKind::Dirt => [0.42, 0.33, 0.24, 1.0],
             RoadKind::Water => [0.22, 0.42, 0.58, 1.0],
         }
     }
@@ -66,6 +108,8 @@ pub struct Terrain {
     spawn: Vec2,
     spawn_heading: Vec2,
     pub roads: Vec<Road>,
+    /// The road segments near each cell, for `surface`.
+    road_grid: RoadGrid,
     pub buildings: Vec<Building>,
     /// Houses and tree trunks as boxes, for collisions (filled in at startup, see
     /// `obstacles.rs`; empty in tests unless built).
@@ -100,7 +144,7 @@ impl Terrain {
     pub fn baked() -> Self {
         let mut r = Bytes(BAKED);
         assert_eq!(r.take(4), b"CSTR", "not a baked terrain file");
-        assert_eq!(r.u32(), 6, "unsupported terrain version");
+        assert_eq!(r.u32(), 7, "unsupported terrain version");
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
         let cell = r.f32();
         let chunk_cells = r.u32() as usize;
@@ -124,10 +168,9 @@ impl Terrain {
                 chunks.push(Chunk { step, classes });
             }
         }
-        let roads = (0..r.u32())
+        let roads: Vec<Road> = (0..r.u32())
             .map(|_| {
-                let kind =
-                    [RoadKind::Paved, RoadKind::Unpaved, RoadKind::Water][r.take(1)[0] as usize];
+                let kind = RoadKind::from_byte(r.take(1)[0]);
                 let width = r.f32();
                 let points = (0..r.u32()).map(|_| Vec2::new(r.f32(), r.f32())).collect();
                 Road {
@@ -144,6 +187,7 @@ impl Terrain {
                 Building { levels, outline }
             })
             .collect();
+        let half = Vec2::new(cells_x as f32, cells_z as f32) * cell / 2.0;
         Self {
             cells_x,
             cells_z,
@@ -153,13 +197,14 @@ impl Terrain {
             chunks,
             spawn,
             spawn_heading,
+            road_grid: RoadGrid::new(&roads, half),
             roads,
             buildings,
             obstacles: Obstacles::default(),
         }
     }
 
-    /// A flat, empty square 1 km across at height 0, for driving tests.
+    /// A flat, empty square 1 km across at height 0, paved all over, for driving tests.
     #[cfg(test)]
     pub fn flat() -> Self {
         let (cells, chunk_cells) = (256, 32);
@@ -173,12 +218,13 @@ impl Terrain {
             chunks: (0..chunks)
                 .map(|_| Chunk {
                     step: chunk_cells,
-                    classes: vec![0],
+                    classes: vec![PAVED],
                 })
                 .collect(),
             spawn: Vec2::ZERO,
             spawn_heading: Vec2::NEG_Y,
             roads: Vec::new(),
+            road_grid: RoadGrid::new(&[], Vec2::splat(cells as f32 * 2.0)),
             buildings: Vec::new(),
             obstacles: Obstacles::default(),
         }
@@ -240,6 +286,24 @@ impl Terrain {
         chunk.classes[local(iz) * m + local(ix)]
     }
 
+    /// What the ground at (x, z) is: the best of the roads there (as their ribbons are
+    /// drawn), else the land use's.
+    pub fn surface(&self, x: f32, z: f32) -> Surface {
+        let p = Vec2::new(x, z);
+        self.road_grid
+            .near(p)
+            .iter()
+            .filter_map(|&(r, i)| {
+                let road = &self.roads[r as usize];
+                let (a, b) = (road.points[i as usize], road.points[i as usize + 1]);
+                let t = ((p - a).dot(b - a) / (b - a).length_squared().max(1e-6)).clamp(0.0, 1.0);
+                (a.lerp(b, t).distance_squared(p) <= road.width * road.width / 4.0)
+                    .then(|| road.kind.surface())
+            })
+            .max_by(|a, b| a.grip().total_cmp(&b.grip()))
+            .unwrap_or_else(|| land_surface(self.land_class(x, z)))
+    }
+
     /// Ground colour at (x, z), as the terrain is drawn there.
     pub fn ground_color_at(&self, x: f32, z: f32, variation: usize) -> [f32; 4] {
         let (_, normal) = self.sample(x, z);
@@ -295,7 +359,7 @@ impl Terrain {
     /// the others line up behind it.
     pub fn road_spawns(&self, count: usize, spacing: f32) -> Vec<(Vec2, f32)> {
         let (road, i, start) = self
-            .closest_on_road(self.spawn, |r| r.kind == RoadKind::Paved && r.width >= 5.0)
+            .closest_on_road(self.spawn, |r| r.kind.paved() && r.width >= 5.0)
             .expect("map has no paved roads");
         // Face along the spawn heading; without one, so there's more road behind.
         let n = road.points.len();
@@ -344,7 +408,7 @@ impl Terrain {
 
     /// The point on a paved road nearest to `p`, the road's direction there and its width.
     pub fn paved_road_near(&self, p: Vec2) -> Option<(Vec2, Vec2, f32)> {
-        let (road, i, point) = self.closest_on_road(p, |r| r.kind == RoadKind::Paved)?;
+        let (road, i, point) = self.closest_on_road(p, |r| r.kind.paved())?;
         let along = (road.points[i + 1] - road.points[i]).normalize_or(Vec2::NEG_Y);
         Some((point, along, road.width))
     }
@@ -417,6 +481,66 @@ impl Terrain {
                 }
             }
         }
+    }
+}
+
+/// The road segments (road, segment start) whose ribbons reach into each cell of a grid
+/// over the map, in compressed rows.
+struct RoadGrid {
+    half: Vec2,
+    cells_x: usize,
+    cells_z: usize,
+    /// Where each cell's entries start in `entries` (one more than there are cells).
+    starts: Vec<u32>,
+    entries: Vec<(u32, u32)>,
+}
+
+impl RoadGrid {
+    fn new(roads: &[Road], half: Vec2) -> Self {
+        let (cells_x, cells_z) = (
+            (2.0 * half.x / ROAD_CELL).ceil() as usize,
+            (2.0 * half.y / ROAD_CELL).ceil() as usize,
+        );
+        let mut grid = Self {
+            half,
+            cells_x,
+            cells_z,
+            starts: Vec::new(),
+            entries: Vec::new(),
+        };
+        let mut cells: Vec<Vec<(u32, u32)>> = vec![Vec::new(); cells_x * cells_z];
+        for (r, road) in roads.iter().enumerate() {
+            for (i, pair) in road.points.windows(2).enumerate() {
+                let reach = Vec2::splat(road.width / 2.0);
+                let (lo, hi) = (pair[0].min(pair[1]) - reach, pair[0].max(pair[1]) + reach);
+                let ((x0, z0), (x1, z1)) = (grid.cell(lo), grid.cell(hi));
+                for cz in z0..=z1 {
+                    for cx in x0..=x1 {
+                        cells[cz * cells_x + cx].push((r as u32, i as u32));
+                    }
+                }
+            }
+        }
+        grid.starts.push(0);
+        for cell in cells {
+            grid.entries.extend(cell);
+            grid.starts.push(grid.entries.len() as u32);
+        }
+        grid
+    }
+
+    fn cell(&self, p: Vec2) -> (usize, usize) {
+        let index = |v: f32, count: usize| ((v / ROAD_CELL).max(0.0) as usize).min(count - 1);
+        (
+            index(p.x + self.half.x, self.cells_x),
+            index(p.y + self.half.y, self.cells_z),
+        )
+    }
+
+    fn near(&self, p: Vec2) -> &[(u32, u32)] {
+        let (cx, cz) = self.cell(p);
+        let i = cz * self.cells_x + cx;
+        &self.entries[self.starts[i] as usize..self.starts[i + 1] as usize]
     }
 }
 
@@ -579,22 +703,36 @@ impl FlatMesh {
     }
 }
 
+/// Land use class of paved areas (see `tools/bake`).
+const PAVED: u8 = 10;
+
+/// What the ground of a land use class (see `tools/bake`) is.
+fn land_surface(class: u8) -> Surface {
+    match class {
+        2..=5 => Surface::Field,
+        7 | 8 => Surface::Forest,
+        9 => Surface::Water,
+        PAVED => Surface::Asphalt,
+        _ => Surface::Grass,
+    }
+}
+
 /// Ground colour for a land use class (see `tools/bake`), with steep natural slopes
 /// showing bare earth.
 fn ground_color(class: u8, up: f32, variation: usize) -> [f32; 4] {
     let jitter = (hash(variation as u32) - 0.5) * 0.04;
     let base = match class {
-        1 => Vec3::new(0.42, 0.56, 0.33),  // residential: gardens
-        2 => Vec3::new(0.78, 0.68, 0.42),  // field: ripe grain
-        3 => Vec3::new(0.70, 0.62, 0.42),  // field: stubble
-        4 => Vec3::new(0.52, 0.41, 0.30),  // field: ploughed
-        5 => Vec3::new(0.46, 0.60, 0.26),  // field: green crop
-        6 => Vec3::new(0.36, 0.58, 0.28),  // meadow
-        7 => Vec3::new(0.32, 0.44, 0.24),  // scrub
-        8 => Vec3::new(0.17, 0.32, 0.15),  // forest
-        9 => Vec3::new(0.22, 0.42, 0.58),  // water
-        10 => Vec3::new(0.30, 0.30, 0.32), // paved area
-        _ => Vec3::new(0.34, 0.53, 0.27),  // unmapped: grass
+        1 => Vec3::new(0.42, 0.56, 0.33),     // residential: gardens
+        2 => Vec3::new(0.78, 0.68, 0.42),     // field: ripe grain
+        3 => Vec3::new(0.70, 0.62, 0.42),     // field: stubble
+        4 => Vec3::new(0.52, 0.41, 0.30),     // field: ploughed
+        5 => Vec3::new(0.46, 0.60, 0.26),     // field: green crop
+        6 => Vec3::new(0.36, 0.58, 0.28),     // meadow
+        7 => Vec3::new(0.32, 0.44, 0.24),     // scrub
+        8 => Vec3::new(0.17, 0.32, 0.15),     // forest
+        9 => Vec3::new(0.22, 0.42, 0.58),     // water
+        PAVED => Vec3::new(0.30, 0.30, 0.32), // paved area
+        _ => Vec3::new(0.34, 0.53, 0.27),     // unmapped: grass
     };
     let natural = !matches!(class, 8..=10);
     let base = if natural && up < 0.85 {
@@ -672,6 +810,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn roads_have_their_surface_and_the_land_its_own() {
+        let terrain = Terrain::baked();
+        let mut seen = Vec::new();
+        for road in terrain.roads.iter().filter(|r| r.kind != RoadKind::Water) {
+            let (a, b) = (road.points[0], road.points[1]);
+            let middle = a.lerp(b, 0.5);
+            let edge = middle + (b - a).perp().normalize() * (road.width / 2.0 - 0.1);
+            for p in [middle, edge] {
+                // Another, better road may cross it there.
+                let surface = terrain.surface(p.x, p.y);
+                assert!(
+                    surface.grip() >= road.kind.surface().grip(),
+                    "{surface:?} at {p}"
+                );
+            }
+            if !seen.contains(&road.kind) {
+                seen.push(road.kind);
+            }
+        }
+        assert_eq!(seen.len(), 4, "{seen:?}");
+        // Away from the roads, the land use decides.
+        let forest = (0..10_000)
+            .map(|i| {
+                Vec2::new(
+                    (i % 100) as f32 * 80.0 - 4000.0,
+                    (i / 100) as f32 * 80.0 - 4000.0,
+                )
+            })
+            .find(|&p| terrain.land_class(p.x, p.y) == 8 && terrain.road_grid.near(p).is_empty())
+            .unwrap();
+        assert_eq!(terrain.surface(forest.x, forest.y), Surface::Forest);
     }
 
     #[test]

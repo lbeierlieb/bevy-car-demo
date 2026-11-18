@@ -230,7 +230,7 @@ fn draw(
             );
 
             // Streams first, then tracks, then paved roads on top.
-            for kind in [RoadKind::Water, RoadKind::Unpaved, RoadKind::Paved] {
+            for kind in RoadKind::ALL {
                 let color = color32(kind.color());
                 for (road, &(lo, hi)) in terrain.roads.iter().zip(&layers.road_bounds) {
                     if road.kind != kind || !visible(lo, hi) {

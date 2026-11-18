@@ -6,5 +6,6 @@ pub mod drivetrain;
 pub mod engine;
 pub mod fuel;
 pub mod rigid_body;
+pub mod surface;
 pub mod suspension;
 pub mod tire;

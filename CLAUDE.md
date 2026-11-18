@@ -558,9 +558,11 @@ phasing, VTEC-style cam switching).
 The map is ours: `map/gerach.osm` (imported from OSM once, edited by the user in JOSM,
 committed; `upload='never'`) is the only input of the bake besides the lidar. `bake
 import` adds new areas without touching what's there (deleted elements stay in the file
-as `action='delete'`). Plan, in this order: (1) map file (done), (2) surfaces with their
-own grip and rolling resistance (mostly asphalt, gravel tracks usually in forest, off-road
-deliberately poor: not an off-road game), (3) roads as their own geometry (smoothed
+as `action='delete'`). Plan, in this order: (1) map file (done), (2) surfaces (done:
+`physics/surface.rs`, grip share and rolling resistance factor per `Surface`; roads by
+their ribbon via `Terrain::surface` (a grid of road segments), else by land use; road
+kinds from OSM `surface`, untagged tracks by `tracktype`; `Terrain::flat` is paved, so
+driving tests that would leave a road use it), (3) roads as their own geometry (smoothed
 height profile, crown, embankments cut into the terrain, own 0.5 m mesh, layered ground
 query so bridges have an underpass), (4) a per-road `condition` making small bumps
 (ISO 8608-like) plus placed potholes/patches, (5) nudging roads off building footprints

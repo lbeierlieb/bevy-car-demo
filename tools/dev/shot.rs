@@ -185,7 +185,7 @@ fn line_up(
     for road in terrain
         .roads
         .iter()
-        .filter(|r| r.kind == crate::terrain::RoadKind::Paved && r.width >= 5.0)
+        .filter(|r| r.kind.paved() && r.width >= 5.0)
     {
         for pair in road.points.windows(2) {
             let (a, b) = (pair[0], pair[1]);

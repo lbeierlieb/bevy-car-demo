@@ -7,6 +7,7 @@
 
 use bevy::prelude::*;
 
+use super::surface::Surface;
 use super::tire::{Patch, RIB_AT, RIBS, TireForce, TireParams, Tread};
 use crate::terrain::Terrain;
 
@@ -230,6 +231,8 @@ pub struct Contact {
     pub point: Vec3,
     pub normal: Vec3,
     pub load: f32,
+    /// What the ground is.
+    pub surface: Surface,
     /// What each rib carries and grips.
     pub patch: Patch,
     pub tire: TireForce,
@@ -318,6 +321,7 @@ impl Corner {
         let up = chassis.rotation * Vec3::Y;
         let below = center - (up - axle_dir * axle_dir.dot(up)).normalize() * tire.radius;
         let (_, n) = terrain.sample(below.x, below.z);
+        let surface = terrain.surface(below.x, below.z);
         let down = -(n - axle_dir * axle_dir.dot(n)).normalize();
         let outside = axle_dir * self.side;
         let ribs = RIB_AT.map(|u| center + outside * (u * tire.width / 2.0) + down * tire.radius);
@@ -330,7 +334,8 @@ impl Corner {
         let patch = touching.then(|| {
             let outward = self.contact.map_or(0.0, |c| c.tire.fy) * self.side;
             let camber = -axle_dir.dot(n).clamp(-1.0, 1.0).asin();
-            let patch = tire.patch(depth, -hub_velocity.dot(n), outward, camber, &self.tread);
+            let mut patch = tire.patch(depth, -hub_velocity.dot(n), outward, camber, &self.tread);
+            patch.grip = patch.grip.map(|g| g * surface.grip());
             let forward = n.cross(axle_dir).normalize();
             let right = forward.cross(n);
             let (vx, vy) = (hub_velocity.dot(forward), hub_velocity.dot(right));
@@ -399,6 +404,7 @@ impl Corner {
             point,
             normal,
             load,
+            surface,
             patch,
             tire: tire_force,
             force: normal * load + forward * tire_force.fx + right * tire_force.fy,

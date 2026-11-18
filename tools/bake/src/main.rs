@@ -196,11 +196,15 @@ impl Dgm1 {
     }
 }
 
+/// A road's surface, or a waterway.
 #[derive(Clone, Copy)]
 enum RoadKind {
-    Paved = 0,
-    Unpaved = 1,
+    Asphalt = 0,
+    Gravel = 1,
     Water = 2,
+    Cobbles = 3,
+    /// Earth and grass.
+    Dirt = 4,
 }
 
 struct Road {
@@ -240,22 +244,27 @@ fn road_style(tags: &Tags) -> Option<(RoadKind, f64)> {
         .or_else(|| number("lanes").map(|lanes| lanes * 3.0 + 0.5))
         .unwrap_or(default_width)
         .clamp(2.0, 15.0);
-    let paved = match tag("surface") {
+    let kind = match tag("surface").map(|s| s.split(':').next().unwrap_or(s)) {
+        Some("asphalt" | "concrete" | "paved" | "chipseal" | "metal") => RoadKind::Asphalt,
         Some(
-            "asphalt" | "concrete" | "concrete:plates" | "concrete:lanes" | "paving_stones"
-            | "sett",
-        ) => true,
-        Some(_) => false,
-        None => tag("highway") != Some("track"),
-    };
-    Some((
-        if paved {
-            RoadKind::Paved
-        } else {
-            RoadKind::Unpaved
+            "paving_stones" | "sett" | "cobblestone" | "unhewn_cobblestone" | "grass_paver"
+            | "bricks",
+        ) => RoadKind::Cobbles,
+        Some("gravel" | "fine_gravel" | "compacted" | "pebblestone" | "unpaved" | "shells") => {
+            RoadKind::Gravel
+        }
+        Some("ground" | "dirt" | "earth" | "grass" | "mud" | "sand" | "wood" | "woodchips") => {
+            RoadKind::Dirt
+        }
+        // Untagged (or unknown): tracks by their grade, other roads asphalt.
+        _ if tag("highway") == Some("track") => match tag("tracktype") {
+            Some("grade1") => RoadKind::Asphalt,
+            Some("grade4" | "grade5") => RoadKind::Dirt,
+            _ => RoadKind::Gravel,
         },
-        width,
-    ))
+        _ => RoadKind::Asphalt,
+    };
+    Some((kind, width))
 }
 
 struct Building {
@@ -644,8 +653,8 @@ fn bake(
     }
     for road in &roads {
         let (margin, step) = match road.kind {
-            RoadKind::Paved => (10.0, STEP_DETAIL),
-            RoadKind::Unpaved => (6.0, STEP_TRACKS),
+            RoadKind::Asphalt | RoadKind::Cobbles => (10.0, STEP_DETAIL),
+            RoadKind::Gravel | RoadKind::Dirt => (6.0, STEP_TRACKS),
             RoadKind::Water => continue,
         };
         for point in resample(&road.points) {
@@ -740,7 +749,8 @@ fn bake(
     // then per chunk (row-major, rows along z): step u8 (in cells), the chunk's
     // (chunk cells / step + 1)² vertex heights f32 relative to the lowest point and
     // (chunk cells / step)² land use classes u8 (row-major),
-    // road count u32, then per road: kind u8 (0 paved, 1 unpaved, 2 water), width f32,
+    // road count u32, then per road: kind u8 (0 asphalt, 1 gravel, 2 water, 3 cobbles,
+    // 4 dirt), width f32,
     // point count u32, points (x, z) f32,
     // building count u32, then per building: levels f32 (0: unknown), point count u32,
     // outline points (x, z) f32.
@@ -758,7 +768,7 @@ fn bake(
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&6u32.to_le_bytes());
+    put(&7u32.to_le_bytes());
     put(&(cells_x as u32).to_le_bytes());
     put(&(cells_z as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());

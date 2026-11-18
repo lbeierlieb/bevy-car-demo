@@ -122,7 +122,7 @@ impl Network {
             .map(|road| {
                 let mut points = road.points.clone();
                 points.dedup();
-                (road.width, road.kind == RoadKind::Unpaved, points)
+                (road.width, !road.kind.paved(), points)
             })
             .filter(|(_, _, points)| points.len() >= 2)
             .collect();

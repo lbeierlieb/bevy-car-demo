@@ -425,6 +425,7 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
         for header in [
             "",
             "Load N",
+            "Ground",
             "Slip",
             "Slip °",
             "Camber °",
@@ -444,6 +445,7 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
             let contact = corner.contact.unwrap_or_default();
             ui.label(*name);
             ui.label(format!("{:.0}", contact.load));
+            ui.label(corner.contact.map_or("–", |c| c.surface.name()));
             ui.label(format!("{:.2}", contact.tire.slip_ratio));
             ui.label(format!("{:.1}", contact.tire.slip_angle.to_degrees()));
             // Against the road while on it (else against the body).

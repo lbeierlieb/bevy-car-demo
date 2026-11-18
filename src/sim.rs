@@ -237,7 +237,9 @@ fn apply_controls(car: &mut Car, dt: f32) {
         let brake = c.brake * abs_pressure[i];
         // Rolling resistance holds each wheel back like a light brake.
         let tire = &setup.axle(corner.front).tire;
-        let rolling = tire.rolling_torque(corner.contact.map_or(0.0, |c| c.load), &corner.tread);
+        let rolling = corner.contact.map_or(0.0, |c| {
+            tire.rolling_torque(c.load, &corner.tread) * c.surface.rolling()
+        });
         corner.drive_torque = torque[i];
         corner.drive_inertia = shares[i] * drive.inertia;
         if corner.front {
@@ -476,9 +478,10 @@ mod tests {
 
     #[test]
     fn automatic_shifts_up_without_hunting() {
-        let terrain = Terrain::baked();
-        let mut car = test_car(&terrain);
+        let terrain = Terrain::flat();
+        let mut car = Car::spawn_at(0, CarSetup::default(), &terrain, 0.0, 400.0, 0.0);
         car.drivetrain.automatic = true;
+        car.parking_brake = false;
         run(&mut car, &terrain, 1.0);
         car.controls = Controls {
             throttle: 1.0,
@@ -486,11 +489,10 @@ mod tests {
         };
         // Flat out from a standstill: the gears only ever go up (the clutch closing after
         // a shift spins the wheels up for a moment, which mustn't trigger another shift).
-        // Unsteered, the car leaves the road after a few seconds and crosses fields, where
-        // it slows down and shifting down is right.
+        // On flat asphalt: off the road it would slow down, and shifting down is right.
         let dt = 1.0 / CHASSIS_HZ as f32;
         let mut gears = vec![car.drivetrain.selected_gear()];
-        for _ in 0..(6.0 / dt) as usize {
+        for _ in 0..(9.0 / dt) as usize {
             step_car(&mut car, &terrain, dt);
             let gear = car.drivetrain.selected_gear();
             if gear != *gears.last().unwrap() {
@@ -569,8 +571,9 @@ mod tests {
 
     #[test]
     fn brakes_without_rear_lock_or_spinning() {
-        let terrain = Terrain::baked();
-        let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
+        // On flat asphalt: the slight steering would take it off a real road.
+        let terrain = Terrain::flat();
+        let (p, yaw) = (Vec2::new(0.0, 300.0), 0.0);
         // Every car as it leaves the factory, and on the track suspension and tires.
         let factory = (0..CHASSIS.len()).map(|chassis| CarSetup::factory(chassis, 0));
         let track = (0..CHASSIS.len()).map(|chassis| {
