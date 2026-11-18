@@ -21,6 +21,11 @@ const SIDEWALL_MASS: f32 = 2.8;
 const RIM_INERTIA: f32 = 0.65;
 /// How far in from the outside the tread's mass is, as a share of the radius.
 const TREAD_DEPTH: f32 = 0.95;
+/// The load a tire is made for (see `TireParams::nominal_load`) per metre of its width, on
+/// a tire of `DESIGN_DIAMETER`; it grows with the root of the diameter (a longer contact
+/// patch).
+const DESIGN_LOAD: f32 = 14_500.0;
+const DESIGN_DIAMETER: f32 = 0.64;
 /// Moment of inertia of what spins with the wheel on the hub (brake disc, hub, half the
 /// drive shaft) per kg of the corner's unsprung mass without its wheel (m²).
 pub const HUB_INERTIA: f32 = 0.004;
@@ -107,6 +112,12 @@ impl TireSize {
     /// Outside radius, unloaded (m).
     pub fn radius(&self) -> f32 {
         self.rim_radius() + self.sidewall()
+    }
+
+    /// The load (N) it grips with its compound's friction at; more grips less per newton.
+    pub fn design_load(&self) -> f32 {
+        let diameter = 2.0 * self.radius();
+        DESIGN_LOAD * self.width_m() * (diameter / DESIGN_DIAMETER).sqrt()
     }
 
     /// Areas of the tread and of both sidewalls (m²).

@@ -15,7 +15,7 @@ use crate::physics::drivetrain::Drive;
 use crate::physics::engine::families::{FAMILIES, Family};
 use crate::physics::engine::parts::Parts;
 use crate::physics::fuel::Tank;
-use crate::physics::tire::STREET;
+use crate::physics::tire::{SPORT, STREET, TOURING};
 use crate::wheels::{Rim, TireSize, Wheel, WheelRoom};
 
 /// Width a transverse engine's gearbox takes up at the end of its crank (m).
@@ -196,8 +196,6 @@ pub struct Chassis {
     pub wheels: [Wheel; 2],
     pub room: [WheelRoom; 2],
     pub hub: [f32; 2],
-    /// Peak friction of the stock tires.
-    pub grip: f32,
     /// Ride frequency front and rear (Hz), and damping ratio.
     pub ride: [f32; 2],
     pub damping: f32,
@@ -388,9 +386,9 @@ impl CarBuild {
     }
 }
 
-/// Street tires of `width` (mm) and `aspect` (%) on rims of `diameter` and `rim_width`
-/// (inches, tenths of an inch).
-const fn wheel(diameter: u8, rim_width: u8, width: u16, aspect: u8) -> Wheel {
+/// Tires of `width` (mm), `aspect` (%) and `compound` on rims of `diameter` and
+/// `rim_width` (inches, tenths of an inch).
+const fn wheel(diameter: u8, rim_width: u8, width: u16, aspect: u8, compound: usize) -> Wheel {
     Wheel {
         rim: Rim {
             diameter,
@@ -401,7 +399,7 @@ const fn wheel(diameter: u8, rim_width: u8, width: u16, aspect: u8) -> Wheel {
             aspect,
             rim: diameter,
         },
-        compound: STREET,
+        compound,
     }
 }
 
@@ -423,7 +421,10 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.54,
         wheelbase: 2.35,
         track: [1.42, 1.41],
-        wheels: [wheel(14, 55, 165, 65), wheel(14, 55, 165, 65)],
+        wheels: [
+            wheel(14, 55, 165, 65, TOURING),
+            wheel(14, 55, 165, 65, TOURING),
+        ],
         room: [
             WheelRoom {
                 diameter: 0.62,
@@ -437,7 +438,6 @@ pub static CHASSIS: [Chassis; 13] = [
             },
         ],
         hub: [17.0, 15.0],
-        grip: 0.95,
         ride: [1.3, 1.45],
         damping: 0.3,
         camber: [-0.8, -1.2],
@@ -505,7 +505,10 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.51,
         wheelbase: 2.6,
         track: [1.53, 1.51],
-        wheels: [wheel(17, 70, 205, 45), wheel(17, 70, 205, 45)],
+        wheels: [
+            wheel(17, 70, 205, 45, STREET),
+            wheel(17, 70, 205, 45, STREET),
+        ],
         room: [
             WheelRoom {
                 diameter: 0.67,
@@ -519,7 +522,6 @@ pub static CHASSIS: [Chassis; 13] = [
             },
         ],
         hub: [18.0, 15.0],
-        grip: 1.05,
         ride: [1.6, 1.85],
         damping: 0.34,
         camber: [-1.5, -1.5],
@@ -590,7 +592,10 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.44,
         wheelbase: 2.31,
         track: [1.43, 1.45],
-        wheels: [wheel(16, 65, 195, 50), wheel(16, 65, 195, 50)],
+        wheels: [
+            wheel(16, 65, 195, 50, STREET),
+            wheel(16, 65, 195, 50, STREET),
+        ],
         room: [
             WheelRoom {
                 diameter: 0.65,
@@ -604,7 +609,6 @@ pub static CHASSIS: [Chassis; 13] = [
             },
         ],
         hub: [16.0, 18.0],
-        grip: 1.05,
         ride: [1.5, 1.65],
         damping: 0.32,
         camber: [-1.2, -1.5],
@@ -671,7 +675,10 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.46,
         wheelbase: 2.57,
         track: [1.52, 1.53],
-        wheels: [wheel(17, 75, 225, 45), wheel(17, 80, 235, 45)],
+        wheels: [
+            wheel(17, 75, 225, 45, STREET),
+            wheel(17, 80, 235, 45, STREET),
+        ],
         room: [
             WheelRoom {
                 diameter: 0.68,
@@ -685,7 +692,6 @@ pub static CHASSIS: [Chassis; 13] = [
             },
         ],
         hub: [19.0, 20.0],
-        grip: 1.1,
         ride: [1.65, 1.8],
         damping: 0.33,
         camber: [-1.2, -1.4],
@@ -754,7 +760,10 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.52,
         wheelbase: 2.85,
         track: [1.58, 1.6],
-        wheels: [wheel(17, 75, 225, 50), wheel(17, 75, 225, 50)],
+        wheels: [
+            wheel(17, 75, 225, 50, STREET),
+            wheel(17, 75, 225, 50, STREET),
+        ],
         room: [
             WheelRoom {
                 diameter: 0.71,
@@ -768,7 +777,6 @@ pub static CHASSIS: [Chassis; 13] = [
             },
         ],
         hub: [22.0, 24.0],
-        grip: 1.05,
         ride: [1.35, 1.5],
         damping: 0.32,
         camber: [-0.8, -1.2],
@@ -837,7 +845,10 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.49,
         wheelbase: 2.55,
         track: [1.53, 1.53],
-        wheels: [wheel(17, 75, 215, 50), wheel(17, 75, 215, 50)],
+        wheels: [
+            wheel(17, 75, 215, 50, STREET),
+            wheel(17, 75, 215, 50, STREET),
+        ],
         room: [
             WheelRoom {
                 diameter: 0.7,
@@ -851,7 +862,6 @@ pub static CHASSIS: [Chassis; 13] = [
             },
         ],
         hub: [21.0, 21.0],
-        grip: 1.1,
         ride: [1.7, 1.8],
         damping: 0.36,
         camber: [-1.5, -1.5],
@@ -929,7 +939,10 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.5,
         wheelbase: 2.75,
         track: [1.6, 1.62],
-        wheels: [wheel(18, 85, 245, 45), wheel(18, 95, 275, 40)],
+        wheels: [
+            wheel(18, 85, 245, 45, STREET),
+            wheel(18, 95, 275, 40, STREET),
+        ],
         room: [
             WheelRoom {
                 diameter: 0.73,
@@ -943,7 +956,6 @@ pub static CHASSIS: [Chassis; 13] = [
             },
         ],
         hub: [22.0, 25.0],
-        grip: 1.05,
         ride: [1.4, 1.5],
         damping: 0.3,
         camber: [-0.8, -1.0],
@@ -1016,7 +1028,7 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.42,
         wheelbase: 2.45,
         track: [1.54, 1.56],
-        wheels: [wheel(18, 80, 225, 40), wheel(18, 95, 265, 40)],
+        wheels: [wheel(18, 80, 225, 40, SPORT), wheel(18, 95, 265, 40, SPORT)],
         room: [
             WheelRoom {
                 diameter: 0.69,
@@ -1030,7 +1042,6 @@ pub static CHASSIS: [Chassis; 13] = [
             },
         ],
         hub: [18.0, 20.0],
-        grip: 1.15,
         ride: [1.9, 2.1],
         damping: 0.36,
         camber: [-1.5, -1.8],
@@ -1104,7 +1115,10 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.45,
         wheelbase: 2.4,
         track: [1.5, 1.54],
-        wheels: [wheel(18, 80, 225, 40), wheel(18, 100, 285, 35)],
+        wheels: [
+            wheel(18, 80, 225, 40, SPORT),
+            wheel(18, 100, 285, 35, SPORT),
+        ],
         room: [
             WheelRoom {
                 diameter: 0.69,
@@ -1118,7 +1132,6 @@ pub static CHASSIS: [Chassis; 13] = [
             },
         ],
         hub: [18.0, 21.0],
-        grip: 1.15,
         ride: [1.8, 2.0],
         damping: 0.36,
         camber: [-1.0, -1.8],
@@ -1191,7 +1204,10 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.4,
         wheelbase: 2.65,
         track: [1.66, 1.62],
-        wheels: [wheel(19, 90, 255, 35), wheel(19, 110, 315, 35)],
+        wheels: [
+            wheel(19, 90, 255, 35, SPORT),
+            wheel(19, 110, 315, 35, SPORT),
+        ],
         room: [
             WheelRoom {
                 diameter: 0.71,
@@ -1205,7 +1221,6 @@ pub static CHASSIS: [Chassis; 13] = [
             },
         ],
         hub: [18.0, 22.0],
-        grip: 1.25,
         ride: [2.2, 2.4],
         damping: 0.4,
         camber: [-1.8, -2.0],
@@ -1281,7 +1296,10 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.36,
         wheelbase: 2.25,
         track: [1.42, 1.4],
-        wheels: [wheel(15, 70, 195, 45), wheel(15, 75, 205, 45)],
+        wheels: [
+            wheel(15, 70, 195, 45, STREET),
+            wheel(15, 75, 205, 45, STREET),
+        ],
         room: [
             WheelRoom {
                 diameter: 0.62,
@@ -1295,7 +1313,6 @@ pub static CHASSIS: [Chassis; 13] = [
             },
         ],
         hub: [9.0, 10.0],
-        grip: 1.2,
         ride: [2.0, 2.2],
         damping: 0.38,
         camber: [-1.8, -1.8],
@@ -1363,7 +1380,10 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.72,
         wheelbase: 3.1,
         track: [1.6, 1.6],
-        wheels: [wheel(17, 75, 255, 65), wheel(17, 75, 255, 65)],
+        wheels: [
+            wheel(17, 75, 255, 65, TOURING),
+            wheel(17, 75, 255, 65, TOURING),
+        ],
         room: [
             WheelRoom {
                 diameter: 0.81,
@@ -1377,7 +1397,6 @@ pub static CHASSIS: [Chassis; 13] = [
             },
         ],
         hub: [35.0, 39.0],
-        grip: 0.95,
         ride: [1.25, 1.5],
         damping: 0.3,
         camber: [-0.3, -0.3],
@@ -1450,21 +1469,23 @@ pub static CHASSIS: [Chassis; 13] = [
         cg_height: 0.74,
         wheelbase: 3.0,
         track: [1.62, 1.6],
-        wheels: [wheel(16, 65, 215, 60), wheel(16, 65, 215, 60)],
+        wheels: [
+            wheel(16, 70, 225, 65, STREET),
+            wheel(16, 70, 225, 65, STREET),
+        ],
         room: [
             WheelRoom {
-                diameter: 0.71,
-                width: 245,
+                diameter: 0.75,
+                width: 255,
                 min_rim: 15,
             },
             WheelRoom {
-                diameter: 0.71,
-                width: 245,
+                diameter: 0.75,
+                width: 255,
                 min_rim: 15,
             },
         ],
-        hub: [26.0, 26.0],
-        grip: 0.95,
+        hub: [24.5, 24.5],
         ride: [1.3, 1.6],
         damping: 0.3,
         camber: [-0.3, -0.5],

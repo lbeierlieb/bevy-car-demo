@@ -11,10 +11,10 @@ use crate::physics::engine::parts::Parts;
 use crate::physics::fuel::{self, Fuel, Tank};
 use crate::physics::rigid_body::RigidBody;
 use crate::physics::suspension::{ArmGeometry, AxleSetup, Corner};
-use crate::physics::tire::{COMPOUNDS, TireParams};
+use crate::physics::tire::{COMPOUNDS, GRIP, TireParams};
 use crate::storage::Folder;
 use crate::terrain::Terrain;
-use crate::wheels::HUB_INERTIA;
+use crate::wheels::{HUB_INERTIA, Wheel};
 
 /// Everything the simulation needs to know about a car, worked out from what it's built
 /// of: a chassis and what's fitted to it (`build`), and an engine.
@@ -91,18 +91,28 @@ impl CarSetup {
         let front_share =
             (sprung_mass * rear_z + fuel_mass * (rear_z - tank_at.z)) / (laden * chassis.wheelbase);
         let (_, ride, damping, camber) = SUSPENSIONS[build.suspension];
-        let compound_grip = |i: usize| COMPOUNDS[build.wheels[i].compound].grip;
-        let grip = chassis.grip * (compound_grip(0) + compound_grip(1)) / 2.0;
-        let axle = |i: usize| {
-            let wheel = &build.wheels[i];
-            let compound = COMPOUNDS[wheel.compound];
-            let grip = chassis.grip * compound.grip;
-            let radius = wheel.tire.radius();
-            let share = if i == 0 {
+        let share = |i: usize| {
+            if i == 0 {
                 front_share
             } else {
                 1.0 - front_share
-            };
+            }
+        };
+        let unsprung = |i: usize| chassis.hub[i] + build.wheels[i].mass();
+        // Each tire's load at rest.
+        let static_load = |i: usize| (laden * share(i) / 2.0 + unsprung(i)) * 9.81;
+        // The tires' friction at rest (warm and new), averaged over the car by load: of the
+        // ones fitted, and of the factory's, which the brakes are made for.
+        let grip_of = |wheels: &[Wheel; 2]| {
+            let load = |i: usize| static_load(i);
+            let friction = |i: usize| tire_params(&wheels[i]).friction(load(i));
+            (friction(0) * load(0) + friction(1) * load(1)) / (load(0) + load(1))
+        };
+        let (grip, factory_grip) = (grip_of(&build.wheels), grip_of(&chassis.wheels));
+        let axle = |i: usize| {
+            let wheel = &build.wheels[i];
+            let radius = wheel.tire.radius();
+            let share = share(i);
             let mut geometry = ArmGeometry::default();
             // The stock linkage, moved out to the track and to the wheel's height below
             // the centre of mass.
@@ -121,23 +131,14 @@ impl CarSetup {
             geometry.static_camber = (chassis.camber[i] - camber).to_radians();
             // Toe-in at the rear keeps the car stable, especially off throttle.
             geometry.static_toe = if i == 0 { 0.0 } else { 0.25f32.to_radians() };
-            let stock = TireParams::default();
-            let unsprung_mass = chassis.hub[i] + wheel.mass();
+            let unsprung_mass = unsprung(i);
             let mut axle = AxleSetup {
                 geometry,
                 spring_rate: 0.0,
                 damping: 0.0,
                 unsprung_mass,
                 wheel_inertia: wheel.inertia() + HUB_INERTIA * chassis.hub[i],
-                tire: TireParams {
-                    radius,
-                    compound,
-                    mu: grip,
-                    // The tires are sized for the car: their friction is `grip` at rest
-                    // (warm and new).
-                    nominal_load: (laden * share / 2.0 + unsprung_mass) * 9.81,
-                    ..stock
-                },
+                tire: tire_params(wheel),
             };
             axle.tune(
                 chassis.ride[i] * ride,
@@ -147,7 +148,6 @@ impl CarSetup {
             axle
         };
 
-        let unsprung = |i: usize| chassis.hub[i] + build.wheels[i].mass();
         let mass = laden + 2.0 * (unsprung(0) + unsprung(1));
         let radius = (build.wheels[0].tire.radius() + build.wheels[1].tire.radius()) / 2.0;
         // Braking as hard as the tires can, the weight shifts forward by the height of
@@ -195,7 +195,7 @@ impl CarSetup {
                 differential,
                 centre: differential,
             },
-            brake_torque: chassis.brakes * chassis.grip * mass * 9.81 * radius,
+            brake_torque: chassis.brakes * factory_grip * mass * 9.81 * radius,
             brake_bias: brake_bias.min(0.9),
             handbrake_torque: 2.0 * mass,
             drag_area: chassis.drag_area,
@@ -249,6 +249,18 @@ impl CarSetup {
     pub fn front_weight_with(&self, litres: f32) -> f32 {
         let unsprung = self.front.unsprung_mass;
         (2.0 * self.corner_mass_with(true, litres) + 2.0 * unsprung) / self.mass_with(litres)
+    }
+}
+
+/// A tire on `wheel`: its size sets the load it's made for, at which it grips with the
+/// friction of its compound.
+fn tire_params(wheel: &Wheel) -> TireParams {
+    TireParams {
+        radius: wheel.tire.radius(),
+        compound: COMPOUNDS[wheel.compound],
+        mu: GRIP * COMPOUNDS[wheel.compound].grip,
+        nominal_load: wheel.tire.design_load(),
+        ..TireParams::default()
     }
 }
 

@@ -24,6 +24,8 @@ const HYSTERESIS: f32 = 0.012;
 /// the square root of the speed (per √(m/s)).
 const COOLING: f32 = 15.0;
 const COOLING_SPEED: f32 = 8.0;
+/// Peak friction of street tires at the load they're made for (see `TireParams::mu`).
+pub const GRIP: f32 = 1.05;
 /// Grip lost with the tread worn through.
 const WORN_GRIP: f32 = 0.25;
 
@@ -144,9 +146,10 @@ pub struct TireParams {
     /// Peak friction coefficient at the nominal load and the best temperature, new: the
     /// Magic Formula `D = mu · Fz`.
     pub mu: f32,
-    /// Load (N) at which the friction is `mu` (the corner's static load), and how it falls
-    /// off with more: `mu · (Fz / nominal)^-load_sensitivity`. A loaded tire grips harder,
-    /// but less than in proportion, so weight shifting across an axle costs it grip.
+    /// Load (N) at which the friction is `mu` (what the tire's size is made for), and how
+    /// it falls off with more: `mu · (Fz / nominal)^-load_sensitivity`. A loaded tire grips
+    /// harder, but less than in proportion, so weight shifting across an axle costs it grip,
+    /// and a wider tire grips better under the same load.
     pub nominal_load: f32,
     pub load_sensitivity: f32,
     /// How far behind the contact centre the lateral force acts at small slip angles (m).
@@ -160,9 +163,9 @@ impl Default for TireParams {
             stiffness: 200_000.0,
             damping: 1_500.0,
             compound: COMPOUNDS[STREET],
-            mu: 1.1,
-            nominal_load: 3500.0,
-            load_sensitivity: 0.1,
+            mu: GRIP,
+            nominal_load: 3000.0,
+            load_sensitivity: 0.27,
             pneumatic_trail: 0.04,
         }
     }
