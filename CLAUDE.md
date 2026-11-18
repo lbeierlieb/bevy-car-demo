@@ -246,7 +246,7 @@ catalogue entries, and things like swap subframes are named so they can be price
   `physics/engine/families.rs` has `FAMILIES` (12 families, 22 factory versions, codes
   like W20T; W is today's 2-litre four, R the high-revving four with switching cams).
 - **A car** is a `CarBuild` (chassis, paint, gearbox, clutch, final drive, limited-slip,
-  suspension, tires) plus its engine's `Parts` (family, version, a part per slot, ECU).
+  suspension, a `Wheel` per axle) plus its engine's `Parts` (family, version, a part per slot, ECU).
   `CarSetup::new` works everything the simulation needs out of them: the engine's and
   the gearbox's masses sit where the chassis' bay has them, which gives the balance and
   the inertia; springs and dampers come from ride frequencies and the weight on each
@@ -254,6 +254,24 @@ catalogue entries, and things like swap subframes are named so they can be price
   0.8, so a floored pedal doesn't lock wheels on a dry road) and its balance follows the
   weight shift. The linkage is the same double A-arm for every car, moved to its track
   and wheel size.
+- **Rims and tires** (`wheels.rs`, agreed with the user: sizes like real ones, every car
+  on a matching factory size, upgradable per axle): a `Wheel` is a rim (diameter and
+  width, tenths of an inch), a `TireSize` (`205/55 R16`) and a compound. A tire goes on
+  rims of its diameter within 1.25" of its ideal width (0.8 × mm / 25.4); the chassis'
+  `room` per axle limits the outside diameter, the width and the smallest rim (brakes;
+  brake swaps are meant to come later). The body and its wheel arches stay built around
+  the factory wheels. Size sets: mass (rim, tread, sidewalls, like real ones) and spin
+  inertia (`chassis.hub` is the corner without its wheel); the tire's design load
+  (14.5 kN per metre of width, × √(diameter/0.64)), at which it grips its compound's
+  friction (`tire::GRIP` 1.05 × compound), with load sensitivity 0.27 (wider grips
+  more, about 5 % for a fifth more width; there's no per-chassis grip any more); tread
+  heat capacity, cooling and life ∝ tread area; rolling resistance per compound ×
+  √(width/215 mm); a lower sidewall is stiffer and peaks at a smaller slip angle; extra
+  tire front adds drag. Factory compounds: Minim and Drover touring, Calder, Rheon and
+  Vespera sport, the rest street. `tires_are_sized_for_their_cars` holds three cars at
+  70 % grip; `cornering_temperatures` (ignored) prints every car. Sandbox: per axle in
+  F4 (another rim diameter or tire width keeps the outside diameter). Career: rims and
+  tire pairs by size in the parts shop, fitted to the front or rear.
 - **What fits** (`Chassis::fit`): the engine's length, width and height against the
   bay's (a transverse engine needs its length plus 36 cm for the gearbox across the
   car). That's all that can stop a swap. An engine family the factory never offered in
@@ -370,7 +388,8 @@ and without traction control; `trace_power_slide` prints one step by step
 - With the bot, mid- and rear-engined cars still spin (plausible), as does the 6.2 V8
   Harrow floored in second, and the 5-litre V8s snap back; the other front-engined cars
   are caught (asserted by `a_power_slide_can_be_caught`).
-- Tire compounds (`tire::COMPOUNDS`, agreed with the user): street (grips from cold,
+- Tire compounds (`tire::COMPOUNDS`, agreed with the user; touring added later: least
+  grip, best at 55 °C, lasts longest, rolls easiest): street (grips from cold,
   best at 65 °C, lets go gently past the peak, overheats when driven hard), sport, race
   (needs heat, best at 95 °C, peaks early and drops off, wears fast). Each has grip,
   peak slip angle/ratio with the Magic Formula C (stiffness B follows from the peak), a
