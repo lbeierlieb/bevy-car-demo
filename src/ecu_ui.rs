@@ -1,4 +1,4 @@
-//! The ECU tuning window (F3) for the active car: its fuel, target λ and spark maps as
+//! The ECU tuning window (3) for the active car: its fuel, target λ and spark maps as
 //! grids to edit, with the engine's operating point on them, live readings to tune by,
 //! the rev limiter and idle settings, and saving and loading tunes.
 
@@ -135,7 +135,7 @@ fn window(
         return Ok(());
     };
     let ctx = contexts.ctx_mut()?;
-    let tool = ("ECU tune", KeyCode::F3);
+    let tool = ("ECU tune", KeyCode::Digit3);
     let Some((window, opened)) = tool_window(ctx, tool, 0, &input, &mut panel.expanded) else {
         return Ok(());
     };

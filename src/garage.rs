@@ -1,4 +1,4 @@
-//! The showroom (F6) and the garage (F4). The showroom has every car as it leaves the
+//! The showroom (6) and the garage (4). The showroom has every car as it leaves the
 //! factory; the garage builds the active car from parts: what's fitted to the chassis
 //! (paint, gearbox, clutch, final drive, differentials, suspension, rims and tires on
 //! each axle), which engine (any that fits the engine bay), and the engine's own parts.
@@ -199,7 +199,7 @@ fn window(
         return Ok(());
     };
     let ctx = contexts.ctx_mut()?;
-    let tool = ("Garage", KeyCode::F4);
+    let tool = ("Garage", KeyCode::Digit4);
     let Some((window, opened)) = tool_window(ctx, tool, 1, &input, &mut garage.expanded) else {
         return Ok(());
     };
@@ -242,7 +242,7 @@ fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
             chassis.name,
             chassis.class.to_lowercase()
         ));
-        ui.label("F6: showroom");
+        ui.label("6: showroom");
     });
     let combo = |ui: &mut egui::Ui, id: &str, chosen: &mut usize, names: &[&str]| {
         egui::ComboBox::from_id_salt(id)
@@ -392,7 +392,7 @@ pub fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, loads: [f32; 2]) {
          outside tire in a corner, but wears and heats the inside shoulders on the straight. \
          Tires warm up and gain pressure as they work: too little and they carry on their \
          shoulders, too much and on their middle. Read the tire temperatures across the tread \
-         (F2) to set both.",
+         (2) to set both.",
     );
     egui::Grid::new("alignment").num_columns(4).show(ui, |ui| {
         for axle in 0..2 {
@@ -810,7 +810,7 @@ fn showroom(
         return Ok(());
     };
     let ctx = contexts.ctx_mut()?;
-    let tool = ("Showroom", KeyCode::F6);
+    let tool = ("Showroom", KeyCode::Digit6);
     let expanded = &mut garage.showroom_expanded;
     let Some((window, opened)) = tool_window(ctx, tool, 3, &input, expanded) else {
         return Ok(());
@@ -907,7 +907,7 @@ fn brochure(ui: &mut egui::Ui, shown: &mut Showroom) -> bool {
     } else {
         format!("On {front} at the front, {rear} at the rear")
     });
-    ui.label("(F4, the garage, fits any engine there's room for)");
+    ui.label("(4, the garage, fits any engine there's room for)");
     ui.add_space(4.0);
     ui.strong("Paint");
     ui.horizontal_wrapped(|ui| {

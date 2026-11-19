@@ -1,14 +1,15 @@
 //! The career's HUD: money and trust in the top left with the job under way and the keys,
-//! messages in the top middle, and the settings window (F2: driving aids, wheel and
+//! messages in the top middle, and the settings window (2: driving aids, wheel and
 //! pedals, controls).
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, RichText};
+use bevy_egui::input::EguiWantsInput;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::{Career, Scene, euros};
 use crate::car::DriverAids;
-use crate::ui::{WheelPanel, credits};
+use crate::ui::{WheelPanel, credits, toggle_key};
 
 /// How long a message stays up (s).
 const NEWS_TIME: f32 = 6.0;
@@ -53,8 +54,12 @@ fn age_news(time: Res<Time>, mut news: ResMut<News>) {
     news.0.retain(|(_, left)| *left > 0.0);
 }
 
-fn toggle_settings(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<Settings>) {
-    if keys.just_pressed(KeyCode::F2) {
+fn toggle_settings(
+    keys: Res<ButtonInput<KeyCode>>,
+    egui: Option<Res<EguiWantsInput>>,
+    mut settings: ResMut<Settings>,
+) {
+    if toggle_key(&keys, egui.as_deref(), KeyCode::Digit2) {
         settings.0 = !settings.0;
     }
 }
@@ -92,9 +97,9 @@ fn hud(
                         ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
                     }
                     let keys = match scene.get() {
-                        Scene::Driving => "K map   T tow home   C view   F2 settings",
-                        Scene::Garage => "F2 settings",
-                        Scene::Dyno => "Drag: look around   M mute   F2 settings",
+                        Scene::Driving => "K map   T tow home   C view   2 settings",
+                        Scene::Garage => "2 settings",
+                        Scene::Dyno => "Drag: look around   M mute   2 settings",
                     };
                     ui.label(RichText::new(keys).small().color(DIM));
                 });
@@ -139,7 +144,7 @@ fn settings(
     if !open.0 {
         return Ok(());
     }
-    egui::Window::new("Settings  (F2)")
+    egui::Window::new("Settings  (2)")
         .open(&mut open.0)
         .default_pos([12.0, 160.0])
         .default_width(360.0)

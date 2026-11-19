@@ -13,10 +13,10 @@ fn main() {
             car::ResetPlugin,
             // A click on the map (K) drives from there.
             map::TeleportPlugin,
-            // F1: gizmos, F2: the panel with telemetry and setup sliders.
+            // 1: gizmos, 2: the panel with telemetry and setup sliders.
             debug::DebugPlugin,
             ui::PanelPlugin,
-            // The tool windows: ECU tune (F3), garage (F4), dyno (F5), showroom (F6).
+            // The tool windows: ECU tune (3), garage (4), dyno (5), showroom (6).
             ecu_ui::EcuUiPlugin,
             garage::GaragePlugin,
             dyno::DynoPlugin,

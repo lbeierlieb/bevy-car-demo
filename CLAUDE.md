@@ -20,13 +20,16 @@ repo, so everything worth knowing between sessions belongs here.
 The game is a library (`src/lib.rs`) and two apps, each the list of plugins it adds to
 the shared `CorePlugin` (world, simulation, input, driving, visuals, camera, HUD, map,
 sound, egui): the **sandbox** (`src/main.rs`: stock coupé, R reset, map teleport, gizmos,
-F2 panel, F3–F6 tools) and the **career** (`src/bin/career.rs`, `cargo run --bin
+2 panel, 3–6 tools) and the **career** (`src/bin/career.rs`, `cargo run --bin
 career`). Keep it that way: no mode flags; something only one app has is a plugin of its
 own (e.g. `car::ResetPlugin`, `map::TeleportPlugin`, `ui::PanelPlugin`), and shared
 pieces are public functions (e.g. `ui::WheelPanel::show`, `workshop`). A third app,
 the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars): its
 `editor::EditorPlugin` adds the terrain, scenery, sky and map plugins itself.
 
+- Window keys are on the number row (moved from F1–F6 at the user's wish, 2026-11-19):
+  1 gizmos, 2 panel/settings, 3–6 tool windows, skipped while egui has a text field
+  focused (`ui::toggle_key`). The editor keeps F5 (bake).
 - rustfmt (asked for by the user): the whole repo is rustfmt-clean since 2026-11-17.
   Always run `nix develop -c cargo fmt --all` before every commit (and `cargo fmt` in
   `tools/bake` and `tools/dev/fakewheel`, `rustfmt --edition 2024 tools/dev/shot.rs`
@@ -77,9 +80,9 @@ src/bin/career.rs` prints 0 for each before committing. Keys are pressed from a 
 the frames until the shot (`k` opens the map, `2` hides the panel, `3` the ECU window,
 `4` the garage, `5` the dyno, `6` the showroom, `f` shows the gizmos (off by default), `c` the driver's view),
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
-The keys `3`–`6` don't expand the F3–F6 windows in screenshots (seen 2026-11-17, also on
+The keys `3`–`6` didn't expand the tool windows in screenshots (as F3–F6) (seen 2026-11-17, also on
 the code before the app split): click their title bars instead. (2026-11-18: neither
-`CLICK` nor `UICLICK` on the "Garage (F4)" bar at (1190, 57) or its arrow expanded it.)
+`CLICK` nor `UICLICK` on the "Garage (F4)" bar (now "Garage (4)") at (1190, 57) or its arrow expanded it.)
 `PLACE="x,z,frame"`The editor (`BIN=editor`, hooked by `EditorShotPlugin`): `EDITCAM="x,z,height,yaw,pitch"`
 (degrees, the first 20 frames), `CLICK="x,y,frame[,x2,y2]"` sets the window's cursor and
 holds the left button (a drag with x2, y2), `UICLICK` is the window-event click for
@@ -92,7 +95,7 @@ own config dir (`XDG_CONFIG_HOME=<scratch>/cfg`) so the save is fresh or can be 
 (e.g. `money 50000`); it starts in the garage, whose "Drive out" button is at (72, 371)
 without own cars. The dyno: `CLICK="72,371,10;544,680,45;640,687,90"
 PLACE="-2601,-3784,25"`, 120 frames: out of the garage, onto the rollers, skipped to the
-results ("The runs on file" button at (678, 680)). The F3–F6 windows are always there,
+results ("The runs on file" button at (678, 680)). The tool windows (3–6) are always there,
 collapsed to title bars stacked in the top right (`ui::tool_window`, agreed with the user
 so they can be found); their keys (or a click) expand them, and the bars hide with the
 panel (`2`). `CLICK="x,y,frame;x,y,frame…"` clicks into the
@@ -170,7 +173,7 @@ pay/time/prices as made up here, one save slot, traffic on.
   200 m under the shop (the player's car is despawned and run as a `Car` held in
   `DynoView`, respawned at the shop on leaving; engine heard via `audio::EngineAudio`),
   the screen drawn with egui over the projected quad, results with `dyno::chart` (shared
-  with F5), runs saved in the career (`run` … `endrun`). `rollers.rs`: the simulation, an
+  with 5), runs saved in the career (`run` … `endrun`). `rollers.rs`: the simulation, an
   inertia dyno (rollers = the car's mass at the tires), the car's own `Drivetrain` with
   manual shifts (user's wish: up through the gears on 40 % throttle, each gear revved
   only until the next lands at the pull's run-in, 300 rpm below the 2000 rpm start; the
@@ -179,14 +182,14 @@ pay/time/prices as made up here, one save slot, traffic on.
   engine and wheels). Blocked with a job or in the dealer's car. Parking at home and
   driving out of the garage are `OnTransition`s (not OnExit/OnEnter of Driving), since
   Driving ↔ Dyno must not park. `tow.rs`: T. `hud.rs`: money/trust/status, `News` messages,
-  F2 settings. `save.rs`: the text save (`~/.config/car-sim/career/career.save`).
+  2 settings. `save.rs`: the text save (`~/.config/car-sim/career/career.save`).
 - Not done yet: tuning in the career (ECU window), engine swaps, selling parts, body
   damage, prices tuned by playing, right of way for traffic near markers, garage door
   animation, a proper pizzeria/dealer building look (they're the OSM houses).
 
 ## Wheel support
 
-Wheel and pedals come through gamepad input (gilrs), bound in the panel (F2, "Wheel and
+Wheel and pedals come through gamepad input (gilrs), bound in the panel (2, "Wheel and
 pedals") and saved to a config file. `src/wheel_base.rs` sets the base's rotation range
 and plays force feedback, both through hid-fanatecff on Linux.
 
@@ -300,10 +303,10 @@ catalogue entries, and things like swap subframes are named so they can be price
   tire front adds drag. Factory compounds: Minim and Drover touring, Calder, Rheon and
   Vespera sport, the rest street. `tires_are_sized_for_their_cars` holds three cars at
   70 % grip; `cornering_temperatures` (ignored) prints every car. Sandbox: per axle in
-  F4 (another rim diameter or tire width keeps the outside diameter). Career: rims and
+  4 (another rim diameter or tire width keeps the outside diameter). Career: rims and
   tire pairs by size in the parts shop, fitted to the front or rear.
 - **Anti-roll bars** (asked for by the user: a part, never adjustable; each chassis has
-  its own sizes per axle, `Chassis::bars`, `RollBars`; picked in F4 and sold per car in
+  its own sizes per axle, `Chassis::bars`, `RollBars`; picked in 4 and sold per car in
   the career shop for the player's cars, `Item::RollBar`; the suspension kits are only
   springs, dampers and camber): solid bars, roll stiffness ∝ diameter⁴ from a 20 mm
   rate. In the sim each axle's bar is a force ±rate × the travel difference on the two
@@ -334,7 +337,7 @@ catalogue entries, and things like swap subframes are named so they can be price
   lower body is a loft with wheel wells; the cabin a loft with glass, roof and pillars;
   an open car's windscreen is a one-sided pane in a frame (two cabin points). One mesh
   with vertex colours. The cockpit is placed by the chassis' eye point.
-- **Showroom (F6) and garage (F4)** are both in `garage.rs`; both go through `start`
+- **Showroom (6) and garage (4)** are both in `garage.rs`; both go through `start`
   and `fit`. A changed `CarBuild` respawns the car's entity (its meshes are children);
   an engine-only change swaps it in while driving.
 - **Traction control** (my addition, on by default, a checkbox in the panel): without
@@ -454,7 +457,7 @@ and without traction control; `trace_power_slide` prints one step by step
 - Ribs, heat and pressure (`tire.rs`, asked for by the user: grip from the surface, a
   spin must not cook the tire, temperatures across the width, pressure, adjustable camber,
   no permanent overheating damage): each tire is 5 ribs (`RIBS`, inside to outside
-  everywhere, also the HUD and F2). `Corner::step` samples the ground under each rib's
+  everywhere, also the HUD and 2). `Corner::step` samples the ground under each rib's
   lowest point (no raycast any more); `TireParams::patch` turns the depths into rib loads:
   the belts pass on 0.6 of a tilt, the sideways force rolls the carcass under (load to
   the outside shoulder of the outside tire), and pressure against what the load wants
@@ -476,7 +479,7 @@ and without traction control; `trace_power_slide` prints one step by step
   cores reach about 50 °C in 30 s and 80 °C in 2 min on street tires. `CarBuild` has
   `camber` and `pressure` per axle (factory: `Chassis::camber`, `Chassis::pressure`,
   checked against `suited_pressure` by `factory_pressures_suit_the_tires`); a suspension
-  kit comes aligned to its extra camber and allows ± its reach (`SUSPENSIONS`). Set in F4
+  kit comes aligned to its extra camber and allows ± its reach (`SUSPENSIONS`). Set in 4
   and the career garage (`garage::alignment`, free). Saves keep wear per rib (temperatures
   not: a parked car cools) and an `align` line.
 - Not tuned by driving yet: the heating rates, the windows (now surface temperatures),
@@ -536,14 +539,14 @@ phasing, VTEC-style cam switching).
   between the NA and turbo builds (about 310 N·m on 0.7 bar) and sets the octane.
   No exhaust thermal mass yet: the exhaust temperature is that of the gas leaving the
   cylinders, and it drives the turbine directly.
-- ECU tuning window (F3, `src/ecu_ui.rs`): VE, target λ and spark grids with the
+- ECU tuning window (3, `src/ecu_ui.rs`): VE, target λ and spark grids with the
   operating point, block selection and +/-/set, "Correct VE here" (scales the cells
   around the operating point by measured/target λ), rev limiter, idle, factory tune.
   Tunes are saved by name as text (`src/tunes.rs`: `~/.config/car-sim/tunes/*.tune`,
   local storage on the web) with the build they were made for; loading reads over the
   engine's factory tune and warns if the build differs. Swapping the engine build in
   the setup panel replaces the tune with the new build's factory tune.
-- Garage (F4, `src/garage.rs`): parts from a catalogue (`parts.rs`: a slot per kind of
+- Garage (4, `src/garage.rs`): parts from a catalogue (`parts.rs`: a slot per kind of
   part, each part a function fitting it onto the engine's hardware, relative to it; a
   factory version is a block and a selection), cam-gear timing and wastegate spring. The car's `EngineSetup.parts` says
   what it's built from. Building bakes the maps if the fingerprint changed (native: a
@@ -553,7 +556,7 @@ phasing, VTEC-style cam switching).
   factory tune unless unticked. The redline follows from the hardware (`safe_rpm`: 95 %
   of the valve float speed, rods' pull under 70 % of their strength); the factory tune's
   rev limit (first cam profile's with the stock ECU) and the rev counter follow it.
-- Engine dyno (F5, `src/dyno.rs`): a copy of the active car's engine (as built, tuned
+- Engine dyno (5, `src/dyno.rs`): a copy of the active car's engine (as built, tuned
   and worn; a run doesn't wear the car's) held at rpm by the brake, full throttle,
   settling 3 s at 1000 rpm, then swept at a set rate (100–1000 rpm/s, slow lets a turbo
   spool) to 50 rpm below the rev limit, sampling crank torque every 100 rpm (1 s

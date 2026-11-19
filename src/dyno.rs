@@ -1,4 +1,4 @@
-//! An engine dyno (F5): the active car's engine on a brake that holds its speed, swept at
+//! An engine dyno (5): the active car's engine on a brake that holds its speed, swept at
 //! full throttle from low rpm up to the rev limiter, plotting torque and power at the
 //! crank. It runs a copy of the engine (as built, tuned and worn), so a run doesn't wear
 //! the car's; the last few runs stay on the plot to compare. Its chart (`chart`) is shared
@@ -186,7 +186,7 @@ fn window(
         return Ok(());
     };
     let ctx = contexts.ctx_mut()?;
-    let tool = ("Engine dyno", KeyCode::F5);
+    let tool = ("Engine dyno", KeyCode::Digit5);
     let Some((window, _)) = tool_window(ctx, tool, 2, &input, &mut dyno.expanded) else {
         return Ok(());
     };

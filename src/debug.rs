@@ -3,11 +3,13 @@
 
 use bevy::color::palettes::css;
 use bevy::prelude::*;
+use bevy_egui::input::EguiWantsInput;
 
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Car};
 use crate::physics::suspension::Corner;
 use crate::terrain::Terrain;
+use crate::ui::toggle_key;
 
 /// Metres of arrow per newton of tire force.
 const FORCE_SCALE: f32 = 1.0 / 4_000.0;
@@ -46,11 +48,16 @@ fn draw_on_top(mut config: ResMut<GizmoConfigStore>) {
     config.config_mut::<DefaultGizmoConfigGroup>().0.depth_bias = -1.0;
 }
 
-fn toggle(keys: Res<ButtonInput<KeyCode>>, mut view: ResMut<DebugView>) {
-    if keys.just_pressed(KeyCode::F1) {
+/// 1 toggles the gizmos, 2 the panel.
+fn toggle(
+    keys: Res<ButtonInput<KeyCode>>,
+    egui: Option<Res<EguiWantsInput>>,
+    mut view: ResMut<DebugView>,
+) {
+    if toggle_key(&keys, egui.as_deref(), KeyCode::Digit1) {
         view.gizmos = !view.gizmos;
     }
-    if keys.just_pressed(KeyCode::F2) {
+    if toggle_key(&keys, egui.as_deref(), KeyCode::Digit2) {
         view.ui = !view.ui;
     }
 }

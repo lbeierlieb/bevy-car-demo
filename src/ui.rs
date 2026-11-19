@@ -1,5 +1,5 @@
 //! The windows' common ground (egui, keeping its input from the game, the tool windows),
-//! and the sandbox's panel (F2): telemetry and live setup tuning for the active car. The
+//! and the sandbox's panel (2): telemetry and live setup tuning for the active car. The
 //! panel's wheel settings are public for other apps' windows.
 
 use bevy::ecs::system::SystemParam;
@@ -33,7 +33,7 @@ impl Plugin for UiPlugin {
     }
 }
 
-/// The sandbox's panel (F2, with `DebugPlugin`): the car's state, telemetry, setup
+/// The sandbox's panel (2, with `DebugPlugin`): the car's state, telemetry, setup
 /// sliders, the wheel and pedals, and the controls.
 pub struct PanelPlugin;
 
@@ -62,11 +62,31 @@ const TOOL_SPACING: f32 = 30.0;
 pub struct ToolInput<'w> {
     keys: Res<'w, ButtonInput<KeyCode>>,
     view: Res<'w, DebugView>,
+    egui: Option<Res<'w, EguiWantsInput>>,
 }
 
-/// A tool window (F3 to F6): always there, but collapsed to its title bar until its key
+/// Whether `key` was just pressed, not while typing into a field (the toggles are on
+/// the number row).
+pub fn toggle_key(
+    keys: &ButtonInput<KeyCode>,
+    egui: Option<&EguiWantsInput>,
+    key: KeyCode,
+) -> bool {
+    keys.just_pressed(key) && !egui.is_some_and(|e| e.wants_keyboard_input())
+}
+
+/// How `key` is written in a window title or help text: "3" for the digit 3.
+pub fn key_name(key: KeyCode) -> String {
+    let name = format!("{key:?}");
+    match name.strip_prefix("Digit").or(name.strip_prefix("Key")) {
+        Some(short) => short.to_string(),
+        None => name,
+    }
+}
+
+/// A tool window (keys 3 to 6): always there, but collapsed to its title bar until its key
 /// or a click on the bar expands it, so it can be found without knowing the key.
-/// Collapsed, it hides with the car's panel (F2). The bars stack up in the top right
+/// Collapsed, it hides with the car's panel (2). The bars stack up in the top right
 /// corner (expanded, a window grows to the left and down), `slot` is the place in the
 /// stack. `expanded` keeps whether it was expanded last frame. Gives the window to
 /// show and whether it was just expanded, or nothing while it's hidden.
@@ -79,7 +99,7 @@ pub fn tool_window(
 ) -> Option<(egui::Window<'static>, bool)> {
     let id = egui::Id::new(name);
     let mut state = CollapsingState::load_with_default_open(ctx, id.with("collapsing"), false);
-    if input.keys.just_pressed(key) {
+    if toggle_key(&input.keys, input.egui.as_deref(), key) {
         state.set_open(!state.is_open());
         state.store(ctx);
     }
@@ -92,7 +112,7 @@ pub fn tool_window(
     if !*expanded && !input.view.ui {
         return None;
     }
-    let window = egui::Window::new(format!("{name}  ({key:?})"))
+    let window = egui::Window::new(format!("{name}  ({})", key_name(key)))
         .id(id)
         .default_open(false)
         .pivot(egui::Align2::RIGHT_TOP)
@@ -200,8 +220,10 @@ fn panel(
                 ui.label("I: start the engine (after stalling with a clutch pedal)");
                 ui.label("(automatic: S at a stop selects reverse)");
                 ui.label("A/D: steer    Space: parking brake");
-                ui.label("R: reset car    F6: showroom (pick a car)");
-                ui.label("F1: gizmos    F2: this panel    F3: ECU tune    F4: garage    F5: dyno    M: mute");
+                ui.label("R: reset car    6: showroom (pick a car)");
+                ui.label(
+                    "1: gizmos    2: this panel    3: ECU tune    4: garage    5: dyno    M: mute",
+                );
                 ui.label("C: chase/driver view    K: map");
                 ui.label("Wheel and pedals: bind them under \"Wheel and pedals\"");
                 ui.label("Left-drag: orbit or look around    Scroll: zoom");
@@ -483,7 +505,7 @@ fn engine_setup(ui: &mut egui::Ui, car: &mut Car) {
     ui.strong("Engine");
     let engine = &mut car.setup.engine;
     ui.label(format!(
-        "{}, {} (F4: garage)",
+        "{}, {} (4: garage)",
         engine.build.hardware.name,
         engine.drive.name()
     ));

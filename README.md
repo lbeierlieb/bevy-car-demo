@@ -32,8 +32,8 @@ A small Bevy demo of car simulation techniques:
 - **Thirteen cars, twelve engine families**: from a city car to a supercar, a
   pickup and a van, each a chassis with a procedurally built low-poly body. Engines
   (a 1.0 three to a 6.5 V12, 22 factory versions) are independent of the cars: the
-  showroom (F6) has every car with the engines its factory offers, and the garage
-  (F4) fits any engine the engine bay has room for, along with gearboxes, clutches,
+  showroom (6) has every car with the engines its factory offers, and the garage
+  (4) fits any engine the engine bay has room for, along with gearboxes, clutches,
   final drives, differentials, suspension, tires and the engine's own parts. Weight
   and balance follow from what's fitted where.
 - **Synthesised engine sound** that follows the cylinder layout: each firing sends a
@@ -116,7 +116,7 @@ in:
   repair its engine, put on new tires, fit parts.
 
 T calls the tow truck, which brings you and your car home (€50 and €2 a kilometre); when
-you can't afford it, mom comes. F2 has the driving aids and the wheel settings. The
+you can't afford it, mom comes. 2 has the driving aids and the wheel settings. The
 career is saved in `~/.config/car-sim/career/` (local storage on the web).
 
 ## Controls (sandbox)
@@ -130,9 +130,9 @@ career is saved in `~/.config/car-sim/career/` (local storage on the web).
 | A / D | Steer |
 | Space | Parking brake on/off (cars start with it on) |
 | R | Reset car |
-| F1 / F2 | Toggle gizmos / telemetry panel |
-| F3 / F4 / F5 | ECU tuning / garage (rebuild the car) / engine dyno |
-| F6 | Showroom: pick a car |
+| 1 / 2 | Toggle gizmos / telemetry panel |
+| 3 / 4 / 5 | ECU tuning / garage (rebuild the car) / engine dyno |
+| 6 | Showroom: pick a car |
 | M | Mute engine sound |
 | C | Switch between chase and driver's view |
 | K | Map of the whole area (drag to move, scroll to zoom, click to put the car on the nearest road there; K or Esc closes) |
@@ -141,7 +141,7 @@ career is saved in `~/.config/car-sim/career/` (local storage on the web).
 ### Steering wheel and pedals
 
 Wheels, pedals and shifters work through the system's gamepad support; the keyboard
-keeps working alongside. Open the panel (F2), expand "Wheel and pedals", and click
+keeps working alongside. Open the panel (2), expand "Wheel and pedals", and click
 **Bind** next to each control, then move it: turn the wheel left, press a pedal fully
 and release it, press a button. Pedals can rest at either end of their axis. The
 bindings and settings are saved to `~/.config/car-sim/wheel.cfg` (on the web, in the
