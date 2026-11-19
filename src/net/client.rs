@@ -39,7 +39,7 @@ impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (receive, send, (move_proxies, remove_proxies))
+            (receive, dress_proxies, send, (move_proxies, remove_proxies))
                 .chain()
                 .after(crate::looks::show_cars)
                 .run_if(resource_exists::<Connection>),
@@ -279,6 +279,20 @@ fn receive(
         connection.status = Status::Lost(why);
         for (entity, _) in &proxies {
             commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// Gives a proxy its car's looks once they're here: a state can overtake them (it comes
+/// as a datagram, they come over the stream) and spawn the proxy first.
+fn dress_proxies(
+    mut commands: Commands,
+    connection: Res<Connection>,
+    proxies: Query<(Entity, &Proxy), Without<Looks>>,
+) {
+    for (entity, proxy) in &proxies {
+        if let Some(looks) = connection.looks.get(&proxy.id) {
+            commands.entity(entity).insert(looks.clone());
         }
     }
 }

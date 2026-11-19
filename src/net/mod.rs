@@ -343,4 +343,64 @@ mod tests {
         };
         assert!(why.contains("doesn't know your car"), "{why}");
     }
+
+    /// A link that hands over what came in with the datagrams first (states and traffic
+    /// overtaking the stream, as they may on the internet).
+    struct Overtaking {
+        link: link::Loopback,
+        held: std::collections::VecDeque<Vec<u8>>,
+    }
+
+    impl link::Link for Overtaking {
+        fn send(&mut self, reliable: bool, message: Vec<u8>) {
+            self.link.send(reliable, message);
+        }
+        fn receive(&mut self) -> Option<Vec<u8>> {
+            while let Some(message) = self.link.receive() {
+                self.held.push_back(message);
+            }
+            let datagram = self.held.iter().position(|m| {
+                let message = wire::decode::<protocol::ToClient>(m);
+                message.is_some_and(|m| !m.reliable())
+            });
+            match datagram {
+                Some(i) => self.held.remove(i),
+                None => self.held.pop_front(),
+            }
+        }
+        fn is_open(&self) -> bool {
+            self.link.is_open()
+        }
+        fn close(&mut self) {
+            self.link.close();
+        }
+    }
+
+    /// A car's first state arriving before its looks: the proxy still gets them.
+    #[test]
+    fn a_state_overtaking_the_looks_still_shows_the_car() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let link = Overtaking {
+            link: listener.connect(),
+            held: Default::default(),
+        };
+        let mut ben = app();
+        let terrain = Terrain::flat();
+        let car = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, 30.0, 0.0, 0.0);
+        ben.add_plugins(ClientPlugin)
+            .init_resource::<ActiveCar>()
+            .insert_resource(Connection::new(link, "Ben", &terrain));
+        ben.world_mut().spawn((
+            Transform::default(),
+            Looks::of(&car.setup),
+            Motion::of(&car),
+            car,
+        ));
+        run(&mut [&mut server, &mut anna, &mut ben], 60);
+        let seen = proxies(&mut ben);
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].2.is_some(), "Anna's car has its looks");
+    }
 }
