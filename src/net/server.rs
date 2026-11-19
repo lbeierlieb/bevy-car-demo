@@ -43,6 +43,8 @@ impl Plugin for ServerPlugin {
 pub struct Server {
     listener: Box<dyn Listener>,
     next_id: PlayerId,
+    /// The most players at once.
+    max_players: usize,
     /// When states were last sent (s).
     sent: f64,
 }
@@ -52,7 +54,15 @@ impl Server {
         Self {
             listener: Box::new(listener),
             next_id: 1,
+            max_players: 32,
             sent: 0.0,
+        }
+    }
+
+    pub fn with_max_players(self, max_players: usize) -> Self {
+        Self {
+            max_players,
+            ..self
         }
     }
 }
@@ -105,11 +115,13 @@ fn accept(mut commands: Commands, mut server: ResMut<Server>, time: Res<Time<Rea
 /// Reads what every player said, and lets go of the ones who left or fell silent.
 fn receive(
     mut commands: Commands,
+    server: Res<Server>,
     terrain: Res<Terrain>,
     time: Res<Time<Real>>,
     mut peers: Query<(Entity, &mut Peer, Option<&mut Transform>)>,
 ) {
     let now = now(&time);
+    let mut present = peers.iter().filter(|(_, p, _)| p.name.is_some()).count();
     // What everyone else has to be told afterwards.
     let mut joined = Vec::new();
     let mut left = Vec::new();
@@ -134,6 +146,8 @@ fn receive(
                         ))
                     } else if map != terrain.fingerprint {
                         Some("The server has another map".to_string())
+                    } else if present >= server.max_players {
+                        Some("The server is full".to_string())
                     } else {
                         None
                     };
@@ -147,6 +161,7 @@ fn receive(
                     let id = peer.id;
                     peer.tell(&ToClient::Welcome { you: id });
                     joined.push((id, name.clone()));
+                    present += 1;
                     peer.name = Some(name);
                 }
                 // Nothing else before hello.

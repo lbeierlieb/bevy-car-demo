@@ -15,6 +15,10 @@ pub trait Link: Send + Sync + 'static {
     /// Whether the other end is still there.
     fn is_open(&self) -> bool;
     fn close(&mut self);
+    /// What went wrong, once it's closed.
+    fn problem(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Where the server's new connections come from.
@@ -91,5 +95,23 @@ impl Listener for LoopbackListener {
     fn accept(&mut self) -> Option<Box<dyn Link>> {
         let link = self.pending.lock().unwrap().pop()?;
         Some(Box::new(link))
+    }
+}
+
+impl Link for Box<dyn Link> {
+    fn send(&mut self, reliable: bool, message: Vec<u8>) {
+        (**self).send(reliable, message);
+    }
+    fn receive(&mut self) -> Option<Vec<u8>> {
+        (**self).receive()
+    }
+    fn is_open(&self) -> bool {
+        (**self).is_open()
+    }
+    fn close(&mut self) {
+        (**self).close();
+    }
+    fn problem(&self) -> Option<String> {
+        (**self).problem()
     }
 }

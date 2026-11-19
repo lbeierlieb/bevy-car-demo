@@ -18,9 +18,29 @@ quick-xml = "0.42"
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = "0.13"
 
+# On the web, multiplayer goes through the browser's WebTransport (bound by hand in
+# `net/web.rs`, as web-sys only has it behind an unstable flag).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 bevy = { version = "0.20", default-features = false, features = ["web"] }
-web-sys = { version = "0.3", features = ["Storage", "Window"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+  "Location",
+  "ReadableStream",
+  "ReadableStreamDefaultReader",
+  "Storage",
+  "Window",
+  "WritableStream",
+  "WritableStreamDefaultWriter",
+] }
+
+# Natively, multiplayer is WebTransport (QUIC) through wtransport, on a tokio runtime.
+# `dangerous-configuration` is for joining a development server with a throwaway
+# certificate; `self-signed` makes that certificate.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+wtransport = { version = "0.7.2", default-features = false, features = ["ring", "self-signed", "dangerous-configuration"] }
 
 # Fast-ish debug builds: optimize dependencies, keep our own crate quick to compile.
 [profile.dev]

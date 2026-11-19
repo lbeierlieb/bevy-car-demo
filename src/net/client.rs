@@ -59,8 +59,8 @@ pub enum Status {
         you: PlayerId,
     },
     Refused(String),
-    /// The server went away.
-    Lost,
+    /// Couldn't join, or the server went away: why.
+    Lost(String),
 }
 
 /// The connection to a server, while playing on one.
@@ -209,11 +209,12 @@ fn receive(
             }
         }
     }
-    if !connection.link.is_open() && connection.status != Status::Lost {
-        if !matches!(connection.status, Status::Refused(_)) {
-            warn!("Lost the connection to the server");
-            connection.status = Status::Lost;
-        }
+    let ended = matches!(connection.status, Status::Lost(_) | Status::Refused(_));
+    if !connection.link.is_open() && !ended {
+        let why = (connection.link.problem())
+            .unwrap_or_else(|| "The connection to the server was lost".to_string());
+        warn!("{why}");
+        connection.status = Status::Lost(why);
         for (entity, _) in &proxies {
             commands.entity(entity).despawn();
         }

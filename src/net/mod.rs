@@ -7,11 +7,52 @@
 pub mod client;
 pub mod link;
 pub mod protocol;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod quic;
 pub mod server;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 pub mod wire;
 
 pub use client::{ClientPlugin, Connection, Status};
 pub use server::{Server, ServerPlugin};
+
+/// The UDP port servers listen on unless told otherwise.
+pub const PORT: u16 = 4433;
+
+/// The WebTransport address of a server given as `host`, `host:port` or a whole
+/// `https://` address.
+pub fn url(address: &str) -> String {
+    let address = address.trim().trim_end_matches('/');
+    let host = address.strip_prefix("https://").unwrap_or(address);
+    // A port after the host (an IPv6 address is in brackets).
+    let has_port = host.rsplit_once(':').is_some_and(|(before, port)| {
+        !before.ends_with(':')
+            && port.parse::<u16>().is_ok()
+            && (!before.contains(':') || before.ends_with(']'))
+    });
+    if has_port {
+        format!("https://{host}")
+    } else {
+        format!("https://{host}:{PORT}")
+    }
+}
+
+/// Starts joining the server at `address` (see `url`); the link is there at once and
+/// says what went wrong if it fails. Natively, `CAR_SIM_INSECURE=1` accepts any
+/// certificate (a development server's throwaway one).
+pub fn connect(address: &str) -> Box<dyn link::Link> {
+    let url = url(address);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let verify = std::env::var_os("CAR_SIM_INSECURE").is_none();
+        Box::new(quic::connect(&url, verify))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Box::new(web::connect(&url))
+    }
+}
 
 /// How often a player's car's state is sent (per second).
 pub const SEND_RATE: f64 = 30.0;
@@ -99,6 +140,22 @@ mod tests {
 
     fn connection(app: &App) -> &Connection {
         app.world().resource::<Connection>()
+    }
+
+    #[test]
+    fn addresses_become_urls() {
+        assert_eq!(url("cars.example.org"), "https://cars.example.org:4433");
+        assert_eq!(
+            url(" cars.example.org:5000 "),
+            "https://cars.example.org:5000"
+        );
+        assert_eq!(
+            url("https://cars.example.org/"),
+            "https://cars.example.org:4433"
+        );
+        assert_eq!(url("127.0.0.1:47433"), "https://127.0.0.1:47433");
+        assert_eq!(url("[::1]:5000"), "https://[::1]:5000");
+        assert_eq!(url("[::1]"), "https://[::1]:4433");
     }
 
     #[test]
