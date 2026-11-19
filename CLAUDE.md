@@ -18,8 +18,9 @@ repo, so everything worth knowing between sessions belongs here.
 ## Apps (agreed with the user)
 
 The game is a library (`src/lib.rs`) and apps, each the list of plugins it adds: the
-**sandbox** (`src/main.rs`: the shared `CorePlugin` (world, simulation, input, driving,
-visuals, camera, HUD, map, sound, egui), stock coupé, R reset, map teleport, gizmos, 2
+**sandbox** (`src/main.rs`: the shared `CorePlugin` (`WorldPlugin` (terrain, obstacles,
+simulation, traffic: all the server has too), scenery, input, driving, visuals, camera,
+HUD, map, sound, egui), stock coupé, R reset, map teleport, gizmos, 2
 panel, 3–6 tools, F11 fullscreen in all apps). The career was removed for the multiplayer work (see
 "Multiplayer"). Keep it that way: no mode flags; something only one app has is a plugin
 of its own (e.g. `car::ResetPlugin`, `map::TeleportPlugin`, `ui::PanelPlugin`), and
@@ -184,7 +185,10 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `looks.rs`, `Looks` (build, body offset, linkage per axle, `audio::EngineCharacter`)
   and `Motion` (arm angle, steer, spin per wheel, `audio::EngineRun`), filled from a
   `Car` by `show_cars`; visuals and engine sound read only these); 3. headless world core, `bin/server.rs`
-  running traffic around several centres; 4. protocol and server/client plugins over a
+  running traffic around several centres (done: `WorldPlugin`; `bin/server.rs` is
+  `MinimalPlugins` + `LogPlugin` + `WorldPlugin` at 60 updates/s; traffic populates
+  around every `Car` and `traffic::Anchor`, its meshes are `TrafficLooksPlugin`; the
+  server still links all of bevy, so it needs the render/audio libraries at runtime); 4. protocol and server/client plugins over a
   loopback transport (tested in process: a server, two clients); 5. WebTransport,
   start menu, join dialog, player name, name tags, player list; 6. shared traffic;
   7. Nix packages and module, README for the VPS.

@@ -82,10 +82,24 @@ fn toggle_fullscreen(keys: Res<ButtonInput<KeyCode>>, mut windows: Query<&mut Wi
     }
 }
 
-/// What every app has: the map (terrain, scenery, houses and trees to hit, traffic), the
-/// simulation, wheel and keyboard input, driving a car and its looks, the camera, the HUD,
-/// the map view, sound, and the egui setup the windows share. Which car there is, is up
-/// to the app.
+/// The world without anything to see or hear, which the server has too: the map with its
+/// houses and trees to hit, the simulation, and the traffic.
+pub struct WorldPlugin;
+
+impl Plugin for WorldPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins((
+            terrain::TerrainPlugin,
+            obstacles::ObstaclesPlugin,
+            sim::SimPlugin,
+            traffic::TrafficPlugin,
+        ));
+    }
+}
+
+/// What every driving app has: the world, its scenery and traffic to see, wheel and
+/// keyboard input, driving a car and its looks, the camera, the HUD, the map view, sound,
+/// and the egui setup the windows share. Which car there is, is up to the app.
 pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
@@ -96,12 +110,10 @@ impl Plugin for CorePlugin {
         })
         .add_plugins((
             (
-                terrain::TerrainPlugin,
+                WorldPlugin,
                 scenery::SceneryPlugin,
-                obstacles::ObstaclesPlugin,
-                traffic::TrafficPlugin,
+                traffic::TrafficLooksPlugin,
             ),
-            sim::SimPlugin,
             input::InputPlugin,
             wheel_base::WheelBasePlugin,
             car::CarPlugin,

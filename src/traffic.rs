@@ -1,4 +1,4 @@
-//! Traffic: cars driving the roads around the player's car.
+//! Traffic: cars driving the roads around the players' cars.
 //!
 //! They aren't simulated like the player's car. A driver follows a route through the road
 //! network (`network.rs`), picking a way at random at each junction; the front axle runs
@@ -7,7 +7,9 @@
 //! ahead, and keeps a distance to whatever is in the lane ahead (the intelligent driver
 //! model). Any knock against another car (or the player's) ends the drive: the car is a
 //! loose rigid body on its box from then on, sliding and tumbling to a stop. Cars come
-//! and go out of sight around the player.
+//! and go out of sight around the players: every simulated `Car` and every `Anchor` (on
+//! the server, the players driving elsewhere). `TrafficPlugin` is the simulation alone
+//! (the server has it), `TrafficLooksPlugin` gives the cars their meshes.
 
 pub mod network;
 
@@ -17,7 +19,7 @@ use std::f32::consts::FRAC_PI_2;
 use bevy::prelude::*;
 
 use crate::body::Wheels;
-use crate::car::{ActiveCar, Car, body_box};
+use crate::car::{Car, body_box};
 use crate::chassis::{CHASSIS, PAINTS};
 use crate::physics::collision::{self, Contact, GROUND, OBSTACLE, Obb};
 use crate::physics::rigid_body::RigidBody;
@@ -81,7 +83,7 @@ const SETTLE_TIME: f32 = 2.0;
 /// The rim's radius relative to the tire's.
 const RIM: f32 = 0.64;
 
-/// How many traffic cars drive around the player (the panel's traffic density).
+/// How many traffic cars drive around each player (the panel's traffic density).
 #[derive(Resource)]
 pub struct Traffic {
     pub cars: usize,
@@ -93,6 +95,7 @@ impl Default for Traffic {
     }
 }
 
+/// The traffic's simulation: drivers, crashes, cars coming and going around the players.
 pub struct TrafficPlugin;
 
 impl Plugin for TrafficPlugin {
@@ -103,14 +106,32 @@ impl Plugin for TrafficPlugin {
                 commands.insert_resource(Spawner::new(&network));
                 commands.insert_resource(network);
             })
-            .add_systems(Update, (populate, pose).chain())
+            .add_systems(Update, populate)
             .add_systems(FixedUpdate, step.after(crate::sim::simulate));
     }
 }
 
+/// The traffic cars' meshes, and posing them.
+pub struct TrafficLooksPlugin;
+
+impl Plugin for TrafficLooksPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Meshes>()
+            .add_systems(Update, (add_meshes, pose).chain().after(populate));
+    }
+}
+
+/// Someone traffic drives around, besides every simulated `Car`: where they are is the
+/// entity's `Transform`.
+#[derive(Component)]
+pub struct Anchor;
+
 /// A traffic car.
 #[derive(Component)]
 pub struct TrafficCar {
+    /// What it looks like: its chassis (in `CHASSIS`) and paint (in `PAINTS`).
+    pub chassis: usize,
+    pub paint: usize,
     /// Its reference point is the body's design origin (on the ground midway between the
     /// axles); the centre of mass is above it.
     pub body: RigidBody,
@@ -322,8 +343,10 @@ struct Spawner {
     rng: Rng,
     /// The first cars may appear nearer, before anything is seen.
     started: bool,
-    meshes: Option<Meshes>,
 }
+
+/// The meshes and materials traffic cars are made of.
+#[derive(Resource)]
 
 struct Meshes {
     /// A body for each chassis and paint, made when first needed.
@@ -334,6 +357,35 @@ struct Meshes {
     rubber: Handle<StandardMaterial>,
     alloy: Handle<StandardMaterial>,
     dark: Handle<StandardMaterial>,
+}
+
+impl FromWorld for Meshes {
+    fn from_world(world: &mut World) -> Self {
+        let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+        let mut flat = |color: Color, roughness: f32| {
+            materials.add(StandardMaterial {
+                base_color: color,
+                perceptual_roughness: roughness,
+                ..default()
+            })
+        };
+        let (paint, rubber, alloy, dark) = (
+            flat(Color::WHITE, 0.45),
+            flat(Color::srgb(0.06, 0.06, 0.06), 0.9),
+            flat(Color::srgb(0.62, 0.64, 0.67), 0.4),
+            flat(Color::srgb(0.12, 0.12, 0.13), 0.6),
+        );
+        let mut meshes = world.resource_mut::<Assets<Mesh>>();
+        Self {
+            bodies: vec![None; CHASSIS.len() * PAINTS.len()],
+            wheel: meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(14).build()),
+            bar: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+            paint,
+            rubber,
+            alloy,
+            dark,
+        }
+    }
 }
 
 impl Spawner {
@@ -357,7 +409,6 @@ impl Spawner {
             spots,
             rng: Rng(0x2545_f491_4f6c_dd1d),
             started: false,
-            meshes: None,
         }
     }
 }
@@ -376,72 +427,87 @@ enum WheelKind {
     Spoke,
 }
 
-/// Keeps the number of cars around the player at what's asked for: new ones appear out
-/// of sight on the roads, ones left far behind go (and when there are too many, the
-/// farthest).
-#[allow(clippy::too_many_arguments)]
+/// Whom traffic drives around.
+type Player = Or<(With<Car>, With<Anchor>)>;
+
+/// Keeps the number of cars around each player at what's asked for: new ones appear out
+/// of everyone's sight on the roads around the player with the fewest, ones left far
+/// behind by everyone go (and when there are too many, the one farthest from anyone,
+/// among those only near players with too many). Players near each other share the cars
+/// around them, so the traffic is as dense where many drive as where one does.
 fn populate(
     mut commands: Commands,
     traffic: Res<Traffic>,
     network: Res<Network>,
     terrain: Res<Terrain>,
-    active: Res<ActiveCar>,
     mut spawner: ResMut<Spawner>,
-    cars: Query<&Car>,
+    players: Query<&Transform, Player>,
     others: Query<(Entity, &TrafficCar)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let Some(player) = cars.iter().find(|car| car.index == active.0) else {
+    let centres: Vec<Vec2> = players.iter().map(|t| t.translation.xz()).collect();
+    if centres.is_empty() {
         return;
-    };
+    }
     let spawner = &mut *spawner;
-    let center = player.body.position.xz();
-    let distance = |car: &TrafficCar| car.body.position.xz().distance(center);
-    let mut count = 0;
-    let mut farthest: Option<(Entity, f32)> = None;
+    let nearest = |p: Vec2| (centres.iter().map(|c| c.distance(p))).fold(f32::INFINITY, f32::min);
+    // The cars that stay, and how many are around each player.
+    let mut kept = Vec::new();
+    let mut around = vec![0; centres.len()];
     for (entity, car) in &others {
-        let d = distance(car);
+        let p = car.body.position.xz();
         let reach = if car.driver.is_some() {
             DESPAWN
         } else {
             DESPAWN_CRASHED
         };
-        if d > reach {
+        if nearest(p) > reach {
             commands.entity(entity).despawn();
             continue;
         }
-        count += 1;
-        if farthest.is_none_or(|(_, far)| d > far) {
-            farthest = Some((entity, d));
+        for (count, c) in around.iter_mut().zip(&centres) {
+            *count += usize::from(c.distance(p) <= DESPAWN);
         }
+        kept.push((entity, p));
     }
-    if count > traffic.cars {
-        if let Some((entity, _)) = farthest {
-            commands.entity(entity).despawn();
-        }
+    // Too many: the car farthest from anyone, whose players all have too many.
+    let surplus = kept
+        .iter()
+        .filter(|&&(_, p)| {
+            (around.iter().zip(&centres))
+                .all(|(&count, c)| c.distance(p) > DESPAWN || count > traffic.cars)
+        })
+        .max_by(|a, b| nearest(a.1).total_cmp(&nearest(b.1)));
+    if around.iter().any(|&count| count > traffic.cars)
+        && let Some(&(entity, _)) = surplus
+    {
+        commands.entity(entity).despawn();
         return;
     }
-    if count == traffic.cars {
+    // Too few: one more around the player who has the fewest.
+    let Some((lacking, _)) = (around.iter().enumerate())
+        .filter(|&(_, &count)| count < traffic.cars)
+        .min_by_key(|&(_, &count)| count)
+    else {
         spawner.started = true;
         return;
-    }
+    };
+    let center = centres[lacking];
 
-    // A spot on the roads in the ring around the player, clear of every other car.
+    // A spot on the roads in the ring around that player, out of everyone's sight and
+    // clear of every other car.
     let near = if spawner.started {
         SPAWN_NEAR
     } else {
         SPAWN_FIRST
     };
-    let taken: Vec<Vec2> = (others.iter().map(|(_, car)| car.body.position.xz()))
-        .chain(cars.iter().map(|car| car.body.position.xz()))
+    let taken: Vec<Vec2> = (kept.iter().map(|&(_, p)| p))
+        .chain(centres.iter().copied())
         .collect();
     let free: Vec<usize> = (0..spawner.spots.len())
         .filter(|&i| {
             let p = spawner.spots[i].2;
-            let d = p.distance(center);
-            d > near
-                && d < SPAWN_FAR
+            p.distance(center) < SPAWN_FAR
+                && nearest(p) > near
                 && terrain.inside(p.x, p.y)
                 && taken.iter().all(|t| t.distance(p) > SPAWN_GAP)
         })
@@ -456,66 +522,60 @@ fn populate(
     let paint = (rng.next() * PAINTS.len() as f32) as usize % PAINTS.len();
     let keen = rng.range(KEEN);
     let seed = rng.0;
+    let car = TrafficCar::new(&network, &terrain, chassis, paint, leg, s, keen, seed);
+    commands.spawn((
+        Transform::from_translation(car.body.position).with_rotation(car.body.rotation),
+        car,
+    ));
+}
 
-    let parts = spawner.meshes.get_or_insert_with(|| {
-        let mut flat = |color: Color, roughness: f32| {
-            materials.add(StandardMaterial {
-                base_color: color,
-                perceptual_roughness: roughness,
-                ..default()
+/// Gives new traffic cars their body and wheels.
+fn add_meshes(
+    mut commands: Commands,
+    cars: Query<(Entity, &TrafficCar), Added<TrafficCar>>,
+    mut parts: ResMut<Meshes>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    for (entity, car) in &cars {
+        let (chassis, paint) = (car.chassis, car.paint);
+        let model = &CHASSIS[chassis];
+        let body_mesh = parts.bodies[chassis * PAINTS.len() + paint]
+            .get_or_insert_with(|| {
+                let [r, g, b] = PAINTS[paint].1;
+                meshes.add(model.body.mesh(&model.wheels(), Color::srgb(r, g, b)))
             })
-        };
-        Meshes {
-            bodies: vec![None; CHASSIS.len() * PAINTS.len()],
-            wheel: meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(14).build()),
-            bar: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-            paint: flat(Color::WHITE, 0.45),
-            rubber: flat(Color::srgb(0.06, 0.06, 0.06), 0.9),
-            alloy: flat(Color::srgb(0.62, 0.64, 0.67), 0.4),
-            dark: flat(Color::srgb(0.12, 0.12, 0.13), 0.6),
-        }
-    });
-    let model = &CHASSIS[chassis];
-    let wheels = model.wheels();
-    let body_mesh = parts.bodies[chassis * PAINTS.len() + paint]
-        .get_or_insert_with(|| {
-            let [r, g, b] = PAINTS[paint].1;
-            meshes.add(model.body.mesh(&wheels, Color::srgb(r, g, b)))
-        })
-        .clone();
-
-    let car = TrafficCar::new(&network, &terrain, chassis, leg, s, keen, seed);
-    commands
-        .spawn((
-            Transform::from_translation(car.body.position).with_rotation(car.body.rotation),
-            Visibility::default(),
-            car,
-        ))
-        .with_children(|parent| {
-            parent.spawn((Mesh3d(body_mesh), MeshMaterial3d(parts.paint.clone())));
-            for corner in 0..4 {
-                for (kind, mesh, material) in [
-                    (WheelKind::Tire, &parts.wheel, &parts.rubber),
-                    (WheelKind::Rim, &parts.wheel, &parts.alloy),
-                    (WheelKind::Spoke, &parts.bar, &parts.dark),
-                ] {
-                    parent.spawn((
-                        WheelPart { corner, kind },
-                        Mesh3d(mesh.clone()),
-                        MeshMaterial3d(material.clone()),
-                    ));
+            .clone();
+        commands
+            .entity(entity)
+            .insert(Visibility::default())
+            .with_children(|parent| {
+                parent.spawn((Mesh3d(body_mesh), MeshMaterial3d(parts.paint.clone())));
+                for corner in 0..4 {
+                    for (kind, mesh, material) in [
+                        (WheelKind::Tire, &parts.wheel, &parts.rubber),
+                        (WheelKind::Rim, &parts.wheel, &parts.alloy),
+                        (WheelKind::Spoke, &parts.bar, &parts.dark),
+                    ] {
+                        parent.spawn((
+                            WheelPart { corner, kind },
+                            Mesh3d(mesh.clone()),
+                            MeshMaterial3d(material.clone()),
+                        ));
+                    }
                 }
-            }
-        });
+            });
+    }
 }
 
 impl TrafficCar {
-    /// A car of `chassis` (in `CHASSIS`) with its front axle `s` along `leg`'s lane,
-    /// driving off at a little under the limit.
+    /// A car of `chassis` (in `CHASSIS`) and `paint` with its front axle `s` along `leg`'s
+    /// lane, driving off at a little under the limit.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         network: &Network,
         terrain: &Terrain,
         chassis: usize,
+        paint: usize,
         leg: Leg,
         s: f32,
         keen: f32,
@@ -557,6 +617,8 @@ impl TrafficCar {
         let (front, direction) = path.point(0.0);
         driver.rear = front - direction * wheels.wheelbase;
         let mut car = Self {
+            chassis,
+            paint,
             body,
             hull,
             wheels,
@@ -894,6 +956,48 @@ fn pose(
 mod tests {
     use super::*;
 
+    /// Players near each other share the traffic around them; one far away has their
+    /// own.
+    #[test]
+    fn traffic_is_shared_by_players_near_each_other() {
+        let terrain = Terrain::baked();
+        let (spawn, _) = terrain.road_spawns(1, 0.0)[0];
+        // Two players 80 m apart, a third on the roads 2 km or more away.
+        let network = Network::new(&terrain);
+        let far = Spawner::new(&network)
+            .spots
+            .iter()
+            .map(|spot| spot.2)
+            .find(|p| p.distance(spawn) > 2000.0 && terrain.inside(p.x, p.y))
+            .unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(terrain)
+            .add_plugins(TrafficPlugin);
+        let at = |p: Vec2| Transform::from_xyz(p.x, 0.0, p.y);
+        for p in [spawn, spawn + Vec2::new(80.0, 0.0), far] {
+            app.world_mut().spawn((at(p), Anchor));
+        }
+        // One car comes or goes per frame.
+        for _ in 0..200 {
+            app.update();
+        }
+        let cars: Vec<Vec2> = (app.world_mut())
+            .query::<&TrafficCar>()
+            .iter(app.world())
+            .map(|car| car.body.position.xz())
+            .collect();
+        let around = |c: Vec2| cars.iter().filter(|p| p.distance(c) <= DESPAWN).count();
+        println!(
+            "{} cars: {} around the two, {} around the far one",
+            cars.len(),
+            around(spawn),
+            around(far)
+        );
+        assert!(around(spawn) >= DEFAULT_CARS && around(far) >= DEFAULT_CARS);
+        assert!(cars.len() < 3 * DEFAULT_CARS, "the two near players share");
+    }
+
     /// Drivers on the map's roads for a minute: they keep moving, stay near the limits
     /// and seldom run into each other (only at junctions).
     #[test]
@@ -924,7 +1028,7 @@ mod tests {
                 let chassis = rng.pick(COMMON.iter().copied());
                 let keen = rng.range(KEEN);
                 cars.push(TrafficCar::new(
-                    &network, &terrain, chassis, leg, s, keen, rng.0,
+                    &network, &terrain, chassis, 0, leg, s, keen, rng.0,
                 ));
             }
         }
