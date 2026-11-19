@@ -43,7 +43,7 @@ the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars)
 - Build inside the dev shell with a separate target dir (the shared `target/` broke):
   `nix develop -c bash -c 'CARGO_TARGET_DIR=/repo/target/sandbox cargo clippy --all-targets -j 4 -- -D warnings'`.
   Touch `src/main.rs` first to make clippy actually re-check. Wasm:
-  `cargo clippy --target wasm32-unknown-unknown -j 4 -- -D warnings`.
+  `cargo clippy --target wasm32-unknown-unknown --all-targets -j 4 -- -D warnings` (as the flake's `clippy-wasm` check).
 - `cargo run` in the dev shell is a wrapper for `--profile release-dev`; build that
   profile, not `dev`, before screenshots.
 - No python/perl installed: `nix shell nixpkgs#python3 -c python3 -I`.
