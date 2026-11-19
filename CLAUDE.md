@@ -168,7 +168,7 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   car against proxies and applies the impulse only to itself.
 - A client sends what others **see and hear**: chassis, paint, wheels, ride height and a
   sound description (layout, cylinders, `ExhaustSound`, turbo), not the engine's parts;
-  re-sent when it changes (e.g. a swap in F4).
+  re-sent when it changes (e.g. a swap in the garage, 4).
 - **The server owns** the session (players, names, looks), **shared traffic** (one
   traffic world: spawned 260–550 m from the nearest player and out of everyone's view,
   removed past 700 m from everyone, density per area, not per player; sent like player
