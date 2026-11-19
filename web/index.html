@@ -14,6 +14,21 @@
 <body>
   <div id="loading">Loading cars…</div>
   <canvas id="bevy" tabindex="0"></canvas>
+  <script>
+    // Browsers start an AudioContext suspended unless the page had a click or key press
+    // before it was made, and cpal asks to resume it only once, at startup. Resume every
+    // context on the user's input, or the game stays silent if loading finished first.
+    const audioContexts = [];
+    const NativeAudioContext = window.AudioContext;
+    window.AudioContext = class extends NativeAudioContext {
+      constructor(...args) { super(...args); audioContexts.push(this); }
+    };
+    for (const event of ['pointerdown', 'keydown', 'touchend']) {
+      document.addEventListener(event, () => {
+        for (const ctx of audioContexts) if (ctx.state === 'suspended') ctx.resume();
+      }, { capture: true });
+    }
+  </script>
   <script type="module">
     import init from './car-sim.js';
     const canvas = document.getElementById('bevy');

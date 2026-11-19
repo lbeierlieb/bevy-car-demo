@@ -704,3 +704,12 @@ The engine sound goes through bevy_audio, which can't set the output buffer size
 attempt to open the output with rodio/cpal directly (fixed 4096-frame buffer against
 underruns) gave no sound at all in the wasm build and was dropped. If it's tried
 again, keep the bevy_audio path on wasm.
+
+Web: the browser creates the `AudioContext` suspended unless the page already had a
+click or key press, and cpal resumes it only once, at startup, so the game was silent
+whenever loading finished before the first input (found 2026-11-19). `web/index.html`
+resumes every context on the first pointer/key/touch event. Checked in headless
+Chromium (from the pinned nixpkgs, `--use-angle=swiftshader --enable-unsafe-swiftshader`)
+with a script that hooks `AudioContext` and `AudioBuffer.copyToChannel` (cpal copies
+every buffer through it) and reports the state and the RMS to the server, and clicks
+sent through the DevTools protocol (`Input.dispatchMouseEvent`).
