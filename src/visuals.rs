@@ -1,12 +1,11 @@
-//! The cars' bodies (see `body`), and their wheels and suspension, posed every frame from
-//! the simulated linkage.
+//! The cars' bodies (see `body`), and their wheels and suspension, made from each car's
+//! `Looks` and posed every frame from its `Motion`.
 
 use std::f32::consts::FRAC_PI_2;
 
 use bevy::prelude::*;
 
-use crate::car::Car;
-use crate::physics::suspension::CornerPose;
+use crate::looks::{Looks, Motion};
 
 /// Fore-aft spacing of each A-arm's two inner mounts.
 const ARM_SPREAD: f32 = 0.18;
@@ -17,7 +16,10 @@ pub struct VisualsPlugin;
 
 impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (add_car_meshes, pose_parts));
+        app.add_systems(
+            Update,
+            (add_car_meshes, pose_parts).after(crate::looks::show_cars),
+        );
     }
 }
 
@@ -36,19 +38,33 @@ enum PartKind {
     },
 }
 
+/// A car's body mesh.
+#[derive(Component)]
+struct Body;
+
 #[derive(Component)]
 struct Part {
     corner: usize,
     kind: PartKind,
 }
 
+/// A car's meshes (its body and parts), which go when its looks change.
+type CarMeshes = Or<(With<Body>, With<Part>)>;
+
+/// The meshes of every car whose looks are new or changed (the old ones go).
 fn add_car_meshes(
     mut commands: Commands,
-    cars: Query<(Entity, &Car), Added<Car>>,
+    cars: Query<(Entity, &Looks, Option<&Children>), Changed<Looks>>,
+    old: Query<(), CarMeshes>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (entity, car) in &cars {
+    for (entity, looks, children) in &cars {
+        for &child in children.into_iter().flatten() {
+            if old.contains(child) {
+                commands.entity(child).despawn();
+            }
+        }
         let mut flat = |color: Color, roughness: f32| {
             materials.add(StandardMaterial {
                 base_color: color,
@@ -64,8 +80,8 @@ fn add_car_meshes(
         let metal = flat(Color::srgb(0.4, 0.42, 0.45), 0.7);
         let spring = flat(Color::srgb(0.90, 0.30, 0.10), 0.7);
 
-        let chassis = car.setup.build.chassis();
-        let body = chassis.body.mesh(&chassis.wheels(), car.setup.color);
+        let chassis = looks.build.chassis();
+        let body = chassis.body.mesh(&chassis.wheels(), looks.build.paint());
         let wheel = Cylinder::new(1.0, 1.0).mesh().resolution(14).build();
         let bar = Cuboid::new(1.0, 1.0, 1.0);
 
@@ -74,9 +90,10 @@ fn add_car_meshes(
             .insert(Visibility::default())
             .with_children(|parent| {
                 parent.spawn((
+                    Body,
                     Mesh3d(meshes.add(body)),
                     MeshMaterial3d(paint),
-                    Transform::from_translation(car.setup.body_offset),
+                    Transform::from_translation(looks.body_offset),
                 ));
                 let wheel = meshes.add(wheel);
                 let bar = meshes.add(bar);
@@ -106,20 +123,22 @@ fn add_car_meshes(
 }
 
 /// Parts are children of the car, so they're posed directly in the chassis frame.
-fn pose_parts(cars: Query<&Car>, mut parts: Query<(&Part, &ChildOf, &mut Transform)>) {
+fn pose_parts(cars: Query<(&Looks, &Motion)>, mut parts: Query<(&Part, &ChildOf, &mut Transform)>) {
     for (part, child_of, mut transform) in &mut parts {
-        let Ok(car) = cars.get(child_of.parent()) else {
+        let Ok((looks, motion)) = cars.get(child_of.parent()) else {
             continue;
         };
-        let corner = &car.corners[part.corner];
-        let pose: &CornerPose = &corner.pose;
-        let radius = car.setup.axle(corner.front).tire.radius;
-        let wheel_size = &car.setup.build.wheels[usize::from(!corner.front)];
+        let wheel_motion = &motion.wheels[part.corner];
+        let pose = looks.corner_pose(part.corner, wheel_motion);
+        let axle = part.corner / 2;
+        let radius = looks.axles[axle].radius;
+        let wheel_size = &looks.build.wheels[axle];
         let width = wheel_size.tire.width_m();
         let rim = wheel_size.rim.radius() + FLANGE;
         // Spinning about the axle (x); a cylinder's own axis is y.
-        let spinning =
-            pose.upright * Quat::from_rotation_x(-corner.spin) * Quat::from_rotation_z(FRAC_PI_2);
+        let spinning = pose.upright
+            * Quat::from_rotation_x(-wheel_motion.spin)
+            * Quat::from_rotation_z(FRAC_PI_2);
         let wheel = |rotation: Quat, scale: Vec3| Transform {
             translation: pose.wheel_center,
             rotation,

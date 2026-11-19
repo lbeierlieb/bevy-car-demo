@@ -20,7 +20,7 @@ const BUMP_STOP: f32 = 60_000.0;
 /// Linkage points in the front-view plane of a right-hand corner (x outward from the car's
 /// centreline, y up from the centre of mass), at the design ride height.
 /// Left corners are mirrored.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ArmGeometry {
     pub lower_pivot: Vec2,
     pub lower_ball: Vec2,
@@ -143,9 +143,11 @@ pub struct AxleSetup {
     pub tire: TireParams,
 }
 
-impl AxleSetup {
-    fn pose(&self, theta: f32, steer: f32, side: f32, axle_z: f32) -> CornerPose {
-        let g = &self.geometry;
+impl ArmGeometry {
+    /// The corner's pose with the lower arm at `theta` and the upright steered by `steer`,
+    /// on the `side` (+1 right, -1 left) of an axle at `axle_z`.
+    pub fn pose(&self, theta: f32, steer: f32, side: f32, axle_z: f32) -> CornerPose {
+        let g = self;
         let l = g.solve(theta);
         let to_3d = |p: Vec2| Vec3::new(side * p.x, p.y, axle_z);
         let camber = g.static_camber - l.upright_angle;
@@ -166,7 +168,9 @@ impl AxleSetup {
             camber,
         }
     }
+}
 
+impl AxleSetup {
     /// Sets the spring and damper for a ride `frequency` (Hz) and damping ratio of
     /// `corner_mass` of sprung mass on the wheel, through the linkage's motion ratio.
     pub fn tune(&mut self, frequency: f32, damping_ratio: f32, corner_mass: f32) {
@@ -202,9 +206,9 @@ impl Derivatives {
     fn at(axle: &AxleSetup, theta: f32, steer: f32, side: f32, axle_z: f32) -> Self {
         const EPS: f32 = 1e-4;
         let r = axle.tire.radius;
-        let pose = axle.pose(theta, steer, side, axle_z);
-        let plus = axle.pose(theta + EPS, steer, side, axle_z);
-        let minus = axle.pose(theta - EPS, steer, side, axle_z);
+        let pose = axle.geometry.pose(theta, steer, side, axle_z);
+        let plus = axle.geometry.pose(theta + EPS, steer, side, axle_z);
+        let minus = axle.geometry.pose(theta - EPS, steer, side, axle_z);
         Self {
             center: (plus.wheel_center - minus.wheel_center) / (2.0 * EPS),
             contact: (plus.contact_point(r) - minus.contact_point(r)) / (2.0 * EPS),
@@ -294,7 +298,7 @@ impl Corner {
             bar_force: 0.0,
             drive_inertia: 0.0,
             brake_torque: 0.0,
-            pose: axle.pose(theta, 0.0, side, axle_z),
+            pose: axle.geometry.pose(theta, 0.0, side, axle_z),
             contact: None,
             travel: 0.0,
         }
@@ -517,7 +521,7 @@ mod tests {
         a.geometry.static_toe = 1f32.to_radians();
         let theta = a.geometry.design_angle();
         for side in [-1.0, 1.0] {
-            let forward = a.pose(theta, 0.0, side, 0.0).upright * Vec3::NEG_Z;
+            let forward = a.geometry.pose(theta, 0.0, side, 0.0).upright * Vec3::NEG_Z;
             // Forward is -z; the wheel on the +x side points a little towards -x.
             assert!(forward.x * side < -0.01, "side {side}: {forward}");
         }
@@ -527,7 +531,7 @@ mod tests {
     fn short_upper_arm_gains_negative_camber_in_bump() {
         let a = axle();
         let theta = a.geometry.design_angle();
-        let bump = a.pose(theta + 0.1, 0.0, 1.0, 0.0);
+        let bump = a.geometry.pose(theta + 0.1, 0.0, 1.0, 0.0);
         assert!(bump.camber < a.geometry.static_camber);
         assert!(bump.wheel_center.y > a.geometry.wheel_center.y);
     }
@@ -553,7 +557,7 @@ mod tests {
     #[test]
     fn preload_compresses_spring() {
         let a = axle();
-        let pose = a.pose(a.geometry.design_angle(), 0.0, 1.0, 0.0);
+        let pose = a.geometry.pose(a.geometry.design_angle(), 0.0, 1.0, 0.0);
         assert!(a.spring_rest_length(300.0) > pose.spring_length());
     }
 }

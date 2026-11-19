@@ -180,8 +180,10 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   standalone listener on port 80), the server restarted on renewal (`reloadServices`),
   hardened service with `DynamicUser`. With `web.enable` the web build is served at the
   same domain, and its "Join server" connects to its own host.
-- Steps: 1. remove the career (done); 2. what's seen and heard decoupled from `Car` (a shared
-  component a local car and a proxy both fill); 3. headless world core, `bin/server.rs`
+- Steps: 1. remove the career (done); 2. what's seen and heard decoupled from `Car` (done:
+  `looks.rs`, `Looks` (build, body offset, linkage per axle, `audio::EngineCharacter`)
+  and `Motion` (arm angle, steer, spin per wheel, `audio::EngineRun`), filled from a
+  `Car` by `show_cars`; visuals and engine sound read only these); 3. headless world core, `bin/server.rs`
   running traffic around several centres; 4. protocol and server/client plugins over a
   loopback transport (tested in process: a server, two clients); 5. WebTransport,
   start menu, join dialog, player name, name tags, player list; 6. shared traffic;

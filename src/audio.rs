@@ -25,8 +25,9 @@ use std::time::Duration;
 use bevy::audio::{AddAudioSource, ChannelCount, Decodable, SampleRate, Source};
 use bevy::prelude::*;
 
-use crate::car::{ActiveCar, Car, CarSetup};
-use crate::physics::drivetrain::Drivetrain;
+use crate::car::{ActiveCar, Car};
+use crate::looks::{Looks, Motion};
+use crate::physics::drivetrain::{Drivetrain, EngineSetup};
 use crate::physics::engine::families::{Layout, relative_size};
 use crate::physics::engine::hardware::EngineHardware;
 
@@ -151,17 +152,59 @@ const WHISTLE_IDLE: f32 = 0.3;
 const WHISTLE_MIN: f32 = 100.0;
 const WHISTLE_MAX: f32 = 6000.0;
 
+/// What an engine sounds like: all the synth needs that doesn't change while it runs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EngineCharacter {
+    pub layout: Layout,
+    pub exhaust: ExhaustSound,
+    /// The turbo's shaft speed limit (rad/s), 0 without a turbo.
+    pub turbo_limit: f32,
+}
+
+impl EngineCharacter {
+    pub fn of(setup: &EngineSetup) -> Self {
+        let hardware = &setup.build.hardware;
+        Self {
+            layout: setup.parts.family().layout,
+            exhaust: ExhaustSound::of(hardware),
+            turbo_limit: hardware.turbo.map_or(0.0, |turbo| turbo.max_speed()),
+        }
+    }
+}
+
+/// What an engine is doing right now, as far as it's heard.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct EngineRun {
+    pub running: bool,
+    pub rpm: f32,
+    /// 0 to 1.
+    pub load: f32,
+    /// The turbo's shaft speed (rad/s).
+    pub turbo_speed: f32,
+}
+
+impl EngineRun {
+    pub fn of(drivetrain: &Drivetrain) -> Self {
+        Self {
+            running: drivetrain.running,
+            rpm: drivetrain.rpm,
+            load: drivetrain.load,
+            turbo_speed: drivetrain.engine.turbo_speed,
+        }
+    }
+}
+
 /// What the exhaust hardware does to the sound.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct ExhaustSound {
+pub struct ExhaustSound {
     /// How much the silencer and the catalyst take out (0 open, 1 fully muffled).
-    muffle: f32,
+    pub muffle: f32,
     /// Pipe diameter relative to the stock one for the engine's size.
-    bore: f32,
+    pub bore: f32,
     /// The header primaries' quarter-wave resonance (Hz).
-    header: f32,
+    pub header: f32,
     /// 1 with a turbine in the exhaust, 0 without.
-    turbine: f32,
+    pub turbine: f32,
 }
 
 impl ExhaustSound {
@@ -204,7 +247,7 @@ impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_audio_source::<EngineSynth>()
             .add_systems(Startup, start_engine)
-            .add_systems(Update, update_engine);
+            .add_systems(Update, update_engine.after(crate::looks::show_cars));
     }
 }
 
@@ -636,22 +679,18 @@ pub struct EngineAudio {
 }
 
 impl EngineAudio {
-    /// Plays the engine of a car with `setup` running as `drivetrain` says.
-    fn hear(&self, setup: &CarSetup, drivetrain: &Drivetrain) {
-        let volume = if self.muted || !drivetrain.running {
-            0.0
+    /// Plays an engine that sounds like `voice` running as `run` says.
+    fn hear(&self, voice: &EngineCharacter, run: &EngineRun) {
+        let volume = if self.muted || !run.running { 0.0 } else { 1.0 };
+        self.targets.set(run.rpm, run.load, volume);
+        self.targets.set_layout(voice.layout);
+        self.targets.set_exhaust(voice.exhaust);
+        let share = if voice.turbo_limit > 0.0 {
+            run.turbo_speed / voice.turbo_limit
         } else {
-            1.0
+            0.0
         };
-        self.targets.set(drivetrain.rpm, drivetrain.load, volume);
-        self.targets.set_layout(setup.engine.parts.family().layout);
-        let hardware = &setup.engine.build.hardware;
-        self.targets.set_exhaust(ExhaustSound::of(hardware));
-        let speed = drivetrain.engine.turbo_speed;
-        let share = hardware
-            .turbo
-            .map_or(0.0, |turbo| speed / turbo.max_speed());
-        self.targets.set_turbo(speed / TAU, share);
+        self.targets.set_turbo(run.turbo_speed / TAU, share);
     }
 }
 
@@ -669,19 +708,19 @@ fn start_engine(mut commands: Commands, mut synths: ResMut<Assets<EngineSynth>>)
 fn update_engine(
     keys: Res<ButtonInput<KeyCode>>,
     active: Res<ActiveCar>,
-    cars: Query<&Car>,
+    cars: Query<(&Car, &Looks, &Motion)>,
     mut engine: ResMut<EngineAudio>,
 ) {
     if keys.just_pressed(KeyCode::KeyM) {
         engine.muted = !engine.muted;
     }
-    let Some(car) = cars.iter().find(|car| car.index == active.0) else {
+    let Some((_, looks, motion)) = cars.iter().find(|(car, ..)| car.index == active.0) else {
         // No car to drive (yet): silence.
         let (rpm, load, _) = engine.targets.get();
         engine.targets.set(rpm, load, 0.0);
         return;
     };
-    engine.hear(&car.setup, &car.drivetrain);
+    engine.hear(&looks.engine, &motion.engine);
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@ pub mod fences;
 pub mod garage;
 pub mod hud;
 pub mod input;
+pub mod looks;
 pub mod map;
 pub mod obstacles;
 pub mod osm;
@@ -104,6 +105,7 @@ impl Plugin for CorePlugin {
             input::InputPlugin,
             wheel_base::WheelBasePlugin,
             car::CarPlugin,
+            looks::LooksPlugin,
             visuals::VisualsPlugin,
             cockpit::CockpitPlugin,
             camera::CameraPlugin,
