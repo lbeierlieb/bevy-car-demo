@@ -1,4 +1,5 @@
-//! The sandbox: every car and part for free, with the developer tools.
+//! The sandbox: every car and part for free, with the developer tools; alone or on a
+//! server.
 
 use bevy::prelude::*;
 use car_sim::*;
@@ -8,6 +9,8 @@ fn main() {
         .add_plugins(default_plugins("Car Sim"))
         .add_plugins(CorePlugin)
         .add_plugins((
+            // The start menu: play alone or join a server.
+            online::OnlinePlugin,
             // Starts in the coupé; R puts the car back on its wheels as new.
             car::DefaultCarPlugin,
             car::ResetPlugin,

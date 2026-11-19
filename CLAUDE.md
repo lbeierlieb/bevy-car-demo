@@ -93,7 +93,13 @@ egui (the map, buttons), `EDITKEYS="Digit2@25;ControlLeft+KeyS@60"` taps keys. A
 of a village road: `EDITCAM="-2986,-1954,45,0,-70"`, the road at (1000, 381). Saving
 or baking in a shot writes the real map and terrain files: `git checkout map assets`.
 `PLACE="x,z,frame"` puts the driven car on the road nearest that map point. Give a shot
-its own config dir (`XDG_CONFIG_HOME=<scratch>/cfg`) for fresh settings. The tool windows (3–6) are always there,
+its own config dir (`XDG_CONFIG_HOME=<scratch>/cfg`) for fresh settings. The start menu
+is closed in shots unless `MENU=1`; `JOIN=127.0.0.1 NAME=Anna` joins a server at once.
+Two players: start the server (`target/sandbox/release-dev/server`, throwaway
+certificate, in the background with `nohup`), then two shots with `CAR_SIM_INSECURE=1`
+and their own config dirs, the second started a few seconds after the first, more
+frames for the first (they take turns building). Don't `pkill -f` anything matching
+your own command line (it kills the shell); `pgrep -x server`, then `kill`. The tool windows (3–6) are always there,
 collapsed to title bars stacked in the top right (`ui::tool_window`, agreed with the user
 so they can be found); their keys (or a click) expand them, and the bars hide with the
 panel (`2`). `CLICK="x,y,frame;x,y,frame…"` clicks into the
@@ -198,7 +204,14 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   clock (offset = least our-clock-minus-theirs seen, creeping up), contacts in
   FixedUpdate push only our car; the plugins idle without the resources; tests in
   `net/mod.rs` step time by hand with `TimeUpdateStrategy::ManualDuration`); 5. WebTransport,
-  start menu, join dialog, player name, name tags, player list; 6. shared traffic;
+  start menu, join dialog, player name, name tags, player list (done: `net/quic.rs`
+  (wtransport, tokio runtime "network", stream framed by u32 length + datagrams ≤ 1200 B,
+  certificate files reloaded on change via `Endpoint::reload_config`), `net/web.rs`
+  (hand-made wasm-bindgen bindings, JS objects in a thread-local by link id),
+  `net::connect`, `online.rs` (`OnlinePlugin` in the sandbox: menu, players window,
+  name tags, joining cars placed in lane spots near the spawn by player id),
+  `bin/server.rs` options `--port --cert --key --traffic --max-players`; tried with a
+  local server and two headless games: both joined, saw each other, shared traffic); 6. shared traffic;
   7. Nix packages and module, README for the VPS.
 - Later: chat, sanity checks on snapshots, Safari, certificate reload without restart,
   career.

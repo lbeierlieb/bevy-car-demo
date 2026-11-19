@@ -90,6 +90,24 @@ Or without entering the shell: `nix run`. The web build is served with
 targets and runs clippy, rustfmt, nixfmt and deadnix. GitHub Actions runs it on every
 pull request, and every push to `main` deploys the web build to GitHub Pages.
 
+## Multiplayer
+
+The game starts with a menu: **Play alone**, or **Join server** with your name and the
+server's address (`host`, `host:port` or `https://host:port`; the port is 4433 unless
+said otherwise). On a server each player drives their own car as alone (physics and
+force feedback stay on your machine) and sees the others near them (within 600 m), with
+their names over the cars; the list of players (top left) has **Leave the server**. A
+server is a program of its own, run headless:
+
+```sh
+cargo run --bin server -- --cert fullchain.pem --key key.pem   # options: --port, --traffic, --max-players
+```
+
+It needs a real certificate for browsers to join (WebTransport). Without `--cert` and
+`--key` it makes a throwaway one, which only the native game joins, with
+`CAR_SIM_INSECURE=1 cargo run` (for development). The game and the server must be the
+same version, on the same map.
+
 ## Controls (sandbox)
 
 | Key | Action |
@@ -184,7 +202,8 @@ tire grip force, cyan for roll centres.
 | `src/physics/engine/` | Engine model, ECU, engine families and their parts, baked maps |
 | `src/chassis.rs` | The cars: chassis, gearboxes, and which engine fits where |
 | `src/body.rs` | Procedural low-poly car bodies |
-| `src/lib.rs`, `src/main.rs` | The shared `CorePlugin`; the sandbox app |
+| `src/lib.rs`, `src/main.rs` | The shared `WorldPlugin` and `CorePlugin`; the sandbox app |
+| `src/net/`, `src/online.rs`, `src/bin/server.rs` | Multiplayer: protocol, server, client, WebTransport; the start menu; the server app |
 | `src/editor/`, `src/bin/editor.rs` | The map editor |
 | `src/osm.rs` | The map file's reader and writer (shared with the bake) |
 | `src/garage.rs` | Sandbox showroom and garage |

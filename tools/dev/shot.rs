@@ -14,6 +14,7 @@ impl Plugin for ShotPlugin {
             );
             // Before the car gets its meshes, which would be added to a despawned car.
             app.add_systems(PreUpdate, (pick_car, line_up, place_car));
+            app.add_systems(PreUpdate, start_online);
             app.add_systems(
                 PostUpdate,
                 car_cam
@@ -27,6 +28,31 @@ impl Plugin for ShotPlugin {
                     .before(bevy::transform::TransformSystems::Propagate),
             );
         }
+    }
+}
+
+/// The start menu is closed unless MENU=1; JOIN="address" joins that server as NAME (or
+/// "Shot") at once.
+fn start_online(
+    mut commands: Commands,
+    mut done: Local<bool>,
+    menu: Option<ResMut<crate::online::Menu>>,
+    terrain: Res<crate::terrain::Terrain>,
+) {
+    let Some(mut menu) = menu else {
+        return;
+    };
+    if std::mem::replace(&mut *done, true) {
+        return;
+    }
+    if std::env::var("MENU").is_err() {
+        menu.open = false;
+    }
+    if let Ok(address) = std::env::var("JOIN") {
+        let name = std::env::var("NAME").unwrap_or_else(|_| "Shot".into());
+        let link = crate::net::connect(&address);
+        commands.insert_resource(crate::net::Connection::new(link, &name, &terrain));
+        menu.open = false;
     }
 }
 

@@ -489,7 +489,8 @@ pub fn heading(rotation: Quat) -> f32 {
 #[derive(Resource, Default)]
 pub struct ActiveCar(pub usize);
 
-const SETTINGS: Folder = Folder {
+/// Settings kept between runs (`~/.config/car-sim/settings/*.cfg`).
+pub(crate) const SETTINGS: Folder = Folder {
     cache: false,
     name: "settings",
     extension: "cfg",

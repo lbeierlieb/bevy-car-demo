@@ -23,6 +23,7 @@ pub mod looks;
 pub mod map;
 pub mod net;
 pub mod obstacles;
+pub mod online;
 pub mod osm;
 pub mod physics;
 pub mod relief;
