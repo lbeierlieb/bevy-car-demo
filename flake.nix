@@ -215,6 +215,8 @@
                   ];
                 }).config;
               summary = config: {
+                user = config.systemd.services.car-sim.serviceConfig.User;
+                dynamicUser = config.systemd.services.car-sim.serviceConfig.DynamicUser or false;
                 exec = config.systemd.services.car-sim.serviceConfig.ExecStart;
                 groups = config.systemd.services.car-sim.serviceConfig.SupplementaryGroups;
                 certGroup = config.security.acme.certs."cars.example.org".group;

@@ -92,6 +92,14 @@ in
 
   config = mkIf cfg.enable (mkMerge [
     {
+      # A user of its own (not `DynamicUser`: that can't share its name with the
+      # certificate's group).
+      users.users.car-sim = {
+        isSystemUser = true;
+        group = "car-sim";
+      };
+      users.groups.car-sim = { };
+
       systemd.services.car-sim = {
         description = "Car Sim multiplayer server";
         wantedBy = [ "multi-user.target" ];
@@ -119,7 +127,8 @@ in
           ];
           Restart = "on-failure";
           RestartSec = 5;
-          DynamicUser = true;
+          User = "car-sim";
+          Group = "car-sim";
           # To read the certificate.
           SupplementaryGroups = [ cert.group ];
           # A port under 1024 needs the capability; nothing else does.
@@ -154,7 +163,6 @@ in
 
     # The certificate alone: ACME's own little web server answers the challenge.
     (mkIf (!cfg.web.enable) {
-      users.groups.car-sim = { };
       security.acme.certs.${cfg.domain} = {
         listenHTTP = ":80";
         group = "car-sim";

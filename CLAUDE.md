@@ -190,7 +190,7 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `services.car-sim = { enable; domain; port; openFirewall; traffic; maxPlayers;
   web.enable; }`, certificate via `security.acme` (nginx's `enableACME` with
   `web.enable`, else ACME's standalone listener on port 80), taken up by the server
-  itself when renewed, hardened service with `DynamicUser`. With `web.enable` the web build is served at the
+  itself when renewed, hardened service as system user `car-sim` (not `DynamicUser`: systemd refuses a dynamic user named like the existing `car-sim` certificate group, seen on the user's VPS). With `web.enable` the web build is served at the
   same domain, and its "Join server" connects to its own host.
 - Steps: 1. remove the career (done); 2. what's seen and heard decoupled from `Car` (done:
   `looks.rs`, `Looks` (build, body offset, linkage per axle, `audio::EngineCharacter`)
