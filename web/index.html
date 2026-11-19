@@ -28,6 +28,15 @@
         for (const ctx of audioContexts) if (ctx.state === 'suspended') ctx.resume();
       }, { capture: true });
     }
+
+    // The F keys belong to the browser (F5 reloads, F11 goes fullscreen): the game has
+    // none, and winit would cancel them in its listeners on the canvas, so they stop
+    // here, on the way down, before reaching it.
+    for (const event of ['keydown', 'keyup']) {
+      window.addEventListener(event, (e) => {
+        if (/^F([1-9]|1[0-2])$/.test(e.code)) e.stopImmediatePropagation();
+      }, { capture: true });
+    }
   </script>
   <script type="module">
     import init from './car-sim.js';

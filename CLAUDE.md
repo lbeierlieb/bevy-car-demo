@@ -20,7 +20,7 @@ repo, so everything worth knowing between sessions belongs here.
 The game is a library (`src/lib.rs`) and two apps, each the list of plugins it adds to
 the shared `CorePlugin` (world, simulation, input, driving, visuals, camera, HUD, map,
 sound, egui): the **sandbox** (`src/main.rs`: stock coupé, R reset, map teleport, gizmos,
-2 panel, 3–6 tools) and the **career** (`src/bin/career.rs`, `cargo run --bin
+2 panel, 3–6 tools, F11 fullscreen in all apps) and the **career** (`src/bin/career.rs`, `cargo run --bin
 career`). Keep it that way: no mode flags; something only one app has is a plugin of its
 own (e.g. `car::ResetPlugin`, `map::TeleportPlugin`, `ui::PanelPlugin`), and shared
 pieces are public functions (e.g. `ui::WheelPanel::show`, `workshop`). A third app,
@@ -29,7 +29,9 @@ the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars)
 
 - Window keys are on the number row (moved from F1–F6 at the user's wish, 2026-11-19):
   1 gizmos, 2 panel/settings, 3–6 tool windows, skipped while egui has a text field
-  focused (`ui::toggle_key`). The editor keeps F5 (bake).
+  focused (`ui::toggle_key`). The F keys belong to the browser on the web
+  (`web/index.html` keeps them from winit's canvas listeners); natively F11 toggles
+  fullscreen (`FullscreenPlugin` in `default_plugins`). The editor keeps F5 (bake).
 - rustfmt (asked for by the user): the whole repo is rustfmt-clean since 2026-11-17.
   Always run `nix develop -c cargo fmt --all` before every commit (and `cargo fmt` in
   `tools/bake` and `tools/dev/fakewheel`, `rustfmt --edition 2024 tools/dev/shot.rs`

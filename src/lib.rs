@@ -42,17 +42,44 @@ pub mod workshop;
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 
-/// The engine's own plugins, with the game's window titled `title`.
+/// The engine's own plugins, with the game's window titled `title`, and F11 for
+/// fullscreen.
 pub fn default_plugins(title: &str) -> impl PluginGroup {
-    DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: title.into(),
-            canvas: Some("#bevy".into()),
-            fit_canvas_to_parent: true,
+    DefaultPlugins
+        .set(WindowPlugin {
+            primary_window: Some(Window {
+                title: title.into(),
+                canvas: Some("#bevy".into()),
+                fit_canvas_to_parent: true,
+                ..default()
+            }),
             ..default()
-        }),
-        ..default()
-    })
+        })
+        .add(FullscreenPlugin)
+}
+
+/// F11 switches the window between windowed and borderless fullscreen. On the web the
+/// page keeps the F keys from the game and the browser does it.
+struct FullscreenPlugin;
+
+impl Plugin for FullscreenPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, toggle_fullscreen);
+    }
+}
+
+fn toggle_fullscreen(keys: Res<ButtonInput<KeyCode>>, mut windows: Query<&mut Window>) {
+    if !keys.just_pressed(KeyCode::F11) {
+        return;
+    }
+    for mut window in &mut windows {
+        window.mode = match window.mode {
+            bevy::window::WindowMode::Windowed => bevy::window::WindowMode::BorderlessFullscreen(
+                bevy::window::MonitorSelection::Current,
+            ),
+            _ => bevy::window::WindowMode::Windowed,
+        };
+    }
 }
 
 /// What every app has: the map (terrain, scenery, houses and trees to hit, traffic), the

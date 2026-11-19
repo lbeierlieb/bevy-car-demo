@@ -133,6 +133,7 @@ career is saved in `~/.config/car-sim/career/` (local storage on the web).
 | 1 / 2 | Toggle gizmos / telemetry panel |
 | 3 / 4 / 5 | ECU tuning / garage (rebuild the car) / engine dyno |
 | 6 | Showroom: pick a car |
+| F11 | Fullscreen (the browser's on the web; all F keys go to the browser there) |
 | M | Mute engine sound |
 | C | Switch between chase and driver's view |
 | K | Map of the whole area (drag to move, scroll to zoom, click to put the car on the nearest road there; K or Esc closes) |
