@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use crate::audio::{EngineCharacter, EngineRun};
 use crate::car::{Car, CarSetup, sync_transforms};
 use crate::chassis::CarBuild;
+use crate::physics::collision::Obb;
 use crate::physics::suspension::{ArmGeometry, CornerPose};
 
 pub struct LooksPlugin;
@@ -31,6 +32,11 @@ pub struct Looks {
     /// Front and rear.
     pub axles: [AxleLooks; 2],
     pub engine: EngineCharacter,
+    /// The body as a box in the chassis frame, the car's mass (kg, with half a tank) and
+    /// its moments of inertia (kg·m²), for other cars to run into it.
+    pub hull: Obb,
+    pub mass: f32,
+    pub inertia: Vec3,
 }
 
 /// An axle's linkage and where it is.
@@ -55,6 +61,9 @@ impl Looks {
             body_offset: setup.body_offset,
             axles: [axle(true), axle(false)],
             engine: EngineCharacter::of(&setup.engine),
+            hull: setup.hull,
+            mass: setup.mass_with(setup.tank.litres / 2.0),
+            inertia: setup.inertia,
         }
     }
 

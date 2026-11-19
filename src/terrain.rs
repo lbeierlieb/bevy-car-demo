@@ -184,6 +184,9 @@ pub struct Terrain {
     /// Houses and tree trunks as boxes, for collisions (filled in at startup, see
     /// `obstacles.rs`; empty in tests unless built).
     pub obstacles: Obstacles,
+    /// A hash of the baked file it was read from (0 for the test grounds): players on a
+    /// server must all drive the same map.
+    pub fingerprint: u64,
 }
 
 struct Chunk {
@@ -371,6 +374,10 @@ impl Terrain {
             buildings,
             fences,
             obstacles: Obstacles::default(),
+            // FNV-1a.
+            fingerprint: file.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
+                (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+            }),
         })
     }
 
@@ -399,6 +406,7 @@ impl Terrain {
             buildings: Vec::new(),
             fences: Vec::new(),
             obstacles: Obstacles::default(),
+            fingerprint: 0,
         }
     }
 

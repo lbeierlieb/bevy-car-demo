@@ -17,7 +17,7 @@ fn main() {
             ))),
             LogPlugin::default(),
         ))
-        .add_plugins(WorldPlugin)
+        .add_plugins((WorldPlugin, net::ServerPlugin))
         .add_systems(Update, report)
         .run();
 }

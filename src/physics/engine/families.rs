@@ -31,6 +31,20 @@ pub enum Layout {
 }
 
 impl Layout {
+    /// Every layout (the order is their number on the network).
+    pub const ALL: [Layout; 10] = [
+        Layout::Inline3,
+        Layout::Inline4,
+        Layout::Flat4,
+        Layout::Inline6,
+        Layout::Flat6,
+        Layout::V6,
+        Layout::V8,
+        Layout::FlatPlaneV8,
+        Layout::V10,
+        Layout::V12,
+    ];
+
     #[cfg(test)]
     fn cylinders(self) -> u32 {
         match self {

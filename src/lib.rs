@@ -21,6 +21,7 @@ pub mod hud;
 pub mod input;
 pub mod looks;
 pub mod map;
+pub mod net;
 pub mod obstacles;
 pub mod osm;
 pub mod physics;
@@ -118,6 +119,7 @@ impl Plugin for CorePlugin {
             wheel_base::WheelBasePlugin,
             car::CarPlugin,
             looks::LooksPlugin,
+            net::ClientPlugin,
             visuals::VisualsPlugin,
             cockpit::CockpitPlugin,
             camera::CameraPlugin,

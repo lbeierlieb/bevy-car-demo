@@ -189,7 +189,15 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `MinimalPlugins` + `LogPlugin` + `WorldPlugin` at 60 updates/s; traffic populates
   around every `Car` and `traffic::Anchor`, its meshes are `TrafficLooksPlugin`; the
   server still links all of bevy, so it needs the render/audio libraries at runtime); 4. protocol and server/client plugins over a
-  loopback transport (tested in process: a server, two clients); 5. WebTransport,
+  loopback transport (done: `src/net/`: `wire.rs` hand-written encoding, checked on
+  reading (finite floats, catalogue indices, sane sizes); `protocol.rs` `ToServer`,
+  `ToClient`, `CarState` (~120 B); `link.rs` `Link`/`Listener` traits, `Loopback`;
+  `server.rs` `Server` resource + `Peer` entities (`traffic::Anchor` while heard
+  from), 128 m grid, looks re-sent by revision; `client.rs` `Connection` resource,
+  `Proxy` entities with `Looks`/`Motion`, interpolated `DELAY` behind on the sender's
+  clock (offset = least our-clock-minus-theirs seen, creeping up), contacts in
+  FixedUpdate push only our car; the plugins idle without the resources; tests in
+  `net/mod.rs` step time by hand with `TimeUpdateStrategy::ManualDuration`); 5. WebTransport,
   start menu, join dialog, player name, name tags, player list; 6. shared traffic;
   7. Nix packages and module, README for the VPS.
 - Later: chat, sanity checks on snapshots, Safari, certificate reload without restart,
