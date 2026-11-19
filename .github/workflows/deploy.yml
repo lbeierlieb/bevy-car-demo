@@ -20,6 +20,18 @@ jobs:
     steps:
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      # The wasm build's LTO briefly needs more memory than the runner has: swap on the
+      # disk with the most free space (the temporary disk at /mnt, if there is one).
+      - name: Add swap
+        run: |
+          free -h; df -h / /mnt || true
+          dir=/; [ -d /mnt ] && [ "$(df --output=avail /mnt | tail -1)" -gt "$(df --output=avail / | tail -1)" ] && dir=/mnt
+          sudo swapoff -a; sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 12G "$dir/ci-swapfile"
+          sudo chmod 600 "$dir/ci-swapfile"
+          sudo mkswap "$dir/ci-swapfile"
+          sudo swapon "$dir/ci-swapfile"
+          free -h
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
       - run: nix build -L .#wasm
