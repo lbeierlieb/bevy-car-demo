@@ -17,7 +17,7 @@ use crate::physics::fuel;
 use crate::physics::suspension::AxleSetup;
 use crate::physics::tire::RIBS;
 use crate::sim::{CHASSIS_HZ, SUBSTEPS};
-use crate::traffic::{MOST_CARS, Traffic};
+use crate::traffic::{MOST_CARS, Source, Traffic};
 use crate::wheel_base::{ForceFeedback, WheelBase};
 
 const CORNER_NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
@@ -175,6 +175,7 @@ fn panel(
     mut cars: Query<&mut Car>,
     mut wheel_panel: WheelPanel,
     mut traffic: ResMut<Traffic>,
+    source: Res<Source>,
     mut aids: ResMut<DriverAids>,
 ) -> Result {
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
@@ -202,10 +203,13 @@ fn panel(
             });
             engine(ui, &car);
             fuel(ui, &car);
-            ui.add(
-                egui::Slider::new(&mut traffic.cars, 0..=MOST_CARS)
-                    .text("Traffic density (cars around)"),
-            );
+            // On a server, the server's traffic.
+            if *source == Source::Own {
+                ui.add(
+                    egui::Slider::new(&mut traffic.cars, 0..=MOST_CARS)
+                        .text("Traffic density (cars around)"),
+                );
+            }
             ui.label(format!(
                 "Chassis {CHASSIS_HZ:.0} Hz, corners {:.0} Hz ({SUBSTEPS} substeps)",
                 CHASSIS_HZ * SUBSTEPS as f64

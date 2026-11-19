@@ -5,7 +5,7 @@
 //! (unreliably: a lost one is soon replaced). The server welcomes it (or refuses it),
 //! tells everyone who joins and leaves, and sends each player the states of the cars near
 //! them, the nearer the more often, with their looks before the first state and after
-//! every change.
+//! every change, and the traffic near them the same way (which car, how it looks, where).
 
 use bevy::prelude::*;
 
@@ -20,7 +20,7 @@ use crate::physics::tire::COMPOUNDS;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -46,6 +46,7 @@ pub enum ToClient {
     Left { id: PlayerId },
     Looks { id: PlayerId, looks: Box<Looks> },
     States(Vec<(PlayerId, CarState)>),
+    Traffic(Vec<TrafficState>),
 }
 
 impl ToServer {
@@ -57,7 +58,7 @@ impl ToServer {
 
 impl ToClient {
     pub fn reliable(&self) -> bool {
-        !matches!(self, ToClient::States(_))
+        !matches!(self, ToClient::States(_) | ToClient::Traffic(_))
     }
 }
 
@@ -71,6 +72,54 @@ pub struct CarState {
     pub velocity: Vec3,
     pub angular_velocity: Vec3,
     pub motion: Motion,
+}
+
+/// A traffic car: which, what it looks like, and where it is at `time` on the server's
+/// clock (s). Its reference point is on the ground midway between the axles.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrafficState {
+    pub id: u32,
+    /// In `CHASSIS` and `PAINTS`.
+    pub chassis: usize,
+    pub paint: usize,
+    pub time: f64,
+    pub position: Vec3,
+    pub rotation: Quat,
+    pub velocity: Vec3,
+    pub angular_velocity: Vec3,
+    /// How far its wheels have rolled (m), and its front wheels' steering angle (rad).
+    pub rolled: f32,
+    pub steer: f32,
+}
+
+impl Wire for TrafficState {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.id.put(out);
+        self.chassis.put(out);
+        self.paint.put(out);
+        self.time.put(out);
+        self.position.put(out);
+        self.rotation.put(out);
+        self.velocity.put(out);
+        self.angular_velocity.put(out);
+        self.rolled.put(out);
+        self.steer.put(out);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        let state = Self {
+            id: r.get()?,
+            chassis: r.get()?,
+            paint: r.get()?,
+            time: r.get()?,
+            position: r.get()?,
+            rotation: r.get()?,
+            velocity: r.get()?,
+            angular_velocity: r.get()?,
+            rolled: r.get()?,
+            steer: r.get()?,
+        };
+        (state.chassis < CHASSIS.len() && state.paint < PAINTS.len()).then_some(state)
+    }
 }
 
 impl Wire for ToServer {
@@ -140,6 +189,10 @@ impl Wire for ToClient {
                 5u8.put(out);
                 states.put(out);
             }
+            ToClient::Traffic(cars) => {
+                6u8.put(out);
+                cars.put(out);
+            }
         }
     }
 
@@ -157,6 +210,7 @@ impl Wire for ToClient {
                 looks: Box::new(r.get()?),
             },
             5 => ToClient::States(r.get()?),
+            6 => ToClient::Traffic(r.get()?),
             _ => return None,
         })
     }

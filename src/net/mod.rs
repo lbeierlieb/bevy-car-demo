@@ -79,12 +79,16 @@ mod tests {
     const FRAME: f64 = 1.0 / 60.0;
 
     fn app() -> App {
+        app_on(Terrain::flat())
+    }
+
+    fn app_on(terrain: Terrain) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
                 FRAME,
             )))
-            .insert_resource(Terrain::flat());
+            .insert_resource(terrain);
         app
     }
 
@@ -97,10 +101,19 @@ mod tests {
 
     /// A player in a car of `chassis` at (x, 0), joined to the server behind `listener`.
     fn player(listener: &LoopbackListener, name: &str, chassis: usize, x: f32) -> App {
-        let mut app = app();
-        let terrain = Terrain::flat();
-        let car = Car::spawn_at(0, CarSetup::factory(chassis, 0), &terrain, x, 0.0, 0.0);
+        player_on(listener, name, chassis, Vec2::new(x, 0.0), Terrain::flat())
+    }
+
+    fn player_on(
+        listener: &LoopbackListener,
+        name: &str,
+        chassis: usize,
+        at: Vec2,
+        terrain: Terrain,
+    ) -> App {
+        let car = Car::spawn_at(0, CarSetup::factory(chassis, 0), &terrain, at.x, at.y, 0.0);
         let connection = Connection::new(listener.connect(), name, &terrain);
+        let mut app = app_on(terrain);
         app.add_plugins(ClientPlugin)
             .init_resource::<ActiveCar>()
             .insert_resource(connection);
@@ -262,5 +275,51 @@ mod tests {
         );
         println!("Anna pushed off at {a:.3} m/s, Ben at {b:.3} m/s");
         assert!(a < -0.1 && b > 0.1, "both pushed apart");
+    }
+
+    /// On a server, the traffic is the server's: a player sees its cars near them where
+    /// the server has them, and none of their own.
+    #[test]
+    fn players_see_the_servers_traffic() {
+        use crate::traffic::{TrafficCar, TrafficPlugin};
+        let listener = LoopbackListener::default();
+        let mut server = app_on(Terrain::baked());
+        server
+            .add_plugins((ServerPlugin, TrafficPlugin))
+            .insert_resource(Server::new(listener.clone()));
+        let terrain = Terrain::baked();
+        let (spawn, _) = terrain.road_spawns(1, 0.0)[0];
+        let mut anna = player_on(&listener, "Anna", 3, spawn, terrain);
+        anna.add_plugins(TrafficPlugin);
+        run(&mut [&mut server, &mut anna], 120);
+        let on_server: Vec<(u32, Vec3)> = (server.world_mut().query::<&TrafficCar>())
+            .iter(server.world())
+            .map(|car| (car.id, car.body.position))
+            .collect();
+        let seen: Vec<(u32, Vec3, bool)> = (anna.world_mut())
+            .query::<(&TrafficCar, Option<&client::ServerTraffic>)>()
+            .iter(anna.world())
+            .map(|(car, shown)| {
+                (
+                    shown.map_or(0, |s| s.id),
+                    car.body.position,
+                    shown.is_some(),
+                )
+            })
+            .collect();
+        println!(
+            "{} cars on the server, {} seen",
+            on_server.len(),
+            seen.len()
+        );
+        assert!(seen.len() >= 10, "{} seen", seen.len());
+        assert!(
+            seen.iter().all(|&(.., shown)| shown),
+            "no traffic of her own"
+        );
+        for (id, at, _) in &seen {
+            let (_, there) = on_server.iter().find(|(i, _)| i == id).unwrap();
+            assert!(at.distance(*there) < 5.0, "car {id} {at} is at {there}");
+        }
     }
 }

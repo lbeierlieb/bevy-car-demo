@@ -169,9 +169,12 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   re-sent when it changes (e.g. a swap in F4).
 - **The server owns** the session (players, names, looks), **shared traffic** (one
   traffic world: spawned 260–550 m from the nearest player and out of everyone's view,
-  removed past 700 m from everyone, density per area, not per player; sent as edge,
-  distance along it and speed, clients extrapolate on the rails of the same network;
-  a crashed traffic car is simulated by whoever hit it until asleep) and **interest
+  removed past 700 m from everyone, density per area, not per player; sent like player
+  cars, as pose and velocities with the wheels' roll and steer, interpolated and dead
+  reckoned (decided while building: the states come at 3–30 Hz, rails would need the
+  driver's random route); the server simulates crashed traffic too, players' cars are
+  `traffic::Visitor`s there (followed, crashed into, never moved), and a player's car
+  pushes itself off traffic on its own side, like off proxies) and **interest
   management** (128 m grid, ~600 m radius, rates falling with distance ~30/10/3 Hz).
   A silent player (a hidden browser tab stops the loop) is frozen for others and
   dropped after 30 s. The traffic density slider only exists alone.
@@ -211,7 +214,11 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `net::connect`, `online.rs` (`OnlinePlugin` in the sandbox: menu, players window,
   name tags, joining cars placed in lane spots near the spawn by player id),
   `bin/server.rs` options `--port --cert --key --traffic --max-players`; tried with a
-  local server and two headless games: both joined, saw each other, shared traffic); 6. shared traffic;
+  local server and two headless games: both joined, saw each other, shared traffic); 6. shared traffic (done: `traffic::Source` (Own/Server, switched by the
+  client on joining/leaving, own traffic despawned), `TrafficCar::shown` + `id`,
+  `ToClient::Traffic(Vec<TrafficState>)` (~75 B each, 14 a message), client
+  `ServerTraffic` components on shown `TrafficCar`s, interpolation shared through the
+  `Snapshot` trait; protocol 2);
   7. Nix packages and module, README for the VPS.
 - Later: chat, sanity checks on snapshots, Safari, certificate reload without restart,
   career.

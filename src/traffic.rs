@@ -106,9 +106,31 @@ impl Plugin for TrafficPlugin {
                 commands.insert_resource(Spawner::new(&network));
                 commands.insert_resource(network);
             })
-            .add_systems(Update, populate)
-            .add_systems(FixedUpdate, step.after(crate::sim::simulate));
+            .init_resource::<Source>()
+            .add_systems(Update, populate.run_if(is_own))
+            .add_systems(FixedUpdate, step.after(crate::sim::simulate).run_if(is_own));
     }
+}
+
+/// Where the traffic comes from: simulated here (alone, and on the server), or from the
+/// server (a player on one), whose cars are only shown here.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Source {
+    #[default]
+    Own,
+    Server,
+}
+
+fn is_own(source: Res<Source>) -> bool {
+    *source == Source::Own
+}
+
+/// A car driven somewhere else (on the server, a player's): traffic keeps its distance
+/// and crashes into it, but doesn't move it. Its body is where it is now.
+#[derive(Component, Clone)]
+pub struct Visitor {
+    pub body: RigidBody,
+    pub hull: Obb,
 }
 
 /// The traffic cars' meshes, and posing them.
@@ -129,6 +151,8 @@ pub struct Anchor;
 /// A traffic car.
 #[derive(Component)]
 pub struct TrafficCar {
+    /// Its number, for the server to tell players which is which.
+    pub id: u32,
     /// What it looks like: its chassis (in `CHASSIS`) and paint (in `PAINTS`).
     pub chassis: usize,
     pub paint: usize,
@@ -343,6 +367,8 @@ struct Spawner {
     rng: Rng,
     /// The first cars may appear nearer, before anything is seen.
     started: bool,
+    /// The next car's number.
+    next_id: u32,
 }
 
 /// The meshes and materials traffic cars are made of.
@@ -409,6 +435,7 @@ impl Spawner {
             spots,
             rng: Rng(0x2545_f491_4f6c_dd1d),
             started: false,
+            next_id: 1,
         }
     }
 }
@@ -522,7 +549,9 @@ fn populate(
     let paint = (rng.next() * PAINTS.len() as f32) as usize % PAINTS.len();
     let keen = rng.range(KEEN);
     let seed = rng.0;
-    let car = TrafficCar::new(&network, &terrain, chassis, paint, leg, s, keen, seed);
+    let mut car = TrafficCar::new(&network, &terrain, chassis, paint, leg, s, keen, seed);
+    car.id = spawner.next_id;
+    spawner.next_id = spawner.next_id.wrapping_add(1);
     commands.spawn((
         Transform::from_translation(car.body.position).with_rotation(car.body.rotation),
         car,
@@ -581,21 +610,8 @@ impl TrafficCar {
         keen: f32,
         seed: u64,
     ) -> Self {
-        let model = &CHASSIS[chassis];
-        let wheels = model.wheels();
-        let mut hull = body_box(model, &model.wheels);
-        let top = hull.center.y + hull.half.y;
-        hull.center.y = top / 2.0;
-        hull.half.y = top / 2.0;
-        let mass = model.mass + DRIVETRAIN_MASS + 2.0 * (model.unsprung(0) + model.unsprung(1));
-        let size = Vec3::new(model.body.width, 1.0, model.body.length);
-        let mut body = RigidBody::new(
-            Vec3::ZERO,
-            Quat::IDENTITY,
-            mass,
-            RigidBody::box_inertia(mass, size),
-        );
-        body.center = Vec3::new(0.0, model.cg_height, 0.0);
+        let mut car = Self::shown(chassis, paint);
+        let wheels = car.wheels;
         let mut driver = Driver {
             route: VecDeque::from([leg]),
             start: s,
@@ -616,17 +632,6 @@ impl TrafficCar {
         driver.speed = 0.8 * keen * lowest;
         let (front, direction) = path.point(0.0);
         driver.rear = front - direction * wheels.wheelbase;
-        let mut car = Self {
-            chassis,
-            paint,
-            body,
-            hull,
-            wheels,
-            driver: None,
-            rolled: 0.0,
-            steer: 0.0,
-            still: 0.0,
-        };
         // On a bridge's deck, or under any.
         car.body.position.y = if network.edges[leg.edge as usize].bridge {
             f32::INFINITY
@@ -636,6 +641,49 @@ impl TrafficCar {
         car.place(terrain, front, driver.rear, driver.speed, 0.0);
         car.driver = Some(driver);
         car
+    }
+
+    /// A car of `chassis` (in `CHASSIS`) and `paint` without a driver, at the origin: one
+    /// driven on the server, shown where it says.
+    pub fn shown(chassis: usize, paint: usize) -> Self {
+        let model = &CHASSIS[chassis];
+        let wheels = model.wheels();
+        let mut hull = body_box(model, &model.wheels);
+        let top = hull.center.y + hull.half.y;
+        hull.center.y = top / 2.0;
+        hull.half.y = top / 2.0;
+        let mass = model.mass + DRIVETRAIN_MASS + 2.0 * (model.unsprung(0) + model.unsprung(1));
+        let size = Vec3::new(model.body.width, 1.0, model.body.length);
+        let mut body = RigidBody::new(
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            mass,
+            RigidBody::box_inertia(mass, size),
+        );
+        body.center = Vec3::new(0.0, model.cg_height, 0.0);
+        Self {
+            id: 0,
+            chassis,
+            paint,
+            body,
+            hull,
+            wheels,
+            driver: None,
+            rolled: 0.0,
+            steer: 0.0,
+            still: 0.0,
+        }
+    }
+
+    /// How far its wheels have rolled (m) and its front wheels' steering angle (rad).
+    pub fn wheels_turned(&self) -> (f32, f32) {
+        (self.rolled, self.steer)
+    }
+
+    /// Sets how far its wheels have rolled and how they're steered.
+    pub fn turn_wheels(&mut self, rolled: f32, steer: f32) {
+        self.rolled = rolled;
+        self.steer = steer;
     }
 
     /// Sets the body on the ground under its axles, moving at `speed` and turning at
@@ -705,6 +753,7 @@ fn step(
     network: Res<Network>,
     mut traffic: Query<&mut TrafficCar>,
     mut cars: Query<&mut Car>,
+    visitors: Query<&Visitor>,
 ) {
     let dt = time.delta_secs();
     let vehicles: Vec<Vehicle> = (traffic.iter().map(|car| Vehicle::of(&car.body, &car.hull)))
@@ -712,6 +761,7 @@ fn step(
             cars.iter()
                 .map(|car| Vehicle::of(&car.body, &car.setup.hull)),
         )
+        .chain(visitors.iter().map(|v| Vehicle::of(&v.body, &v.hull)))
         .collect();
     let mut path = Path::default();
     let mut contacts = Vec::new();
@@ -748,6 +798,20 @@ fn step(
                     dt,
                 );
                 player.knocks += impulse / player.body.mass;
+            }
+        }
+    }
+    // Cars driven elsewhere: only the traffic car is moved (the other is pushed off on
+    // its own side).
+    for visitor in &visitors {
+        let hull = visitor
+            .hull
+            .placed(visitor.body.position, visitor.body.rotation);
+        for mut car in &mut traffic {
+            if let Some(contact) = touch(&car.placed_hull(), &hull) {
+                crash(&mut car);
+                let mut other = visitor.body.clone();
+                collision::resolve(&mut car.body, Some(&mut other), &[contact], OBSTACLE, dt);
             }
         }
     }
