@@ -368,7 +368,7 @@ fn traffic_cam(
 }
 
 /// PLACE="x,z,frame": put the car being driven on the road nearest map point (x, z) at
-/// that frame, e.g. on a career place's marker.
+/// that frame.
 fn place_car(
     terrain: Res<crate::terrain::Terrain>,
     active: Res<crate::car::ActiveCar>,

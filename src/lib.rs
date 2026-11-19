@@ -1,14 +1,13 @@
 //! The game's library, shared by its apps: the sandbox (`main.rs`: every car and part
-//! free, with the developer tools), the career (`bin/career.rs`) and the map editor
-//! (`bin/editor.rs`, native only, no cars). Each app is the plugins it adds; `CorePlugin`
-//! is what the two driving apps have: the world, driving a car, and seeing and hearing it.
+//! free, with the developer tools) and the map editor (`bin/editor.rs`, native only, no
+//! cars). Each app is the plugins it adds; `CorePlugin` is what a driving app has: the
+//! world, driving a car, and seeing and hearing it.
 
 pub mod audio;
 pub mod body;
 pub mod buildings;
 pub mod camera;
 pub mod car;
-pub mod career;
 pub mod chassis;
 pub mod cockpit;
 pub mod debug;

@@ -204,14 +204,9 @@ impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_audio_source::<EngineSynth>()
             .add_systems(Startup, start_engine)
-            .add_systems(Update, update_engine.in_set(EngineSound));
+            .add_systems(Update, update_engine);
     }
 }
-
-/// Where the engine sound is set from the active car. A system that has another engine
-/// heard (a car on a dyno) runs after it and calls `EngineAudio::hear`.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct EngineSound;
 
 /// Targets shared between the game and the audio thread (f32 bits in atomics).
 #[derive(Default)]
@@ -642,7 +637,7 @@ pub struct EngineAudio {
 
 impl EngineAudio {
     /// Plays the engine of a car with `setup` running as `drivetrain` says.
-    pub fn hear(&self, setup: &CarSetup, drivetrain: &Drivetrain) {
+    fn hear(&self, setup: &CarSetup, drivetrain: &Drivetrain) {
         let volume = if self.muted || !drivetrain.running {
             0.0
         } else {

@@ -73,15 +73,14 @@ A small Bevy demo of car simulation techniques:
 ```sh
 nix develop               # toolchain + native libraries
 cargo run                 # the sandbox: optimised build (release-dev profile) with fast rebuilds
-cargo run --bin career    # the career
 cargo run --bin editor    # the map editor (native only)
 cargo test                # physics unit tests and headless driving tests
 ```
 
-There are three apps built from the same library: the **sandbox** (`src/main.rs`, every
-car and part for free, with the developer tools), the **career** (`src/bin/career.rs`)
-and the **map editor** (`src/bin/editor.rs`, no cars; see "The map editor" below). The
-driving apps are each the list of plugins they add to the shared `CorePlugin`. On
+There are two apps built from the same library: the **sandbox** (`src/main.rs`, every
+car and part for free, with the developer tools) and the **map editor**
+(`src/bin/editor.rs`, no cars; see "The map editor" below). The sandbox is the list of
+plugins it adds to the shared `CorePlugin`. On
 native, they read the baked map from `assets/gerach.terrain` at startup, so a fresh
 bake shows up without recompiling (the copy built in is the fallback, and the web
 build's map).
@@ -90,34 +89,6 @@ Or without entering the shell: `nix run`. The web build is served with
 `nix run .#serve-wasm` at <http://localhost:8080>. `nix flake check` builds both
 targets and runs clippy, rustfmt, nixfmt and deadnix. GitHub Actions runs it on every
 pull request, and every push to `main` deploys the web build to GitHub Pages.
-
-## Career
-
-Start in the garage at home with €500 and mom's car (always full and in one piece).
-Places are marked on the road with a glowing disc and on the map (K); stop on one to go
-in:
-
-- **Pizzeria Bella Strada**: deliver a pizza to a house against the clock; on time and
-  without a knock there's a tip.
-- **Kessler Cars**: deliver a car to a house. The dealer trusts you more with every clean
-  delivery (less with knocks, and when a car comes back undelivered), and trust gets you
-  nicer cars that pay more. Afterwards you're back at the dealer with your own car. The
-  lot has new and used cars for sale (the car you came in goes home), and the dealer buys
-  yours.
-- **Motor Parts Thiel**: order parts; they wait on the shelf in your garage, where you
-  fit them. Fitting parts never changes the ECU's tune.
-- **Gas station**: fill up.
-- **Rollwerk Dyno**: an all-wheel chassis dyno in a scene of its own (€120 a run). The
-  car warms up through the gears, then pulls in fourth to the rev limiter while a screen
-  shows the power at the wheels. Afterwards: power and torque at the wheels and at the
-  crank, and every run on file, to name, take notes on and compare. A run wears the car
-  like driving does (Space skips to the results).
-- **Home**: into the garage, a scene of its own: pick the car to take out (A/D, Enter),
-  repair its engine, put on new tires, fit parts.
-
-T calls the tow truck, which brings you and your car home (€50 and €2 a kilometre); when
-you can't afford it, mom comes. 2 has the driving aids and the wheel settings. The
-career is saved in `~/.config/car-sim/career/` (local storage on the web).
 
 ## Controls (sandbox)
 
@@ -213,10 +184,9 @@ tire grip force, cyan for roll centres.
 | `src/physics/engine/` | Engine model, ECU, engine families and their parts, baked maps |
 | `src/chassis.rs` | The cars: chassis, gearboxes, and which engine fits where |
 | `src/body.rs` | Procedural low-poly car bodies |
-| `src/lib.rs`, `src/main.rs`, `src/bin/career.rs` | The shared `CorePlugin`; the sandbox and career apps |
+| `src/lib.rs`, `src/main.rs` | The shared `CorePlugin`; the sandbox app |
 | `src/editor/`, `src/bin/editor.rs` | The map editor |
 | `src/osm.rs` | The map file's reader and writer (shared with the bake) |
-| `src/career/` | Career: places, jobs, the garage and dyno scenes, dealer, parts shop, towing, save |
 | `src/garage.rs` | Sandbox showroom and garage |
 | `src/workshop.rs` | Baking engine maps in the background, and their cache |
 | `src/sim.rs` | Multi-rate loop, controls to wheel torques, driving tests |

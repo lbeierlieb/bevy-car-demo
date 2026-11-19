@@ -15,15 +15,15 @@ repo, so everything worth knowing between sessions belongs here.
 - Respect "stop"/"wait" messages immediately.
 - Keep this file up to date when something worth knowing next session comes up.
 
-## Two apps (agreed with the user)
+## Apps (agreed with the user)
 
-The game is a library (`src/lib.rs`) and two apps, each the list of plugins it adds to
-the shared `CorePlugin` (world, simulation, input, driving, visuals, camera, HUD, map,
-sound, egui): the **sandbox** (`src/main.rs`: stock coupé, R reset, map teleport, gizmos,
-2 panel, 3–6 tools, F11 fullscreen in all apps) and the **career** (`src/bin/career.rs`, `cargo run --bin
-career`). Keep it that way: no mode flags; something only one app has is a plugin of its
-own (e.g. `car::ResetPlugin`, `map::TeleportPlugin`, `ui::PanelPlugin`), and shared
-pieces are public functions (e.g. `ui::WheelPanel::show`, `workshop`). A third app,
+The game is a library (`src/lib.rs`) and apps, each the list of plugins it adds: the
+**sandbox** (`src/main.rs`: the shared `CorePlugin` (world, simulation, input, driving,
+visuals, camera, HUD, map, sound, egui), stock coupé, R reset, map teleport, gizmos, 2
+panel, 3–6 tools, F11 fullscreen in all apps). The career was removed for the multiplayer work (see
+"Multiplayer"). Keep it that way: no mode flags; something only one app has is a plugin
+of its own (e.g. `car::ResetPlugin`, `map::TeleportPlugin`, `ui::PanelPlugin`), and
+shared pieces are public functions (e.g. `workshop`, `garage::start`). An app,
 the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars): its
 `editor::EditorPlugin` adds the terrain, scenery, sky and map plugins itself.
 
@@ -75,10 +75,10 @@ the embedded copy, `Terrain::baked`, the fallback otherwise); commit the re-bake
 ### Screenshots (`tools/dev`)
 
 `tools/dev/unstrip.sh` copies `tools/dev/shot.rs` into `src/` and hooks it into
-`lib.rs` and both apps; `tools/dev/shot.sh out.png [frames] [keys]` renders headless and
-saves a screenshot (`BIN=career` for the career); `tools/dev/strip.sh` removes the hook.
+`lib.rs` and the apps; `tools/dev/shot.sh out.png [frames] [keys]` renders headless and
+saves a screenshot (`BIN=editor` for the editor); `tools/dev/strip.sh` removes the hook.
 Always run `strip.sh` and check that `grep -c shot src/lib.rs src/main.rs
-src/bin/career.rs` prints 0 for each before committing. Keys are pressed from a third of
+src/bin/*.rs` prints 0 for each before committing. Keys are pressed from a third of
 the frames until the shot (`k` opens the map, `2` hides the panel, `3` the ECU window,
 `4` the garage, `5` the dyno, `6` the showroom, `f` shows the gizmos (off by default), `c` the driver's view),
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
@@ -91,13 +91,8 @@ holds the left button (a drag with x2, y2), `UICLICK` is the window-event click 
 egui (the map, buttons), `EDITKEYS="Digit2@25;ControlLeft+KeyS@60"` taps keys. A view
 of a village road: `EDITCAM="-2986,-1954,45,0,-70"`, the road at (1000, 381). Saving
 or baking in a shot writes the real map and terrain files: `git checkout map assets`.
-`PLACE="x,z,frame"` puts the driven car on the road nearest that map point, e.g. on a
-career place (building positions in `career/places.rs`). For the career, give it its
-own config dir (`XDG_CONFIG_HOME=<scratch>/cfg`) so the save is fresh or can be edited
-(e.g. `money 50000`); it starts in the garage, whose "Drive out" button is at (72, 371)
-without own cars. The dyno: `CLICK="72,371,10;544,680,45;640,687,90"
-PLACE="-2601,-3784,25"`, 120 frames: out of the garage, onto the rollers, skipped to the
-results ("The runs on file" button at (678, 680)). The tool windows (3–6) are always there,
+`PLACE="x,z,frame"` puts the driven car on the road nearest that map point. Give a shot
+its own config dir (`XDG_CONFIG_HOME=<scratch>/cfg`) for fresh settings. The tool windows (3–6) are always there,
 collapsed to title bars stacked in the top right (`ui::tool_window`, agreed with the user
 so they can be found); their keys (or a click) expand them, and the bars hide with the
 panel (`2`). `CLICK="x,y,frame;x,y,frame…"` clicks into the
@@ -139,55 +134,16 @@ changed settings back there). Gotchas found with it:
 - The kernel only reports changes, and gilrs doesn't read initial state: a control
   counts once it has moved.
 
-## Career (first version, agreed with the user)
+## Career (removed 2026-11-19, to come back on top of multiplayer)
 
-`src/career/`, all under `CareerPlugin`. Agreed design: start with €500 and mom's car
-(Halden saloon, silver, always full and repaired); home near the spawn with a garage that
-is its own 3D scene (not an overlay); gas station; pizzeria (deliveries to random
-houses); car dealer (buy cars: the car you came in goes home; deliver cars: you get a car,
-deliver it, are teleported back and can do another or drive on in your own; trust grows
-with deliveries, drops with hits, unlocks nicer cars and pay); parts shop (parts wait in
-the garage to be fitted); towing home for money, or "mommy please fetch me". Physical
-part changes never modify the ECU (tuning later). Defaults the user accepted: 3 own bays,
-pay/time/prices as made up here, one save slot, traffic on.
-
-- `mod.rs`: `Career` (money, trust 0–100, own cars as `OwnedCar { setup, wear, age }`,
-  `items` on the shelf, `ride` = Mom or Own(i), counts), `Scene` state (Garage, the
-  start, or Driving). Car indices: `PLAYER` 0, `DELIVERY` 1 (`ActiveCar` says which is
-  driven; the player's car waits at the dealer during a delivery). OnEnter(Driving)
-  spawns the ride at home's marker; OnExit(Driving) keeps its wear, despawns every car
-  and saves. `Wear` is engine damage, fuel and treads.
-- `places.rs`: the places by OSM building middle (home, gas station, pizzeria, dealer,
-  parts shop: picked from the map by me, easy to move), a marker on the road edge in front
-  (`kerb`), `AtPlace` when stopped on one (radius 3.5 m, < 1.5 m/s), labels, `MapMarks`.
-- `menus.rs`: the place windows (`Visit` system param). `jobs.rs`: pizzas (0.4–3 km,
-  €10 + €9/km, 30 % tip on time and clean, a minute + 130 s/km), car deliveries
-  (1.5–5.5 km, four `TIERS` by trust, pay × 1–5, −15 % per hit, trust +5 clean, −3 per
-  hit, −8 undelivered), hits = `Car::knocks` (speed change from house/tree/car contacts)
-  over 1.2 m/s, destination marker, map mark, arrow. `lot.rs`: 7 cars for sale (5 used,
-  2 cheap runabouts), restocked after jobs, dealer sells at worth × 1.2, buys at × 0.8.
-  `catalog.rs`: all prices and `worth`. `fitting.rs`: fitting shelf parts; engine parts
-  return new `Parts`, baked in the garage via `workshop::Work` if not cached.
-  `garage.rs`: the room (200 m under home), bays, models (`visuals::spawn_model`),
-  camera, repairs, shelf. `dyno.rs` (asked for by the user: own scene, all-wheel dyno,
-  through the gears to fourth then a full pull, a screen with wheel hp, then wheel and
-  crank power and torque, all past runs with names and notes): `Scene::Dyno`, the room
-  200 m under the shop (the player's car is despawned and run as a `Car` held in
-  `DynoView`, respawned at the shop on leaving; engine heard via `audio::EngineAudio`),
-  the screen drawn with egui over the projected quad, results with `dyno::chart` (shared
-  with 5), runs saved in the career (`run` … `endrun`). `rollers.rs`: the simulation, an
-  inertia dyno (rollers = the car's mass at the tires), the car's own `Drivetrain` with
-  manual shifts (user's wish: up through the gears on 40 % throttle, each gear revved
-  only until the next lands at the pull's run-in, 300 rpm below the 2000 rpm start; the
-  pull starts as soon as fourth is in, no braking down), 6 % gear loss (10 % AWD), 1.2 % rolling; wheel power = roller inertia ×
-  acceleration × speed between 100 rpm samples, so ~18 % is lost (incl. spinning up
-  engine and wheels). Blocked with a job or in the dealer's car. Parking at home and
-  driving out of the garage are `OnTransition`s (not OnExit/OnEnter of Driving), since
-  Driving ↔ Dyno must not park. `tow.rs`: T. `hud.rs`: money/trust/status, `News` messages,
-  2 settings. `save.rs`: the text save (`~/.config/car-sim/career/career.save`).
-- Not done yet: tuning in the career (ECU window), engine swaps, selling parts, body
-  damage, prices tuned by playing, right of way for traffic near markers, garage door
-  animation, a proper pizzeria/dealer building look (they're the OSM houses).
+The first career (`src/career/`, `src/bin/career.rs`) is in git history up to c34bfbf.
+Its agreed design, to revisit for multiplayer: start with €500 and mom's car (always full
+and repaired); home with a garage that is its own 3D scene; gas station; pizzeria
+(deliveries against the clock); car dealer (buy cars, deliver cars, trust unlocking
+nicer cars and pay); parts shop (parts wait in the garage to be fitted, never touching
+the ECU); a chassis dyno in its own scene (through the gears to fourth, then a full
+pull; wheel and crank power, runs saved with names and notes); towing home, or mom
+fetching you; 3 own bays, one save slot.
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 
@@ -224,7 +180,7 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   standalone listener on port 80), the server restarted on renewal (`reloadServices`),
   hardened service with `DynamicUser`. With `web.enable` the web build is served at the
   same domain, and its "Join server" connects to its own host.
-- Steps: 1. remove the career; 2. what's seen and heard decoupled from `Car` (a shared
+- Steps: 1. remove the career (done); 2. what's seen and heard decoupled from `Car` (a shared
   component a local car and a proxy both fill); 3. headless world core, `bin/server.rs`
   running traffic around several centres; 4. protocol and server/client plugins over a
   loopback transport (tested in process: a server, two clients); 5. WebTransport,
@@ -349,11 +305,9 @@ catalogue entries, and things like swap subframes are named so they can be price
   tire front adds drag. Factory compounds: Minim and Drover touring, Calder, Rheon and
   Vespera sport, the rest street. `tires_are_sized_for_their_cars` holds three cars at
   70 % grip; `cornering_temperatures` (ignored) prints every car. Sandbox: per axle in
-  4 (another rim diameter or tire width keeps the outside diameter). Career: rims and
-  tire pairs by size in the parts shop, fitted to the front or rear.
+  4 (another rim diameter or tire width keeps the outside diameter).
 - **Anti-roll bars** (asked for by the user: a part, never adjustable; each chassis has
-  its own sizes per axle, `Chassis::bars`, `RollBars`; picked in 4 and sold per car in
-  the career shop for the player's cars, `Item::RollBar`; the suspension kits are only
+  its own sizes per axle, `Chassis::bars`, `RollBars`; picked in 4; the suspension kits are only
   springs, dampers and camber): solid bars, roll stiffness ∝ diameter⁴ from a 20 mm
   rate. In the sim each axle's bar is a force ±rate × the travel difference on the two
   corners' arm equations (`Corner::bar_force`, set every substep, so the substep loop
@@ -526,8 +480,7 @@ and without traction control; `trace_power_slide` prints one step by step
   `camber` and `pressure` per axle (factory: `Chassis::camber`, `Chassis::pressure`,
   checked against `suited_pressure` by `factory_pressures_suit_the_tires`); a suspension
   kit comes aligned to its extra camber and allows ± its reach (`SUSPENSIONS`). Set in 4
-  and the career garage (`garage::alignment`, free). Saves keep wear per rib (temperatures
-  not: a parked car cools) and an `align` line.
+  (`garage::alignment`).
 - Not tuned by driving yet: the heating rates, the windows (now surface temperatures),
   how much grip overheating costs, wear rates, how strongly camber and pressure matter.
   Possible next steps: rim width affecting the sidewall, brake heat into the rim and the tire's air, toe settings.

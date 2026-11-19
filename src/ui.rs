@@ -138,7 +138,7 @@ fn block_orbit(wants: Res<EguiWantsInput>, mut orbit: ResMut<OrbitInput>) {
 
 /// Everything the wheel section of the panel shows and changes.
 #[derive(SystemParam)]
-pub struct WheelPanel<'w, 's> {
+struct WheelPanel<'w, 's> {
     config: ResMut<'w, WheelConfig>,
     capture: ResMut<'w, Capture>,
     gamepads: Gamepads<'w, 's>,
@@ -162,7 +162,7 @@ impl WheelPanel<'_, '_> {
 }
 
 /// Where the map and its heights come from.
-pub fn credits(ui: &mut egui::Ui) {
+fn credits(ui: &mut egui::Ui) {
     ui.collapsing("Map: Gerach to Rattelsdorf and Baunach, Bavaria", |ui| {
         ui.label("Map data © OpenStreetMap contributors (ODbL)");
         ui.label("Elevation: DGM1 © Bayerische Vermessungsverwaltung (CC BY 4.0)");

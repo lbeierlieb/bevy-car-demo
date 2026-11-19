@@ -229,7 +229,7 @@ impl CarSetup {
 
     /// Sprung mass carried by each wheel of the front or the rear axle (kg) with `litres`
     /// of fuel.
-    pub fn corner_mass_with(&self, front: bool, litres: f32) -> f32 {
+    fn corner_mass_with(&self, front: bool, litres: f32) -> f32 {
         let wheelbase = self.rear_z - self.front_z;
         let fuel = litres * fuel::DENSITY;
         let (body, tank) = if front {

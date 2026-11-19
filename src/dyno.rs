@@ -1,8 +1,7 @@
 //! An engine dyno (5): the active car's engine on a brake that holds its speed, swept at
 //! full throttle from low rpm up to the rev limiter, plotting torque and power at the
 //! crank. It runs a copy of the engine (as built, tuned and worn), so a run doesn't wear
-//! the car's; the last few runs stay on the plot to compare. Its chart (`chart`) is shared
-//! with the career's dyno.
+//! the car's; the last few runs stay on the plot to compare.
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, pos2};
@@ -24,7 +23,7 @@ const SAMPLE_RPM: f32 = 100.0;
 /// Air the dyno cell's fan blows through the radiator (m/s).
 const FAN_AIRSPEED: f32 = 20.0;
 /// Watts per mechanical horsepower.
-pub const HORSEPOWER: f32 = 745.7;
+const HORSEPOWER: f32 = 745.7;
 /// Runs kept on the plot, newest first, and their colours.
 const KEPT: usize = 4;
 const COLORS: [Color32; KEPT] = [
@@ -68,7 +67,7 @@ impl Default for Dyno {
 
 /// A run's torque at the crank by rpm, and what it was run on.
 #[derive(Clone)]
-pub struct Curve {
+struct Curve {
     pub label: String,
     /// (rpm, N·m)
     pub points: Vec<(f32, f32)>,
@@ -100,7 +99,7 @@ impl Curve {
 
 /// A sweep in progress: the engine held at `rpm` at full throttle, the speed rising at a
 /// steady rate after settling at the start.
-pub struct Sweep {
+struct Sweep {
     build: EngineBuild,
     engine: Engine,
     rate: f32,
@@ -273,7 +272,7 @@ fn plot(ui: &mut egui::Ui, dyno: &Dyno) {
 
 /// Which scale a line on a chart is read against: torque on the left, power on the right.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Axis {
+enum Axis {
     Torque,
     Power,
 }
@@ -289,7 +288,7 @@ impl Axis {
 
 /// A line on a chart: values (N·m or hp, by `axis`) by rpm. Lines with a `name` show their
 /// value under the pointer, named so.
-pub struct Line<'a> {
+struct Line<'a> {
     pub points: Vec<(f32, f32)>,
     pub axis: Axis,
     pub color: Color32,
@@ -298,7 +297,7 @@ pub struct Line<'a> {
 }
 
 /// Power (hp) at `rpm` with `torque` (N·m).
-pub fn horsepower(rpm: f32, torque: f32) -> f32 {
+fn horsepower(rpm: f32, torque: f32) -> f32 {
     Curve::power(rpm, torque) / HORSEPOWER
 }
 
@@ -309,7 +308,7 @@ fn ceil_to(value: f32, step: f32) -> f32 {
 
 /// Torque and power against rpm, `height` high: the first line on top, with the named
 /// lines' readings under the pointer.
-pub fn chart(ui: &mut egui::Ui, lines: &[Line], height: f32) {
+fn chart(ui: &mut egui::Ui, lines: &[Line], height: f32) {
     let width = ui.available_width().max(400.0);
     let (response, painter) = ui.allocate_painter(egui::vec2(width, height), Sense::hover());
     let frame = response.rect;

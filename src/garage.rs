@@ -380,13 +380,13 @@ fn wheel_parts(ui: &mut egui::Ui, draft: &mut CarBuild, same: &mut bool) {
 }
 
 /// Each tire's load with the car standing (N), front and rear.
-pub fn static_loads(setup: &CarSetup) -> [f32; 2] {
+fn static_loads(setup: &CarSetup) -> [f32; 2] {
     [true, false].map(|front| (setup.corner_mass(front) + setup.axle(front).unsprung_mass) * 9.81)
 }
 
 /// Camber (within what the suspension kit allows) and cold tire pressure per axle, with
 /// the pressure the tires suit under `loads` (N, front and rear; see `static_loads`).
-pub fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, loads: [f32; 2]) {
+fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, loads: [f32; 2]) {
     ui.strong("Alignment and pressures").on_hover_text(
         "Negative camber leans the tops of the wheels in: it evens out the load across the \
          outside tire in a corner, but wears and heats the inside shoulders on the straight. \
@@ -425,7 +425,7 @@ pub fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, loads: [f32; 2]) {
 
 /// Rim diameter and width, tire width and sidewall, and compound. Another rim diameter or
 /// tire width keeps the outside diameter as near as it goes, on a rim that suits the tire.
-pub fn wheel_picker(ui: &mut egui::Ui, axle: usize, wheel: &mut Wheel) {
+fn wheel_picker(ui: &mut egui::Ui, axle: usize, wheel: &mut Wheel) {
     fn pick<T: Copy + PartialEq>(
         ui: &mut egui::Ui,
         id: (&str, usize),
