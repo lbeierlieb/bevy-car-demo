@@ -108,6 +108,41 @@ It needs a real certificate for browsers to join (WebTransport). Without `--cert
 `CAR_SIM_INSECURE=1 cargo run` (for development). The game and the server must be the
 same version, on the same map.
 
+### A server on NixOS
+
+The flake has the server as a NixOS module, which gets the certificate from Let's
+Encrypt and can serve the web version at the same domain (whose **Join server** then
+joins this server):
+
+```nix
+{
+  inputs.car-sim.url = "github:<you>/bevy-car-demo";
+
+  outputs = { nixpkgs, car-sim, ... }: {
+    nixosConfigurations.vps = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        car-sim.nixosModules.server
+        {
+          security.acme = { acceptTerms = true; defaults.email = "you@example.org"; };
+          services.car-sim = {
+            enable = true;
+            domain = "cars.example.org";  # a DNS record pointing at the machine
+            openFirewall = true;          # UDP 4433, TCP 80 (and 443 with the web version)
+            web.enable = true;            # https://cars.example.org: the game in the browser
+            # port = 4433; traffic = 20; maxPlayers = 32;
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+The server runs as `car-sim.service` (`journalctl -u car-sim` shows who joins and
+leaves) and takes up renewed certificates by itself, without dropping anyone. The flake
+also has the packages alone: `nix build .#server` and `nix build .#web`.
+
 ## Controls (sandbox)
 
 | Key | Action |

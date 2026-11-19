@@ -12,6 +12,7 @@
 
   outputs =
     {
+      self,
       nixpkgs,
       rust-overlay,
       crane,
@@ -121,6 +122,20 @@
             }
           );
 
+          # The dedicated multiplayer server, headless.
+          server = craneLib.buildPackage (
+            nativeArgs
+            // {
+              pname = "${pname}-server";
+              cargoArtifacts = nativeDeps;
+              cargoExtraArgs = "--locked --bin server";
+              meta = {
+                description = "Car Sim multiplayer server";
+                mainProgram = "server";
+              };
+            }
+          );
+
           wasm = craneLib.mkCargoDerivation (
             wasmArgs
             // {
@@ -165,13 +180,54 @@
               }
             );
 
-          # Lint a Nix file with a tool that exits non-zero on problems.
+          # Lint the Nix files with a tool that exits non-zero on problems.
           nixLint =
             name: tool: command:
             pkgs.runCommand name { nativeBuildInputs = [ tool ]; } ''
-              ${command} ${./flake.nix}
+              ${command} ${./flake.nix} ${./nix/module.nix}
               touch $out
             '';
+
+          # The server's NixOS module evaluated with and without the web version: what the
+          # service runs and how the certificate is got.
+          moduleCheck =
+            let
+              evaluate =
+                web:
+                (nixpkgs.lib.nixosSystem {
+                  inherit system;
+                  modules = [
+                    self.nixosModules.server
+                    {
+                      boot.isContainer = true;
+                      system.stateVersion = "25.11";
+                      security.acme = {
+                        acceptTerms = true;
+                        defaults.email = "admin@example.org";
+                      };
+                      services.car-sim = {
+                        enable = true;
+                        domain = "cars.example.org";
+                        openFirewall = true;
+                        web.enable = web;
+                      };
+                    }
+                  ];
+                }).config;
+              summary = config: {
+                exec = config.systemd.services.car-sim.serviceConfig.ExecStart;
+                groups = config.systemd.services.car-sim.serviceConfig.SupplementaryGroups;
+                certGroup = config.security.acme.certs."cars.example.org".group;
+                tcp = config.networking.firewall.allowedTCPPorts;
+                udp = config.networking.firewall.allowedUDPPorts;
+              };
+            in
+            pkgs.writeText "nixos-module.json" (
+              builtins.toJSON {
+                alone = summary (evaluate false);
+                web = summary (evaluate true);
+              }
+            );
 
           # `nix run .#serve-wasm` serves the wasm build on http://localhost:8080
           serve-wasm = pkgs.writeShellApplication {
@@ -186,7 +242,13 @@
         {
           packages = {
             default = native;
-            inherit native wasm serve-wasm;
+            web = wasm;
+            inherit
+              native
+              wasm
+              server
+              serve-wasm
+              ;
           };
 
           apps = {
@@ -208,6 +270,12 @@
             fmt = craneLib.cargoFmt { inherit pname version src; };
             clippy-native = clippy nativeArgs nativeDeps;
             clippy-wasm = clippy wasmArgs wasmDeps;
+            inherit server;
+          }
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            nixos-module = moduleCheck;
+          }
+          // {
             nixfmt = nixLint "nixfmt" pkgs.nixfmt "nixfmt --check";
             deadnix = nixLint "deadnix" pkgs.deadnix "deadnix --fail";
           };
@@ -237,5 +305,8 @@
       apps = forAllSystems (system: bySystem.${system}.apps);
       checks = forAllSystems (system: bySystem.${system}.checks);
       devShells = forAllSystems (system: bySystem.${system}.devShells);
+
+      # The multiplayer server as a NixOS service (see nix/module.nix).
+      nixosModules.server = import ./nix/module.nix self;
     };
 }

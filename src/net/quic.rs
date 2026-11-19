@@ -26,7 +26,7 @@ const KEEP_ALIVE: Duration = Duration::from_secs(3);
 const IDLE: Duration = Duration::from_secs(15);
 /// How long joining may take, and how often the server looks for a renewed certificate.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const CERTIFICATE_CHECK: Duration = Duration::from_secs(600);
+const CERTIFICATE_CHECK: Duration = Duration::from_secs(60);
 
 fn runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();

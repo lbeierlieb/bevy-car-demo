@@ -50,6 +50,8 @@ the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars)
 - 4 cores, 7.8 GB RAM, no swap: a full `nix flake check` got OOM-killed once.
 - Anything that copies the repo flake into the Nix store (`nix build .#…`,
   `builtins.getFlake`) fails with "No space left on device": `target/` is over 20 GB.
+  `nix build 'git+file:///repo#…'` works (only tracked files; it built
+  `checks.x86_64-linux.nixos-module`, server included, in ~10 min).
   To look at nixpkgs, use the pinned rev from `flake.lock` directly, e.g.
   `nix build 'github:NixOS/nixpkgs/<rev>#linuxPackages.hid-fanatecff'`.
 - Passwordless sudo works.
@@ -185,10 +187,10 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   version and the terrain's fingerprint. Dev only: without a certificate the server makes
   a throwaway one and a native client can skip verification (browsers can't join).
 - **Nix**: `packages.server`, `packages.web`, `nixosModules.server`:
-  `services.car-sim = { enable; domain; port; openFirewall; web.enable; settings; }`,
-  certificate via `security.acme` (nginx's `enableACME` with `web.enable`, else ACME's
-  standalone listener on port 80), the server restarted on renewal (`reloadServices`),
-  hardened service with `DynamicUser`. With `web.enable` the web build is served at the
+  `services.car-sim = { enable; domain; port; openFirewall; traffic; maxPlayers;
+  web.enable; }`, certificate via `security.acme` (nginx's `enableACME` with
+  `web.enable`, else ACME's standalone listener on port 80), taken up by the server
+  itself when renewed, hardened service with `DynamicUser`. With `web.enable` the web build is served at the
   same domain, and its "Join server" connects to its own host.
 - Steps: 1. remove the career (done); 2. what's seen and heard decoupled from `Car` (done:
   `looks.rs`, `Looks` (build, body offset, linkage per axle, `audio::EngineCharacter`)
@@ -219,7 +221,15 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `ToClient::Traffic(Vec<TrafficState>)` (~75 B each, 14 a message), client
   `ServerTraffic` components on shown `TrafficCar`s, interpolation shared through the
   `Snapshot` trait; protocol 2);
-  7. Nix packages and module, README for the VPS.
+  7. Nix packages and module, README for the VPS (done: `packages.server`
+  (crane, `--bin server`), `packages.web` (= `wasm`), `nixosModules.server` =
+  `nix/module.nix` (options `enable domain port openFirewall traffic maxPlayers
+  web.enable web.package package`; no `reloadServices`: the server stats the
+  certificate files every 60 s and reloads them itself, so renewals drop nobody and the
+  provisional self-signed certificate at first boot is replaced); `checks.nixos-module`
+  evaluates both modes into a JSON summary. Building flake outputs here works through
+  `nix build 'git+file:///repo#…'` (copies only tracked files; stage new ones first),
+  unlike `.#…`).
 - Later: chat, sanity checks on snapshots, Safari, certificate reload without restart,
   career.
 
