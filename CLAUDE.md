@@ -189,6 +189,50 @@ pay/time/prices as made up here, one save slot, traffic on.
   damage, prices tuned by playing, right of way for traffic near markers, garage door
   animation, a proper pizzeria/dealer building look (they're the OSM houses).
 
+## Multiplayer (agreed with the user, 2026-11-19)
+
+A multiplayer sandbox first; the career comes back later, built on it. Native and web
+both offer **"Play alone"** and **"Join server"** (a start menu, chosen at runtime).
+No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headless:
+`MinimalPlugins` and the world core) runs on the user's VPS.
+
+- **Each player owns their car**: full local physics, engine and force feedback, as
+  alone. ~30 snapshots/s (pose, velocities, wheels, rpm, throttle, gear, lights; ~100 B,
+  unreliable datagrams). Other players' cars are **proxies** (model, wheels, sound),
+  interpolated ~100 ms behind, extrapolated for contacts; each client collides its own
+  car against proxies and applies the impulse only to itself.
+- A client sends what others **see and hear**: chassis, paint, wheels, ride height and a
+  sound description (layout, cylinders, `ExhaustSound`, turbo), not the engine's parts;
+  re-sent when it changes (e.g. a swap in F4).
+- **The server owns** the session (players, names, looks), **shared traffic** (one
+  traffic world: spawned 260–550 m from the nearest player and out of everyone's view,
+  removed past 700 m from everyone, density per area, not per player; sent as edge,
+  distance along it and speed, clients extrapolate on the rails of the same network;
+  a crashed traffic car is simulated by whoever hit it until asleep) and **interest
+  management** (128 m grid, ~600 m radius, rates falling with distance ~30/10/3 Hz).
+  A silent player (a hidden browser tab stops the loop) is frozen for others and
+  dropped after 30 s. The traffic density slider only exists alone.
+- **Transport**: WebTransport (QUIC, one UDP port, default 4433) with a real
+  certificate; `wtransport` for the server and native client, the browser's
+  WebTransport for the web (maybe `xwt` for both clients). Datagrams for snapshots and
+  traffic, streams for the handshake, looks and events. Handshake checks the protocol
+  version and the terrain's fingerprint. Dev only: without a certificate the server makes
+  a throwaway one and a native client can skip verification (browsers can't join).
+- **Nix**: `packages.server`, `packages.web`, `nixosModules.server`:
+  `services.car-sim = { enable; domain; port; openFirewall; web.enable; settings; }`,
+  certificate via `security.acme` (nginx's `enableACME` with `web.enable`, else ACME's
+  standalone listener on port 80), the server restarted on renewal (`reloadServices`),
+  hardened service with `DynamicUser`. With `web.enable` the web build is served at the
+  same domain, and its "Join server" connects to its own host.
+- Steps: 1. remove the career; 2. what's seen and heard decoupled from `Car` (a shared
+  component a local car and a proxy both fill); 3. headless world core, `bin/server.rs`
+  running traffic around several centres; 4. protocol and server/client plugins over a
+  loopback transport (tested in process: a server, two clients); 5. WebTransport,
+  start menu, join dialog, player name, name tags, player list; 6. shared traffic;
+  7. Nix packages and module, README for the VPS.
+- Later: chat, sanity checks on snapshots, Safari, certificate reload without restart,
+  career.
+
 ## Wheel support
 
 Wheel and pedals come through gamepad input (gilrs), bound in the panel (2, "Wheel and
