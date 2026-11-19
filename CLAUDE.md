@@ -230,8 +230,11 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   evaluates both modes into a JSON summary. Building flake outputs here works through
   `nix build 'git+file:///repo#…'` (copies only tracked files; stage new ones first),
   unlike `.#…`).
-- Later: chat, sanity checks on snapshots, Safari, certificate reload without restart,
-  career.
+- Not done yet: other players' engine sound (the synth plays only the driven car; a
+  proxy needs a sound source of its own), other players on the map (K), name tags hidden
+  behind houses, the browser path tried in a real browser (no browser here; it builds
+  and links), rate limits on what a player sends.
+- Later: chat, sanity checks on snapshots, Safari, career.
 
 ## Wheel support
 
