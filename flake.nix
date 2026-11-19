@@ -144,6 +144,7 @@
               nativeBuildInputs = [
                 wasm-bindgen-cli
                 pkgs.binaryen
+                pkgs.removeReferencesTo
               ];
               buildPhaseCargoCommand = "cargoWithProfile build --locked";
               installPhaseCommand = ''
@@ -154,6 +155,10 @@
                 wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int \
                   -o $out/${pname}_bg.wasm $out/${pname}_bg.wasm
                 cp web/index.html $out/
+                # Panic messages name source files of the toolchain and the crates: as
+                # store paths they'd make all of those part of the web build's closure
+                # (and of a server serving it).
+                remove-references-to -t ${toolchain} -t "$cargoVendorDir" $out/*
               '';
               dontFixup = true;
             }
