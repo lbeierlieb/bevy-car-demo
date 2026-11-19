@@ -331,7 +331,7 @@ fn wheel_log(
         car.drivetrain.rpm,
         car.drivetrain.running,
         car.forward_speed(),
-        car.steering_torque,
+        car.rack.total(),
         ffb.level,
         ffb.problem
     );
