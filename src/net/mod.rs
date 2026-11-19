@@ -322,4 +322,25 @@ mod tests {
             assert!(at.distance(*there) < 5.0, "car {id} {at} is at {there}");
         }
     }
+
+    /// A car the server's catalogues don't have (a newer game's) gets a clear refusal.
+    #[test]
+    fn a_car_the_server_doesnt_know_is_refused_with_a_reason() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let entity = (anna.world_mut().query_filtered::<Entity, With<Car>>())
+            .single(anna.world())
+            .unwrap();
+        anna.world_mut()
+            .get_mut::<Looks>(entity)
+            .unwrap()
+            .build
+            .chassis = crate::chassis::CHASSIS.len();
+        run(&mut [&mut server, &mut anna], 10);
+        let Status::Refused(why) = &connection(&anna).status else {
+            panic!("{:?}", connection(&anna).status);
+        };
+        assert!(why.contains("doesn't know your car"), "{why}");
+    }
 }

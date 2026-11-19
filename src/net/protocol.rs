@@ -50,6 +50,9 @@ pub enum ToClient {
 }
 
 impl ToServer {
+    /// The first byte of a `Looks` message.
+    pub const LOOKS: u8 = 1;
+
     /// Whether it must arrive (else a newer one will do).
     pub fn reliable(&self) -> bool {
         !matches!(self, ToServer::State(_))
@@ -57,6 +60,9 @@ impl ToServer {
 }
 
 impl ToClient {
+    /// The first byte of a `Looks` message.
+    pub const LOOKS: u8 = 4;
+
     pub fn reliable(&self) -> bool {
         !matches!(self, ToClient::States(_) | ToClient::Traffic(_))
     }
@@ -118,7 +124,21 @@ impl Wire for TrafficState {
             rolled: r.get()?,
             steer: r.get()?,
         };
-        (state.chassis < CHASSIS.len() && state.paint < PAINTS.len()).then_some(state)
+        // A chassis or paint a newer server has and this game doesn't: shown as the first
+        // one, rather than not at all.
+        Some(Self {
+            chassis: if state.chassis < CHASSIS.len() {
+                state.chassis
+            } else {
+                0
+            },
+            paint: if state.paint < PAINTS.len() {
+                state.paint
+            } else {
+                0
+            },
+            ..state
+        })
     }
 }
 
@@ -136,7 +156,7 @@ impl Wire for ToServer {
                 name.put(out);
             }
             ToServer::Looks(looks) => {
-                1u8.put(out);
+                Self::LOOKS.put(out);
                 looks.put(out);
             }
             ToServer::State(state) => {
@@ -153,7 +173,7 @@ impl Wire for ToServer {
                 map: r.get()?,
                 name: r.get()?,
             },
-            1 => ToServer::Looks(Box::new(r.get()?)),
+            Self::LOOKS => ToServer::Looks(Box::new(r.get()?)),
             2 => ToServer::State(r.get()?),
             _ => return None,
         })
@@ -181,7 +201,7 @@ impl Wire for ToClient {
                 id.put(out);
             }
             ToClient::Looks { id, looks } => {
-                4u8.put(out);
+                Self::LOOKS.put(out);
                 id.put(out);
                 looks.put(out);
             }
@@ -205,7 +225,7 @@ impl Wire for ToClient {
                 name: r.get()?,
             },
             3 => ToClient::Left { id: r.get()? },
-            4 => ToClient::Looks {
+            Self::LOOKS => ToClient::Looks {
                 id: r.get()?,
                 looks: Box::new(r.get()?),
             },

@@ -135,7 +135,16 @@ fn receive(
     for (entity, mut peer, mut transform) in &mut peers {
         while let Some(bytes) = peer.link.receive() {
             let Some(message) = decode::<ToServer>(&bytes) else {
-                warn!("Player {} sent something unreadable; dropped", peer.id);
+                // Looks out of our catalogues come from a newer game (a car or part the
+                // server's version doesn't have yet): say so.
+                let why = if bytes.first() == Some(&ToServer::LOOKS) {
+                    "The server doesn't know your car: it runs an older version of the game \
+                     and needs updating"
+                } else {
+                    "Your game sent something the server couldn't read"
+                };
+                warn!("Player {}: {why}; dropped", peer.id);
+                peer.tell(&ToClient::Refused(why.to_string()));
                 peer.link.close();
                 break;
             };

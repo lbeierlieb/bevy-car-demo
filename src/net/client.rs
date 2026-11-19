@@ -159,7 +159,14 @@ fn receive(
     let connection = &mut *connection;
     while let Some(bytes) = connection.link.receive() {
         let Some(message) = decode::<ToClient>(&bytes) else {
-            warn!("The server sent something unreadable");
+            if bytes.first() == Some(&ToClient::LOOKS) {
+                warn!(
+                    "Another player drives a car this game doesn't know (a newer version): \
+                     it isn't shown"
+                );
+            } else {
+                warn!("The server sent something unreadable");
+            }
             continue;
         };
         match message {

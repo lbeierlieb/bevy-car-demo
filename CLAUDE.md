@@ -230,6 +230,17 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   evaluates both modes into a JSON summary. Building flake outputs here works through
   `nix build 'git+file:///repo#…'` (copies only tracked files; stage new ones first),
   unlike `.#…`).
+- **Updates** (discussed with the user): the server checks only `PROTOCOL` and the map
+  fingerprint, so client-only changes (driving physics, engine, tires, FFB, aids, UI)
+  need no server update, and old and new clients play together. Bump `PROTOCOL`
+  whenever a message's content changes (`protocol.rs`: `CarState`, `Looks`, `Motion`,
+  `TrafficState`, a new message). The server needs updating too for: catalogue changes
+  (chassis, paints, gearboxes, clutches, suspensions, compounds, bar sizes: sent as
+  indices and checked against the reader's catalogues; a car the server can't read gets
+  "The server doesn't know your car…", a client shows an unknown traffic chassis as the
+  first one and skips another player's unknown car with a warning), traffic behaviour
+  (simulated on the server), and a re-bake (fingerprint). With `web.enable` the web
+  build updates with the server (`nixos-rebuild` restarts it, dropping everyone).
 - Not done yet: other players' engine sound (the synth plays only the driven car; a
   proxy needs a sound source of its own), other players on the map (K), name tags hidden
   behind houses, the browser path tried in a real browser (no browser here; it builds
