@@ -199,10 +199,10 @@ mod tests {
         assert_eq!(seen.len(), 1);
         let (_, at, looks) = &seen[0];
         assert_eq!(looks.as_ref(), Some(&Looks::of(&car(&mut ben).setup)));
-        // Shown a little in the past: the delay and a frame or two on the way.
+        // Predicted to where he is by now, short only of the frame or two on the way.
         let behind = ben_at.x - at.x;
         println!("Anna sees Ben {behind:.2} m behind where he is");
-        assert!((0.8..2.0).contains(&behind), "{behind}");
+        assert!((-0.1..0.6).contains(&behind), "{behind}");
         assert_eq!(proxies(&mut ben).len(), 1);
     }
 

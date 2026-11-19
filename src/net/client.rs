@@ -1,11 +1,12 @@
 //! A player's side: say hello, send the car being driven (its looks when they change, its
 //! state `SEND_RATE` times a second), and show the cars of the players nearby as proxies:
 //! entities with their `Looks` and `Motion` (so they're drawn and heard like any car),
-//! moved along their states a little in the past (`DELAY`, so there's always a state on
-//! either side to interpolate between). For contacts, a proxy is where its last state
-//! says it is by now. A car only pushes itself off a proxy; the other player's game does
-//! the same on their side. On a server the traffic is the server's: its cars near us are
-//! shown the same way (`ServerTraffic`), and our own traffic stops.
+//! where they are by now: carried on from their latest state (dead reckoning), turning as
+//! they turned and speeding up or slowing down as they did between their last two states
+//! (`predict`). What's drawn closes on that smoothly (`Drawn`), so a new state that
+//! disagrees doesn't make a car jump. A car only pushes itself off a proxy; the other
+//! player's game does the same on their side. On a server the traffic is the server's:
+//! its cars near us are shown the same way (`ServerTraffic`), and our own traffic stops.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
@@ -16,22 +17,30 @@ use super::link::Link;
 use super::protocol::{CarState, PROTOCOL, PlayerId, ToClient, ToServer, TrafficState};
 use super::wire::{decode, encode};
 use crate::car::{ActiveCar, Car};
-use crate::looks::{Looks, Motion, WheelMotion};
+use crate::looks::{Looks, Motion};
 use crate::physics::collision::Obb;
 use crate::physics::collision::{self, OBSTACLE};
 use crate::physics::rigid_body::RigidBody;
 use crate::terrain::Terrain;
 use crate::traffic::{self, TrafficCar};
 
-/// How far behind its latest state a proxy is shown (s): more than the time between two
-/// states, so there's usually one either side.
-const DELAY: f64 = 0.1;
-/// How far a proxy is carried on past its latest state when the next is late (s).
-const EXTRAPOLATE: f64 = 0.25;
+/// How long a car is carried on past its latest state; then it's held there (s). More
+/// than the time between states far away (3 a second), and a lost one.
+const PREDICT: f64 = 0.8;
+/// How quickly what's drawn of a car closes on where it's predicted to be (s, the time
+/// constant).
+const SMOOTHING: f32 = 0.1;
+/// Further than this from where it's predicted to be, a car is drawn there at once (m).
+const SNAP: f32 = 5.0;
+/// The step a car is carried on in (s).
+const STEP: f32 = 1.0 / 120.0;
+/// The most acceleration believed from two states (m/s²): more is a crash, which doesn't
+/// go on.
+const MOST_ACCELERATION: f32 = 15.0;
 /// A proxy not heard of for this long is gone (out of range) (s).
 const GONE: f64 = 2.0;
-/// States kept per proxy.
-const KEPT: usize = 16;
+/// States kept per car: the last two give the acceleration.
+const KEPT: usize = 2;
 
 pub struct ClientPlugin;
 
@@ -126,6 +135,7 @@ pub struct ServerTraffic {
     heard: f64,
     /// Where it is by now, as a body to run into.
     pub body: RigidBody,
+    drawn: Drawn,
 }
 
 /// Another player's car.
@@ -141,6 +151,7 @@ pub struct Proxy {
     heard: f64,
     /// Where it is by now, as a body to run into (moving, but never pushed).
     pub body: Option<RigidBody>,
+    drawn: Drawn,
 }
 
 fn now(time: &Time<Real>) -> f64 {
@@ -223,6 +234,7 @@ fn receive(
                             states: VecDeque::from([state]),
                             heard: now,
                             body: car.body.clone(),
+                            drawn: Drawn::default(),
                         },
                         Transform::from_translation(state.position).with_rotation(state.rotation),
                         car,
@@ -260,6 +272,7 @@ fn receive(
                             offset: sample,
                             heard: now,
                             body: None,
+                            drawn: Drawn::default(),
                         },
                         Transform::from_translation(state.position).with_rotation(state.rotation),
                         state.motion,
@@ -328,22 +341,26 @@ fn send(
     }
 }
 
-/// Shows each proxy where its states say it was `DELAY` ago, and keeps its body where it
-/// is by now.
+/// Shows each proxy where it's predicted to be by now, and keeps its body there.
 fn move_proxies(
     time: Res<Time<Real>>,
     mut proxies: Query<(&mut Proxy, &mut Transform, &mut Motion, Option<&Looks>)>,
 ) {
     let now = now(&time);
+    let dt = time.delta_secs();
     for (mut proxy, mut transform, mut motion, looks) in &mut proxies {
-        let shown = now - proxy.offset - DELAY;
-        let state = sample(&proxy.states, shown);
-        transform.translation = state.position;
-        transform.rotation = state.rotation;
-        *motion = state.motion;
-        let latest = *proxy.states.back().unwrap();
-        let ahead = (now - proxy.offset - latest.time).clamp(0.0, EXTRAPOLATE) as f32;
-        let by_now = latest.ahead(ahead);
+        let proxy = &mut *proxy;
+        let (by_now, ahead) = predict(&proxy.states, now - proxy.offset);
+        (transform.translation, transform.rotation) = proxy.drawn.follow(&by_now, dt);
+        // The wheels roll on as fast as they did between the last two states.
+        let (before, latest) = (proxy.states.front().unwrap(), proxy.states.back().unwrap());
+        *motion = latest.motion;
+        if latest.time > before.time {
+            let between = (latest.time - before.time) as f32;
+            for (wheel, was) in motion.wheels.iter_mut().zip(&before.motion.wheels) {
+                wheel.spin += (wheel.spin - was.spin) / between * ahead;
+            }
+        }
         proxy.body = looks.map(|looks| {
             let mut body =
                 RigidBody::new(by_now.position, by_now.rotation, looks.mass, looks.inertia);
@@ -354,13 +371,45 @@ fn move_proxies(
     }
 }
 
-/// A state of something moving, to show it between states.
+/// How a car moves at some moment.
+#[derive(Clone, Copy, Debug)]
+struct Kinematics {
+    position: Vec3,
+    rotation: Quat,
+    velocity: Vec3,
+    angular_velocity: Vec3,
+}
+
+impl Kinematics {
+    /// Carried on `dt` seconds: turning as it turns, its velocity turning with it and
+    /// changing by `acceleration` (in the car's frame) until it stops.
+    fn ahead(mut self, mut acceleration: Vec3, dt: f32) -> Self {
+        let mut local = self.rotation.inverse() * self.velocity;
+        let steps = (dt / STEP).ceil().max(1.0);
+        let h = dt / steps;
+        for _ in 0..steps as usize {
+            let next = local + acceleration * h;
+            if next.dot(local) < 0.0 {
+                // Braked to a stop (not into reversing).
+                local = Vec3::ZERO;
+                acceleration = Vec3::ZERO;
+                self.angular_velocity = Vec3::ZERO;
+            } else {
+                local = next;
+            }
+            self.rotation =
+                (Quat::from_scaled_axis(self.angular_velocity * h) * self.rotation).normalize();
+            self.position += self.rotation * local * h;
+        }
+        self.velocity = self.rotation * local;
+        self
+    }
+}
+
+/// A state of a car, to carry on from.
 trait Snapshot: Copy {
     fn time(&self) -> f64;
-    /// `t` of the way from `a` to `b`, at `time`.
-    fn between(a: &Self, b: &Self, t: f32, time: f64) -> Self;
-    /// Carried on `dt` seconds.
-    fn ahead(&self, dt: f32) -> Self;
+    fn kinematics(&self) -> Kinematics;
 }
 
 impl Snapshot for CarState {
@@ -368,37 +417,12 @@ impl Snapshot for CarState {
         self.time
     }
 
-    fn between(a: &Self, b: &Self, t: f32, time: f64) -> Self {
-        let wheel = |a: &WheelMotion, b: &WheelMotion| WheelMotion {
-            theta: a.theta.lerp(b.theta, t),
-            steer: a.steer.lerp(b.steer, t),
-            spin: a.spin.lerp(b.spin, t),
-        };
-        let mut motion = b.motion;
-        for k in 0..4 {
-            motion.wheels[k] = wheel(&a.motion.wheels[k], &b.motion.wheels[k]);
-        }
-        let (ea, eb) = (&a.motion.engine, &b.motion.engine);
-        motion.engine.rpm = ea.rpm.lerp(eb.rpm, t);
-        motion.engine.load = ea.load.lerp(eb.load, t);
-        motion.engine.turbo_speed = ea.turbo_speed.lerp(eb.turbo_speed, t);
-        CarState {
-            time,
-            position: a.position.lerp(b.position, t),
-            rotation: a.rotation.slerp(b.rotation, t),
-            velocity: a.velocity.lerp(b.velocity, t),
-            angular_velocity: a.angular_velocity.lerp(b.angular_velocity, t),
-            motion,
-        }
-    }
-
-    fn ahead(&self, dt: f32) -> Self {
-        CarState {
-            time: self.time + f64::from(dt),
-            position: self.position + self.velocity * dt,
-            rotation: (Quat::from_scaled_axis(self.angular_velocity * dt) * self.rotation)
-                .normalize(),
-            ..*self
+    fn kinematics(&self) -> Kinematics {
+        Kinematics {
+            position: self.position,
+            rotation: self.rotation,
+            velocity: self.velocity,
+            angular_velocity: self.angular_velocity,
         }
     }
 }
@@ -408,48 +432,63 @@ impl Snapshot for TrafficState {
         self.time
     }
 
-    fn between(a: &Self, b: &Self, t: f32, time: f64) -> Self {
-        TrafficState {
-            time,
-            position: a.position.lerp(b.position, t),
-            rotation: a.rotation.slerp(b.rotation, t),
-            velocity: a.velocity.lerp(b.velocity, t),
-            angular_velocity: a.angular_velocity.lerp(b.angular_velocity, t),
-            rolled: a.rolled.lerp(b.rolled, t),
-            steer: a.steer.lerp(b.steer, t),
-            ..*b
-        }
-    }
-
-    fn ahead(&self, dt: f32) -> Self {
-        let forward = self.rotation * Vec3::NEG_Z;
-        TrafficState {
-            time: self.time + f64::from(dt),
-            position: self.position + self.velocity * dt,
-            rotation: (Quat::from_scaled_axis(self.angular_velocity * dt) * self.rotation)
-                .normalize(),
-            rolled: self.rolled + self.velocity.dot(forward) * dt,
-            ..*self
+    fn kinematics(&self) -> Kinematics {
+        Kinematics {
+            position: self.position,
+            rotation: self.rotation,
+            velocity: self.velocity,
+            angular_velocity: self.angular_velocity,
         }
     }
 }
 
-/// The state at `time` (its clock): between the two states around it, or carried on
-/// from the last (a little, then held).
-fn sample<S: Snapshot>(states: &VecDeque<S>, time: f64) -> S {
-    let last = *states.back().unwrap();
-    if time >= last.time() {
-        return last.ahead((time - last.time()).min(EXTRAPOLATE) as f32);
+/// The acceleration from `before` to `after`, in the car's frame (so a steady turn has
+/// none: the velocity turns with the car), along and across it only (not the bumps).
+fn acceleration<S: Snapshot>(before: &S, after: &S) -> Vec3 {
+    let between = after.time() - before.time();
+    if !(0.001..=1.0).contains(&between) {
+        return Vec3::ZERO;
     }
-    let Some(i) = states.iter().position(|s| s.time() > time) else {
-        return last;
+    let local = |k: Kinematics| k.rotation.inverse() * k.velocity;
+    let change = (local(after.kinematics()) - local(before.kinematics())) / between as f32;
+    Vec3::new(change.x, 0.0, change.z).clamp_length_max(MOST_ACCELERATION)
+}
+
+/// Where a car is at `time` (its clock): its latest state carried on with the
+/// acceleration between its last two (up to `PREDICT`), and how long after that state.
+fn predict<S: Snapshot>(states: &VecDeque<S>, time: f64) -> (Kinematics, f32) {
+    let latest = states.back().unwrap();
+    let acceleration = match states.len() {
+        n if n >= 2 => acceleration(&states[n - 2], latest),
+        _ => Vec3::ZERO,
     };
-    if i == 0 {
-        return states[0];
+    let ahead = (time - latest.time()).clamp(0.0, PREDICT) as f32;
+    (latest.kinematics().ahead(acceleration, ahead), ahead)
+}
+
+/// Where a car is drawn: moving as it's predicted to and closing on where that is, so a
+/// new state that disagrees with the last doesn't make it jump.
+#[derive(Default)]
+struct Drawn(Option<(Vec3, Quat)>);
+
+impl Drawn {
+    /// Where to draw it now, `dt` after last time, with it predicted to be `at`.
+    fn follow(&mut self, at: &Kinematics, dt: f32) -> (Vec3, Quat) {
+        let pose = match self.0 {
+            Some((position, rotation)) if position.distance(at.position) < SNAP => {
+                let position = position + at.velocity * dt;
+                let rotation = Quat::from_scaled_axis(at.angular_velocity * dt) * rotation;
+                let closing = 1.0 - (-dt / SMOOTHING).exp();
+                (
+                    position.lerp(at.position, closing),
+                    rotation.slerp(at.rotation, closing).normalize(),
+                )
+            }
+            _ => (at.position, at.rotation),
+        };
+        self.0 = Some(pose);
+        pose
     }
-    let (a, b) = (&states[i - 1], &states[i]);
-    let t = ((time - a.time()) / (b.time() - a.time())) as f32;
-    S::between(a, b, t, time)
 }
 
 /// Proxies not heard of for a while are out of range.
@@ -494,8 +533,8 @@ fn traffic_source(
     }
 }
 
-/// Shows each of the server's traffic cars where it was `DELAY` ago, and keeps its body
-/// where it is by now.
+/// Shows each of the server's traffic cars where it's predicted to be by now, and keeps
+/// its body there.
 fn move_traffic(
     time: Res<Time<Real>>,
     clock: Res<TrafficClock>,
@@ -505,15 +544,19 @@ fn move_traffic(
         return;
     };
     let now = now(&time);
+    let dt = time.delta_secs();
     for (mut shown, mut car) in &mut cars {
-        let state = sample(&shown.states, now - offset - DELAY);
-        car.body.position = state.position;
-        car.body.rotation = state.rotation;
-        car.body.velocity = state.velocity;
-        car.body.angular_velocity = state.angular_velocity;
-        car.turn_wheels(state.rolled, state.steer);
-        let latest = *shown.states.back().unwrap();
-        let by_now = latest.ahead((now - offset - latest.time).clamp(0.0, EXTRAPOLATE) as f32);
+        let shown = &mut *shown;
+        let (by_now, ahead) = predict(&shown.states, now - offset);
+        (car.body.position, car.body.rotation) = shown.drawn.follow(&by_now, dt);
+        car.body.velocity = by_now.velocity;
+        car.body.angular_velocity = by_now.angular_velocity;
+        let latest = shown.states.back().unwrap();
+        let forward = latest.rotation * Vec3::NEG_Z;
+        car.turn_wheels(
+            latest.rolled + latest.velocity.dot(forward) * ahead,
+            latest.steer,
+        );
         shown.body.position = by_now.position;
         shown.body.rotation = by_now.rotation;
         shown.body.velocity = by_now.velocity;
@@ -549,5 +592,109 @@ fn push_off_proxies(
                 car.knocks += impulse / car.body.mass;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A state of a car on a circle of `radius` around the origin at `speed`, braking at
+    /// `braking`, `time` into it (and its speed then).
+    fn on_circle(radius: f32, speed: f32, braking: f32, time: f64) -> TrafficState {
+        let t = time as f32;
+        let speed = speed - braking * t;
+        let angle = (speed + braking * t / 2.0) * t / radius;
+        let yaw_rate = speed / radius;
+        let rotation = Quat::from_rotation_y(angle);
+        // Starts at (radius, 0, 0) heading -z, turning left (around +y).
+        let position = Vec3::new(radius * angle.cos(), 0.0, -radius * angle.sin());
+        TrafficState {
+            id: 0,
+            chassis: 0,
+            paint: 0,
+            time,
+            position,
+            rotation,
+            velocity: rotation * Vec3::new(0.0, 0.0, -speed),
+            angular_velocity: Vec3::new(0.0, yaw_rate, 0.0),
+            rolled: 0.0,
+            steer: 0.0,
+        }
+    }
+
+    #[test]
+    fn a_car_braking_in_a_bend_is_predicted_along_it() {
+        // 20 m/s on a 60 m bend, braking at 4 m/s², states 3 a second (far away).
+        let states = VecDeque::from([
+            on_circle(60.0, 20.0, 4.0, 0.0),
+            on_circle(60.0, 20.0, 4.0, 1.0 / 3.0),
+        ]);
+        for ahead in [0.1, 0.3, 0.6] {
+            let time = 1.0 / 3.0 + ahead;
+            let (predicted, _) = predict(&states, time);
+            let truth = on_circle(60.0, 20.0, 4.0, time);
+            let off = predicted.position.distance(truth.position);
+            // Straight on at the same speed, as before, for comparison.
+            let latest = states[1];
+            let straight = latest.position + latest.velocity * ahead as f32;
+            println!(
+                "{ahead} s ahead: {off:.3} m off (straight on: {:.2} m)",
+                straight.distance(truth.position)
+            );
+            assert!(off < 0.1, "{off}");
+        }
+    }
+
+    #[test]
+    fn a_car_braking_to_a_stop_stays_stopped() {
+        let state = |time: f64, speed: f32| TrafficState {
+            id: 0,
+            chassis: 0,
+            paint: 0,
+            time,
+            position: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            velocity: Vec3::new(0.0, 0.0, -speed),
+            angular_velocity: Vec3::new(0.0, 0.2, 0.0),
+            rolled: 0.0,
+            steer: 0.0,
+        };
+        // 2 m/s, braking at 6 m/s²: stopped after 1/3 s, 0.33 m on.
+        let states = VecDeque::from([state(0.0, 3.0), state(1.0 / 6.0, 2.0)]);
+        let (stopped, _) = predict(&states, 1.0 / 6.0 + PREDICT);
+        assert_eq!(stopped.velocity, Vec3::ZERO);
+        assert_eq!(stopped.angular_velocity, Vec3::ZERO);
+        let travelled = stopped.position.length();
+        assert!((0.3..0.36).contains(&travelled), "{travelled}");
+    }
+
+    #[test]
+    fn a_car_drawn_closes_on_a_correction_without_jumping() {
+        let mut drawn = Drawn::default();
+        let mut at = Kinematics {
+            position: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            velocity: Vec3::new(0.0, 0.0, -10.0),
+            angular_velocity: Vec3::ZERO,
+        };
+        let dt = 1.0 / 60.0;
+        drawn.follow(&at, dt);
+        // A new state puts it a metre further on.
+        at.position.z -= 1.0;
+        let mut was = Vec3::ZERO;
+        for frame in 1..=30 {
+            at.position += at.velocity * dt;
+            let (position, _) = drawn.follow(&at, dt);
+            let step = was.distance(position);
+            assert!(step < 10.0 * dt + 0.2, "frame {frame}: moved {step} m");
+            was = position;
+        }
+        // Half a second on (five time constants), it's there.
+        assert!(
+            was.distance(at.position) < 0.01,
+            "{}",
+            was.distance(at.position)
+        );
     }
 }

@@ -172,7 +172,7 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
 - **The server owns** the session (players, names, looks), **shared traffic** (one
   traffic world: spawned 260–550 m from the nearest player and out of everyone's view,
   removed past 700 m from everyone, density per area, not per player; sent like player
-  cars, as pose and velocities with the wheels' roll and steer, interpolated and dead
+  cars, as pose and velocities with the wheels' roll and steer, dead
   reckoned (decided while building: the states come at 3–30 Hz, rails would need the
   driver's random route); the server simulates crashed traffic too, players' cars are
   `traffic::Visitor`s there (followed, crashed into, never moved), and a player's car
@@ -205,9 +205,15 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `ToClient`, `CarState` (~120 B); `link.rs` `Link`/`Listener` traits, `Loopback`;
   `server.rs` `Server` resource + `Peer` entities (`traffic::Anchor` while heard
   from), 128 m grid, looks re-sent by revision; `client.rs` `Connection` resource,
-  `Proxy` entities with `Looks`/`Motion`, interpolated `DELAY` behind on the sender's
+  `Proxy` entities with `Looks`/`Motion`, shown where they are by now on the sender's
   clock (offset = least our-clock-minus-theirs seen, creeping up), contacts in
-  FixedUpdate push only our car; the plugins idle without the resources; tests in
+  FixedUpdate push only our car (since 2026-11-19 dead reckoning instead of drawing
+  0.1 s in the past, which looked laggy, worst for traffic at 3–10 states/s: `predict`
+  carries the latest state on along its turn (angular velocity) with the acceleration
+  between the last two states in the car's frame (estimated on the client, agreed with
+  the user: sending it would only gain one state at the onset), stopping rather than
+  reversing, for up to 0.8 s; `Drawn` closes on the prediction with a 0.1 s time
+  constant, snapping past 5 m; wheels roll on at their last rate); the plugins idle without the resources; tests in
   `net/mod.rs` step time by hand with `TimeUpdateStrategy::ManualDuration`); 5. WebTransport,
   start menu, join dialog, player name, name tags, player list (done: `net/quic.rs`
   (wtransport, tokio runtime "network", stream framed by u32 length + datagrams ≤ 1200 B,
