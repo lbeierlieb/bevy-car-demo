@@ -230,6 +230,11 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   evaluates both modes into a JSON summary. Building flake outputs here works through
   `nix build 'git+file:///repo#…'` (copies only tracked files; stage new ones first),
   unlike `.#…`).
+- Checking a deployed server from outside: `CAR_SIM_SERVER=host cargo test --profile
+  release-dev join_a_real_server -- --ignored --nocapture` (says hello with this build's
+  protocol and map, prints the answer). "No answer" with the page loading over HTTPS
+  means UDP is dropped before the server (seen 2026-11-19 on the user's IONOS VPS; QUIC
+  out of the sandbox works, e.g. `curl --http3-only https://cloudflare.com`).
 - **Updates** (discussed with the user): the server checks only `PROTOCOL` and the map
   fingerprint, so client-only changes (driving physics, engine, tires, FFB, aids, UI)
   need no server update, and old and new clients play together. Bump `PROTOCOL`

@@ -394,4 +394,39 @@ mod tests {
         client.close();
         wait(&mut || !server.is_open());
     }
+
+    /// Joins the real server at `CAR_SIM_SERVER` (e.g. `cars.example.org`) and prints
+    /// what it answers to a hello with this build's protocol and map: for checking a
+    /// deployed server from outside.
+    /// `CAR_SIM_SERVER=cars.example.org cargo test join_a_real_server -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn join_a_real_server() {
+        use crate::net::protocol::{PROTOCOL, ToClient, ToServer};
+        use crate::net::wire::{decode, encode};
+        use crate::terrain::Terrain;
+        let address = std::env::var("CAR_SIM_SERVER").expect("CAR_SIM_SERVER=host");
+        let url = crate::net::url(&address);
+        println!("Joining {url}");
+        let mut link = connect(&url, std::env::var_os("CAR_SIM_INSECURE").is_none());
+        let hello = ToServer::Hello {
+            protocol: PROTOCOL,
+            map: Terrain::baked().fingerprint,
+            name: "connection test".into(),
+        };
+        link.send(true, encode(&hello));
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_secs(15) {
+            if let Some(bytes) = link.receive() {
+                println!("The server says: {:?}", decode::<ToClient>(&bytes));
+                link.close();
+                return;
+            }
+            if !link.is_open() {
+                panic!("{}", link.problem().unwrap_or_default());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("no answer in 15 s");
+    }
 }
