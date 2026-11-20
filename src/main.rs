@@ -9,14 +9,17 @@ fn main() {
         .add_plugins(default_plugins("Car Sim"))
         .add_plugins(CorePlugin)
         .add_plugins((
-            // The start menu: play alone or join a server.
+            // The controls at the start (H), and hints when the car won't go.
+            help::HelpPlugin,
+            // The start menu (after the controls): play alone or join a server.
             online::OnlinePlugin,
             // Starts in the coupé; R puts the car back on the nearest road as new.
             car::DefaultCarPlugin,
             car::ResetPlugin,
             // A click on the map (K) drives from there.
             map::TeleportPlugin,
-            // 1: gizmos, 2: the panel with telemetry and setup sliders.
+            // 1: gizmos, 2: the panel with telemetry, setup sliders and bindings (hidden
+            // at first).
             debug::DebugPlugin,
             ui::PanelPlugin,
             // The tool windows: ECU tune (3), garage (4), dyno (5), showroom (6).

@@ -29,19 +29,11 @@ impl Plugin for DebugPlugin {
     }
 }
 
-#[derive(Resource)]
+/// What's shown: the gizmos (1) and the panel (2), both hidden at first.
+#[derive(Resource, Default)]
 pub struct DebugView {
     pub gizmos: bool,
     pub ui: bool,
-}
-
-impl Default for DebugView {
-    fn default() -> Self {
-        Self {
-            gizmos: false,
-            ui: true,
-        }
-    }
 }
 
 fn draw_on_top(mut config: ResMut<GizmoConfigStore>) {

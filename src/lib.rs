@@ -17,6 +17,7 @@ pub mod ecu_ui;
 pub mod editor;
 pub mod fences;
 pub mod garage;
+pub mod help;
 pub mod hud;
 pub mod input;
 pub mod looks;

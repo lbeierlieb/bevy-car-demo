@@ -1,0 +1,424 @@
+//! Help for beginners: a screen listing the controls (shown at the start, H brings it
+//! back; a click or Esc closes it), and hints over the road when the car won't do what the
+//! driver seems to want: what's wrong, what to press, and what that does.
+
+use bevy::prelude::*;
+use bevy_egui::egui::{self, Align2, Color32, FontId, text::LayoutJob};
+use bevy_egui::input::EguiWantsInput;
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
+
+use crate::car::{ActiveCar, Car, ReverseRefused, drive};
+use crate::input::{Action, WheelConfig, WheelInput};
+use crate::ui::toggle_key;
+
+/// The key that brings the controls screen back.
+const KEY: KeyCode = KeyCode::KeyH;
+
+/// The controls of the sandbox, keyboard first: (keys, what they do).
+const CONTROLS: [(&str, &str); 16] = [
+    ("W or Up", "Throttle"),
+    ("S or Down", "Brake"),
+    ("A D or Left Right", "Steer"),
+    (
+        "E / Q",
+        "Shift up / down (Q from neutral at a standstill: reverse)",
+    ),
+    ("Space", "Parking brake on / off (it's on when you start)"),
+    ("I", "Start the engine after it stalled"),
+    (
+        "R",
+        "Back on the nearest road: repaired, refuelled, fresh tires",
+    ),
+    ("C", "Chase or driver's view"),
+    ("Left-drag, scroll", "Look around, zoom"),
+    ("K", "Map: click on a road to drive from there"),
+    ("M", "Mute"),
+    ("2", "Settings: wheel, pedals and gamepad, driving aids"),
+    ("6", "Showroom: pick another car"),
+    ("3 4 5", "ECU tuning, garage, engine dyno"),
+    ("1 / F11", "Debug gizmos / fullscreen"),
+    ("H", "This screen"),
+];
+
+pub struct HelpPlugin;
+
+impl Plugin for HelpPlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(Intro { open: true })
+            .init_resource::<Hints>()
+            .add_systems(Update, (toggle, hints.after(drive)))
+            .add_systems(EguiPrimaryContextPass, (intro, show_hint));
+    }
+}
+
+/// Whether the controls screen is shown. The start menu waits for it.
+#[derive(Resource)]
+pub struct Intro {
+    pub open: bool,
+}
+
+fn toggle(
+    keys: Res<ButtonInput<KeyCode>>,
+    egui: Option<Res<EguiWantsInput>>,
+    mut intro: ResMut<Intro>,
+) {
+    if toggle_key(&keys, egui.as_deref(), KEY) {
+        intro.open ^= true;
+    }
+}
+
+/// The controls as a grid, for the screen and the settings panel.
+pub fn controls(ui: &mut egui::Ui) {
+    egui::Grid::new("controls")
+        .num_columns(2)
+        .spacing([24.0, 6.0])
+        .striped(true)
+        .show(ui, |ui| {
+            for (keys, action) in CONTROLS {
+                ui.label(egui::RichText::new(keys).strong().color(KEY_COLOR));
+                ui.label(action);
+                ui.end_row();
+            }
+        });
+}
+
+fn intro(mut contexts: EguiContexts, mut intro: ResMut<Intro>) -> Result {
+    if !intro.open {
+        return Ok(());
+    }
+    let modal = egui::Modal::new(egui::Id::new("intro"))
+        .backdrop_color(Color32::from_black_alpha(140))
+        .show(contexts.ctx_mut()?, |ui| {
+            ui.set_max_width(520.0);
+            ui.heading("Controls");
+            ui.add_space(6.0);
+            controls(ui);
+            ui.add_space(8.0);
+            ui.label(
+                "You shift gears yourself. The clutch works by itself, unless you bind a \
+                 clutch pedal. A steering wheel, pedals, a shifter or a gamepad can be bound \
+                 in the settings (2, \"Wheel and pedals\").",
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let drive = ui.button("Let's drive");
+                ui.label(egui::RichText::new("(or Esc, or click anywhere)").weak());
+                drive.clicked()
+            })
+            .inner
+        });
+    let clicked = modal.response.ctx.input(|i| i.pointer.any_click());
+    if modal.inner || modal.should_close() || clicked {
+        intro.open = false;
+    }
+    Ok(())
+}
+
+/// The things the hints are about, most important first: only the first that's due is
+/// shown.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Hint {
+    Blown,
+    NoFuel,
+    Stalled,
+    ParkingBrake,
+    Reverse,
+    Neutral,
+    RevLimit,
+    Stuck,
+}
+
+impl Hint {
+    const ALL: [Hint; 8] = [
+        Hint::Blown,
+        Hint::NoFuel,
+        Hint::Stalled,
+        Hint::ParkingBrake,
+        Hint::Reverse,
+        Hint::Neutral,
+        Hint::RevLimit,
+        Hint::Stuck,
+    ];
+
+    /// How long the situation must last before the hint shows (s).
+    fn delay(self) -> f32 {
+        match self {
+            Hint::Reverse => 0.0,
+            Hint::ParkingBrake => 0.4,
+            Hint::RevLimit => 0.8,
+            Hint::Stuck => 3.0,
+            _ => 0.6,
+        }
+    }
+
+    /// How long the hint stays up after the situation is over (s): a refused shift is
+    /// over at once, the rest end when the driver does something about them.
+    fn linger(self) -> f32 {
+        match self {
+            Hint::Reverse => 5.0,
+            _ => 1.5,
+        }
+    }
+}
+
+/// How long each situation has lasted (s), and the hint shown with the time it stays up.
+#[derive(Resource, Default)]
+struct Hints {
+    held: [f32; Hint::ALL.len()],
+    shown: Option<(Hint, f32)>,
+    /// What the hint says, worked out when it's due: (what's wrong, what to do).
+    text: (String, String),
+}
+
+/// Throttle above which the driver means to go, and speed below which the car stands
+/// (m/s).
+const GAS: f32 = 0.2;
+const STANDING: f32 = 1.0;
+/// The rev limiter counts from this far below its limit (rpm): it cuts and lets the revs
+/// drop a little each time.
+const LIMITER_BAND: f32 = 250.0;
+
+/// Watches the active car for situations a beginner may not understand.
+fn hints(
+    time: Res<Time>,
+    active: Res<ActiveCar>,
+    cars: Query<&Car>,
+    config: Res<WheelConfig>,
+    wheel: Res<WheelInput>,
+    mut refused: MessageReader<ReverseRefused>,
+    mut hints: ResMut<Hints>,
+) {
+    let dt = time.delta_secs();
+    let reverse = refused.read().count() > 0;
+    let Some(car) = cars.iter().find(|car| car.index == active.0) else {
+        return;
+    };
+    let engine = &car.setup.engine;
+    let drivetrain = &car.drivetrain;
+    let c = &car.controls;
+    let gas = c.throttle > GAS;
+    let standing = car.forward_speed().abs() < STANDING;
+    let gear = drivetrain.selected_gear();
+    let blown = drivetrain.engine.blown(&engine.build.hardware);
+    let no_fuel = car.fuel.supply < 0.5;
+    let running = drivetrain.running;
+    let clutch_in = c.clutch.is_some_and(|travel| travel > 0.5);
+    let at_limit = drivetrain.rpm >= engine.build.ecu.rev_limit - LIMITER_BAND;
+    let now = |hint: Hint| match hint {
+        Hint::Blown => gas && blown,
+        Hint::NoFuel => gas && no_fuel && !blown,
+        Hint::Stalled => gas && !running && !blown && !no_fuel,
+        Hint::ParkingBrake => gas && car.parking_brake && standing,
+        Hint::Reverse => reverse,
+        Hint::Neutral => gas && running && gear == 0 && standing,
+        Hint::RevLimit => {
+            running && c.throttle > 0.5 && at_limit && (1..engine.top_gear()).contains(&gear)
+        }
+        Hint::Stuck => {
+            gas && standing
+                && running
+                && gear != 0
+                && !car.parking_brake
+                && !clutch_in
+                && c.brake < 0.5
+        }
+    };
+    let mut due = None;
+    for (i, hint) in Hint::ALL.into_iter().enumerate() {
+        let held = &mut hints.held[i];
+        // Falling back twice as fast keeps an on-and-off situation (the limiter) counting.
+        *held = if now(hint) {
+            *held + dt
+        } else {
+            (*held - 2.0 * dt).max(0.0)
+        };
+        if due.is_none() && now(hint) && *held >= hint.delay() {
+            due = Some(hint);
+        }
+    }
+    match (due, hints.shown) {
+        (Some(hint), shown) => {
+            if shown.is_none_or(|(old, _)| old != hint) {
+                hints.text = text(hint, &config, &wheel, c.clutch.is_some());
+            }
+            hints.shown = Some((hint, hint.linger()));
+        }
+        (None, Some((hint, left))) => {
+            hints.shown = (left > dt).then_some((hint, left - dt));
+        }
+        (None, None) => {}
+    }
+}
+
+/// What a hint says: what's wrong, and what to press and what that does. Keys are in
+/// [brackets], shown highlighted.
+fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (String, String) {
+    let bound = |action| config.enabled && config.binding(action).is_some();
+    // A key, or the key and the wheel's button bound to the same.
+    let key = |key: &str, action| {
+        if bound(action) {
+            format!("[{key}] (or its button on the wheel)")
+        } else {
+            format!("[{key}]")
+        }
+    };
+    let shifter = wheel.shifter.is_some();
+    let clutch_first = if pedal { "press the clutch and " } else { "" };
+    let (what, how) = match hint {
+        Hint::Blown => (
+            "The engine is wrecked".into(),
+            format!(
+                "It was pushed past what its parts can take. Press {} to put the car back \
+                 on the nearest road with the engine repaired.",
+                key("R", Action::Reset)
+            ),
+        ),
+        Hint::NoFuel => (
+            "The tank is empty".into(),
+            format!(
+                "Without fuel the engine stops. Press {} to put the car back on the \
+                 nearest road with the tank filled.",
+                key("R", Action::Reset)
+            ),
+        ),
+        Hint::Stalled => (
+            "The engine has stalled".into(),
+            format!(
+                "The clutch dragged it below idle. Press {} to start it again. To pull \
+                 away, give a little gas and let the clutch out slowly; press the clutch \
+                 whenever you stop.",
+                key("I", Action::Ignition)
+            ),
+        ),
+        Hint::ParkingBrake => (
+            "The parking brake is on".into(),
+            format!(
+                "It holds the car still however much gas you give. Press {} to release \
+                 it, and again to hold the car when you've stopped.",
+                if wheel.handbrake.is_some() {
+                    "[Space]".to_string()
+                } else {
+                    key("Space", Action::Handbrake)
+                }
+            ),
+        ),
+        Hint::Reverse => (
+            "Reverse only goes in at a standstill".into(),
+            if shifter {
+                "Brake to a stop with [S] (or the brake pedal), then move the shifter into \
+                 reverse."
+                    .into()
+            } else {
+                format!(
+                    "Brake to a stop with [S], then press {} in neutral to shift into \
+                     reverse (R). {} shifts back up into neutral and first.",
+                    key("Q", Action::ShiftDown),
+                    key("E", Action::ShiftUp)
+                )
+            },
+        ),
+        Hint::Neutral => (
+            "The gearbox is in neutral (N)".into(),
+            if shifter {
+                format!(
+                    "The engine turns, but nothing drives the wheels: {clutch_first}move the \
+                     shifter into first gear."
+                )
+            } else {
+                format!(
+                    "The engine turns, but nothing drives the wheels. Press {} to shift up \
+                     into first gear.",
+                    key("E", Action::ShiftUp)
+                )
+            },
+        ),
+        Hint::RevLimit => (
+            "The engine is at its rev limit".into(),
+            format!(
+                "The limiter cuts the fuel to keep the engine from breaking, so the car \
+                 can't go faster in this gear. {} up a gear: more speed at lower revs.",
+                if shifter {
+                    if pedal {
+                        "Press the clutch and move the shifter".to_string()
+                    } else {
+                        "Move the shifter".to_string()
+                    }
+                } else {
+                    format!("Press {} to shift", key("E", Action::ShiftUp))
+                }
+            ),
+        ),
+        Hint::Stuck => (
+            "Stuck?".into(),
+            format!(
+                "Press {} to put the car back on the nearest road: repaired, refuelled \
+                 and on fresh tires.",
+                key("R", Action::Reset)
+            ),
+        ),
+    };
+    (what, how)
+}
+
+const KEY_COLOR: Color32 = Color32::from_rgb(255, 196, 60);
+
+/// The hint, in a box at the top middle, over the road.
+fn show_hint(mut contexts: EguiContexts, hints: Res<Hints>, intro: Res<Intro>) -> Result {
+    if hints.shown.is_none() || intro.open {
+        return Ok(());
+    }
+    let (what, how) = &hints.text;
+    egui::Area::new(egui::Id::new("hint"))
+        .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 70.0))
+        .interactable(false)
+        .show(contexts.ctx_mut()?, |ui| {
+            egui::Frame::new()
+                .fill(Color32::from_rgba_premultiplied(10, 12, 16, 210))
+                .corner_radius(8.0)
+                .inner_margin(12.0)
+                .show(ui, |ui| {
+                    ui.set_max_width(440.0);
+                    ui.label(
+                        egui::RichText::new(what)
+                            .font(FontId::proportional(20.0))
+                            .color(Color32::WHITE),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(highlighted(how, FontId::proportional(15.0), 440.0));
+                });
+        });
+    Ok(())
+}
+
+/// `text` with the parts in [brackets] highlighted (without the brackets).
+fn highlighted(text: &str, font: FontId, width: f32) -> LayoutJob {
+    let mut job = LayoutJob::default();
+    job.wrap.max_width = width;
+    let plain = Color32::from_rgb(220, 222, 226);
+    for (i, part) in text.split(['[', ']']).enumerate() {
+        let color = if i % 2 == 1 { KEY_COLOR } else { plain };
+        job.append(
+            part,
+            0.0,
+            egui::TextFormat {
+                font_id: font.clone(),
+                color,
+                ..default()
+            },
+        );
+    }
+    job
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keys_are_highlighted_without_brackets() {
+        let job = highlighted("Press [R] now", FontId::default(), 100.0);
+        assert_eq!(job.text, "Press R now");
+        assert_eq!(job.sections.len(), 3);
+        assert_eq!(job.sections[1].format.color, KEY_COLOR);
+    }
+}

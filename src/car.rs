@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::chassis::{CLUTCHES, CarBuild, Chassis, DEFAULT_CHASSIS, SUSPENSIONS};
 use crate::input::WheelInput;
 use crate::physics::collision::Obb;
-use crate::physics::drivetrain::{Differential, Drive, Drivetrain, EngineSetup};
+use crate::physics::drivetrain::{Differential, Drive, Drivetrain, EngineSetup, REVERSE_SPEED};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::parts::Parts;
 use crate::physics::fuel::{self, Fuel, Tank};
@@ -576,6 +576,7 @@ impl Plugin for CarPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActiveCar>()
             .insert_resource(DriverAids::load())
+            .add_message::<ReverseRefused>()
             .add_systems(Update, (drive, sync_transforms).chain());
     }
 }
@@ -611,6 +612,10 @@ const KEY_STEER_RATE: f32 = 1.0;
 /// How fast they come back towards the middle (released, or steering the other way).
 const KEY_STEER_RETURN_RATE: f32 = 2.5;
 
+/// The driver asked for reverse while the car was rolling (`drive` refused it).
+#[derive(Message)]
+pub struct ReverseRefused;
+
 /// Keyboard and wheel to controls for the active car; any other car holds all brakes. Q/E
 /// (or the paddles, or an H-shifter) change gear, I starts a stalled engine.
 pub fn drive(
@@ -620,6 +625,7 @@ pub fn drive(
     active: Res<ActiveCar>,
     aids: Res<DriverAids>,
     mut cars: Query<&mut Car>,
+    mut refused: MessageWriter<ReverseRefused>,
 ) {
     let pressed = |a, b| keys.pressed(a) || keys.pressed(b);
     for mut car in &mut cars {
@@ -651,6 +657,7 @@ pub fn drive(
         if keys.just_pressed(KeyCode::KeyI) || wheel.ignition {
             drivetrain.start(&setup.engine);
         }
+        let gear = drivetrain.selected_gear();
         let shift = keys.just_pressed(KeyCode::KeyE) as i8 - keys.just_pressed(KeyCode::KeyQ) as i8
             + wheel.shift_up as i8
             - wheel.shift_down as i8;
@@ -661,6 +668,13 @@ pub fn drive(
             let shares = setup.engine.drive.shares();
             let wheel_omega = (0..4).map(|i| shares[i] * corners[i].omega).sum();
             drivetrain.shift_by(&setup.engine, shift, wheel_omega, speed);
+        }
+        let wants_reverse = match wheel.shifter {
+            Some(gate) => gate < 0,
+            None => shift < 0 && gear == 0,
+        };
+        if wants_reverse && drivetrain.selected_gear() >= 0 && speed.abs() >= REVERSE_SPEED {
+            refused.write(ReverseRefused);
         }
         // The pedals add to the keys.
         let go = (forward as u8 as f32).max(wheel.throttle.unwrap_or(0.0));

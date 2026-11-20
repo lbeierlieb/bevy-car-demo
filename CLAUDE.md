@@ -20,8 +20,8 @@ repo, so everything worth knowing between sessions belongs here.
 The game is a library (`src/lib.rs`) and apps, each the list of plugins it adds: the
 **sandbox** (`src/main.rs`: the shared `CorePlugin` (`WorldPlugin` (terrain, obstacles,
 simulation, traffic: all the server has too), scenery, input, driving, visuals, camera,
-HUD, map, sound, egui), stock coupé, R reset, map teleport, gizmos, 2
-panel, 3–6 tools, F11 fullscreen in all apps). The career was removed for the multiplayer work (see
+HUD, map, sound, egui), help (controls screen, hints), stock coupé, R reset, map
+teleport, gizmos, 2 panel, 3–6 tools, F11 fullscreen in all apps). The career was removed for the multiplayer work (see
 "Multiplayer"). Keep it that way: no mode flags; something only one app has is a plugin
 of its own (e.g. `car::ResetPlugin`, `map::TeleportPlugin`, `ui::PanelPlugin`), and
 shared pieces are public functions (e.g. `workshop`, `garage::start`). An app,
@@ -37,6 +37,18 @@ the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars)
   Always run `nix develop -c cargo fmt --all` before every commit (and `cargo fmt` in
   `tools/bake` and `tools/dev/fakewheel`, `rustfmt --edition 2024 tools/dev/shot.rs`
   if touched). Mind that a format change in `cycle.rs` or `maps.rs` needs a re-bake.
+
+## Beginner help (agreed with the user, 2026-11-20)
+
+Made to be easy to pick up: `help.rs` (`HelpPlugin`, sandbox). At every start a
+controls screen (`egui::Modal`; a click anywhere or Esc closes it, H reopens it; the
+start menu waits for it) lists the keyboard controls; the panel (2) and the tool window
+bars are hidden by default. Hints over the road say what's wrong, what to press and what
+that does: gas with the parking brake on, reverse asked for while rolling
+(`car::ReverseRefused`, a message from `drive`), on the rev limiter below top gear, and
+gas without moving for 3 s (R). Added alone: in neutral, stalled, wrecked engine, empty
+tank. R (`ResetPlugin`) puts the car on the nearest road (`Terrain::drive_spot`: the
+right-hand lane on roads with traffic lanes, which the map teleport shares).
 
 ## Sandbox workflow
 
@@ -82,7 +94,8 @@ the embedded copy, `Terrain::baked`, the fallback otherwise); commit the re-bake
 saves a screenshot (`BIN=editor` for the editor); `tools/dev/strip.sh` removes the hook.
 Always run `strip.sh` and check that `grep -c shot src/lib.rs src/main.rs
 src/bin/*.rs` prints 0 for each before committing. Keys are pressed from a third of
-the frames until the shot (`k` opens the map, `2` hides the panel, `3` the ECU window,
+the frames until the shot (`k` opens the map, `2` shows the panel (hidden by default
+since 2026-11-20; older notes here used `2` to hide it), `3` the ECU window,
 `4` the garage, `5` the dyno, `6` the showroom, `f` shows the gizmos (off by default), `c` the driver's view),
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
 The keys `3`–`6` didn't expand the tool windows in screenshots (as F3–F6) (seen 2026-11-17, also on
@@ -96,7 +109,7 @@ of a village road: `EDITCAM="-2986,-1954,45,0,-70"`, the road at (1000, 381). Sa
 or baking in a shot writes the real map and terrain files: `git checkout map assets`.
 `PLACE="x,z,frame"` puts the driven car on the road nearest that map point. Give a shot
 its own config dir (`XDG_CONFIG_HOME=<scratch>/cfg`) for fresh settings. The start menu
-is closed in shots unless `MENU=1`; `JOIN=127.0.0.1 NAME=Anna` joins a server at once.
+is closed in shots unless `MENU=1`, the controls screen before it unless `INTRO=1`; `JOIN=127.0.0.1 NAME=Anna` joins a server at once.
 Two players: start the server (`target/sandbox/release-dev/server`, throwaway
 certificate, in the background with `nohup`), then two shots with `CAR_SIM_INSECURE=1`
 and their own config dirs, the second started a few seconds after the first, more
@@ -290,7 +303,9 @@ and plays force feedback, both through hid-fanatecff on Linux.
   go in from there), biting at 55 % with 3 % of the capacity (creeps at idle), rising
   steeply to the top. On idle alone it pulls away when held around 45–50 % until
   rolling; with 10 % throttle even a half-second release works (stock coupé, 350 N·m).
-- The automatic gearbox ignores the clutch pedal (automatic clutch, no stalling).
+- No automatic gearbox for the player (removed at the user's wish, 2026-11-20; real
+  automatic gearboxes are to come later). `Drivetrain::automatic` (rpm-based shifting)
+  is only kept for the test drivers (consumption, flat-out runs).
 - H-shifter: with a clutch pedal bound, a gear only goes in with the clutch pressed
   (otherwise neutral). Without a pedal, the automatic clutch shifts. Paddles shift
   with the automatic clutch even when a pedal is bound.
@@ -413,8 +428,7 @@ catalogue entries, and things like swap subframes are named so they can be price
   it full throttle on the keyboard just spins the wheels of anything strong. It eases
   the throttle to hold the driven wheels at a slip ratio of 0.12, at a rate that follows
   the slip smoothly (no chopping; turbos still hunt a little with the boost lag).
-  The gearbox mode (automatic/manual), traction control and ABS are the driver's, not
-  the car's (asked for by the user):
+  Traction control and ABS are the driver's, not the car's (asked for by the user):
   `car::DriverAids`, saved in `~/.config/car-sim/settings/aids.cfg`, handed to the
   active car by `drive`.
 - **ABS** (asked for by the user, on by default, next to traction control): per wheel,

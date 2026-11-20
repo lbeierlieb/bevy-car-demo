@@ -145,6 +145,13 @@ also has the packages alone: `nix build .#server` and `nix build .#web`.
 
 ## Controls (sandbox)
 
+The game starts with a screen listing the controls (a click or Esc closes it, H brings
+it back); the panel and the tool windows are hidden until their keys open them. When
+the car won't do what you seem to want, a hint over the road says why and what to
+press: giving gas with the parking brake on or in neutral, asking for reverse while
+rolling, bouncing off the rev limiter below top gear, a stalled or wrecked engine, an
+empty tank, or a few seconds of gas without moving (stuck: R).
+
 | Key | Action |
 | --- | --- |
 | W / S, arrows | Throttle; brake |
@@ -153,7 +160,8 @@ also has the packages alone: `nix build .#server` and `nix build .#web`.
 | A / D | Steer |
 | Space | Parking brake on/off (cars start with it on) |
 | R | Put the car on the nearest road (in its lane), as new: repaired, refuelled, fresh tires |
-| 1 / 2 | Toggle gizmos / telemetry panel |
+| H | The controls screen |
+| 1 / 2 | Toggle gizmos / telemetry and settings panel |
 | 3 / 4 / 5 | ECU tuning / garage (rebuild the car) / engine dyno |
 | 6 | Showroom: pick a car |
 | F11 | Fullscreen (the browser's on the web; all F keys go to the browser there) |
@@ -251,6 +259,7 @@ tire grip force, cyan for roll centres.
 | `src/visuals.rs` | Bodies, wheels and suspension posed from the simulation |
 | `src/debug.rs`, `src/ui.rs`, `src/camera.rs` | Gizmos, telemetry panel, chase and driver cameras |
 | `src/hud.rs` | Speed, gear and rev counter HUD |
+| `src/help.rs` | The controls screen and the hints for beginners |
 | `src/map.rs` | Map of the whole area with roads, houses and the cars |
 | `src/cockpit.rs` | Interior for the driver's view: dashboard, steering wheel, gauges |
 

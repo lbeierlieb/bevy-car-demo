@@ -8,6 +8,7 @@ use bevy_egui::egui::{self, Align2, Color32, FontId};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car, SETTINGS};
+use crate::help::Intro;
 use crate::net::client::Proxy;
 use crate::net::{self, Connection, Status};
 use crate::terrain::Terrain;
@@ -82,7 +83,12 @@ fn menu(
     mut menu: ResMut<Menu>,
     terrain: Res<Terrain>,
     connection: Option<ResMut<Connection>>,
+    intro: Option<Res<Intro>>,
 ) -> Result {
+    // After the controls screen.
+    if intro.is_some_and(|intro| intro.open) {
+        return Ok(());
+    }
     let ctx = contexts.ctx_mut()?;
     let window = |title: &str| {
         egui::Window::new(title.to_string())

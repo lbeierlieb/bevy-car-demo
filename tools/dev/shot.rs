@@ -31,12 +31,13 @@ impl Plugin for ShotPlugin {
     }
 }
 
-/// The start menu is closed unless MENU=1; JOIN="address" joins that server as NAME (or
-/// "Shot") at once.
+/// The controls screen is closed unless INTRO=1, the start menu unless MENU=1;
+/// JOIN="address" joins that server as NAME (or "Shot") at once.
 fn start_online(
     mut commands: Commands,
     mut done: Local<bool>,
     menu: Option<ResMut<crate::online::Menu>>,
+    intro: Option<ResMut<crate::help::Intro>>,
     terrain: Res<crate::terrain::Terrain>,
 ) {
     let Some(mut menu) = menu else {
@@ -44,6 +45,11 @@ fn start_online(
     };
     if std::mem::replace(&mut *done, true) {
         return;
+    }
+    if let Some(mut intro) = intro
+        && std::env::var("INTRO").is_err()
+    {
+        intro.open = false;
     }
     if std::env::var("MENU").is_err() {
         menu.open = false;

@@ -218,19 +218,7 @@ fn panel(
             telemetry(ui, &car);
             ui.collapsing("Setup", |ui| setup(ui, &mut car));
             ui.collapsing("Wheel and pedals", |ui| wheel_panel.show(ui));
-            ui.collapsing("Controls", |ui| {
-                ui.label("W/S or arrows: throttle, brake");
-                ui.label("Q/E: shift down/up (Q from neutral at a standstill: reverse)");
-                ui.label("I: start the engine (after stalling with a clutch pedal)");
-                ui.label("A/D: steer    Space: parking brake");
-                ui.label("R: reset car    6: showroom (pick a car)");
-                ui.label(
-                    "1: gizmos    2: this panel    3: ECU tune    4: garage    5: dyno    M: mute",
-                );
-                ui.label("C: chase/driver view    K: map");
-                ui.label("Wheel and pedals: bind them under \"Wheel and pedals\"");
-                ui.label("Left-drag: orbit or look around    Scroll: zoom");
-            });
+            ui.collapsing("Controls (H)", crate::help::controls);
             credits(ui);
         });
     Ok(())
