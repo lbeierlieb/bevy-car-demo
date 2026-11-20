@@ -3,10 +3,16 @@
 //!
 //! ```text
 //! server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]
+//!        [--telegram-token-file token --telegram-chat-file chat]
 //! ```
 //!
 //! Without a certificate it makes a throwaway one: only the native game joins that, with
 //! `CAR_SIM_INSECURE=1` (for development).
+//!
+//! With a Telegram bot's token and a chat (each in a file, so both stay secret and out
+//! of the command line), the bot tells that chat who joins and leaves. The chat is a
+//! user's, group's or channel's id (or `@channel`); the bot must be in it, and a user
+//! must have written to the bot first.
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
@@ -22,7 +28,7 @@ fn main() {
         Ok(options) => options,
         Err(e) => {
             eprintln!(
-                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]"
+                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--telegram-token-file token --telegram-chat-file chat]"
             );
             std::process::exit(2);
         }
@@ -32,6 +38,16 @@ fn main() {
         _ => Certificate::Throwaway,
     };
     let throwaway = matches!(certificate, Certificate::Throwaway);
+    let telegram = match (options.telegram_token_file, options.telegram_chat_file) {
+        (Some(token), Some(chat)) => match (secret(&token), secret(&chat)) {
+            (Ok(token), Ok(chat)) => Some(Telegram::start(&token, chat)),
+            (Err(e), _) | (_, Err(e)) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        },
+        _ => None,
+    };
     let listener = match QuicListener::bind(options.port, certificate) {
         Ok(listener) => listener,
         Err(e) => {
@@ -53,6 +69,11 @@ fn main() {
         cars: options.traffic,
     })
     .add_systems(Update, report);
+    if let Some(telegram) = telegram {
+        telegram.send("The server started".to_string());
+        app.insert_resource(telegram)
+            .add_systems(Update, tell_telegram);
+    }
     if throwaway {
         warn!(
             "No certificate given (--cert, --key): using a throwaway one, which only the \
@@ -70,6 +91,8 @@ struct Options {
     key: Option<std::path::PathBuf>,
     traffic: usize,
     max_players: usize,
+    telegram_token_file: Option<std::path::PathBuf>,
+    telegram_chat_file: Option<std::path::PathBuf>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -81,6 +104,8 @@ impl Options {
             key: None,
             traffic: 20,
             max_players: 32,
+            telegram_token_file: None,
+            telegram_chat_file: None,
         };
         fn number<T: std::str::FromStr>(arg: &str, value: Option<String>) -> Result<T, String> {
             let value = value.ok_or(format!("{arg} needs a value"))?;
@@ -98,11 +123,28 @@ impl Options {
                         number::<usize>(&arg, args.next())?.min(car_sim::traffic::MOST_CARS)
                 }
                 "--max-players" => options.max_players = number(&arg, args.next())?,
+                "--telegram-token-file" => {
+                    options.telegram_token_file = Some(
+                        args.next()
+                            .ok_or("--telegram-token-file needs a file")?
+                            .into(),
+                    )
+                }
+                "--telegram-chat-file" => {
+                    options.telegram_chat_file = Some(
+                        args.next()
+                            .ok_or("--telegram-chat-file needs a file")?
+                            .into(),
+                    )
+                }
                 _ => return Err(format!("unknown option {arg}")),
             }
         }
         if options.cert.is_some() != options.key.is_some() {
             return Err("--cert and --key go together".into());
+        }
+        if options.telegram_token_file.is_some() != options.telegram_chat_file.is_some() {
+            return Err("--telegram-token-file and --telegram-chat-file go together".into());
         }
         Ok(options)
     }
@@ -123,6 +165,74 @@ fn report(
             players.iter().count(),
             traffic.iter().count()
         );
+    }
+}
+
+/// What a file holds, trimmed (a secret: a token or chat id), or why not.
+#[cfg(not(target_arch = "wasm32"))]
+fn secret(file: &std::path::Path) -> Result<String, String> {
+    match std::fs::read_to_string(file) {
+        Ok(text) if !text.trim().is_empty() => Ok(text.trim().to_string()),
+        Ok(_) => Err(format!("{}: empty", file.display())),
+        Err(e) => Err(format!("{}: {e}", file.display())),
+    }
+}
+
+/// A Telegram bot telling a chat who joins and leaves. The messages go out one after
+/// another from a thread of their own, so a slow or unreachable Telegram never holds up
+/// the game; one that fails is logged and dropped.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(bevy::prelude::Resource)]
+struct Telegram {
+    messages: std::sync::mpsc::Sender<String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Telegram {
+    fn start(token: &str, chat: String) -> Self {
+        let token = token.to_string();
+        let url = format!("https://api.telegram.org/bot{token}/sendMessage");
+        let (messages, inbox) = std::sync::mpsc::channel::<String>();
+        std::thread::Builder::new()
+            .name("telegram".into())
+            .spawn(move || {
+                let agent: ureq::Agent = ureq::Agent::config_builder()
+                    .timeout_global(Some(std::time::Duration::from_secs(10)))
+                    .build()
+                    .into();
+                for text in inbox {
+                    let sent = agent
+                        .post(&url)
+                        .send_form([("chat_id", chat.as_str()), ("text", text.as_str())]);
+                    if let Err(e) = sent {
+                        // Never the token in the log (a bad URL error would have it).
+                        let e = e.to_string().replace(&token, "<token>");
+                        bevy::log::warn!("Couldn't tell Telegram \"{text}\": {e}");
+                    }
+                }
+            })
+            .expect("a thread for Telegram");
+        Self { messages }
+    }
+
+    fn send(&self, text: String) {
+        let _ = self.messages.send(text);
+    }
+}
+
+/// Tells Telegram who joined and who left.
+#[cfg(not(target_arch = "wasm32"))]
+fn tell_telegram(
+    telegram: bevy::prelude::Res<Telegram>,
+    mut presence: bevy::prelude::MessageReader<car_sim::net::Presence>,
+) {
+    for p in presence.read() {
+        let players = match p.players {
+            1 => "1 player".to_string(),
+            n => format!("{n} players"),
+        };
+        let what = if p.joined { "joined" } else { "left" };
+        telegram.send(format!("{} {what} ({players} on the server)", p.name));
     }
 }
 

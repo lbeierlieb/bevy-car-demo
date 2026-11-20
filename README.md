@@ -100,7 +100,8 @@ their names over the cars; the list of players (top left) has **Leave the server
 server is a program of its own, run headless:
 
 ```sh
-cargo run --bin server -- --cert fullchain.pem --key key.pem   # options: --port, --traffic, --max-players
+cargo run --bin server -- --cert fullchain.pem --key key.pem   # options: --port, --traffic, --max-players,
+                                                               # --telegram-token-file with --telegram-chat-file
 ```
 
 It needs a real certificate for browsers to join (WebTransport). Without `--cert` and
@@ -131,6 +132,11 @@ joins this server):
             openFirewall = true;          # UDP 4433, TCP 80 (and 443 with the web version)
             web.enable = true;            # https://cars.example.org: the game in the browser
             # port = 4433; traffic = 20; maxPlayers = 32;
+            # A Telegram bot says who joins and leaves (the token file e.g. from sops-nix):
+            # telegram = {
+            #   tokenFile = config.sops.secrets.car-sim-telegram-token.path;
+            #   chatIdFile = config.sops.secrets.car-sim-telegram-chat.path;
+            # };
           };
         }
       ];
@@ -140,7 +146,13 @@ joins this server):
 ```
 
 The server runs as `car-sim.service` (`journalctl -u car-sim` shows who joins and
-leaves) and takes up renewed certificates by itself, without dropping anyone. The flake
+leaves) and takes up renewed certificates by itself, without dropping anyone. With
+`telegram` set, a Telegram bot tells the chat when the server starts and who joins and
+leaves (with how many are on). Make the bot with @BotFather and put its token in one
+file and the chat id in another (nothing else in them; the service reads both as
+systemd credentials, so they may stay root's). The chat id is yours once you've written
+to the bot (it's in `https://api.telegram.org/bot<token>/getUpdates`), or a group's the
+bot is in. The flake
 also has the packages alone: `nix build .#server` and `nix build .#web`.
 
 ## Controls (sandbox)

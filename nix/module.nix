@@ -10,6 +10,11 @@
 #     web.enable = true;
 #   };
 #
+# To hear who joins and leaves through a Telegram bot (the token and the chat id each in
+# a file, e.g. from sops-nix: `telegram.tokenFile = config.sops.secrets.….path;`):
+#
+#   services.car-sim.telegram = { tokenFile = "/run/secrets/…"; chatIdFile = "/run/secrets/…"; };
+#
 # The server takes up a renewed certificate by itself (it looks for changed files every
 # minute), so renewals don't drop anyone.
 self:
@@ -78,6 +83,33 @@ in
       description = "The most players at once.";
     };
 
+    telegram = {
+      tokenFile = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "/run/secrets/car-sim-telegram";
+        description = ''
+          A file holding a Telegram bot's token (as a string, so the secret stays out of
+          the Nix store; e.g. a sops-nix secret's path). If set, the bot tells
+          the chat in {option}`services.car-sim.telegram.chatIdFile` who joins and leaves the server.
+          The service reads it as a systemd credential, so the file may stay root's.
+        '';
+      };
+
+      chatIdFile = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "/run/secrets/car-sim-telegram-chat";
+        description = ''
+          A file holding the chat the bot writes to (kept secret like the token, read as a
+          systemd credential too): a user's, group's or channel's id, or a public
+          channel's `@name`. A user must have written to the bot first, and the bot must
+          be in a group or channel (an admin in a channel). Write to the bot and open
+          `https://api.telegram.org/bot<token>/getUpdates` to find your id.
+        '';
+      };
+    };
+
     web = {
       enable = mkEnableOption "serving the web version at https://<domain> with nginx (it joins this server)";
 
@@ -92,6 +124,13 @@ in
 
   config = mkIf cfg.enable (mkMerge [
     {
+      assertions = [
+        {
+          assertion = (cfg.telegram.tokenFile != null) == (cfg.telegram.chatIdFile != null);
+          message = "services.car-sim.telegram.tokenFile and chatIdFile go together";
+        }
+      ];
+
       # A user of its own (not `DynamicUser`: that can't share its name with the
       # certificate's group).
       users.users.car-sim = {
@@ -112,18 +151,31 @@ in
           "acme-finished-${cfg.domain}.target"
         ];
         serviceConfig = {
-          ExecStart = lib.escapeShellArgs [
-            (lib.getExe cfg.package)
-            "--port"
-            cfg.port
-            "--cert"
-            "${cert.directory}/fullchain.pem"
-            "--key"
-            "${cert.directory}/key.pem"
-            "--traffic"
-            cfg.traffic
-            "--max-players"
-            cfg.maxPlayers
+          ExecStart = lib.escapeShellArgs (
+            [
+              (lib.getExe cfg.package)
+              "--port"
+              cfg.port
+              "--cert"
+              "${cert.directory}/fullchain.pem"
+              "--key"
+              "${cert.directory}/key.pem"
+              "--traffic"
+              cfg.traffic
+              "--max-players"
+              cfg.maxPlayers
+            ]
+            # The credentials' copies (%d: the service's credentials directory).
+            ++ lib.optionals (cfg.telegram.tokenFile != null) [
+              "--telegram-token-file"
+              "%d/telegram-token"
+              "--telegram-chat-file"
+              "%d/telegram-chat"
+            ]
+          );
+          LoadCredential = lib.optionals (cfg.telegram.tokenFile != null) [
+            "telegram-token:${cfg.telegram.tokenFile}"
+            "telegram-chat:${cfg.telegram.chatIdFile}"
           ];
           Restart = "on-failure";
           RestartSec = 5;

@@ -15,7 +15,7 @@ pub mod web;
 pub mod wire;
 
 pub use client::{ClientPlugin, Connection, Status};
-pub use server::{Server, ServerPlugin};
+pub use server::{Presence, Server, ServerPlugin};
 
 /// The UDP port servers listen on unless told otherwise.
 pub const PORT: u16 = 4433;
@@ -254,6 +254,35 @@ mod tests {
         run(&mut [&mut server, &mut anna], 5);
         assert!(connection(&anna).players.is_empty());
         assert!(proxies(&mut anna).is_empty());
+    }
+
+    #[test]
+    fn the_server_tells_who_joined_and_left() {
+        #[derive(Resource, Default)]
+        struct Told(Vec<(String, bool, usize)>);
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        server.init_resource::<Told>().add_systems(
+            Update,
+            |mut presence: MessageReader<Presence>, mut told: ResMut<Told>| {
+                for p in presence.read() {
+                    told.0.push((p.name.clone(), p.joined, p.players));
+                }
+            },
+        );
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut ben = player(&listener, "Ben", 3, 50.0);
+        run(&mut [&mut server, &mut anna, &mut ben], 60);
+        ben.world_mut().resource_mut::<Connection>().close();
+        run(&mut [&mut server, &mut anna], 5);
+        let told = &server.world().resource::<Told>().0;
+        let mut joined: Vec<_> = told[..2].to_vec();
+        joined.sort();
+        assert_eq!(joined[0].0, "Anna");
+        assert_eq!(joined[1].0, "Ben");
+        assert!(joined.iter().all(|(_, joined, _)| *joined));
+        assert_eq!(told[2], ("Ben".to_string(), false, 1));
+        assert_eq!(told.len(), 3);
     }
 
     #[test]

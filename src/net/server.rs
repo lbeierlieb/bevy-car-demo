@@ -33,13 +33,24 @@ pub struct ServerPlugin;
 
 impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.add_message::<Presence>().add_systems(
             Update,
             (accept, receive, send)
                 .chain()
                 .run_if(resource_exists::<Server>),
         );
     }
+}
+
+/// A player joined or left (for telling the server's owner, e.g. `bin/server.rs`'s
+/// Telegram bot).
+#[derive(Message, Clone, Debug)]
+pub struct Presence {
+    pub name: String,
+    /// Joined, else left.
+    pub joined: bool,
+    /// How many players there are now.
+    pub players: usize,
 }
 
 /// The server: where players come from.
@@ -126,6 +137,7 @@ fn receive(
     terrain: Res<Terrain>,
     time: Res<Time<Real>>,
     mut peers: Query<(Entity, &mut Peer, Option<&mut Transform>)>,
+    mut presence: MessageWriter<Presence>,
 ) {
     let now = now(&time);
     let mut present = peers.iter().filter(|(_, p, _)| p.name.is_some()).count();
@@ -220,7 +232,7 @@ fn receive(
         if !peer.link.is_open() || silent > TIMEOUT {
             if let Some(name) = &peer.name {
                 info!("{name} left (player {})", peer.id);
-                left.push(peer.id);
+                left.push((peer.id, name.clone()));
             }
             commands.entity(entity).despawn();
         } else if silent > FROZEN || peer.state.is_none() {
@@ -258,7 +270,21 @@ fn receive(
             }
         }
     }
-    for id in left {
+    // The ones who left are still there until the commands run.
+    let players = present.len() - left.len();
+    for (_, name) in &joined {
+        presence.write(Presence {
+            name: name.clone(),
+            joined: true,
+            players,
+        });
+    }
+    for (id, name) in left {
+        presence.write(Presence {
+            name,
+            joined: false,
+            players,
+        });
         for (_, mut peer, _) in &mut peers {
             if peer.name.is_some() && peer.id != id {
                 peer.told.remove(&id);

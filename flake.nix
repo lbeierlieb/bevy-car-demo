@@ -215,6 +215,11 @@
                         domain = "cars.example.org";
                         openFirewall = true;
                         web.enable = web;
+                        # Tried along with the web version.
+                        telegram = lib.mkIf web {
+                          tokenFile = "/run/secrets/car-sim-telegram";
+                          chatIdFile = "/run/secrets/car-sim-telegram-chat";
+                        };
                       };
                     }
                   ];
@@ -223,6 +228,7 @@
                 user = config.systemd.services.car-sim.serviceConfig.User;
                 dynamicUser = config.systemd.services.car-sim.serviceConfig.DynamicUser or false;
                 exec = config.systemd.services.car-sim.serviceConfig.ExecStart;
+                credentials = config.systemd.services.car-sim.serviceConfig.LoadCredential;
                 groups = config.systemd.services.car-sim.serviceConfig.SupplementaryGroups;
                 certGroup = config.security.acme.certs."cars.example.org".group;
                 tcp = config.networking.firewall.allowedTCPPorts;

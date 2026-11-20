@@ -265,6 +265,13 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   first one and skips another player's unknown car with a warning), traffic behaviour
   (simulated on the server), and a re-bake (fingerprint). With `web.enable` the web
   build updates with the server (`nixos-rebuild` restarts it, dropping everyone).
+- **Telegram** (asked for by the user, 2026-11-20): `server --telegram-token-file F
+  --telegram-chat-file F` (module: `services.car-sim.telegram = { tokenFile;
+  chatIdFile; }`; both secret, the user manages them with sops; the module hands them
+  over as systemd credentials, `%d/telegram-token` and `%d/telegram-chat`) sends "The server
+  started" and who joined/left (`net::Presence` messages from `net::server`) through
+  `ureq` from a thread of its own.
+  Tried here only against Telegram with a fake token (401, logged, token kept out).
 - Not done yet: other players' engine sound (the synth plays only the driven car; a
   proxy needs a sound source of its own), other players on the map (K), name tags hidden
   behind houses, the browser path tried in a real browser (no browser here; it builds
