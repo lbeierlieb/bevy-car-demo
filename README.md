@@ -88,7 +88,7 @@ build's map).
 Or without entering the shell: `nix run`. The web build is served with
 `nix run .#serve-wasm` at <http://localhost:8080>. `nix flake check` builds both
 targets and runs clippy, rustfmt, nixfmt and deadnix. GitHub Actions runs it on every
-pull request, and every push to `main` deploys the web build to GitHub Pages.
+pull request.
 
 ## Multiplayer
 
