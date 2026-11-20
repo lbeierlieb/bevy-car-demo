@@ -16,6 +16,7 @@ const KEY: KeyCode = KeyCode::KeyH;
 
 /// The controls of the sandbox, keyboard first: (keys, what they do).
 const CONTROLS: [(&str, &str); 16] = [
+    ("H", "This screen"),
     ("W or Up", "Throttle"),
     ("S or Down", "Brake"),
     ("A D or Left Right", "Steer"),
@@ -37,7 +38,6 @@ const CONTROLS: [(&str, &str); 16] = [
     ("6", "Showroom: pick another car"),
     ("3 4 5", "ECU tuning, garage, engine dyno"),
     ("1 / F11", "Debug gizmos / fullscreen"),
-    ("H", "This screen"),
 ];
 
 pub struct HelpPlugin;
