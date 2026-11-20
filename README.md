@@ -27,8 +27,8 @@ A small Bevy demo of car simulation techniques:
   engine turns with the wheels and its inertia is added to theirs, so the wheel-spin
   update stays implicit. The clutch slips when pulling away (and under an engine too
   strong for it) and closes gradually after each shift, during which the throttle is
-  cut. Gears are shifted by hand by default; the automatic shifts by rpm and
-  throttle. Traction control eases the throttle while a driven wheel spins.
+  cut. Gears are shifted by hand (automatic gearboxes are to come); without a clutch
+  pedal the clutch works by itself. Traction control eases the throttle while a driven wheel spins.
 - **Thirteen cars, twelve engine families**: from a city car to a supercar, a
   pickup and a van, each a chassis with a procedurally built low-poly body. Engines
   (a 1.0 three to a 6.5 V12, 22 factory versions) are independent of the cars: the
@@ -148,8 +148,7 @@ also has the packages alone: `nix build .#server` and `nix build .#web`.
 | Key | Action |
 | --- | --- |
 | W / S, arrows | Throttle; brake |
-| Q / E | Shift down / up (R, N, 1 and up) |
-| G | Toggle automatic gearbox (S at a stop then selects reverse) |
+| Q / E | Shift down / up (R, N, 1 and up; reverse only at a standstill) |
 | I | Start the engine after a stall (only with a clutch pedal) |
 | A / D | Steer |
 | Space | Parking brake on/off (cars start with it on) |
@@ -182,17 +181,14 @@ restores their own range on exit. Writing the range needs the driver's udev rule
 farther than the slider gets a soft lock, like in BeamNG: the steering covers the
 slider's range and force feedback holds the wheel at either end. The game reads the
 base's range from hid-fanatecff; elsewhere, enter it in the panel (or set the base to
-the slider's range by hand). The
-paddles shift like Q/E (in automatic mode they select reverse or drive at a stop).
-Buttons can also be bound to resetting the car (like R), the camera view (like C) and
+the slider's range by hand). The paddles shift like Q/E. Buttons can also be bound to resetting the car (like R), the camera view (like C) and
 the map (like K).
 
 With a clutch pedal bound, you work the clutch: let it out to pull away, and press
 it to change gear at once (without pressing it, the paddles still shift with the
 automatic clutch). Drop it at low revs or stop in gear and the engine stalls; start
 it again with the ignition button or I. Without a clutch pedal, the clutch works by
-itself and the engine never stalls. The same goes for the automatic gearbox (G): it
-ignores the clutch pedal.
+itself and the engine never stalls.
 
 An H-shifter is bound gate by gate (move the lever into each). The gear follows the
 lever, and the gearbox is in neutral whenever the lever is between gates; reverse

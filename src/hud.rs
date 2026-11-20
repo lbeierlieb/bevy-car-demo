@@ -143,14 +143,6 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
                     FontId::proportional(10.0),
                     ORANGE,
                 );
-            } else if car.drivetrain.automatic {
-                painter.text(
-                    center + vec2(0.0, RADIUS + 4.0),
-                    Align2::CENTER_CENTER,
-                    "AUTO",
-                    FontId::proportional(10.0),
-                    DIM,
-                );
             }
         });
 

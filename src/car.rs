@@ -460,10 +460,9 @@ impl Car {
         car
     }
 
-    /// Takes the driver's settings (gearbox mode, traction control, ABS) from the car this
-    /// one replaces. (The active car gets them from `DriverAids` anyway.)
+    /// Takes the driver's settings (traction control, ABS) from the car this one replaces.
+    /// (The active car gets them from `DriverAids` anyway.)
     pub fn keep_settings(&mut self, old: &Car) {
-        self.drivetrain.automatic = old.drivetrain.automatic;
         self.traction_control = old.traction_control;
         self.abs = old.abs;
     }
@@ -501,12 +500,10 @@ pub(crate) const SETTINGS: Folder = Folder {
     web_prefix: "car-sim-settings:",
 };
 
-/// The driver's choice of aids (gearbox mode, traction control, ABS), the same for every
-/// car and kept between runs (`~/.config/car-sim/settings/aids.cfg`): `drive` hands it
+/// The driver's choice of aids (traction control, ABS), the same for every car and kept between runs (`~/.config/car-sim/settings/aids.cfg`): `drive` hands it
 /// to the active car.
 #[derive(Resource, Clone, Copy, PartialEq, Debug)]
 pub struct DriverAids {
-    pub automatic: bool,
     pub traction_control: bool,
     pub abs: bool,
 }
@@ -514,7 +511,6 @@ pub struct DriverAids {
 impl Default for DriverAids {
     fn default() -> Self {
         Self {
-            automatic: false,
             traction_control: true,
             abs: true,
         }
@@ -537,8 +533,8 @@ impl DriverAids {
 
     fn to_text(self) -> String {
         format!(
-            "automatic {}\ntraction_control {}\nabs {}\n",
-            self.automatic, self.traction_control, self.abs
+            "traction_control {}\nabs {}\n",
+            self.traction_control, self.abs
         )
     }
 
@@ -551,7 +547,6 @@ impl DriverAids {
                 continue;
             };
             match key {
-                "automatic" => aids.automatic = on,
                 "traction_control" => aids.traction_control = on,
                 "abs" => aids.abs = on,
                 _ => {}
@@ -563,7 +558,6 @@ impl DriverAids {
     /// Checkboxes for them all; saves a change.
     pub fn show(&mut self, ui: &mut bevy_egui::egui::Ui) {
         let before = *self;
-        ui.checkbox(&mut self.automatic, "Automatic (G)");
         ui.checkbox(&mut self.traction_control, "Traction control")
             .on_hover_text("Eases the throttle while a driven wheel spins");
         ui.checkbox(&mut self.abs, "ABS")
@@ -617,21 +611,17 @@ const KEY_STEER_RATE: f32 = 1.0;
 /// How fast they come back towards the middle (released, or steering the other way).
 const KEY_STEER_RETURN_RATE: f32 = 2.5;
 
-/// Keyboard and wheel to controls for the active car; any other car holds all brakes. G
-/// switches between manual and automatic gearboxes, I starts a stalled engine.
+/// Keyboard and wheel to controls for the active car; any other car holds all brakes. Q/E
+/// (or the paddles, or an H-shifter) change gear, I starts a stalled engine.
 pub fn drive(
     keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<WheelInput>,
     time: Res<Time>,
     active: Res<ActiveCar>,
-    mut aids: ResMut<DriverAids>,
+    aids: Res<DriverAids>,
     mut cars: Query<&mut Car>,
 ) {
     let pressed = |a, b| keys.pressed(a) || keys.pressed(b);
-    if keys.just_pressed(KeyCode::KeyG) {
-        aids.automatic ^= true;
-        aids.save();
-    }
     for mut car in &mut cars {
         if car.index != active.0 {
             car.controls = Controls {
@@ -641,7 +631,6 @@ pub fn drive(
             };
             continue;
         }
-        car.drivetrain.automatic = aids.automatic;
         car.traction_control = aids.traction_control;
         car.abs = aids.abs;
         let speed = car.forward_speed();
@@ -662,43 +651,20 @@ pub fn drive(
         if keys.just_pressed(KeyCode::KeyI) || wheel.ignition {
             drivetrain.start(&setup.engine);
         }
-        let gear = drivetrain.selected_gear();
         let shift = keys.just_pressed(KeyCode::KeyE) as i8 - keys.just_pressed(KeyCode::KeyQ) as i8
             + wheel.shift_up as i8
             - wheel.shift_down as i8;
-        let (go, stop) = if drivetrain.automatic {
-            // W drives forward and S backward: each brakes while rolling the other way
-            // and selects first or reverse once (nearly) stopped.
-            let reverse = gear < 0;
-            let (go, stop) = if reverse {
-                (back, forward)
-            } else {
-                (forward, back)
-            };
-            let along = if reverse { -speed } else { speed };
-            if stop && !go && along < 1.0 {
-                drivetrain.shift_to(&setup.engine, if reverse { 1 } else { -1 });
-            }
-            // Shifting down or up at a stop selects reverse or drive.
-            if speed.abs() < 1.0 && shift != 0 {
-                drivetrain.shift_to(&setup.engine, if shift < 0 { -1 } else { 1 });
-            }
-            (go, stop)
-        } else if let Some(gate) = wheel.shifter {
+        if let Some(gate) = wheel.shifter {
             drivetrain.select_gate(&setup.engine, gate, speed);
-            (forward, back)
-        } else {
+        } else if shift != 0 {
             // Q/E or the paddles shift down/up.
-            if shift != 0 {
-                let shares = setup.engine.drive.shares();
-                let wheel_omega = (0..4).map(|i| shares[i] * corners[i].omega).sum();
-                drivetrain.shift_by(&setup.engine, shift, wheel_omega, speed);
-            }
-            (forward, back)
-        };
-        // The pedals add to the keys; they work the same in both gearbox modes.
-        let go = (go as u8 as f32).max(wheel.throttle.unwrap_or(0.0));
-        let stop = (stop as u8 as f32).max(wheel.brake.unwrap_or(0.0));
+            let shares = setup.engine.drive.shares();
+            let wheel_omega = (0..4).map(|i| shares[i] * corners[i].omega).sum();
+            drivetrain.shift_by(&setup.engine, shift, wheel_omega, speed);
+        }
+        // The pedals add to the keys.
+        let go = (forward as u8 as f32).max(wheel.throttle.unwrap_or(0.0));
+        let stop = (back as u8 as f32).max(wheel.brake.unwrap_or(0.0));
         (c.throttle, c.brake) = if go > 0.0 { (go, stop) } else { (0.0, stop) };
         // Space and a handbrake button pull the parking brake on or release it; a lever
         // works directly, on top of it.
@@ -778,12 +744,11 @@ mod tests {
     #[test]
     fn driver_aids_read_back() {
         let aids = DriverAids {
-            automatic: true,
             traction_control: false,
             abs: true,
         };
         assert_eq!(DriverAids::from_text(&aids.to_text()), aids);
-        // Broken lines keep the defaults.
+        // Broken and unknown lines (the gearbox mode there once was) keep the defaults.
         assert_eq!(
             DriverAids::from_text("abs maybe\ntraction_control false\nautomatic true\n"),
             aids

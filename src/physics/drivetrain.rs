@@ -56,6 +56,8 @@ pub fn clutch_engagement(travel: f32) -> f32 {
         None => 0.0,
     }
 }
+/// Reverse only goes in below this speed (m/s): at a standstill, near enough.
+pub const REVERSE_SPEED: f32 = 2.0;
 /// Time the automatic stays in a gear before it shifts again (s): just after a shift, the
 /// clutch closing can spin the wheels up for a moment, and that isn't speed to shift on.
 const AUTO_DWELL: f32 = 1.0;
@@ -233,7 +235,8 @@ pub struct Drivetrain {
     pub running: bool,
     /// -1 reverse, 0 neutral, 1 and up forward.
     pub gear: i8,
-    /// Shifts by itself, based on rpm and throttle.
+    /// Shifts by itself, based on rpm and throttle: only for the test drivers, the player
+    /// shifts by hand (real automatic gearboxes are to come).
     pub automatic: bool,
     /// Gear being shifted into, and the time left until the clutch closes again.
     shift: Option<(i8, f32)>,
@@ -297,7 +300,7 @@ impl Drivetrain {
         let gear = self.selected_gear();
         let target = (gear + steps).clamp(-1, engine.top_gear());
         let over_rev = target > 0 && engine.rpm_in(target, wheel_omega) > engine.redline_rpm();
-        if target != gear && !over_rev && (target >= 0 || speed.abs() < 2.0) {
+        if target != gear && !over_rev && (target >= 0 || speed.abs() < REVERSE_SPEED) {
             self.shift_to(engine, target);
         }
     }
@@ -307,7 +310,11 @@ impl Drivetrain {
     /// in neutral until it is. Reverse only goes in when (nearly) stopped (`speed` in m/s).
     pub fn select_gate(&mut self, engine: &EngineSetup, gate: i8, speed: f32) {
         // Reverse is refused while rolling forward (backing up quickly must keep it).
-        let gate = if gate < 0 && speed > 2.0 { 0 } else { gate };
+        let gate = if gate < 0 && speed > REVERSE_SPEED {
+            0
+        } else {
+            gate
+        };
         if gate == self.selected_gear() {
             return;
         }
