@@ -408,10 +408,14 @@ impl Car {
         self.load_fuel();
     }
 
-    /// Places the car upright, at rest, just above the ground at its current spot.
+    /// Places the car upright, at rest, on the road nearest to it (in its lane, facing
+    /// the way along it nearest to where the car faced), or where it is if there's none.
     fn reset(&mut self, terrain: &Terrain) {
-        let p = self.body.position;
-        self.place(terrain, p.xz(), heading(self.body.rotation));
+        let p = self.body.position.xz();
+        let yaw = heading(self.body.rotation);
+        let facing = Vec2::new(-yaw.sin(), -yaw.cos());
+        let (p, yaw) = terrain.drive_spot(p, facing).unwrap_or((p, yaw));
+        self.place(terrain, p, yaw);
     }
 
     /// Puts the car at rest at (x, z) in the xz plane, facing along `yaw`, keeping its
@@ -591,8 +595,8 @@ impl Plugin for DefaultCarPlugin {
     }
 }
 
-/// R (or the wheel's reset button) puts the active car back on its wheels where it is, as
-/// new: refuelled to the fuel load, fresh tires, a repaired engine.
+/// R (or the wheel's reset button) puts the active car back on its wheels on the nearest
+/// road, as new: refuelled to the fuel load, fresh tires, a repaired engine.
 pub struct ResetPlugin;
 
 impl Plugin for ResetPlugin {
@@ -746,6 +750,30 @@ pub fn sync_transforms(mut cars: Query<(&Car, &mut Transform)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reset_puts_the_car_on_the_nearest_road() {
+        let terrain = Terrain::baked();
+        let (spawn, yaw) = terrain.road_spawns(1, 0.0)[0];
+        // 40 m off the road to the side, lying on its roof.
+        let side = Vec2::new(yaw.cos(), -yaw.sin());
+        let off = spawn + 40.0 * side;
+        let mut car = Car::spawn_at(0, CarSetup::default(), &terrain, off.x, off.y, yaw);
+        car.body.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(3.0);
+        car.reset(&terrain);
+        let p = car.body.position.xz();
+        // In the lane for the way it faces.
+        let facing = (car.body.rotation * Vec3::NEG_Z).xz();
+        let (lane, _) = terrain.drive_spot(p, facing).unwrap();
+        assert!(
+            p.distance(lane) < 0.1,
+            "{p} is {} m off the lane",
+            p.distance(lane)
+        );
+        assert!(p.distance(off) < 40.0, "{p} isn't the nearest road");
+        assert!((car.body.rotation * Vec3::Y).y > 0.99, "not upright");
+        assert!(car.parking_brake);
+    }
 
     #[test]
     fn driver_aids_read_back() {

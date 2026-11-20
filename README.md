@@ -153,7 +153,7 @@ also has the packages alone: `nix build .#server` and `nix build .#web`.
 | I | Start the engine after a stall (only with a clutch pedal) |
 | A / D | Steer |
 | Space | Parking brake on/off (cars start with it on) |
-| R | Reset car |
+| R | Put the car on the nearest road (in its lane), as new: repaired, refuelled, fresh tires |
 | 1 / 2 | Toggle gizmos / telemetry panel |
 | 3 / 4 / 5 | ECU tuning / garage (rebuild the car) / engine dyno |
 | 6 | Showroom: pick a car |

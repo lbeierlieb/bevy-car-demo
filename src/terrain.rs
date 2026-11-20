@@ -686,8 +686,9 @@ impl Terrain {
         spawns
     }
 
-    /// The drivable road point closest to `p` (inside the map), as (position in xz, yaw
-    /// facing along the road in the direction closest to `heading`).
+    /// A spot on the drivable road closest to `p` (inside the map), as (position in xz,
+    /// yaw facing along the road in the direction closest to `heading`): in the right-hand
+    /// lane where the traffic has a lane each way, else in the middle.
     pub fn drive_spot(&self, p: Vec2, heading: Vec2) -> Option<(Vec2, f32)> {
         let (road, i, point) = self.closest_on_road(p, |r| r.kind != RoadKind::Water)?;
         let along = (road.points[i + 1] - road.points[i]).normalize_or(Vec2::NEG_Y);
@@ -696,7 +697,9 @@ impl Terrain {
         } else {
             -along
         };
-        Some((point, (-facing.x).atan2(-facing.y)))
+        let right = Vec2::new(-facing.y, facing.x);
+        let lane = crate::traffic::network::lane_offset(road.width).unwrap_or(0.0);
+        Some((point + lane * right, (-facing.x).atan2(-facing.y)))
     }
 
     /// The point on a paved road nearest to `p`, the road's direction there and its width.
@@ -1185,7 +1188,7 @@ mod tests {
                     && road.points.windows(2).any(|pair| {
                         let (a, b) = (pair[0], pair[1]);
                         let t = ((p - a).dot(b - a) / (b - a).length_squared()).clamp(0.0, 1.0);
-                        a.lerp(b, t).distance(p) < 0.01
+                        a.lerp(b, t).distance(p) < road.width / 2.0
                     })
             })
         };

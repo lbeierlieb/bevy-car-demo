@@ -11,7 +11,7 @@ fn main() {
         .add_plugins((
             // The start menu: play alone or join a server.
             online::OnlinePlugin,
-            // Starts in the coupé; R puts the car back on its wheels as new.
+            // Starts in the coupé; R puts the car back on the nearest road as new.
             car::DefaultCarPlugin,
             car::ResetPlugin,
             // A click on the map (K) drives from there.

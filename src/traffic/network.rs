@@ -26,6 +26,12 @@ const BUILT_HOUSES: usize = 8;
 /// Built-up areas on roads narrower than this are residential streets: 30 (m).
 const RESIDENTIAL_WIDTH: f32 = 5.5;
 
+/// How far right of a road's centreline its lanes are (m), on a road wide enough for
+/// traffic (a lane each way).
+pub fn lane_offset(width: f32) -> Option<f32> {
+    (width >= MIN_WIDTH).then(|| (width / 4.0).clamp(LANE_LEAST, LANE_MOST))
+}
+
 const fn kmh(v: f32) -> f32 {
     v / 3.6
 }
@@ -168,7 +174,7 @@ impl Network {
                 if ends[1] != ends[0] {
                     network.nodes[ends[1] as usize].edges.push(edge);
                 }
-                let offset = (width / 4.0).clamp(LANE_LEAST, LANE_MOST);
+                let offset = lane_offset(width).expect("only roads wide enough");
                 let forward = offset_line(stretch, offset);
                 let back: Vec<Vec2> = stretch.iter().rev().copied().collect();
                 let backward = offset_line(&back, offset);
