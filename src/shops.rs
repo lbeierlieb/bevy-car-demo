@@ -13,6 +13,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Car};
+use crate::map::{MapLegend, MapMark, MapMarks};
 use crate::net::wire::{Reader, Wire};
 use crate::net::{Connection, Status, WantsGhost};
 use crate::terrain::Terrain;
@@ -272,15 +273,16 @@ pub fn kerb(terrain: &Terrain, p: Vec2) -> (Vec2, f32) {
     (at, (-along.x).atan2(-along.y))
 }
 
-/// Puts the server's shops on the map when they come, and takes them off when we leave.
+/// Puts the server's shops on the map (and the map, M) when they come, and takes them off
+/// when we leave.
 fn place(
     mut commands: Commands,
     connection: Option<Res<Connection>>,
-    mut shops: ResMut<Shops>,
-    mut at: ResMut<AtShop>,
+    (mut shops, mut at): (ResMut<Shops>, ResMut<AtShop>),
     markers: Query<Entity, With<Marker>>,
     terrain: Res<Terrain>,
     (mut meshes, mut materials): (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
+    (mut marks, mut legend): (ResMut<MapMarks>, ResMut<MapLegend>),
 ) {
     let wanted: &[Shop] = match connection.as_deref() {
         Some(c) if matches!(c.status, Status::Joined { .. }) => &c.shops,
@@ -311,6 +313,18 @@ fn place(
                 yaw,
             }
         })
+        .collect();
+    // On the map: each shop in its kind's colour, and a legend of the kinds there are.
+    marks.0 = (shops.list.iter())
+        .map(|placed| MapMark {
+            at: placed.marker,
+            color: placed.shop.kind.color(),
+            label: placed.shop.name.clone(),
+        })
+        .collect();
+    legend.0 = (ShopKind::ALL.into_iter())
+        .filter(|&kind| shops.list.iter().any(|placed| placed.shop.kind == kind))
+        .map(|kind| (kind.color(), kind.title().to_string()))
         .collect();
 }
 

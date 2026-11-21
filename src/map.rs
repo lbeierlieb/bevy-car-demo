@@ -42,6 +42,7 @@ impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MapView>()
             .init_resource::<MapMarks>()
+            .init_resource::<MapLegend>()
             .init_resource::<MapCars>()
             .add_message::<MapClicked>()
             .add_systems(Update, toggle)
@@ -65,6 +66,10 @@ pub struct MapMark {
     pub color: [u8; 3],
     pub label: String,
 }
+
+/// What the marks' colours mean, listed in a corner of the map.
+#[derive(Resource, Default)]
+pub struct MapLegend(pub Vec<([u8; 3], String)>);
 
 /// Cars other than the app's own to show (other players, as a server tells): an arrow in
 /// their paint and a label each.
@@ -260,7 +265,7 @@ fn draw(
     terrain: Res<Terrain>,
     active: Option<Res<ActiveCar>>,
     cars: Query<&Car>,
-    (marks, others): (Res<MapMarks>, Res<MapCars>),
+    (marks, legend, others): (Res<MapMarks>, Res<MapLegend>, Res<MapCars>),
     mut view: ResMut<MapView>,
     mut clicks: MessageWriter<MapClicked>,
 ) -> Result {
@@ -386,6 +391,26 @@ fn draw(
                 };
                 let at = to_screen(car.body.position.xz());
                 arrow(&painter, at, forward, size, car.setup.color, outline);
+            }
+
+            // The legend, top left: a dot and what it means per line.
+            if !legend.0.is_empty() {
+                let (line, inset) = (20.0, 12.0);
+                let size = vec2(170.0, line * legend.0.len() as f32);
+                let rect = Rect::from_min_size(screen.left_top() + vec2(inset, inset), size);
+                painter.rect_filled(rect.expand(6.0), 4.0, PANEL);
+                for (i, ([r, g, b], text)) in legend.0.iter().enumerate() {
+                    let middle = rect.left_top() + vec2(6.0, line * (i as f32 + 0.5));
+                    let color = Color32::from_rgb(*r, *g, *b);
+                    painter.circle(middle, 6.0, color, Stroke::new(1.5, Color32::BLACK));
+                    painter.text(
+                        middle + vec2(14.0, 0.0),
+                        Align2::LEFT_CENTER,
+                        text,
+                        FontId::proportional(13.0),
+                        TEXT,
+                    );
+                }
             }
 
             scale_bar(&painter, screen, scale);
