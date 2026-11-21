@@ -12,7 +12,7 @@ pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<OrbitInput>().add_systems(
+        app.add_systems(
             Update,
             (switch_view, orbit, follow)
                 .chain()
@@ -70,16 +70,6 @@ impl ChaseCamera {
     }
 }
 
-/// Whether mouse input may drive the camera (the UI clears this while it uses the pointer).
-#[derive(Resource)]
-pub struct OrbitInput(pub bool);
-
-impl Default for OrbitInput {
-    fn default() -> Self {
-        Self(true)
-    }
-}
-
 fn switch_view(
     keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<WheelInput>,
@@ -103,12 +93,8 @@ fn orbit(
     buttons: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
-    enabled: Res<OrbitInput>,
     mut cameras: Query<&mut ChaseCamera>,
 ) {
-    if !enabled.0 {
-        return;
-    }
     for mut camera in &mut cameras {
         if camera.driver {
             if buttons.pressed(MouseButton::Left) {

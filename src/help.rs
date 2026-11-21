@@ -4,12 +4,10 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, text::LayoutJob};
-use bevy_egui::input::EguiWantsInput;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car, ReverseRefused, drive};
 use crate::input::{Action, WheelConfig, WheelInput};
-use crate::ui::toggle_key;
 
 /// The key that brings the controls screen back.
 const KEY: KeyCode = KeyCode::KeyH;
@@ -57,12 +55,8 @@ pub struct Intro {
     pub open: bool,
 }
 
-fn toggle(
-    keys: Res<ButtonInput<KeyCode>>,
-    egui: Option<Res<EguiWantsInput>>,
-    mut intro: ResMut<Intro>,
-) {
-    if toggle_key(&keys, egui.as_deref(), KEY) {
+fn toggle(keys: Res<ButtonInput<KeyCode>>, mut intro: ResMut<Intro>) {
+    if keys.just_pressed(KEY) {
         intro.open ^= true;
     }
 }

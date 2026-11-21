@@ -231,13 +231,8 @@ fn toggle(
     active: Option<Res<ActiveCar>>,
     cars: Query<&Car>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
-    egui: Option<Res<bevy_egui::input::EguiWantsInput>>,
     mut view: ResMut<MapView>,
 ) {
-    // Not while typing into a field.
-    if egui.is_some_and(|e| e.wants_keyboard_input()) {
-        return;
-    }
     let close = view.open && keys.just_pressed(KeyCode::Escape);
     if !(keys.just_pressed(view.key) || wheel.is_some_and(|w| w.map) || close) {
         return;

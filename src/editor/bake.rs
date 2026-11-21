@@ -75,12 +75,11 @@ fn arguments(out: &Path) -> Vec<String> {
 
 fn start(
     keys: Res<ButtonInput<KeyCode>>,
-    egui: Res<bevy_egui::input::EguiWantsInput>,
     mut bake: ResMut<Bake>,
     mut doc: ResMut<Doc>,
     mut tools: ResMut<Tools>,
 ) {
-    if keys.just_pressed(KeyCode::F5) && !egui.wants_keyboard_input() {
+    if keys.just_pressed(KeyCode::F5) {
         bake.requested = true;
     }
     if !std::mem::take(&mut bake.requested) || bake.job.is_some() {

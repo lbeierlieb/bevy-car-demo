@@ -267,7 +267,7 @@ pub fn act(
     let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     let mut commands = Vec::new();
-    if !view.open && !egui.wants_keyboard_input() {
+    if !view.open {
         if ctrl && keys.just_pressed(KeyCode::KeyZ) {
             commands.push(if shift { Command::Redo } else { Command::Undo });
         }

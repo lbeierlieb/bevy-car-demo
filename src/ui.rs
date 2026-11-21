@@ -3,12 +3,12 @@
 //! panel's wheel settings are public for other apps' windows.
 
 use bevy::ecs::system::SystemParam;
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy_egui::egui::collapsing_header::CollapsingState;
 use bevy_egui::input::EguiWantsInput;
-use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
+use bevy_egui::{EguiContexts, EguiPlugin, EguiPreUpdateSet, EguiPrimaryContextPass, egui};
 
-use crate::camera::OrbitInput;
 use crate::car::{ActiveCar, Car, DriverAids};
 use crate::debug::DebugView;
 use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_value, input_name};
@@ -27,9 +27,42 @@ pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(EguiPlugin::default())
-            .add_systems(Startup, absorb_input)
-            .add_systems(PreUpdate, block_orbit);
+        app.add_plugins((EguiPlugin::default(), ShieldPlugin { pointer: true }));
+    }
+}
+
+/// Keeps egui's input from the game: while egui uses the keyboard (a text field has focus,
+/// a popup is open), no key reaches the game's systems, and with `pointer`, while egui
+/// uses the pointer (it's over a window), neither do the mouse's buttons, motion and
+/// wheel. So the game's systems read their input as it is, never asking egui. The wheel
+/// and pedals aren't held back: they can't type, and a held brake must stay held.
+pub struct ShieldPlugin {
+    /// Also the mouse (the editor checks the pointer itself: holding the buttons back
+    /// would drop a node being dragged as soon as the pointer crosses its panel).
+    pub pointer: bool,
+}
+
+impl Plugin for ShieldPlugin {
+    fn build(&self, app: &mut App) {
+        let pointer = self.pointer;
+        app.add_systems(
+            PreUpdate,
+            (move |wants: Res<EguiWantsInput>,
+                   mut keys: ResMut<ButtonInput<KeyCode>>,
+                   mut buttons: ResMut<ButtonInput<MouseButton>>,
+                   mut motion: ResMut<AccumulatedMouseMotion>,
+                   mut scroll: ResMut<AccumulatedMouseScroll>| {
+                if wants.wants_any_keyboard_input() {
+                    keys.reset_all();
+                }
+                if pointer && wants.wants_any_pointer_input() {
+                    buttons.reset_all();
+                    motion.delta = Vec2::ZERO;
+                    scroll.delta = Vec2::ZERO;
+                }
+            })
+            .after(EguiPreUpdateSet::ProcessInput),
+        );
     }
 }
 
@@ -46,12 +79,6 @@ impl Plugin for PanelPlugin {
     }
 }
 
-/// Typing into a field (or clicking on the panels) shouldn't drive the car: while egui
-/// uses the keyboard or pointer, the game doesn't see them.
-fn absorb_input(mut settings: ResMut<EguiGlobalSettings>) {
-    settings.enable_absorb_bevy_input_system = true;
-}
-
 /// How far the stack of collapsed tool windows is from the top right corner, and how far
 /// apart their title bars are.
 const TOOL_MARGIN: f32 = 10.0;
@@ -62,17 +89,6 @@ const TOOL_SPACING: f32 = 30.0;
 pub struct ToolInput<'w> {
     keys: Res<'w, ButtonInput<KeyCode>>,
     view: Res<'w, DebugView>,
-    egui: Option<Res<'w, EguiWantsInput>>,
-}
-
-/// Whether `key` was just pressed, not while typing into a field (the toggles are on
-/// the number row).
-pub fn toggle_key(
-    keys: &ButtonInput<KeyCode>,
-    egui: Option<&EguiWantsInput>,
-    key: KeyCode,
-) -> bool {
-    keys.just_pressed(key) && !egui.is_some_and(|e| e.wants_keyboard_input())
 }
 
 /// How `key` is written in a window title or help text: "3" for the digit 3.
@@ -99,7 +115,7 @@ pub fn tool_window(
 ) -> Option<(egui::Window<'static>, bool)> {
     let id = egui::Id::new(name);
     let mut state = CollapsingState::load_with_default_open(ctx, id.with("collapsing"), false);
-    if toggle_key(&input.keys, input.egui.as_deref(), key) {
+    if input.keys.just_pressed(key) {
         state.set_open(!state.is_open());
         state.store(ctx);
     }
@@ -129,11 +145,6 @@ pub fn collapse_tool(ctx: &egui::Context, name: &str) {
     let mut state = CollapsingState::load_with_default_open(ctx, id, false);
     state.set_open(false);
     state.store(ctx);
-}
-
-/// Mouse input over the panel shouldn't orbit or zoom the camera.
-fn block_orbit(wants: Res<EguiWantsInput>, mut orbit: ResMut<OrbitInput>) {
-    orbit.0 = !(wants.wants_pointer_input() || wants.is_pointer_over_area());
 }
 
 /// Everything the wheel section of the panel shows and changes.

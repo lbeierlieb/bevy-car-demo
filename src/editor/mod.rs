@@ -68,6 +68,7 @@ impl Plugin for EditorPlugin {
             crate::sky::SkyPlugin,
             crate::map::MapPlugin,
             EguiPlugin::default(),
+            crate::ui::ShieldPlugin { pointer: false },
         ))
         .add_plugins((
             camera::FlyCameraPlugin,
@@ -105,7 +106,7 @@ fn load(mut commands: Commands, mut map: ResMut<crate::map::MapView>) {
 }
 
 fn setup(mut commands: Commands) {
-    // egui's input isn't absorbed (that would drop a node being dragged as soon as the
-    // pointer crosses the panel): the systems ask `EguiWantsInput` themselves.
+    // egui's pointer input isn't held back (that would drop a node being dragged as soon
+    // as the pointer crosses the panel): the systems ask `EguiWantsInput` themselves.
     crate::spawn_sun(&mut commands);
 }

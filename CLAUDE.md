@@ -29,10 +29,14 @@ the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars)
 `editor::EditorPlugin` adds the terrain, scenery, sky and map plugins itself.
 
 - Window keys are on the number row (moved from F1–F6 at the user's wish, 2026-11-19):
-  1 gizmos, 2 panel/settings, 3–6 tool windows, skipped while egui has a text field
-  focused (`ui::toggle_key`). The F keys belong to the browser on the web
+  1 gizmos, 2 panel/settings, 3–6 tool windows. The F keys belong to the browser on the web
   (`web/index.html` keeps them from winit's canvas listeners); natively F11 toggles
   fullscreen (`FullscreenPlugin` in `default_plugins`). The editor keeps F5 (bake).
+- Input while typing (agreed with the user, 2026-11-21: generic, no per-key checks):
+  `ui::ShieldPlugin` clears all keys while egui wants the keyboard, and in the driving
+  apps the mouse's buttons, motion and wheel while egui uses the pointer, so game
+  systems just read `ButtonInput` and never ask `EguiWantsInput`. The wheel and pedals
+  pass. The editor shields only the keyboard (its systems check the pointer themselves).
 - rustfmt (asked for by the user): the whole repo is rustfmt-clean since 2026-11-17.
   Always run `nix develop -c cargo fmt --all` before every commit (and `cargo fmt` in
   `tools/bake` and `tools/dev/fakewheel`, `rustfmt --edition 2024 tools/dev/shot.rs`
