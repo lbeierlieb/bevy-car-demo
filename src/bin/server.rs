@@ -90,6 +90,16 @@ fn main() {
              native game joins, with CAR_SIM_INSECURE=1"
         );
     }
+    // One thread for the systems: there's little to do in each, and handing it to the
+    // task pool's threads every frame cost more than the work (an idle server: 2.3 % of a
+    // core, 0.6 % so; with traffic 5.5 %, 3.1 %); the VPS it runs on has one core anyway.
+    for (_, schedule) in app
+        .world_mut()
+        .resource_mut::<bevy::ecs::schedule::Schedules>()
+        .iter_mut()
+    {
+        schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
+    }
     info!("Listening on UDP port {}", options.port);
     app.run();
 }

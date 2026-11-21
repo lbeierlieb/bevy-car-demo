@@ -224,7 +224,7 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   and `Motion` (arm angle, steer, spin per wheel, `audio::EngineRun`), filled from a
   `Car` by `show_cars`; visuals and engine sound read only these); 3. headless world core, `bin/server.rs`
   running traffic around several centres (done: `WorldPlugin`; `bin/server.rs` is
-  `MinimalPlugins` + `LogPlugin` + `WorldPlugin` at 60 updates/s; traffic populates
+  `MinimalPlugins` + `LogPlugin` + `WorldPlugin` at 60 updates/s, every schedule on the single-threaded executor (idle 0.6 % of a core instead of 2.3 %; the user's VPS has one slow vCPU, about 4–5× slower than the sandbox's cores, and fell behind with traffic until the traffic paths were cached); traffic populates
   around every `Car` and `traffic::Anchor`; the
   server still links all of bevy, so it needs the render/audio libraries at runtime); 4. protocol and server/client plugins over a
   loopback transport (done: `src/net/`: `wire.rs` hand-written encoding, checked on
