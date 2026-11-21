@@ -194,10 +194,13 @@ the building's side (`kerb`); names float above within 500 m. Free (no money). P
 order (✓ done):
 
 1. ✓ server list, protocol, markers and names. 2. ✓ Stop on a marker to go in (window opens,
-   parking brake; drive off or Esc leaves). 3. **Ghosts**: a car stopped on a marker,
+   parking brake; drive off or Esc leaves). 3. ✓ **Ghosts**: a car stopped on a marker,
    in a shop or in the dyno is a ghost (a flag in its state): no collisions with players'
    cars or traffic (the server's traffic ignores it), drawn half transparent; it stays a
    ghost after leaving until it overlaps nobody. So several players use a shop at once.
+   (`CarState::ghost`; `shops` sets `net::WantsGhost`, `client::haunt` puts `looks::Ghost`
+   on our car, `move_cars` on remote ones; `push_off_remote_cars` skips ghosts, the server
+   removes a ghost's `traffic::Visitor`; `visuals` swaps in a second, blended material set.)
 4. Shops on the map (M), with a legend. 5. **Gas station**: 95/98/102; the tank keeps
    its octane, mixing by volume; the engine's knock limit reads the tank's octane (the
    panel's octane and fuel load sliders go). 6. **Alignment shop**: camber, pressures

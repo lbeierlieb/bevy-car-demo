@@ -21,6 +21,11 @@ impl Plugin for LooksPlugin {
     }
 }
 
+/// A car others drive through (stopped at a shop, or just left one and still overlapping
+/// another car): nothing collides with it, and it's drawn half transparent.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct Ghost;
+
 /// What a car is built like, as far as it's seen and heard.
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct Looks {

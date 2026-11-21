@@ -6,20 +6,24 @@ use std::f32::consts::FRAC_PI_2;
 
 use bevy::prelude::*;
 
-use crate::looks::{Looks, Motion};
+use crate::looks::{Ghost, Looks, Motion};
 
 /// Fore-aft spacing of each A-arm's two inner mounts.
 const ARM_SPREAD: f32 = 0.18;
 /// How far the rim's flange stands out past its bead seat (m).
 const FLANGE: f32 = 0.012;
+/// How opaque a ghost is.
+const GHOST_ALPHA: f32 = 0.35;
 
 pub struct VisualsPlugin;
 
 impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.init_resource::<Shared>().add_systems(
             Update,
-            (add_car_meshes, pose_parts).after(crate::looks::show_cars),
+            (add_car_meshes, ghosts, pose_parts)
+                .chain()
+                .after(crate::looks::show_cars),
         );
     }
 }
@@ -52,14 +56,32 @@ struct Part {
 /// A car's meshes (its body and parts), which go when its looks change.
 type CarMeshes = Or<(With<Body>, With<Part>)>;
 
-/// What every car's meshes share: the materials, the wheel and bar meshes, and each body
-/// (made once per chassis and paint), so that many cars (traffic) cost little and batch.
-#[derive(Default)]
+/// A car whose looks are new or changed.
+type NewCar = (
+    Entity,
+    &'static Looks,
+    Option<&'static Children>,
+    Has<Ghost>,
+);
+
+/// What every car's meshes share: the materials (solid and a ghost's), the wheel and bar
+/// meshes, and each body (made once per chassis and paint), so that many cars (traffic)
+/// cost little and batch.
+#[derive(Resource, Default)]
 struct Shared {
-    materials: Option<Materials>,
+    materials: Option<[Materials; 2]>,
     wheel: Handle<Mesh>,
     bar: Handle<Mesh>,
     bodies: HashMap<(usize, usize), Handle<Mesh>>,
+}
+
+impl Shared {
+    fn materials(&mut self, assets: &mut Assets<StandardMaterial>, ghost: bool) -> &Materials {
+        let sets = self
+            .materials
+            .get_or_insert_with(|| [false, true].map(|ghost| Materials::new(assets, ghost)));
+        &sets[usize::from(ghost)]
+    }
 }
 
 struct Materials {
@@ -71,25 +93,25 @@ struct Materials {
     spring: Handle<StandardMaterial>,
 }
 
-/// The meshes of every car whose looks are new or changed (the old ones go).
-fn add_car_meshes(
-    mut commands: Commands,
-    cars: Query<(Entity, &Looks, Option<&Children>), Changed<Looks>>,
-    old: Query<(), CarMeshes>,
-    mut shared: Local<Shared>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let shared = &mut *shared;
-    if shared.materials.is_none() {
+impl Materials {
+    fn new(assets: &mut Assets<StandardMaterial>, ghost: bool) -> Self {
         let mut flat = |color: Color, roughness: f32| {
-            materials.add(StandardMaterial {
-                base_color: color,
+            assets.add(StandardMaterial {
+                base_color: if ghost {
+                    color.with_alpha(GHOST_ALPHA)
+                } else {
+                    color
+                },
                 perceptual_roughness: roughness,
+                alpha_mode: if ghost {
+                    AlphaMode::Blend
+                } else {
+                    AlphaMode::Opaque
+                },
                 ..default()
             })
         };
-        shared.materials = Some(Materials {
+        Self {
             // The body's colours are in its vertices.
             paint: flat(Color::WHITE, 0.45),
             rubber: flat(Color::srgb(0.06, 0.06, 0.06), 0.9),
@@ -97,12 +119,37 @@ fn add_car_meshes(
             dark: flat(Color::srgb(0.12, 0.12, 0.13), 0.6),
             metal: flat(Color::srgb(0.4, 0.42, 0.45), 0.7),
             spring: flat(Color::srgb(0.90, 0.30, 0.10), 0.7),
-        });
+        }
+    }
+
+    /// A part's material (the body's without one).
+    fn of(&self, part: Option<PartKind>) -> &Handle<StandardMaterial> {
+        match part {
+            None => &self.paint,
+            Some(PartKind::Tire) => &self.rubber,
+            Some(PartKind::Rim) => &self.alloy,
+            Some(PartKind::Spoke(_)) => &self.dark,
+            Some(PartKind::Coilover) => &self.spring,
+            Some(PartKind::Upright | PartKind::ArmLink { .. }) => &self.metal,
+        }
+    }
+}
+
+/// The meshes of every car whose looks are new or changed (the old ones go).
+fn add_car_meshes(
+    mut commands: Commands,
+    cars: Query<NewCar, Changed<Looks>>,
+    old: Query<(), CarMeshes>,
+    mut shared: ResMut<Shared>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let shared = &mut *shared;
+    if shared.wheel == Handle::default() {
         shared.wheel = meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(14).build());
         shared.bar = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
     }
-    let m = shared.materials.as_ref().unwrap();
-    for (entity, looks, children) in &cars {
+    for (entity, looks, children, ghost) in &cars {
         for &child in children.into_iter().flatten() {
             if old.contains(child) {
                 commands.entity(child).despawn();
@@ -116,7 +163,8 @@ fn add_car_meshes(
                 meshes.add(chassis.body.mesh(&chassis.wheels(), build.paint()))
             })
             .clone();
-        let (wheel, bar) = (&shared.wheel, &shared.bar);
+        let (wheel, bar) = (shared.wheel.clone(), shared.bar.clone());
+        let m = shared.materials(&mut materials, ghost);
         commands
             .entity(entity)
             .insert(Visibility::default())
@@ -124,31 +172,57 @@ fn add_car_meshes(
                 parent.spawn((
                     Body,
                     Mesh3d(body),
-                    MeshMaterial3d(m.paint.clone()),
+                    MeshMaterial3d(m.of(None).clone()),
                     Transform::from_translation(looks.body_offset),
                 ));
                 for corner in 0..4 {
-                    let mut part =
-                        |kind, mesh: &Handle<Mesh>, material: &Handle<StandardMaterial>| {
-                            parent.spawn((
-                                Part { corner, kind },
-                                Mesh3d(mesh.clone()),
-                                MeshMaterial3d(material.clone()),
-                            ));
-                        };
-                    part(PartKind::Tire, wheel, &m.rubber);
-                    part(PartKind::Rim, wheel, &m.alloy);
-                    part(PartKind::Spoke(0.0), bar, &m.dark);
-                    part(PartKind::Spoke(FRAC_PI_2), bar, &m.dark);
-                    part(PartKind::Upright, bar, &m.metal);
-                    part(PartKind::Coilover, bar, &m.spring);
+                    let mut part = |kind, mesh: &Handle<Mesh>| {
+                        parent.spawn((
+                            Part { corner, kind },
+                            Mesh3d(mesh.clone()),
+                            MeshMaterial3d(m.of(Some(kind)).clone()),
+                        ));
+                    };
+                    part(PartKind::Tire, &wheel);
+                    part(PartKind::Rim, &wheel);
+                    part(PartKind::Spoke(0.0), &bar);
+                    part(PartKind::Spoke(FRAC_PI_2), &bar);
+                    part(PartKind::Upright, &bar);
+                    part(PartKind::Coilover, &bar);
                     for upper in [false, true] {
                         for front in [false, true] {
-                            part(PartKind::ArmLink { upper, front }, bar, &m.metal);
+                            part(PartKind::ArmLink { upper, front }, &bar);
                         }
                     }
                 }
             });
+    }
+}
+
+/// A car that becomes a ghost, or stops being one, gets the other materials.
+fn ghosts(
+    became: Query<&Children, Added<Ghost>>,
+    mut stopped: RemovedComponents<Ghost>,
+    cars: Query<&Children, Without<Ghost>>,
+    mut meshes: Query<(&mut MeshMaterial3d<StandardMaterial>, Option<&Part>), CarMeshes>,
+    mut shared: ResMut<Shared>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let mut dress = |children: &Children, ghost: bool| {
+        let m = shared.materials(&mut materials, ghost);
+        for &child in children {
+            if let Ok((mut material, part)) = meshes.get_mut(child) {
+                material.0 = m.of(part.map(|part| part.kind)).clone();
+            }
+        }
+    };
+    for children in &became {
+        dress(children, true);
+    }
+    for entity in stopped.read() {
+        if let Ok(children) = cars.get(entity) {
+            dress(children, false);
+        }
     }
 }
 

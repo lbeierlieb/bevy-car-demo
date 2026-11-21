@@ -145,6 +145,8 @@ pub struct CarState {
     pub velocity: Vec3,
     pub angular_velocity: Vec3,
     pub motion: Motion,
+    /// A ghost: stopped at a shop (or just left one), nothing collides with it.
+    pub ghost: bool,
 }
 
 /// Another player's car on the map: where it is and goes (xz, on the ground), which way
@@ -341,6 +343,7 @@ impl Wire for CarState {
         self.velocity.put(out);
         self.angular_velocity.put(out);
         self.motion.put(out);
+        self.ghost.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         Some(Self {
@@ -350,6 +353,7 @@ impl Wire for CarState {
             velocity: r.get()?,
             angular_velocity: r.get()?,
             motion: r.get()?,
+            ghost: r.get()?,
         })
     }
 }
@@ -627,6 +631,7 @@ mod tests {
             velocity: Vec3::X,
             angular_velocity: Vec3::Y,
             motion: Motion::default(),
+            ghost: true,
         };
         let bytes = encode(&ToServer::State(state));
         assert!(bytes.len() < 130, "{} bytes", bytes.len());

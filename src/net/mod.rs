@@ -14,7 +14,7 @@ pub mod server;
 pub mod web;
 pub mod wire;
 
-pub use client::{ChatLine, ClientPlugin, Connection, Status};
+pub use client::{ChatLine, ClientPlugin, Connection, Status, WantsGhost};
 pub use server::{MapPlayers, Presence, Server, ServerPlugin};
 
 use bevy::time::{Fixed, Real, Time};
@@ -522,6 +522,44 @@ mod tests {
         );
         println!("Anna pushed off at {a:.3} m/s, Ben at {b:.3} m/s");
         assert!(a < -0.1 && b > 0.1, "both pushed apart");
+    }
+
+    /// A car at a shop is a ghost: overlapping cars don't push each other, and it stays a
+    /// ghost after the shop until it overlaps nobody.
+    #[test]
+    fn ghosts_run_into_nothing_until_clear() {
+        use crate::looks::Ghost;
+        let ghosts = |app: &mut App| {
+            (app.world_mut().query_filtered::<(), With<Ghost>>())
+                .iter(app.world())
+                .count()
+        };
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut ben = player(&listener, "Ben", 3, 30.0);
+        run(&mut [&mut server, &mut anna, &mut ben], 30);
+        anna.insert_resource(WantsGhost(true));
+        run(&mut [&mut server, &mut anna, &mut ben], 30);
+        let width = 2.0 * Looks::of(&car(&mut anna).setup).hull.half.x;
+        car(&mut ben).body.position.x = width - 0.5;
+        run(&mut [&mut server, &mut anna, &mut ben], 30);
+        assert_eq!(ghosts(&mut anna), 1, "Anna's car is a ghost");
+        assert_eq!(ghosts(&mut ben), 1, "and Ben sees it as one");
+        let (a, b) = (
+            car(&mut anna).body.velocity.x,
+            car(&mut ben).body.velocity.x,
+        );
+        assert!(a == 0.0 && b == 0.0, "nobody pushed: {a}, {b}");
+        // Anna leaves the shop: still a ghost while overlapping Ben.
+        anna.insert_resource(WantsGhost(false));
+        run(&mut [&mut server, &mut anna, &mut ben], 30);
+        assert_eq!(ghosts(&mut anna), 1, "still a ghost on top of Ben");
+        // Ben drives off.
+        car(&mut ben).body.position.x = 30.0;
+        run(&mut [&mut server, &mut anna, &mut ben], 30);
+        assert_eq!(ghosts(&mut anna), 0, "clear of Ben, no ghost");
+        assert_eq!(ghosts(&mut ben), 0);
     }
 
     /// On a server, the traffic is the server's: a player sees its cars near them where

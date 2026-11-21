@@ -22,7 +22,7 @@ use super::protocol::{
 use super::wire::{decode, encode};
 use super::{ClockOffset, SEND_RATE};
 use crate::car::{ActiveCar, Car};
-use crate::looks::{Looks, Motion};
+use crate::looks::{Ghost, Looks, Motion};
 use crate::physics::collision::Obb;
 use crate::physics::collision::{self, OBSTACLE};
 use crate::physics::rigid_body::RigidBody;
@@ -73,6 +73,8 @@ impl Plugin for ClientPlugin {
                 .run_if(resource_exists::<Connection>),
         )
         .init_resource::<traffic::Source>()
+        .init_resource::<WantsGhost>()
+        .add_systems(Update, haunt.before(send))
         .add_systems(PreUpdate, switch_source)
         .add_systems(
             FixedUpdate,
@@ -446,13 +448,14 @@ fn send(
     time: Res<Time<Real>>,
     fixed: Res<Time<Fixed>>,
     active: Res<ActiveCar>,
-    cars: Query<(&Car, &Looks, &Motion)>,
+    cars: Query<(&Car, &Looks, &Motion, Has<Ghost>)>,
 ) {
     let now = now(&time);
     if !matches!(connection.status, Status::Joined { .. }) {
         return;
     }
-    let Some((car, looks, motion)) = cars.iter().find(|(car, ..)| car.index == active.0) else {
+    let Some((car, looks, motion, ghost)) = cars.iter().find(|(car, ..)| car.index == active.0)
+    else {
         return;
     };
     if connection.sent_looks.as_ref() != Some(looks) {
@@ -468,9 +471,20 @@ fn send(
             velocity: car.body.velocity,
             angular_velocity: car.body.angular_velocity,
             motion: *motion,
+            ghost,
         }));
     }
 }
+
+/// What `move_cars` reads and moves of a remote car.
+type RemoteParts = (
+    Entity,
+    &'static mut RemoteCar,
+    &'static mut Transform,
+    &'static mut Motion,
+    Option<&'static Looks>,
+    Has<Ghost>,
+);
 
 /// Shows each remote car where it's predicted to be by the end of the last simulation
 /// step, and keeps its body there. That's when our own car is drawn (and the camera
@@ -481,7 +495,8 @@ fn move_cars(
     fixed: Res<Time<Fixed>>,
     connection: Res<Connection>,
     mut drawn_at: Local<Option<f64>>,
-    mut cars: Query<(&mut RemoteCar, &mut Transform, &mut Motion, Option<&Looks>)>,
+    mut commands: Commands,
+    mut cars: Query<RemoteParts>,
 ) {
     let at = super::stamp(&time, &fixed);
     let Some(their) = connection.clock.their(at) else {
@@ -489,13 +504,18 @@ fn move_cars(
     };
     let dt = drawn_at.map_or(0.0, |before| (at - before).max(0.0) as f32);
     *drawn_at = Some(at);
-    for (mut car, mut transform, mut motion, looks) in &mut cars {
+    for (entity, mut car, mut transform, mut motion, looks, ghost) in &mut cars {
         let car = &mut *car;
         let (by_now, ahead) = predict(&car.states, their);
         (transform.translation, transform.rotation) = car.drawn.follow(&by_now, dt);
         // The wheels roll on as fast as they did between the last two states.
         let (before, latest) = (car.states.front().unwrap(), car.states.back().unwrap());
         *motion = latest.motion;
+        if latest.ghost && !ghost {
+            commands.entity(entity).insert(Ghost);
+        } else if !latest.ghost && ghost {
+            commands.entity(entity).remove::<Ghost>();
+        }
         if latest.time > before.time {
             let between = (latest.time - before.time) as f32;
             for (wheel, was) in motion.wheels.iter_mut().zip(&before.motion.wheels) {
@@ -638,12 +658,51 @@ fn switch_source(
     }
 }
 
+/// Whether the game wants our car to be a ghost (stopped at a shop, or in one); it stays
+/// one after that while it overlaps another car, so cars leaving a shop together aren't
+/// thrown apart.
+#[derive(Resource, Default)]
+pub struct WantsGhost(pub bool);
+
+/// Makes our car a ghost, or not, as `WantsGhost` and the cars around it say (never
+/// alone).
+fn haunt(
+    mut commands: Commands,
+    connection: Option<Res<Connection>>,
+    wants: Res<WantsGhost>,
+    active: Res<ActiveCar>,
+    cars: Query<(Entity, &Car, Has<Ghost>)>,
+    remote: Query<(&RemoteCar, &Looks)>,
+) {
+    let joined = connection.is_some_and(|c| matches!(c.status, Status::Joined { .. }));
+    for (entity, car, ghost) in &cars {
+        let overlapping = || {
+            let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
+            (remote.iter()).any(|(other, looks)| {
+                (other.body.as_ref()).is_some_and(|body| {
+                    let other = looks.hull.placed(body.position, body.rotation);
+                    let reach = hull.radius() + other.radius();
+                    hull.center.distance_squared(other.center) <= reach * reach
+                        && hull.contact(&other).is_some()
+                })
+            })
+        };
+        let wanted = joined && car.index == active.0 && (wants.0 || (ghost && overlapping()));
+        if wanted && !ghost {
+            commands.entity(entity).insert(Ghost);
+        } else if !wanted && ghost {
+            commands.entity(entity).remove::<Ghost>();
+        }
+    }
+}
+
 /// Our cars push themselves off the remote cars they run into (those aren't moved: the
-/// other player's game pushes theirs off ours, the server its traffic).
+/// other player's game pushes theirs off ours, the server its traffic). Ghosts, ours or
+/// theirs, run into nothing.
 fn push_off_remote_cars(
     time: Res<Time>,
-    mut cars: Query<&mut Car>,
-    remote: Query<(&RemoteCar, &Looks)>,
+    mut cars: Query<&mut Car, Without<Ghost>>,
+    remote: Query<(&RemoteCar, &Looks), Without<Ghost>>,
 ) {
     let dt = time.delta_secs();
     let others: Vec<(RigidBody, Obb)> = (remote.iter())
@@ -688,6 +747,7 @@ mod tests {
             velocity: rotation * Vec3::new(0.0, 0.0, -speed),
             angular_velocity: Vec3::new(0.0, yaw_rate, 0.0),
             motion: Motion::default(),
+            ghost: false,
         }
     }
 
@@ -723,6 +783,7 @@ mod tests {
             velocity: Vec3::new(0.0, 0.0, -speed),
             angular_velocity: Vec3::new(0.0, 0.2, 0.0),
             motion: Motion::default(),
+            ghost: false,
         };
         // 2 m/s, braking at 6 m/s²: stopped after 1/3 s, 0.33 m on.
         let states = VecDeque::from([state(0.0, 3.0), state(1.0 / 6.0, 2.0)]);

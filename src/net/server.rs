@@ -5,7 +5,8 @@
 //! who falls silent is frozen for the others (and traffic stops coming for them), and
 //! dropped after a while. Each player is an entity with a `Peer`, and a `traffic::Anchor`
 //! and `traffic::Visitor` while their car is heard from, so traffic drives around them,
-//! keeps its distance and crashes into them. Once a second each player is told where the others
+//! keeps its distance and crashes into them (not while their car is a ghost, at a shop).
+//! Once a second each player is told where the others
 //! are for the map: nobody, the ones near them or everyone, as the server is set
 //! (`MapPlayers`), and every two seconds everyone's ping (the connection's round trip).
 //! Every state goes out stamped on the server's clock (a player's converted from theirs),
@@ -322,7 +323,10 @@ fn receive(
                     peer.clock.heard(state.time, now);
                     if peer.state.is_none_or(|old| state.time > old.time) {
                         peer.state = Some(state);
-                        if let Some(looks) = &peer.looks {
+                        if state.ghost {
+                            // Traffic drives through a ghost.
+                            commands.entity(entity).remove::<Visitor>();
+                        } else if let Some(looks) = &peer.looks {
                             let mut body = RigidBody::new(
                                 state.position,
                                 state.rotation,
@@ -526,6 +530,7 @@ fn send(
                 velocity: car.center_velocity(looks),
                 angular_velocity: car.body.angular_velocity,
                 motion: *motion,
+                ghost: false,
             },
             looks: looks.clone(),
             revision: 1,

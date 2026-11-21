@@ -14,7 +14,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Car};
 use crate::net::wire::{Reader, Wire};
-use crate::net::{Connection, Status};
+use crate::net::{Connection, Status, WantsGhost};
 use crate::terrain::Terrain;
 
 /// The list the server has unless told otherwise (`--shops`).
@@ -199,14 +199,17 @@ impl AtShop {
 }
 
 /// Stopping on a marker is going into its shop (with the parking brake pulled); moving
-/// off it, leaving.
+/// off it, leaving. A car stopped on a marker, or in a shop, is a ghost (see
+/// `WantsGhost`), so several can use a shop at once.
 fn arrive(
     shops: Res<Shops>,
     mut at: ResMut<AtShop>,
+    mut ghost: ResMut<WantsGhost>,
     active: Res<ActiveCar>,
     mut cars: Query<&mut Car>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
+    ghost.0 = false;
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
         *at = AtShop::default();
         return;
@@ -219,20 +222,16 @@ fn arrive(
     if !near(at.left) {
         at.left = None;
     }
-    if at.shop.is_some() {
-        if !near(at.shop) || keys.just_pressed(KeyCode::Escape) {
-            at.leave();
-        }
-        return;
+    if at.shop.is_some() && (!near(at.shop) || keys.just_pressed(KeyCode::Escape)) {
+        at.leave();
     }
-    if car.body.velocity.length() > STOPPED {
-        return;
-    }
+    let stopped = car.body.velocity.length() < STOPPED;
     let on = (shops.list.iter()).position(|placed| placed.marker.distance(p) < MARKER_RADIUS);
-    if on.is_some() && on != at.left {
+    if at.shop.is_none() && stopped && on.is_some() && on != at.left {
         at.shop = on;
         car.parking_brake = true;
     }
+    ghost.0 = at.shop.is_some() || (stopped && on.is_some());
 }
 
 /// The window of the shop the car is in.
