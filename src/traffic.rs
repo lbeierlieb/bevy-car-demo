@@ -82,8 +82,12 @@ const DRIVETRAIN_MASS: f32 = 230.0;
 /// rad/s, s).
 const STILL: f32 = 0.05;
 const SETTLE_TIME: f32 = 2.0;
-/// What a traffic car's engine shows (rpm): idling, whatever it does.
+/// What a traffic car's engine sounds like: idling standing, cruising at a steady rpm
+/// and load once moving (no gears), blended in over the first few m/s.
 const IDLE_RPM: f32 = 850.0;
+const CRUISE_RPM: f32 = 2000.0;
+const CRUISE_LOAD: f32 = 0.2;
+const CRUISING_FROM: f32 = 3.0;
 
 /// How many traffic cars drive around each player (the panel's traffic density).
 #[derive(Resource)]
@@ -640,8 +644,9 @@ impl TrafficCar {
     }
 
     /// What moves on it, for a car that `looks` so: the wheels roll and the front ones
-    /// steer, on a suspension at rest; the engine idles.
+    /// steer, on a suspension at rest; the engine idles standing and cruises moving.
     pub fn motion(&self, looks: &Looks) -> Motion {
+        let moving = (self.body.velocity.length() / CRUISING_FROM).min(1.0);
         Motion {
             wheels: std::array::from_fn(|corner| {
                 let axle = &looks.axles[corner / 2];
@@ -653,8 +658,8 @@ impl TrafficCar {
             }),
             engine: EngineRun {
                 running: true,
-                rpm: IDLE_RPM,
-                load: 0.0,
+                rpm: IDLE_RPM + (CRUISE_RPM - IDLE_RPM) * moving,
+                load: CRUISE_LOAD * moving,
                 turbo_speed: 0.0,
             },
         }

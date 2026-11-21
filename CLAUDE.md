@@ -329,11 +329,13 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `switch_source` removes traffic and remote cars when joining or leaving. Name tags
   follow `Tag`. Alone (and on the server): `TrafficCar` simulates as before,
   `traffic::show` gives it `Looks` (`FactoryLooks`, per chassis with its base engine,
-  16 ms for all 13) and `Motion` (steer, spin from rolled, suspension at rest, idling)
+  16 ms for all 13) and `Motion` (steer, spin from rolled, suspension at rest, idling standing, 2000 rpm
+  at 20 % load moving)
   and a `Transform` at the centre of mass, and `visuals.rs` draws it like any car (shared
   materials, bodies cached per chassis and paint). Remaining tells: traffic's suspension
-  doesn't move, its engine idles (heard since other cars have engine sound; the user is
-  fine with idling NPCs for now), how it drives.
+  doesn't move, its engine (heard since other cars have engine sound) only idles
+  standing and holds 2000 rpm at 20 % load moving (blended over 0–3 m/s; asked for by
+  the user, no gears), how it drives.
   Tried with a local server and two headless games: name tag over the other player,
   traffic shown, a leaving player's car gone at once.
 - **Parallel worlds** (planned with the user, 2026-11-21, not built): groups of players
