@@ -411,16 +411,23 @@ fn send(
     }
 }
 
-/// Shows each remote car where it's predicted to be by now, and keeps its body there.
+/// Shows each remote car where it's predicted to be by the end of the last simulation
+/// step, and keeps its body there. That's when our own car is drawn (and the camera
+/// placed): drawn at now instead, a car keeping pace with ours would shake by its speed
+/// times the step's overstep, which changes from frame to frame.
 fn move_cars(
     time: Res<Time<Real>>,
+    fixed: Res<Time<Fixed>>,
     connection: Res<Connection>,
+    mut drawn_at: Local<Option<f64>>,
     mut cars: Query<(&mut RemoteCar, &mut Transform, &mut Motion, Option<&Looks>)>,
 ) {
-    let Some(their) = connection.clock.their(now(&time)) else {
+    let at = super::stamp(&time, &fixed);
+    let Some(their) = connection.clock.their(at) else {
         return;
     };
-    let dt = time.delta_secs();
+    let dt = drawn_at.map_or(0.0, |before| (at - before).max(0.0) as f32);
+    *drawn_at = Some(at);
     for (mut car, mut transform, mut motion, looks) in &mut cars {
         let car = &mut *car;
         let (by_now, ahead) = predict(&car.states, their);

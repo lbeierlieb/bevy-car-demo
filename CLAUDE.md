@@ -240,7 +240,7 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   between the last two states in the car's frame (estimated on the client, agreed with
   the user: sending it would only gain one state at the onset), stopping rather than
   reversing, for up to 0.8 s; `Drawn` closes on the prediction with a 0.1 s time
-  constant, snapping past 5 m; wheels roll on at their last rate); the plugins idle without the resources; tests in
+  constant, snapping past 5 m; wheels roll on at their last rate; drawn as of the last simulation step's end (`net::stamp`), when our own car and the camera are, not now: a car keeping pace shook by its speed × the overstep); the plugins idle without the resources; tests in
   `net/mod.rs` step time by hand with `TimeUpdateStrategy::ManualDuration`); 5. WebTransport,
   start menu, join dialog, player name, name tags, player list (done: `net/quic.rs`
   (wtransport, tokio runtime "network", stream framed by u32 length + datagrams ≤ 1200 B,
