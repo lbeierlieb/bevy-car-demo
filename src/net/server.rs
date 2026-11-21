@@ -299,6 +299,7 @@ fn receive(
 fn send(
     mut server: ResMut<Server>,
     time: Res<Time<Real>>,
+    fixed: Res<Time<Fixed>>,
     mut peers: Query<&mut Peer>,
     traffic: Query<&TrafficCar>,
 ) {
@@ -333,6 +334,7 @@ fn send(
         grid.entry(cell(car.state.position)).or_default().push(i);
     }
     let reach = (NEAR / CELL).ceil() as i32;
+    let stamp = super::stamp(&time, &fixed);
     let traffic: Vec<TrafficState> = traffic
         .iter()
         .map(|car| {
@@ -341,7 +343,7 @@ fn send(
                 id: car.id,
                 chassis: car.chassis,
                 paint: car.paint,
-                time: now,
+                time: stamp,
                 position: car.body.position,
                 rotation: car.body.rotation,
                 velocity: car.body.velocity,

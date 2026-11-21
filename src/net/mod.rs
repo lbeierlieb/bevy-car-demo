@@ -17,6 +17,8 @@ pub mod wire;
 pub use client::{ClientPlugin, Connection, Status};
 pub use server::{Presence, Server, ServerPlugin};
 
+use bevy::time::{Fixed, Real, Time};
+
 /// The UDP port servers listen on unless told otherwise.
 pub const PORT: u16 = 4433;
 
@@ -61,6 +63,13 @@ pub const NEAR: f32 = 600.0;
 /// How often a car's state is passed on to a player within each distance of it (m, per
 /// second); the last one reaches to `NEAR`.
 pub const RATES: [(f32, f64); 3] = [(150.0, 30.0), (350.0, 10.0), (NEAR, 3.0)];
+
+/// The time on our clock (s) that a car's state, as the last simulation step left it, is
+/// from: the step's end, not now (now is up to a step later, unevenly from frame to
+/// frame, which would make a steadily moving car seem to jerk).
+pub fn stamp(real: &Time<Real>, fixed: &Time<Fixed>) -> f64 {
+    real.elapsed_secs_f64() - fixed.overstep().as_secs_f64()
+}
 
 #[cfg(test)]
 mod tests {

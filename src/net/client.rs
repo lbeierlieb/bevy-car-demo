@@ -314,6 +314,7 @@ fn dress_proxies(
 fn send(
     mut connection: ResMut<Connection>,
     time: Res<Time<Real>>,
+    fixed: Res<Time<Fixed>>,
     active: Res<ActiveCar>,
     cars: Query<(&Car, &Looks, &Motion)>,
 ) {
@@ -331,7 +332,7 @@ fn send(
     if now - connection.sent >= 1.0 / SEND_RATE {
         connection.sent = now;
         connection.say(&ToServer::State(CarState {
-            time: now,
+            time: super::stamp(&time, &fixed),
             position: car.body.position,
             rotation: car.body.rotation,
             velocity: car.body.velocity,
