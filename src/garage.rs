@@ -11,7 +11,8 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::car::{ActiveCar, Car, CarSetup, heading};
 use crate::chassis::{
-    CHASSIS, CLUTCHES, CarBuild, GEARBOXES, PAINTS, PRESSURES, SUSPENSIONS, needs_adapter,
+    BRAKE_BALANCES, BRAKE_FORCES, CHASSIS, CLUTCHES, CarBuild, GEARBOXES, PAINTS, PRESSURES,
+    SUSPENSIONS, TOES, needs_adapter,
 };
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::ecu::{Ecu, EcuModel};
@@ -217,7 +218,6 @@ fn window(
         let garage = &mut *garage;
         car_parts(ui, &mut garage.draft.0);
         wheel_parts(ui, &mut garage.draft.0, &mut garage.same_wheels);
-        alignment(ui, &mut garage.draft.0, static_loads(&car.setup));
         ui.separator();
         engine(ui, garage);
         build_now = build(ui, garage, &car);
@@ -380,21 +380,23 @@ fn wheel_parts(ui: &mut egui::Ui, draft: &mut CarBuild, same: &mut bool) {
 }
 
 /// Each tire's load with the car standing (N), front and rear.
-fn static_loads(setup: &CarSetup) -> [f32; 2] {
+pub fn static_loads(setup: &CarSetup) -> [f32; 2] {
     [true, false].map(|front| (setup.corner_mass(front) + setup.axle(front).unsprung_mass) * 9.81)
 }
 
-/// Camber (within what the suspension kit allows) and cold tire pressure per axle, with
-/// the pressure the tires suit under `loads` (N, front and rear; see `static_loads`).
-fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, loads: [f32; 2]) {
+/// Camber (within what the suspension kit allows), cold tire pressure and toe per axle,
+/// with the pressure the tires suit standing; and the brakes' force and balance. `setup`
+/// is the car as it is now (for the loads and the factory brake balance).
+pub fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, setup: &CarSetup) {
+    let loads = static_loads(setup);
     ui.strong("Alignment and pressures").on_hover_text(
         "Negative camber leans the tops of the wheels in: it evens out the load across the \
          outside tire in a corner, but wears and heats the inside shoulders on the straight. \
          Tires warm up and gain pressure as they work: too little and they carry on their \
          shoulders, too much and on their middle. Read the tire temperatures across the tread \
-         (2) to set both.",
+         (2) to set both. Toe-in steadies an axle, toe-out makes it keener to turn.",
     );
-    egui::Grid::new("alignment").num_columns(4).show(ui, |ui| {
+    egui::Grid::new("alignment").num_columns(5).show(ui, |ui| {
         for axle in 0..2 {
             ui.label(["Front", "Rear"][axle]);
             let range = build.camber_range(axle);
@@ -403,6 +405,12 @@ fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, loads: [f32; 2]) {
                     .step_by(0.1)
                     .fixed_decimals(1)
                     .suffix("° camber"),
+            );
+            ui.add(
+                egui::Slider::new(&mut build.toe[axle], TOES)
+                    .step_by(0.05)
+                    .fixed_decimals(2)
+                    .suffix("° toe-in"),
             );
             ui.add(
                 egui::Slider::new(&mut build.pressure[axle], PRESSURES)
@@ -419,6 +427,45 @@ fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, loads: [f32; 2]) {
                 .on_hover_text("Cold, for the tires to carry evenly once warm, standing");
             ui.end_row();
         }
+    });
+    ui.strong("Brakes");
+    let factory_torque = setup.brake_torque / setup.build.brake_force;
+    let factory_bias = setup.brake_bias - setup.build.brake_balance;
+    egui::Grid::new("brakes").num_columns(2).show(ui, |ui| {
+        ui.label("Force").on_hover_text(
+            "Stronger brakes stop shorter until the tires lock (ABS holds them back); the \
+             factory's lock a dry road's tires at about 0.8 of the pedal",
+        );
+        let mut percent = build.brake_force * 100.0;
+        let torque = factory_torque * build.brake_force;
+        ui.add(
+            egui::Slider::new(
+                &mut percent,
+                BRAKE_FORCES.start() * 100.0..=BRAKE_FORCES.end() * 100.0,
+            )
+            .step_by(1.0)
+            .fixed_decimals(0)
+            .suffix(format!(" % of the factory's ({torque:.0} N·m)")),
+        );
+        build.brake_force = percent / 100.0;
+        ui.end_row();
+        ui.label("Balance").on_hover_text(
+            "More at the front keeps the rear wheels from locking first (stable); more at \
+             the rear stops harder until the rear steps out",
+        );
+        let mut front = (factory_bias + build.brake_balance) * 100.0;
+        ui.add(
+            egui::Slider::new(
+                &mut front,
+                (factory_bias + BRAKE_BALANCES.start()) * 100.0
+                    ..=(factory_bias + BRAKE_BALANCES.end()) * 100.0,
+            )
+            .step_by(1.0)
+            .fixed_decimals(0)
+            .suffix(format!(" % front (factory {:.0} %)", factory_bias * 100.0)),
+        );
+        build.brake_balance = front / 100.0 - factory_bias;
+        ui.end_row();
     });
     build.clamp_alignment();
 }

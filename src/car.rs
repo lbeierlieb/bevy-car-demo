@@ -130,8 +130,8 @@ impl CarSetup {
                 *point += shift;
             }
             geometry.static_camber = build.camber[i].to_radians();
-            // Toe-in at the rear keeps the car stable, especially off throttle.
-            geometry.static_toe = if i == 0 { 0.0 } else { 0.25f32.to_radians() };
+            // Toe-in at the rear keeps the car stable, especially off throttle (the factory's).
+            geometry.static_toe = build.toe[i].to_radians();
             let unsprung_mass = unsprung(i);
             let mut axle = AxleSetup {
                 geometry,
@@ -202,8 +202,8 @@ impl CarSetup {
                 differential,
                 centre: differential,
             },
-            brake_torque: chassis.brakes * factory_grip * mass * 9.81 * radius,
-            brake_bias: brake_bias.min(0.9),
+            brake_torque: chassis.brakes * factory_grip * mass * 9.81 * radius * build.brake_force,
+            brake_bias: (brake_bias.min(0.9) + build.brake_balance).clamp(0.3, 0.95),
             handbrake_torque: 2.0 * mass,
             drag_area: chassis.drag_area + tire_drag(&build.wheels, &chassis.wheels),
             downforce_area: chassis.downforce_area,

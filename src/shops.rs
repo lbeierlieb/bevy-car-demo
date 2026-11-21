@@ -12,7 +12,8 @@ use bevy_egui::egui::{self, Align2, Color32, FontId};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::camera::ChaseCamera;
-use crate::car::{ActiveCar, Car};
+use crate::car::{ActiveCar, Car, CarSetup};
+use crate::garage;
 use crate::map::{MapLegend, MapMark, MapMarks};
 use crate::net::wire::{Reader, Wire};
 use crate::net::{Connection, Status, WantsGhost};
@@ -261,6 +262,7 @@ fn window(
         .show(ctx, |ui| {
             match kind {
                 ShopKind::Gas => gas_station(ui, &mut car, &mut pump),
+                ShopKind::Alignment => alignment_shop(ui, &mut car),
                 _ => {
                     ui.label("Nothing here yet.");
                 }
@@ -275,6 +277,17 @@ fn window(
         at.leave();
     }
     Ok(())
+}
+
+/// Camber, toe, pressures and the brakes, set on the car as they're moved.
+fn alignment_shop(ui: &mut egui::Ui, car: &mut Car) {
+    let mut build = car.setup.build.clone();
+    garage::alignment(ui, &mut build, &car.setup);
+    if build != car.setup.build {
+        let engine = &car.setup.engine;
+        let setup = CarSetup::new(build, engine.parts.clone(), engine.build.clone());
+        *car = car.rebuilt(setup);
+    }
 }
 
 /// The gas station's grades: name and research octane number.

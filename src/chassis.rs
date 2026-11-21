@@ -169,6 +169,14 @@ pub const SUSPENSIONS: [(&str, f32, f32, f32, f32); 3] = [
 
 /// The cold tire pressures that can be set (bar).
 pub const PRESSURES: std::ops::RangeInclusive<f32> = 1.2..=3.5;
+/// The toe that can be set (degrees, toe-in positive), and the factory's front and rear.
+pub const TOES: std::ops::RangeInclusive<f32> = -1.0..=1.0;
+pub const FACTORY_TOE: [f32; 2] = [0.0, 0.25];
+/// How much stronger or weaker the brakes can be set than the factory's (a share of its
+/// torque), and how far their balance can be moved from the factory's (a share of the
+/// braking at the front).
+pub const BRAKE_FORCES: std::ops::RangeInclusive<f32> = 0.7..=1.3;
+pub const BRAKE_BALANCES: std::ops::RangeInclusive<f32> = -0.1..=0.1;
 
 /// Paints every car comes in.
 pub const PAINTS: [(&str, [f32; 3]); 10] = [
@@ -383,6 +391,12 @@ pub struct CarBuild {
     /// Static camber (degrees) and cold tire pressure (bar), front and rear.
     pub camber: [f32; 2],
     pub pressure: [f32; 2],
+    /// Toe-in (degrees), front and rear.
+    pub toe: [f32; 2],
+    /// The brakes' torque as a share of the factory's, and their balance moved this far
+    /// to the front from the factory's (a share of the braking).
+    pub brake_force: f32,
+    pub brake_balance: f32,
 }
 
 impl CarBuild {
@@ -401,6 +415,9 @@ impl CarBuild {
             wheels: made.wheels,
             camber: made.camber,
             pressure: made.pressure,
+            toe: FACTORY_TOE,
+            brake_force: 1.0,
+            brake_balance: 0.0,
         }
     }
 
@@ -427,15 +444,20 @@ impl CarBuild {
         self
     }
 
-    /// Keeps the camber within what the suspension kit can be set to, and the tire
-    /// pressures within `PRESSURES`.
+    /// Keeps the camber within what the suspension kit can be set to, the tire pressures
+    /// within `PRESSURES`, and the toe and brakes within theirs.
     pub fn clamp_alignment(&mut self) {
         for axle in 0..2 {
             let range = self.camber_range(axle);
             self.camber[axle] = self.camber[axle].clamp(*range.start(), *range.end());
             let pressure = self.pressure[axle];
             self.pressure[axle] = pressure.clamp(*PRESSURES.start(), *PRESSURES.end());
+            self.toe[axle] = self.toe[axle].clamp(*TOES.start(), *TOES.end());
         }
+        (self.brake_force, self.brake_balance) = (
+            (self.brake_force).clamp(*BRAKE_FORCES.start(), *BRAKE_FORCES.end()),
+            (self.brake_balance).clamp(*BRAKE_BALANCES.start(), *BRAKE_BALANCES.end()),
+        );
     }
 
     pub fn chassis(&self) -> &'static Chassis {

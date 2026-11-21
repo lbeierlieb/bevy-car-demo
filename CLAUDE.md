@@ -692,8 +692,9 @@ and without traction control; `trace_power_slide` prints one step by step
   cores reach about 50 °C in 30 s and 80 °C in 2 min on street tires. `CarBuild` has
   `camber` and `pressure` per axle (factory: `Chassis::camber`, `Chassis::pressure`,
   checked against `suited_pressure` by `factory_pressures_suit_the_tires`); a suspension
-  kit comes aligned to its extra camber and allows ± its reach (`SUSPENSIONS`). Set in 4
-  (`garage::alignment`).
+  kit comes aligned to its extra camber and allows ± its reach (`SUSPENSIONS`). Set at alignment shops
+  (`garage::alignment`, with toe and the brakes' force and balance, `CarBuild::toe`,
+  `brake_force`, `brake_balance`; not sent to others; applied live by `Car::rebuilt`).
 - Not tuned by driving yet: the heating rates, the windows (now surface temperatures),
   how much grip overheating costs, wear rates, how strongly camber and pressure matter.
   Possible next steps: rim width affecting the sidewall, brake heat into the rim and the tire's air, toe settings.

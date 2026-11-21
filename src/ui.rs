@@ -540,20 +540,11 @@ fn setup(ui: &mut egui::Ui, car: &mut Car) {
     ui.add(egui::Slider::new(&mut mu, 0.5..=1.8).text("Peak μ (warm, new)"));
     setup.front.tire.mu = mu;
     setup.rear.tire.mu = mu;
-    ui.strong("Brakes");
-    ui.add(egui::Slider::new(&mut setup.brake_torque, 1_000.0..=6_000.0).text("Torque N·m"));
-    ui.add(egui::Slider::new(&mut setup.brake_bias, 0.4..=0.9).text("Front share"));
 }
 
 fn axle_sliders(ui: &mut egui::Ui, axle: &mut AxleSetup) {
     ui.add(egui::Slider::new(&mut axle.spring_rate, 20_000.0..=250_000.0).text("Spring N/m"));
     ui.add(egui::Slider::new(&mut axle.damping, 500.0..=15_000.0).text("Damper N·s/m"));
-    let mut camber = axle.geometry.static_camber.to_degrees();
-    ui.add(egui::Slider::new(&mut camber, -5.0..=1.0).text("Static camber °"));
-    axle.geometry.static_camber = camber.to_radians();
-    let mut toe = axle.geometry.static_toe.to_degrees();
-    ui.add(egui::Slider::new(&mut toe, -2.0..=2.0).text("Toe-in °"));
-    axle.geometry.static_toe = toe.to_radians();
     // Moving the upper arm's inner pivot outward shortens the arm: more camber gain.
     ui.add(egui::Slider::new(&mut axle.geometry.upper_pivot.x, 0.25..=0.6).text("Upper pivot x m"));
 }

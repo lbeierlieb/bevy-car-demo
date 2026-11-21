@@ -18,7 +18,7 @@ use bevy::prelude::*;
 
 use super::wire::{Reader, Wire};
 use crate::audio::{EngineCharacter, EngineRun, ExhaustSound};
-use crate::chassis::{CHASSIS, CLUTCHES, CarBuild, GEARBOXES, PAINTS, SUSPENSIONS};
+use crate::chassis::{CHASSIS, CLUTCHES, CarBuild, FACTORY_TOE, GEARBOXES, PAINTS, SUSPENSIONS};
 use crate::looks::{AxleLooks, Looks, Motion, WheelMotion};
 use crate::physics::collision::Obb;
 use crate::physics::engine::families::Layout;
@@ -476,6 +476,10 @@ impl Wire for CarBuild {
             wheels: r.get()?,
             camber: r.get()?,
             pressure: r.get()?,
+            // Not sent: nobody else sees them.
+            toe: FACTORY_TOE,
+            brake_force: 1.0,
+            brake_balance: 0.0,
         };
         let chassis = CHASSIS.get(build.chassis)?;
         let fine = build.paint < PAINTS.len()
