@@ -39,6 +39,11 @@ const STEP: f32 = 1.0 / 120.0;
 const MOST_ACCELERATION: f32 = 15.0;
 /// A proxy not heard of for this long is gone (out of range) (s).
 const GONE: f64 = 2.0;
+/// How fast the clock offset may rise (s per s): enough to follow a sender whose clock
+/// runs slow (a few hundred parts per million at most) and a route that got slower for
+/// good (20 ms in 4 s), slow enough that it stays near the quickest delivery however many
+/// states come in.
+const RISE: f64 = 0.005;
 /// States kept per car: the last two give the acceleration.
 const KEPT: usize = 2;
 
@@ -121,11 +126,34 @@ impl Connection {
     }
 }
 
-/// The server's clock less ours, for the traffic (like `Proxy::offset`).
-#[derive(Resource, Default)]
-struct TrafficClock {
-    offset: Option<f64>,
+/// Our clock less a sender's, as low as it's been seen (the clocks' difference plus the
+/// quickest a state came over), rising at most `RISE` per second towards later samples,
+/// so a slower route or a slow clock is followed. By time, not per sample: how many
+/// states come in (the traffic's share one clock) mustn't lift it off the quickest
+/// delivery, or cars would be predicted to a time before their latest state.
+#[derive(Clone, Copy, Debug, Default)]
+struct ClockOffset(Option<(f64, f64)>);
+
+impl ClockOffset {
+    /// Takes in a state stamped `then` (their clock) arriving `now` (ours).
+    fn heard(&mut self, then: f64, now: f64) {
+        let sample = now - then;
+        let offset = match self.0 {
+            Some((offset, at)) if sample > offset => (offset + RISE * (now - at)).min(sample),
+            _ => sample,
+        };
+        self.0 = Some((offset, now));
+    }
+
+    /// The time on their clock that it is `now` on ours, as quickly as states come.
+    fn their(&self, now: f64) -> Option<f64> {
+        self.0.map(|(offset, _)| now - offset)
+    }
 }
+
+/// The server's clock less ours, for the traffic: one clock for all its cars.
+#[derive(Resource, Default)]
+struct TrafficClock(ClockOffset);
 
 /// A traffic car on the server, shown here.
 #[derive(Component)]
@@ -144,9 +172,8 @@ pub struct Proxy {
     pub id: PlayerId,
     /// The latest states, oldest first.
     states: VecDeque<CarState>,
-    /// Our clock less theirs, as low as it's been seen (the quickest a state came over),
-    /// creeping up so a slower route is followed (s).
-    offset: f64,
+    /// Their clock against ours.
+    clock: ClockOffset,
     /// When it was last heard of (our clock, s).
     heard: f64,
     /// Where it is by now, as a body to run into (moving, but never pushed).
@@ -211,11 +238,7 @@ fn receive(
             }
             ToClient::Traffic(cars) => {
                 for state in cars {
-                    let sample = now - state.time;
-                    traffic_clock.offset = Some(match traffic_clock.offset {
-                        Some(offset) if sample >= offset => offset + 0.01 * (sample - offset),
-                        _ => sample,
-                    });
+                    traffic_clock.0.heard(state.time, now);
                     let found = traffic_cars.iter_mut().find(|car| car.id == state.id);
                     if let Some(mut car) = found {
                         car.heard = now;
@@ -243,15 +266,10 @@ fn receive(
             }
             ToClient::States(states) => {
                 for (id, state) in states {
-                    let sample = now - state.time;
                     let found = proxies.iter_mut().find(|(_, proxy)| proxy.id == id);
                     if let Some((_, mut proxy)) = found {
                         proxy.heard = now;
-                        proxy.offset = if sample < proxy.offset {
-                            sample
-                        } else {
-                            proxy.offset + 0.01 * (sample - proxy.offset)
-                        };
+                        proxy.clock.heard(state.time, now);
                         if proxy
                             .states
                             .back()
@@ -265,11 +283,13 @@ fn receive(
                         continue;
                     }
                     // A car new to us (or back in range).
+                    let mut clock = ClockOffset::default();
+                    clock.heard(state.time, now);
                     let mut entity = commands.spawn((
                         Proxy {
                             id,
                             states: VecDeque::from([state]),
-                            offset: sample,
+                            clock,
                             heard: now,
                             body: None,
                             drawn: Drawn::default(),
@@ -351,7 +371,10 @@ fn move_proxies(
     let dt = time.delta_secs();
     for (mut proxy, mut transform, mut motion, looks) in &mut proxies {
         let proxy = &mut *proxy;
-        let (by_now, ahead) = predict(&proxy.states, now - proxy.offset);
+        let Some(their) = proxy.clock.their(now) else {
+            continue;
+        };
+        let (by_now, ahead) = predict(&proxy.states, their);
         (transform.translation, transform.rotation) = proxy.drawn.follow(&by_now, dt);
         // The wheels roll on as fast as they did between the last two states.
         let (before, latest) = (proxy.states.front().unwrap(), proxy.states.back().unwrap());
@@ -527,7 +550,7 @@ fn traffic_source(
     };
     if *source != wanted {
         *source = wanted;
-        clock.offset = None;
+        clock.0 = ClockOffset::default();
         for entity in &cars {
             commands.entity(entity).despawn();
         }
@@ -541,14 +564,13 @@ fn move_traffic(
     clock: Res<TrafficClock>,
     mut cars: Query<(&mut ServerTraffic, &mut TrafficCar)>,
 ) {
-    let Some(offset) = clock.offset else {
+    let Some(their) = clock.0.their(now(&time)) else {
         return;
     };
-    let now = now(&time);
     let dt = time.delta_secs();
     for (mut shown, mut car) in &mut cars {
         let shown = &mut *shown;
-        let (by_now, ahead) = predict(&shown.states, now - offset);
+        let (by_now, ahead) = predict(&shown.states, their);
         (car.body.position, car.body.rotation) = shown.drawn.follow(&by_now, dt);
         car.body.velocity = by_now.velocity;
         car.body.angular_velocity = by_now.angular_velocity;
@@ -668,6 +690,44 @@ mod tests {
         assert_eq!(stopped.angular_velocity, Vec3::ZERO);
         let travelled = stopped.position.length();
         assert!((0.3..0.36).contains(&travelled), "{travelled}");
+    }
+
+    #[test]
+    fn the_clock_stays_with_the_quickest_delivery_however_much_comes() {
+        // A server 1000 s ahead of us sends 20 cars' states 30 times a second, two
+        // messages each time; they take 50 ms at best and up to 40 ms more.
+        let mut clock = ClockOffset::default();
+        let mut random = 12345u32;
+        let mut jitter = || {
+            random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            f64::from(random >> 8) / f64::from(1u32 << 24) * 0.04
+        };
+        let mut delay = 0.05;
+        let mut worst = 0.0f64;
+        for sent in 0..30 * 40 {
+            let then = 1000.0 + f64::from(sent) / 30.0;
+            for _message in 0..2 {
+                let now = then - 1000.0 + delay + jitter();
+                for _car in 0..10 {
+                    clock.heard(then, now);
+                }
+                if (30 * 10..30 * 20).contains(&sent) {
+                    // How much later than the quickest delivery it shows them.
+                    let late = (now + 1000.0 - delay) - clock.their(now).unwrap();
+                    worst = worst.max(late);
+                }
+            }
+            if sent == 30 * 20 {
+                // The route gets 20 ms slower for good.
+                delay += 0.02;
+            }
+        }
+        // Its idea of the server's time stays within a few ms of the quickest delivery
+        // (a rule per sample sat near the middle of the jitter).
+        assert!(worst < 0.006, "{worst}");
+        // And it followed the slower route (20 ms in 4 s, it had 20).
+        let (offset, _) = clock.0.unwrap();
+        assert!((offset - (-1000.0 + 0.07)).abs() < 0.006, "{offset}");
     }
 
     #[test]

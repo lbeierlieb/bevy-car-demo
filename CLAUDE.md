@@ -219,7 +219,7 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `server.rs` `Server` resource + `Peer` entities (`traffic::Anchor` while heard
   from), 128 m grid, looks re-sent by revision; `client.rs` `Connection` resource,
   `Proxy` entities with `Looks`/`Motion`, shown where they are by now on the sender's
-  clock (offset = least our-clock-minus-theirs seen, creeping up), contacts in
+  clock (offset = least our-clock-minus-theirs seen, rising at most 5 ms per second (`ClockOffset`; by time, not per sample: the shared traffic clock, rising 1 % per sample, sat mid-jitter, so cars close by were predicted to before their latest state and jerked back and forth); states stamped at the end of their simulation step (`net::stamp`)), contacts in
   FixedUpdate push only our car (since 2026-11-19 dead reckoning instead of drawing
   0.1 s in the past, which looked laggy, worst for traffic at 3–10 states/s: `predict`
   carries the latest state on along its turn (angular velocity) with the acceleration
