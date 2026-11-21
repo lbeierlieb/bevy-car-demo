@@ -1,8 +1,8 @@
-//! Map of the whole area (K, or a wheel button bound to "Map"): the ground in its land use
+//! Map of the whole area (M, or a wheel button bound to "Map"): the ground in its land use
 //! colours as one image, with roads, houses and the cars drawn on top (the app's own,
 //! and whatever others it lists in `MapCars`, e.g. other players). Drag to move,
 //! scroll to zoom. A click is a `MapClicked` message for whatever the app does with it
-//! (the sandbox's `TeleportPlugin` puts the car on the nearest road there). Driving goes
+//! (the editor flies there). Driving goes
 //! on underneath. The ground image is built a few rows per frame from startup, so the
 //! map opens at once.
 
@@ -25,8 +25,6 @@ const PIXEL: f32 = 5.0;
 const HOUSES_BELOW: f32 = 3.0;
 /// Closest zoom (metres per screen point).
 const MIN_SCALE: f32 = 0.2;
-/// A click puts the car on the nearest road within this distance (m) of where it was.
-const PLACE_WITHIN: f32 = 250.0;
 /// Narrowest a road is drawn, in screen points, however far out the map is zoomed.
 const MIN_ROAD_WIDTH: f32 = 1.5;
 /// Time per frame spent building the ground image until it's done (it takes about 0.1 s
@@ -55,18 +53,6 @@ impl Plugin for MapPlugin {
                 )
                     .chain(),
             );
-    }
-}
-
-/// Clicking puts the car being driven on the nearest road there.
-pub struct TeleportPlugin;
-
-impl Plugin for TeleportPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Startup, |mut view: ResMut<MapView>| {
-            view.click = Some("drive from there");
-        })
-        .add_systems(Update, teleport);
     }
 }
 
@@ -119,7 +105,7 @@ impl Default for MapView {
         Self {
             open: false,
             click: None,
-            key: KeyCode::KeyK,
+            key: KeyCode::KeyM,
             center: Vec2::ZERO,
             scale: 0.0,
             ground: None,
@@ -428,29 +414,6 @@ fn draw(
         clicks.write(MapClicked(target));
     }
     Ok(())
-}
-
-/// A click puts the car being driven on the nearest road, facing as close to its current
-/// heading as the road allows, and closes the map.
-fn teleport(
-    mut clicks: MessageReader<MapClicked>,
-    terrain: Res<Terrain>,
-    active: Res<ActiveCar>,
-    mut cars: Query<&mut Car>,
-    mut view: ResMut<MapView>,
-) {
-    for &MapClicked(target) in clicks.read() {
-        let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
-            continue;
-        };
-        let heading = (car.body.rotation * Vec3::NEG_Z).xz();
-        if let Some((spot, yaw)) = terrain.drive_spot(target, heading)
-            && spot.distance(target) < PLACE_WITHIN
-        {
-            car.place(&terrain, spot, yaw);
-            view.open = false;
-        }
-    }
 }
 
 /// A bar of a round length (1, 2 or 5 times a power of ten metres) about 120 points long.

@@ -671,7 +671,7 @@ impl Source for EngineVoice {
     }
 }
 
-/// The engine sound: what the audio thread plays, and whether it's muted (M).
+/// The engine sound: what the audio thread plays, and whether it's muted (0).
 #[derive(Resource)]
 pub struct EngineAudio {
     targets: Arc<Targets>,
@@ -711,7 +711,7 @@ fn update_engine(
     cars: Query<(&Car, &Looks, &Motion)>,
     mut engine: ResMut<EngineAudio>,
 ) {
-    if keys.just_pressed(KeyCode::KeyM) {
+    if keys.just_pressed(KeyCode::Digit0) {
         engine.muted = !engine.muted;
     }
     let Some((_, looks, motion)) = cars.iter().find(|(car, ..)| car.index == active.0) else {

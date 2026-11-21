@@ -17,7 +17,6 @@ fn main() {
             car::DefaultCarPlugin,
             car::ResetPlugin,
             // A click on the map (K) drives from there.
-            map::TeleportPlugin,
             // 1: gizmos, 2: the panel with telemetry, setup sliders and bindings (hidden
             // at first).
             debug::DebugPlugin,

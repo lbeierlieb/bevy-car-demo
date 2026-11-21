@@ -61,7 +61,7 @@ A small Bevy demo of car simulation techniques:
 - Debug gizmos for the linkage and forces, and a telemetry panel with live-tunable springs, dampers, camber, toe, arm geometry,
   tire parameters and brakes (torque and front/rear split). A HUD in the bottom
   right shows speed and gear inside a rev counter.
-- A map of the whole area (K): the ground in its land use colours, drawn once into
+- A map of the whole area (M): the ground in its land use colours, drawn once into
   a single image, so it needs no terrain chunks. Roads, houses and the cars are drawn
   on top; drag to move it, scroll to zoom, and click to put the car on the nearest
   road there.
@@ -105,7 +105,7 @@ cargo run --bin server -- --cert fullchain.pem --key key.pem   # options: --port
                                                                # --telegram-token-file with --telegram-chat-file
 ```
 
-Who a player sees of the others on their map (K) is the server's choice:
+Who a player sees of the others on their map (M) is the server's choice:
 `--map-players self` (nobody), `near` (within `--map-near` metres, 200 by default; the
 default) or `all` (everyone, wherever they are).
 
@@ -183,9 +183,10 @@ empty tank, or a few seconds of gas without moving (stuck: R).
 | 3 / 4 / 5 | ECU tuning / garage (rebuild the car) / engine dyno |
 | 6 | Showroom: pick a car |
 | F11 | Fullscreen (the browser's on the web; all F keys go to the browser there) |
-| M | Mute engine sound |
-| C | Switch between chase and driver's view |
-| K | Map of the whole area (drag to move, scroll to zoom, click to put the car on the nearest road there; K or Esc closes) |
+| 0 | Mute engine sound |
+| C | Switch between chase and driver's view (facing forward) |
+| B (hold) | Look back |
+| M | Map of the whole area (drag to move, scroll to zoom; M or Esc closes) |
 | Left-drag, scroll | Orbit and zoom the camera (driver's view: look around) |
 
 ### Steering wheel and pedals
@@ -207,8 +208,8 @@ restores their own range on exit. Writing the range needs the driver's udev rule
 farther than the slider gets a soft lock, like in BeamNG: the steering covers the
 slider's range and force feedback holds the wheel at either end. The game reads the
 base's range from hid-fanatecff; elsewhere, enter it in the panel (or set the base to
-the slider's range by hand). The paddles shift like Q/E. Buttons can also be bound to resetting the car (like R), the camera view (like C) and
-the map (like K).
+the slider's range by hand). The paddles shift like Q/E. Buttons can also be bound to resetting the car (like R), the camera view (like C), looking
+back (like B, held) and the map (like M).
 
 With a clutch pedal bound, you work the clutch: let it out to pull away, and press
 it to change gear at once (without pressing it, the paddles still shift with the
