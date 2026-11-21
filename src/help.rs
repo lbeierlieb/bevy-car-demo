@@ -35,8 +35,8 @@ const CONTROLS: [(&str, &str); 18] = [
     ("0", "Mute"),
     ("T", "Chat (on a server): Enter sends, Esc cancels"),
     ("2", "Settings: wheel, pedals and gamepad, driving aids"),
-    ("6", "Showroom: pick another car"),
-    ("3 4 5", "ECU tuning, garage, engine dyno"),
+    ("6", "Showroom (on a server): pick another car"),
+    ("3 4 5", "ECU tuning, garage, engine dyno (on a server)"),
     ("1 / F11", "Debug gizmos / fullscreen"),
 ];
 

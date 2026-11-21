@@ -94,7 +94,9 @@ pull request.
 
 The game starts with a menu: **Play alone**, or **Join server** with your name and the
 server's address (`host`, `host:port` or `https://host:port`; the port is 4433 unless
-said otherwise). On a server each player drives their own car as alone (physics and
+said otherwise). The web version only asks for your name and joins the server the page
+came from. Alone, you just drive around the map with traffic; the ECU, garage, dyno and
+showroom windows (3–6) are only there on a server. On a server each player drives their own car as alone (physics and
 force feedback stay on your machine) and sees the others near them (within 600 m), with
 their names over the cars; the list of players (top left) has **Leave the server**. A
 server is a program of its own, run headless:

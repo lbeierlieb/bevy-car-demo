@@ -107,6 +107,7 @@ the frames until the shot (`m` opens the map, `0` mutes, `2` shows the panel (hi
 since 2026-11-20; older notes here used `2` to hide it), `3` the ECU window,
 `4` the garage, `5` the dyno, `6` the showroom, `f` shows the gizmos (off by default), `c` the driver's view, `b` looks back; keys stay held through the shot's frame),
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
+The tool windows (3–6) only show joined to a server (`JOIN=127.0.0.1`, see below).
 The keys `3`–`6` didn't expand the tool windows in screenshots (as F3–F6) (seen 2026-11-17, also on
 the code before the app split): click their title bars instead. (2026-11-18: neither
 `CLICK` nor `UICLICK` on the "Garage (F4)" bar (now "Garage (4)") at (1190, 57) or its arrow expanded it.)
@@ -184,7 +185,13 @@ fetching you; 3 own bays, one save slot.
 ## Multiplayer (agreed with the user, 2026-11-19)
 
 A multiplayer sandbox first; the career comes back later, built on it. Native and web
-both offer **"Play alone"** and **"Join server"** (a start menu, chosen at runtime).
+native offers **"Play alone"** and **"Join server"** (a start menu, chosen at runtime);
+the web only asks for the name and joins the server the page came from (no playing
+alone, no address field; agreed with the user, 2026-11-21). Alone is just driving the
+default car with traffic (panel 2, gizmos, R, M kept); the tool windows (3–6) are only
+there while joined (`ui::tool_window` checks the `Connection`, the one runtime switch
+of that kind), until they become places on the map to drive to (dealership, garage,
+dyno: planned with the user, later).
 No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headless:
 `MinimalPlugins` and the world core) runs on the user's VPS.
 

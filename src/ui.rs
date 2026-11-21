@@ -12,6 +12,7 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPreUpdateSet, EguiPrimaryContextPa
 use crate::car::{ActiveCar, Car, DriverAids};
 use crate::debug::DebugView;
 use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_value, input_name};
+use crate::net::{Connection, Status};
 use crate::physics::engine::AMBIENT_PRESSURE;
 use crate::physics::fuel;
 use crate::physics::suspension::AxleSetup;
@@ -84,11 +85,13 @@ impl Plugin for PanelPlugin {
 const TOOL_MARGIN: f32 = 10.0;
 const TOOL_SPACING: f32 = 30.0;
 
-/// What a tool window needs to know: its key, and whether the car's panel is shown.
+/// What a tool window needs to know: its key, whether the car's panel is shown, and
+/// whether we're on a server.
 #[derive(SystemParam)]
 pub struct ToolInput<'w> {
     keys: Res<'w, ButtonInput<KeyCode>>,
     view: Res<'w, DebugView>,
+    connection: Option<Res<'w, Connection>>,
 }
 
 /// How `key` is written in a window title or help text: "3" for the digit 3.
@@ -106,6 +109,9 @@ pub fn key_name(key: KeyCode) -> String {
 /// corner (expanded, a window grows to the left and down), `slot` is the place in the
 /// stack. `expanded` keeps whether it was expanded last frame. Gives the window to
 /// show and whether it was just expanded, or nothing while it's hidden.
+///
+/// Only on a server: playing alone is just driving (the tools are to become places on the
+/// map to drive to).
 pub fn tool_window(
     ctx: &egui::Context,
     (name, key): (&str, KeyCode),
@@ -113,6 +119,12 @@ pub fn tool_window(
     input: &ToolInput,
     expanded: &mut bool,
 ) -> Option<(egui::Window<'static>, bool)> {
+    let joined =
+        (input.connection.as_ref()).is_some_and(|c| matches!(c.status, Status::Joined { .. }));
+    if !joined {
+        *expanded = false;
+        return None;
+    }
     let id = egui::Id::new(name);
     let mut state = CollapsingState::load_with_default_open(ctx, id.with("collapsing"), false);
     if input.keys.just_pressed(key) {
