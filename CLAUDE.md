@@ -140,7 +140,7 @@ left, the sunlit side), up, and ahead. Side views of five:
 `LINEUP=3,1 CARCAM="-3.6,1.9,4.6"`; from the driver's seat: keys `2c`.
 `TRAFFICCAM="back,height[,nth]"` follows the nth nearest traffic car from behind, e.g.
 `TRAFFICCAM="9,2.2,1" bash tools/dev/shot.sh out.png 200 2`.
-`PROXYCAM="distance,height,bearing"` looks at the other player's car from that far
+`PROXYCAM="distance,height,bearing"` looks at the other player's car (a named remote car) from that far
 towards the bearing (degrees from north). Two players side by side (the second needs
 `PLACE` after it has joined, or the join puts it elsewhere): Anna with
 `PLACE="-2986,-1954,150"` and many frames, Ben with `PLACE="-2986,-1975,150"` sees her
@@ -190,9 +190,9 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
 
 - **Each player owns their car**: full local physics, engine and force feedback, as
   alone. ~30 snapshots/s (pose, velocities, wheels, rpm, throttle, gear, lights; ~100 B,
-  unreliable datagrams). Other players' cars are **proxies** (model, wheels, sound),
-  interpolated ~100 ms behind, extrapolated for contacts; each client collides its own
-  car against proxies and applies the impulse only to itself.
+  unreliable datagrams). Other players' cars are **remote cars** (model, wheels, sound),
+  dead reckoned like traffic (see "Every car from the server alike"); each client
+  collides its own car against them and applies the impulse only to itself.
 - A client sends what others **see and hear**: chassis, paint, wheels, ride height and a
   sound description (layout, cylinders, `ExhaustSound`, turbo), not the engine's parts;
   re-sent when it changes (e.g. a swap in the garage, 4).
@@ -203,7 +203,7 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   reckoned (decided while building: the states come at 3–30 Hz, rails would need the
   driver's random route); the server simulates crashed traffic too, players' cars are
   `traffic::Visitor`s there (followed, crashed into, never moved), and a player's car
-  pushes itself off traffic on its own side, like off proxies) and **interest
+  pushes itself off traffic on its own side, like off other players' cars) and **interest
   management** (128 m grid, ~600 m radius, rates falling with distance ~30/10/3 Hz).
   A silent player (a hidden browser tab stops the loop) is frozen for others and
   dropped after 30 s. The traffic density slider only exists alone.
@@ -225,15 +225,15 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `Car` by `show_cars`; visuals and engine sound read only these); 3. headless world core, `bin/server.rs`
   running traffic around several centres (done: `WorldPlugin`; `bin/server.rs` is
   `MinimalPlugins` + `LogPlugin` + `WorldPlugin` at 60 updates/s; traffic populates
-  around every `Car` and `traffic::Anchor`, its meshes are `TrafficLooksPlugin`; the
+  around every `Car` and `traffic::Anchor`; the
   server still links all of bevy, so it needs the render/audio libraries at runtime); 4. protocol and server/client plugins over a
   loopback transport (done: `src/net/`: `wire.rs` hand-written encoding, checked on
   reading (finite floats, catalogue indices, sane sizes); `protocol.rs` `ToServer`,
   `ToClient`, `CarState` (~120 B); `link.rs` `Link`/`Listener` traits, `Loopback`;
   `server.rs` `Server` resource + `Peer` entities (`traffic::Anchor` while heard
   from), 128 m grid, looks re-sent by revision; `client.rs` `Connection` resource,
-  `Proxy` entities with `Looks`/`Motion`, shown where they are by now on the sender's
-  clock (offset = least our-clock-minus-theirs seen, rising at most 5 ms per second (`ClockOffset`; by time, not per sample: the shared traffic clock, rising 1 % per sample, sat mid-jitter, so cars close by were predicted to before their latest state and jerked back and forth); states stamped at the end of their simulation step (`net::stamp`)), contacts in
+  remote cars (then `Proxy`, now `RemoteCar`) with `Looks`/`Motion`, shown where they
+  are by now on the sender's clock (offset = least our-clock-minus-theirs seen, rising at most 5 ms per second (`ClockOffset`; by time, not per sample: the shared traffic clock, rising 1 % per sample, sat mid-jitter, so cars close by were predicted to before their latest state and jerked back and forth); states stamped at the end of their simulation step (`net::stamp`)), contacts in
   FixedUpdate push only our car (since 2026-11-19 dead reckoning instead of drawing
   0.1 s in the past, which looked laggy, worst for traffic at 3–10 states/s: `predict`
   carries the latest state on along its turn (angular velocity) with the acceleration
@@ -250,10 +250,8 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   name tags, joining cars placed in lane spots near the spawn by player id),
   `bin/server.rs` options `--port --cert --key --traffic --max-players`; tried with a
   local server and two headless games: both joined, saw each other, shared traffic); 6. shared traffic (done: `traffic::Source` (Own/Server, switched by the
-  client on joining/leaving, own traffic despawned), `TrafficCar::shown` + `id`,
-  `ToClient::Traffic(Vec<TrafficState>)` (~75 B each, 14 a message), client
-  `ServerTraffic` components on shown `TrafficCar`s, interpolation shared through the
-  `Snapshot` trait; protocol 2);
+  client on joining/leaving, own traffic despawned); since protocol 5 sent like any
+  car, see below);
   7. Nix packages and module, README for the VPS (done: `packages.server`
   (crane, `--bin server`), `packages.web` (= `wasm`), `nixosModules.server` =
   `nix/module.nix` (options `enable domain port openFirewall traffic maxPlayers
@@ -272,11 +270,11 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   fingerprint, so client-only changes (driving physics, engine, tires, FFB, aids, UI)
   need no server update, and old and new clients play together. Bump `PROTOCOL`
   whenever a message's content changes (`protocol.rs`: `CarState`, `Looks`, `Motion`,
-  `TrafficState`, a new message). The server needs updating too for: catalogue changes
+  a new message). The server needs updating too for: catalogue changes
   (chassis, paints, gearboxes, clutches, suspensions, compounds, bar sizes: sent as
   indices and checked against the reader's catalogues; a car the server can't read gets
-  "The server doesn't know your car…", a client shows an unknown traffic chassis as the
-  first one and skips another player's unknown car with a warning), traffic behaviour
+  "The server doesn't know your car…", a client skips a car it can't read (traffic's or
+  another player's) with a warning), traffic behaviour
   (simulated on the server), and a re-bake (fingerprint). With `web.enable` the web
   build updates with the server (`nixos-rebuild` restarts it, dropping everyone).
   A browser left on an old page (its cache) is refused with "Press Ctrl+F5 to reload
@@ -311,24 +309,32 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `ureq` from a thread of its own.
   Tried here only against Telegram with a fake token (401, logged, token kept out).
 - **Every car from the server alike** (agreed with the user, 2026-11-21, so players can
-  hide in traffic; in progress, steps below): one `CarId` counter on the server for
-  traffic and player cars, never tied to a `PlayerId` on the wire (players list, chat,
-  pings keep `PlayerId`). `ToClient::Cars(Vec<(CarId, CarState)>)` (unreliable),
-  `ToClient::Looks { car, looks }` (reliable, by revision; traffic gets one too),
-  `ToClient::Tag { car, name: Option<String> }` (what name the car shows, if any: players'
-  names today, named NPCs or none later). The server stamps every state on its own
-  clock (player states converted with a per-peer `ClockOffset`), so the client has one
-  clock and a car's own clock gives nothing away. Server: every car is an entity with
-  `CarId`, `Looks` and its latest `CarState`; one sending loop over all of them. Client
-  joined: one `RemoteCar` (states, `Drawn`, body for contacts, `Looks`/`Motion`,
-  optional `Tag`), dead reckoned like players (no rail prediction); no local traffic.
-  Alone (and on the server): `TrafficCar` simulates as before, `traffic::show` gives it
-  `Looks` (factory looks cached per chassis and paint) and `Motion` (steer, spin from
-  rolled, suspension at rest, idle engine) and a `Transform` at the centre of mass, and
-  `visuals.rs` draws it like any car. Remaining tells: traffic's suspension doesn't
-  move, its engine idles (matters once remote cars are heard), how it drives.
-  Steps: 1. local traffic through `Looks`/`Motion`; 2. server clock for all states;
-  3. protocol 5 (`CarId`, `Cars`/`Looks`/`Tag`, `RemoteCar`); 4. notes.
+  hide in traffic; done, protocol 5): one counter (`traffic::CarNumbers`, `CarId`) on
+  the server for traffic and player cars, never tied to a `PlayerId` on the wire
+  (players list, chat, pings, map keep `PlayerId`). `ToClient::Cars(Vec<(CarId,
+  CarState)>)` (unreliable, 8 a message), `ToClient::Looks { car, looks }` (reliable, by
+  revision; traffic's too), `ToClient::Tag { car, name: Option<String> }` (what name the
+  car shows, if any: players' names today, named NPCs or none in a game mode later),
+  `ToClient::Gone { car }` (out of range or gone; the client's 2 s timeout is only a
+  fallback). What a player was told of a car (`server::Told`: looks revision, tag, next
+  state due) is forgotten when it leaves range, so it's told afresh on return. The
+  server stamps every state on its own clock (player states converted with a per-peer
+  `ClockOffset`), so the client has one clock (`Connection::clock`) and a car's own clock
+  gives nothing away. Server `send`: one list of cars (players' from their `Peer`,
+  traffic's from `TrafficCar` + `Looks` + `Motion`, its state at the centre of mass,
+  `TrafficCar::transform`/`center_velocity`) and one loop over them per player. Client
+  joined: `RemoteCar` (states, `Drawn`, body for contacts) with `Looks`/`Motion` and an
+  optional `client::Tag`, dead reckoned (no rail prediction); looks and tags that come
+  before a car's first state wait in `Connection::known` (30 s); no traffic of its own;
+  `switch_source` removes traffic and remote cars when joining or leaving. Name tags
+  follow `Tag`. Alone (and on the server): `TrafficCar` simulates as before,
+  `traffic::show` gives it `Looks` (`FactoryLooks`, per chassis with its base engine,
+  16 ms for all 13) and `Motion` (steer, spin from rolled, suspension at rest, idling)
+  and a `Transform` at the centre of mass, and `visuals.rs` draws it like any car (shared
+  materials, bodies cached per chassis and paint). Remaining tells: traffic's suspension
+  doesn't move, its engine idles (matters once remote cars are heard), how it drives.
+  Tried with a local server and two headless games: name tag over the other player,
+  traffic shown, a leaving player's car gone at once.
 - **Parallel worlds** (planned with the user, 2026-11-21, not built): groups of players
   in a challenge (race, hide and seek) separate from the normal world and each other.
   Built on the above: a world component on cars, peers and anchors; the sending loop
