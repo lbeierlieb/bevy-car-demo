@@ -6,7 +6,7 @@
 //! keeps its distance and crashes into them. Each player is sent the traffic near them
 //! like the other players' cars. Once a second each player is told where the others
 //! are for the map: nobody, the ones near them or everyone, as the server is set
-//! (`MapPlayers`).
+//! (`MapPlayers`), and every two seconds everyone's ping (the connection's round trip).
 
 use std::collections::{HashMap, HashSet};
 
@@ -33,6 +33,8 @@ const TRAFFIC_PER_MESSAGE: usize = 14;
 const MAP_PER_MESSAGE: usize = 32;
 /// How often the other players' places on the map are sent (per second).
 const MAP_RATE: f64 = 1.0;
+/// How often everyone's ping is sent (per second).
+const PING_RATE: f64 = 0.5;
 /// How near other players are shown on the map by default (m).
 pub const MAP_NEAR: f32 = 200.0;
 
@@ -81,6 +83,7 @@ pub struct Server {
     /// When states, and the map's players, were last sent (s).
     sent: f64,
     map_sent: f64,
+    pings_sent: f64,
 }
 
 impl Server {
@@ -92,6 +95,7 @@ impl Server {
             map: MapPlayers::Near(MAP_NEAR),
             sent: 0.0,
             map_sent: f64::NEG_INFINITY,
+            pings_sent: f64::NEG_INFINITY,
         }
     }
 
@@ -339,6 +343,22 @@ fn send(
         server.map_sent = now;
     }
     let map = server.map;
+    if now - server.pings_sent >= 1.0 / PING_RATE {
+        server.pings_sent = now;
+        let pings: Vec<(PlayerId, u16)> = (peers.iter())
+            .filter(|peer| peer.name.is_some())
+            .filter_map(|peer| {
+                let ms = peer.link.rtt()?.as_secs_f64() * 1000.0;
+                Some((peer.id, ms.round().min(u16::MAX.into()) as u16))
+            })
+            .collect();
+        let message = ToClient::Pings(pings);
+        for mut peer in &mut peers {
+            if peer.name.is_some() {
+                peer.tell(&message);
+            }
+        }
+    }
 
     // The cars there are to see: heard from lately, with looks.
     struct Car {

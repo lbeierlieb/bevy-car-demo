@@ -216,6 +216,29 @@ mod tests {
     }
 
     #[test]
+    fn everyone_hears_everyones_ping() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut ben = player(&listener, "Ben", 0, 100.0);
+        // Every two seconds.
+        run(&mut [&mut server, &mut anna, &mut ben], 150);
+        for app in [&anna, &ben] {
+            let mut pings: Vec<_> = connection(app)
+                .pings
+                .iter()
+                .map(|(&id, &ms)| (id, ms))
+                .collect();
+            pings.sort();
+            assert_eq!(
+                pings,
+                [(1, 0), (2, 0)],
+                "theirs and our own (in memory: none)"
+            );
+        }
+    }
+
+    #[test]
     fn players_far_apart_see_each_other_once_near() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);

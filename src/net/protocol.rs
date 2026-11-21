@@ -7,7 +7,7 @@
 //! them, the nearer the more often, with their looks before the first state and after
 //! every change, and the traffic near them the same way (which car, how it looks, where).
 //! About once a second it also sends where the other players are for the map, as many of
-//! them as the server's settings show.
+//! them as the server's settings show, and every two seconds everyone's ping.
 
 use bevy::prelude::*;
 
@@ -22,7 +22,7 @@ use crate::physics::tire::COMPOUNDS;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -62,6 +62,8 @@ pub enum ToClient {
     /// Other players to show on the map (a player missing from every message for a while
     /// is no longer shown).
     Map(Vec<MapPlayer>),
+    /// Every player's round trip to the server (ms), ours too.
+    Pings(Vec<(PlayerId, u16)>),
 }
 
 impl ToServer {
@@ -81,7 +83,7 @@ impl ToClient {
     pub fn reliable(&self) -> bool {
         !matches!(
             self,
-            ToClient::States(_) | ToClient::Traffic(_) | ToClient::Map(_)
+            ToClient::States(_) | ToClient::Traffic(_) | ToClient::Map(_) | ToClient::Pings(_)
         )
     }
 }
@@ -275,6 +277,10 @@ impl Wire for ToClient {
                 7u8.put(out);
                 players.put(out);
             }
+            ToClient::Pings(pings) => {
+                8u8.put(out);
+                pings.put(out);
+            }
         }
     }
 
@@ -294,6 +300,7 @@ impl Wire for ToClient {
             5 => ToClient::States(r.get()?),
             6 => ToClient::Traffic(r.get()?),
             7 => ToClient::Map(r.get()?),
+            8 => ToClient::Pings(r.get()?),
             _ => return None,
         })
     }

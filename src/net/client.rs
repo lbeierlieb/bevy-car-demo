@@ -96,6 +96,8 @@ pub struct Connection {
     pub status: Status,
     /// Everyone on the server but us, by number.
     pub players: BTreeMap<PlayerId, String>,
+    /// Everyone's round trip to the server (ms), ours too, as last sent.
+    pub pings: HashMap<PlayerId, u16>,
     /// The looks of every car we've been told of.
     looks: HashMap<PlayerId, Looks>,
     /// The other players the server shows on our map, and when each was heard of (s).
@@ -112,6 +114,7 @@ impl Connection {
             link: Box::new(link),
             status: Status::Joining,
             players: BTreeMap::new(),
+            pings: HashMap::new(),
             looks: HashMap::new(),
             map: HashMap::new(),
             sent_looks: None,
@@ -242,6 +245,7 @@ fn receive(
             }
             ToClient::Left { id } => {
                 connection.players.remove(&id);
+                connection.pings.remove(&id);
                 connection.looks.remove(&id);
                 connection.map.remove(&id);
                 for (entity, proxy) in &proxies {
@@ -262,6 +266,9 @@ fn receive(
                 for player in players {
                     connection.map.insert(player.id, (player, now));
                 }
+            }
+            ToClient::Pings(pings) => {
+                connection.pings = pings.into_iter().collect();
             }
             ToClient::Traffic(cars) => {
                 for state in cars {

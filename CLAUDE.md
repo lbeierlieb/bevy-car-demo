@@ -278,6 +278,10 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   a second with whoever the setting shows; the client keeps each for 3 s, carries it on
   at its speed (`Connection::on_map`), and `online.rs` hands them to the map as
   `map::MapCars` (the map itself knows nothing of networking). Protocol 3.
+- **Ping** (asked for by the user, 2026-11-21): the server reads each connection's QUIC
+  round-trip time (`Link::rtt`, `quic.rs` stores `Connection::rtt` every 0.5 s; loopback
+  0) and sends everyone `ToClient::Pings` every 2 s; the players window lists them, ours
+  too. Protocol 4.
 - **Telegram** (asked for by the user, 2026-11-20): `server --telegram-token-file F
   --telegram-chat-file F` (module: `services.car-sim.telegram = { tokenFile;
   chatIdFile; }`; both secret, the user manages them with sops; the module hands them

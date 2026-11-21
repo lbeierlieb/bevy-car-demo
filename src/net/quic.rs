@@ -5,7 +5,7 @@
 //! a `QuicLink`: queues to and from the connection's task.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
@@ -27,6 +27,8 @@ const IDLE: Duration = Duration::from_secs(15);
 /// How long joining may take, and how often the server looks for a renewed certificate.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CERTIFICATE_CHECK: Duration = Duration::from_secs(60);
+/// How often the round-trip time is read off the connection.
+const RTT_CHECK: Duration = Duration::from_millis(500);
 
 fn runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -46,6 +48,8 @@ pub struct QuicLink {
     incoming: UnboundedReceiver<Vec<u8>>,
     open: Arc<AtomicBool>,
     problem: Arc<Mutex<Option<String>>>,
+    /// The round-trip time (µs; 0 until the connection stands).
+    rtt: Arc<AtomicU32>,
 }
 
 /// The connection task's end.
@@ -54,6 +58,7 @@ struct Ends {
     incoming: UnboundedSender<Vec<u8>>,
     open: Arc<AtomicBool>,
     problem: Arc<Mutex<Option<String>>>,
+    rtt: Arc<AtomicU32>,
 }
 
 fn link() -> (QuicLink, Ends) {
@@ -61,18 +66,21 @@ fn link() -> (QuicLink, Ends) {
     let (incoming, from_net) = unbounded_channel();
     let open = Arc::new(AtomicBool::new(true));
     let problem = Arc::new(Mutex::new(None));
+    let rtt = Arc::new(AtomicU32::new(0));
     (
         QuicLink {
             outgoing: Some(to_net),
             incoming: from_net,
             open: open.clone(),
             problem: problem.clone(),
+            rtt: rtt.clone(),
         },
         Ends {
             outgoing,
             incoming,
             open,
             problem,
+            rtt,
         },
     )
 }
@@ -107,6 +115,11 @@ impl Link for QuicLink {
 
     fn problem(&self) -> Option<String> {
         self.problem.lock().unwrap().clone()
+    }
+
+    fn rtt(&self) -> Option<Duration> {
+        let micros = self.rtt.load(Ordering::Relaxed);
+        (micros > 0).then(|| Duration::from_micros(micros.into()))
     }
 }
 
@@ -173,10 +186,19 @@ async fn run(
         // The game let go of it.
         Ok(())
     };
+    let rtt = ends.rtt.clone();
+    let measuring = async {
+        loop {
+            let micros = connection.rtt().as_micros().clamp(1, u32::MAX.into()) as u32;
+            rtt.store(micros, Ordering::Relaxed);
+            tokio::time::sleep(RTT_CHECK).await;
+        }
+    };
     let ended: Result<(), String> = tokio::select! {
         r = reliable => r,
         r = datagrams => r,
         r = writing => r,
+        r = measuring => r,
     };
     connection.close(0u32.into(), b"bye");
     match ended {

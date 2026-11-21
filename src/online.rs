@@ -158,7 +158,7 @@ fn menu(
     Ok(())
 }
 
-/// On a server: who's there, and leaving it.
+/// On a server: who's there with their pings (ours too), and leaving it.
 fn players(
     mut commands: Commands,
     mut contexts: EguiContexts,
@@ -168,19 +168,27 @@ fn players(
     let Some(mut connection) = connection else {
         return Ok(());
     };
-    if !matches!(connection.status, Status::Joined { .. }) {
+    let Status::Joined { you } = connection.status else {
         return Ok(());
-    }
+    };
     egui::Window::new(format!("Online ({} more)", connection.players.len()))
         .id(egui::Id::new("players"))
         .anchor(Align2::LEFT_TOP, egui::vec2(8.0, 8.0))
         .default_open(false)
         .resizable(false)
         .show(contexts.ctx_mut()?, |ui| {
-            ui.label(format!("You: {}", menu.settings.name));
-            for name in connection.players.values() {
-                ui.label(name);
-            }
+            let ping =
+                |id| (connection.pings.get(&id)).map_or(String::new(), |ms| format!("{ms} ms"));
+            egui::Grid::new("players").num_columns(2).show(ui, |ui| {
+                ui.label(format!("You: {}", menu.settings.name));
+                ui.label(ping(you));
+                ui.end_row();
+                for (&id, name) in &connection.players {
+                    ui.label(name);
+                    ui.label(ping(id));
+                    ui.end_row();
+                }
+            });
             if ui.button("Leave the server").clicked() {
                 connection.close();
                 commands.remove_resource::<Connection>();

@@ -6,6 +6,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// One end of a connection.
 pub trait Link: Send + Sync + 'static {
@@ -17,6 +18,10 @@ pub trait Link: Send + Sync + 'static {
     fn close(&mut self);
     /// What went wrong, once it's closed.
     fn problem(&self) -> Option<String> {
+        None
+    }
+    /// The connection's round-trip time, as far as it's known.
+    fn rtt(&self) -> Option<Duration> {
         None
     }
 }
@@ -74,6 +79,11 @@ impl Link for Loopback {
     fn close(&mut self) {
         self.open.store(false, Ordering::Relaxed);
     }
+
+    /// In memory: none.
+    fn rtt(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
+    }
 }
 
 /// A server's end of in-memory connections: `connect` makes one and hands back the
@@ -113,5 +123,8 @@ impl Link for Box<dyn Link> {
     }
     fn problem(&self) -> Option<String> {
         (**self).problem()
+    }
+    fn rtt(&self) -> Option<Duration> {
+        (**self).rtt()
     }
 }
