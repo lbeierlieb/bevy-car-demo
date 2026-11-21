@@ -13,7 +13,7 @@ use crate::input::{Action, WheelConfig, WheelInput};
 const KEY: KeyCode = KeyCode::KeyH;
 
 /// The controls of the sandbox, keyboard first: (keys, what they do).
-const CONTROLS: [(&str, &str); 16] = [
+const CONTROLS: [(&str, &str); 17] = [
     ("H", "This screen"),
     ("W or Up", "Throttle"),
     ("S or Down", "Brake"),
@@ -29,6 +29,7 @@ const CONTROLS: [(&str, &str); 16] = [
         "Back on the nearest road: repaired, refuelled, fresh tires",
     ),
     ("C", "Chase or driver's view"),
+    ("B (hold)", "Look back"),
     ("Left-drag, scroll", "Look around, zoom"),
     ("K", "Map: click on a road to drive from there"),
     ("M", "Mute"),

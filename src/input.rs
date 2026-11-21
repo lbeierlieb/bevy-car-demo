@@ -45,11 +45,13 @@ pub enum Action {
     Ignition,
     Reset,
     View,
+    /// Held: the camera looks backwards.
+    LookBack,
     Map,
 }
 
 impl Action {
-    pub const ALL: [Action; 18] = [
+    pub const ALL: [Action; 19] = [
         Action::Steer,
         Action::Throttle,
         Action::Brake,
@@ -67,6 +69,7 @@ impl Action {
         Action::Ignition,
         Action::Reset,
         Action::View,
+        Action::LookBack,
         Action::Map,
     ];
 
@@ -85,6 +88,7 @@ impl Action {
             Action::Ignition => "ignition".into(),
             Action::Reset => "reset".into(),
             Action::View => "view".into(),
+            Action::LookBack => "look_back".into(),
             Action::Map => "map".into(),
         }
     }
@@ -103,6 +107,7 @@ impl Action {
             Action::Ignition => "Ignition".into(),
             Action::Reset => "Reset car".into(),
             Action::View => "Camera view".into(),
+            Action::LookBack => "Look back".into(),
             Action::Map => "Map".into(),
         }
     }
@@ -427,6 +432,8 @@ pub struct WheelInput {
     pub ignition: bool,
     pub reset: bool,
     pub view: bool,
+    /// The look-back button is held.
+    pub look_back: bool,
     pub map: bool,
     /// With an H-shifter bound: the gate the lever is in, or neutral (0) between gates.
     pub shifter: Option<i8>,
@@ -581,6 +588,7 @@ fn read_wheel(
         ignition: pressed(Action::Ignition),
         reset: pressed(Action::Reset),
         view: pressed(Action::View),
+        look_back: held.contains(&Action::LookBack),
         map: pressed(Action::Map),
         shifter,
         held,

@@ -1,5 +1,7 @@
 //! Camera on the active car: a chase view (drag with the left mouse button to orbit, scroll
-//! to zoom) and a driver's view from the seat (drag to look around). C switches views.
+//! to zoom) and a driver's view from the seat (drag to look around). C switches views,
+//! facing forward again (the chase view keeps its zoom); B (or the wheel's look-back
+//! button) held looks backwards in either.
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
@@ -26,6 +28,8 @@ const CHASE_FOV: f32 = std::f32::consts::FRAC_PI_4;
 const DRIVER_FOV: f32 = 0.95;
 /// The driver looks slightly down by default, so the gauges are in view.
 const DRIVER_PITCH: f32 = -0.08;
+/// The chase view's default height angle.
+const CHASE_PITCH: f32 = 0.3;
 
 #[derive(Component)]
 pub struct ChaseCamera {
@@ -38,6 +42,8 @@ pub struct ChaseCamera {
     /// Head turn in the driver's view.
     look_yaw: f32,
     look_pitch: f32,
+    /// Looking backwards (held).
+    back: bool,
 }
 
 impl Default for ChaseCamera {
@@ -46,10 +52,11 @@ impl Default for ChaseCamera {
             driver: false,
             yaw: 0.0,
             orbit_yaw: 0.0,
-            pitch: 0.3,
+            pitch: CHASE_PITCH,
             distance: 9.0,
             look_yaw: 0.0,
             look_pitch: DRIVER_PITCH,
+            back: false,
         }
     }
 }
@@ -75,11 +82,18 @@ fn switch_view(
     wheel: Res<WheelInput>,
     mut cameras: Query<(&mut ChaseCamera, &mut Projection)>,
 ) {
+    let back = keys.pressed(KeyCode::KeyB) || wheel.look_back;
+    for (mut camera, _) in &mut cameras {
+        camera.back = back;
+    }
     if !keys.just_pressed(KeyCode::KeyC) && !wheel.view {
         return;
     }
     for (mut camera, mut projection) in &mut cameras {
+        // Facing forward again, at the same zoom.
         camera.driver = !camera.driver;
+        camera.orbit_yaw = 0.0;
+        camera.pitch = CHASE_PITCH;
         camera.look_yaw = 0.0;
         camera.look_pitch = DRIVER_PITCH;
         if let Projection::Perspective(perspective) = &mut *projection {
@@ -131,17 +145,26 @@ fn follow(
 
         if camera.driver {
             // Fixed to the seat: the view moves with every bump and roll of the body.
+            // Looking back, the head turns all the way round, level.
             let rotation = car.body.rotation;
+            let (look_yaw, look_pitch) = if camera.back {
+                (std::f32::consts::PI, 0.0)
+            } else {
+                (camera.look_yaw, camera.look_pitch)
+            };
             *transform = Transform::from_translation(car.body.position + rotation * car.setup.eye)
                 .with_rotation(
-                    rotation
-                        * Quat::from_rotation_y(camera.look_yaw)
-                        * Quat::from_rotation_x(camera.look_pitch),
+                    rotation * Quat::from_rotation_y(look_yaw) * Quat::from_rotation_x(look_pitch),
                 );
             continue;
         }
-        let rotation = Quat::from_rotation_y(camera.yaw + camera.orbit_yaw)
-            * Quat::from_rotation_x(-camera.pitch);
+        // Looking back, from ahead of the car.
+        let yaw = if camera.back {
+            camera.yaw + std::f32::consts::PI
+        } else {
+            camera.yaw + camera.orbit_yaw
+        };
+        let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-camera.pitch);
         let mut position = target + rotation * Vec3::new(0.0, 0.0, camera.distance);
         position.y = position
             .y

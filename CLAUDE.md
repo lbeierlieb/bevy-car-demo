@@ -100,7 +100,7 @@ Always run `strip.sh` and check that `grep -c shot src/lib.rs src/main.rs
 src/bin/*.rs` prints 0 for each before committing. Keys are pressed from a third of
 the frames until the shot (`k` opens the map, `2` shows the panel (hidden by default
 since 2026-11-20; older notes here used `2` to hide it), `3` the ECU window,
-`4` the garage, `5` the dyno, `6` the showroom, `f` shows the gizmos (off by default), `c` the driver's view),
+`4` the garage, `5` the dyno, `6` the showroom, `f` shows the gizmos (off by default), `c` the driver's view, `b` looks back; keys stay held through the shot's frame),
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
 The keys `3`–`6` didn't expand the tool windows in screenshots (as F3–F6) (seen 2026-11-17, also on
 the code before the app split): click their title bars instead. (2026-11-18: neither

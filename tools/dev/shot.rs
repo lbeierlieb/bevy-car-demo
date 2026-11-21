@@ -74,7 +74,8 @@ fn shot(
         .and_then(|s| s.parse().ok())
         .unwrap_or(120);
     if let Ok(k) = std::env::var("KEYS") {
-        let (start, end) = (at / 3, at);
+        // Released after the shot, so they're held in the frame it shows.
+        let (start, end) = (at / 3, at + 1);
         if *frame == start {
             for c in k.chars() {
                 keys.press(key(c));
@@ -150,6 +151,9 @@ fn key(c: char) -> KeyCode {
         'f' => KeyCode::Digit1,
         'c' => KeyCode::KeyC,
         'k' => KeyCode::KeyK,
+        'm' => KeyCode::KeyM,
+        'b' => KeyCode::KeyB,
+        '0' => KeyCode::Digit0,
         '2' => KeyCode::Digit2,
         '3' => KeyCode::Digit3,
         '4' => KeyCode::Digit4,
