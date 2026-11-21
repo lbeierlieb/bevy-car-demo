@@ -203,11 +203,12 @@ order (✓ done):
    removes a ghost's `traffic::Visitor`; `visuals` swaps in a second, blended material set.)
 4. ✓ Shops on the map (M), with a legend (`map::MapLegend`). 5. ✓ **Gas station**: 95/98/102; the tank keeps
    its octane, mixing by volume; the engine's knock limit reads the tank's octane (the
-   panel's octane and fuel load sliders go). 6. **Alignment shop**: camber, pressures
+   panel's octane and fuel load sliders go). 6. ✓ **Alignment shop**: camber, pressures
    (from the garage), toe and brake torque/balance (from the panel; into `CarBuild`).
 7. ✓ **Paint shop**: the existing paints only (swatches; gone from the garage). 8. ✓ **Showroom**: the showroom window
    (`shops::shop_window` draws a shop's window for other modules, saying when the car came in).
-9. **Parts shop**: the garage window without alignment, cam timing and wastegate;
+9. ✓ **Parts shop**: the garage window without alignment, cam timing and wastegate (those
+   still there until the dyno is);
    repairs; new tires. 10. **Dyno**: the career's chassis dyno scene back (`career/dyno.rs`,
    `rollers.rs` at c34bfbf), with the ECU window, cam timing and wastegate, and a hold
    mode (rollers held at an rpm, throttle set) for tuning cells; others see the car
@@ -551,7 +552,7 @@ catalogue entries, and things like swap subframes are named so they can be price
   lower body is a loft with wheel wells; the cabin a loft with glass, roof and pillars;
   an open car's windscreen is a one-sided pane in a frame (two cabin points). One mesh
   with vertex colours. The cockpit is placed by the chassis' eye point.
-- **Showroom (car dealers) and garage (4)** are both in `garage.rs`; both go through `start`
+- **Showroom (car dealers) and garage (parts shops)** are both in `garage.rs`; both go through `start`
   and `fit`. A changed `CarBuild` respawns the car's entity (its meshes are children);
   an engine-only change swaps it in while driving.
 - **Traction control** (my addition, on by default, a checkbox in the panel): without

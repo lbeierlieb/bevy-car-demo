@@ -1,7 +1,9 @@
-//! The showroom (6) and the garage (4). The showroom has every car as it leaves the
-//! factory; the garage builds the active car from parts: what's fitted to the chassis
-//! (paint, gearbox, clutch, final drive, differentials, suspension, rims and tires on
-//! each axle), which engine (any that fits the engine bay), and the engine's own parts.
+//! The car dealers' showroom and the parts shop (see `shops`). The showroom has every car
+//! as it leaves the factory; the parts shop builds the active car from parts: what's
+//! fitted to the chassis (gearbox, clutch, final drive, differentials, suspension, rims and
+//! tires on each axle), which engine (any that fits the engine bay), and the engine's own
+//! parts; it repairs the engine and fits new tires. The alignment (`alignment`) is set at
+//! alignment shops.
 //!
 //! Parts on the cylinder side need the engine's maps baked again (see `workshop`), which
 //! takes a few seconds, while the car keeps its old engine.
@@ -20,10 +22,9 @@ use crate::physics::engine::families::{FAMILIES, Version};
 use crate::physics::engine::hardware::EngineHardware;
 use crate::physics::engine::maps::{self, EngineMaps};
 use crate::physics::engine::parts::{HEADERS, INTERCOOLER, Parts, SLOTS};
-use crate::physics::tire::COMPOUNDS;
+use crate::physics::tire::{COMPOUNDS, Tread};
 use crate::shops::{AtShop, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
-use crate::ui::{ToolInput, tool_window};
 use crate::wheels::{self, TireSize, Wheel};
 use crate::workshop::{self, Work};
 
@@ -41,8 +42,6 @@ impl Plugin for GaragePlugin {
 
 #[derive(Resource)]
 struct Garage {
-    /// Whether the garage was expanded last frame.
-    expanded: bool,
     /// The showroom: the chassis looked at, and the engine option and paint picked for it.
     showroom: Showroom,
     /// The car the draft was taken from, and what's picked so far: the car's build and
@@ -68,7 +67,6 @@ impl Default for Garage {
     fn default() -> Self {
         let stock = CarSetup::default();
         Self {
-            expanded: false,
             showroom: Showroom {
                 chassis: stock.build.chassis,
                 engine: 0,
@@ -186,45 +184,44 @@ fn fit(
     commands.spawn((Transform::from_translation(new.body.position), new));
 }
 
+/// The parts shop: what's fitted to the car and its engine, its condition and repairs.
 fn window(
     mut commands: Commands,
     mut contexts: EguiContexts,
-    input: ToolInput,
     terrain: Res<Terrain>,
     active_car: Res<ActiveCar>,
     mut cars: Query<(Entity, &mut Car)>,
     mut garage: ResMut<Garage>,
+    (shops, mut at): (Res<Shops>, ResMut<AtShop>),
 ) -> Result {
     let Some((entity, mut car)) = active(&mut cars, active_car.0) else {
         return Ok(());
     };
     let ctx = contexts.ctx_mut()?;
-    let tool = ("Garage", KeyCode::Digit4);
-    let Some((window, opened)) = tool_window(ctx, tool, 1, &input, &mut garage.expanded) else {
-        return Ok(());
-    };
-    if opened {
-        // Take the parts from the car again when it opens.
-        garage.car = None;
-    }
-    if garage.car != Some(car.index) || garage.draft.0.chassis != car.setup.build.chassis {
-        garage.car = Some(car.index);
-        garage.draft = (car.setup.build.clone(), car.setup.engine.parts.clone());
-        garage.same_wheels = car.setup.build.wheels[0] == car.setup.build.wheels[1];
-    }
     let mut build_now = false;
-    window.default_height(680.0).vscroll(true).show(ctx, |ui| {
+    shop_window(ctx, &shops, &mut at, ShopKind::Parts, |ui, came_in| {
         let garage = &mut *garage;
-        car_parts(ui, &mut garage.draft.0);
-        wheel_parts(ui, &mut garage.draft.0, &mut garage.same_wheels);
-        ui.separator();
-        engine(ui, garage);
-        build_now = build(ui, garage, &car);
-        condition(ui, &mut car);
-        ui.separator();
-        egui::CollapsingHeader::new("Engine parts")
-            .default_open(true)
-            .show(ui, |ui| parts(ui, garage));
+        if came_in || garage.car != Some(car.index) {
+            // Take the parts from the car again when it comes in.
+            garage.car = Some(car.index);
+            garage.draft = (car.setup.build.clone(), car.setup.engine.parts.clone());
+            garage.same_wheels = car.setup.build.wheels[0] == car.setup.build.wheels[1];
+            garage.status.clear();
+        }
+        egui::ScrollArea::vertical()
+            .max_height(ui.ctx().content_rect().height() - 160.0)
+            .show(ui, |ui| {
+                car_parts(ui, &mut garage.draft.0);
+                wheel_parts(ui, &mut garage.draft.0, &mut garage.same_wheels);
+                ui.separator();
+                engine(ui, garage);
+                build_now = build(ui, garage, &car);
+                condition(ui, &mut car);
+                ui.separator();
+                egui::CollapsingHeader::new("Engine parts")
+                    .default_open(true)
+                    .show(ui, |ui| parts(ui, garage));
+            });
     });
     if build_now {
         start(&mut commands, &terrain, &mut garage, entity, &mut car);
@@ -758,7 +755,7 @@ fn build(ui: &mut egui::Ui, garage: &mut Garage, car: &Car) -> bool {
     build_now
 }
 
-/// How worn the engine's parts are, what has failed, and repairing it.
+/// How worn the engine's parts are, what has failed, and repairing it; and new tires.
 fn condition(ui: &mut egui::Ui, car: &mut Car) {
     let cylinders = car.setup.engine.build.hardware.cylinders as usize;
     let damage = &car.drivetrain.engine.damage;
@@ -787,6 +784,21 @@ fn condition(ui: &mut egui::Ui, car: &mut Car) {
     {
         car.drivetrain.engine.damage = Default::default();
     }
+    let worn = (car.corners.iter())
+        .map(|corner| corner.tread.wear())
+        .fold(0.0, f32::max);
+    ui.horizontal(|ui| {
+        ui.label(format!("Tires: worn {:.0} % at most", worn * 100.0));
+        if ui
+            .button("New tires")
+            .on_hover_text("The same tires, new and cold")
+            .clicked()
+        {
+            for corner in &mut car.corners {
+                corner.tread = Tread::default();
+            }
+        }
+    });
 }
 
 /// Builds the draft: right away if the engine's maps are at hand (the car's own, the
