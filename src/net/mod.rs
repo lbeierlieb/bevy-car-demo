@@ -308,6 +308,23 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_web_page_is_told_to_reload() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut terrain = Terrain::flat();
+        terrain.fingerprint = 42;
+        let ben = Connection::new(listener.connect_from_browser(), "Ben", &terrain);
+        anna.world_mut().insert_resource(ben);
+        run(&mut [&mut server, &mut anna], 10);
+        let Status::Refused(why) = &connection(&anna).status else {
+            panic!("not refused");
+        };
+        assert!(why.starts_with("Press Ctrl+F5"), "{why}");
+        assert!(why.ends_with("(The server has another map)"), "{why}");
+    }
+
+    #[test]
     fn a_player_who_leaves_is_gone_for_the_others() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);

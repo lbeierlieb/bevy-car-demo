@@ -50,6 +50,8 @@ pub struct QuicLink {
     problem: Arc<Mutex<Option<String>>>,
     /// The round-trip time (µs; 0 until the connection stands).
     rtt: Arc<AtomicU32>,
+    /// Whether it came from a web page (browsers send an `Origin`; server side only).
+    browser: bool,
 }
 
 /// The connection task's end.
@@ -74,6 +76,7 @@ fn link() -> (QuicLink, Ends) {
             open: open.clone(),
             problem: problem.clone(),
             rtt: rtt.clone(),
+            browser: false,
         },
         Ends {
             outgoing,
@@ -120,6 +123,10 @@ impl Link for QuicLink {
     fn rtt(&self) -> Option<Duration> {
         let micros = self.rtt.load(Ordering::Relaxed);
         (micros > 0).then(|| Duration::from_micros(micros.into()))
+    }
+
+    fn browser(&self) -> bool {
+        self.browser
     }
 }
 
@@ -346,14 +353,16 @@ impl QuicListener {
 async fn accept(incoming: IncomingSession, found: UnboundedSender<QuicLink>) -> Result<(), String> {
     let joined = tokio::time::timeout(CONNECT_TIMEOUT, async {
         let request = incoming.await.map_err(|e| e.to_string())?;
+        let browser = request.origin().is_some();
         let connection = request.accept().await.map_err(|e| e.to_string())?;
         let (send, recv) = connection.accept_bi().await.map_err(|e| e.to_string())?;
-        Ok::<_, String>((connection, send, recv))
+        Ok::<_, String>((connection, send, recv, browser))
     })
     .await
     .map_err(|_| "it didn't open its stream".to_string())??;
-    let (connection, send, recv) = joined;
-    let (link, ends) = link();
+    let (connection, send, recv, browser) = joined;
+    let (mut link, ends) = link();
+    link.browser = browser;
     found.send(link).map_err(|_| "the server stopped")?;
     run(connection, send, recv, ends).await;
     Ok(())

@@ -24,6 +24,10 @@ pub trait Link: Send + Sync + 'static {
     fn rtt(&self) -> Option<Duration> {
         None
     }
+    /// Whether the other end is a web page (the server's end only).
+    fn browser(&self) -> bool {
+        false
+    }
 }
 
 /// Where the server's new connections come from.
@@ -39,6 +43,7 @@ pub struct Loopback {
     outgoing: Queue,
     incoming: Queue,
     open: Arc<AtomicBool>,
+    browser: bool,
 }
 
 impl Loopback {
@@ -51,11 +56,13 @@ impl Loopback {
                 outgoing: a.clone(),
                 incoming: b.clone(),
                 open: open.clone(),
+                browser: false,
             },
             Loopback {
                 outgoing: b,
                 incoming: a,
                 open,
+                browser: false,
             },
         )
     }
@@ -84,6 +91,10 @@ impl Link for Loopback {
     fn rtt(&self) -> Option<Duration> {
         Some(Duration::ZERO)
     }
+
+    fn browser(&self) -> bool {
+        self.browser
+    }
 }
 
 /// A server's end of in-memory connections: `connect` makes one and hands back the
@@ -97,6 +108,13 @@ impl LoopbackListener {
     pub fn connect(&self) -> Loopback {
         let (player, server) = Loopback::pair();
         self.pending.lock().unwrap().push(server);
+        player
+    }
+
+    /// A connection the server takes for one from a web page.
+    pub fn connect_from_browser(&self) -> Loopback {
+        let player = self.connect();
+        self.pending.lock().unwrap().last_mut().unwrap().browser = true;
         player
     }
 }
@@ -126,5 +144,8 @@ impl Link for Box<dyn Link> {
     }
     fn rtt(&self) -> Option<Duration> {
         (**self).rtt()
+    }
+    fn browser(&self) -> bool {
+        (**self).browser()
     }
 }

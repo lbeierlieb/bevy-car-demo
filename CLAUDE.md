@@ -279,6 +279,11 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   first one and skips another player's unknown car with a warning), traffic behaviour
   (simulated on the server), and a re-bake (fingerprint). With `web.enable` the web
   build updates with the server (`nixos-rebuild` restarts it, dropping everyone).
+  A browser left on an old page (its cache) is refused with "Press Ctrl+F5 to reload
+  the page without the browser's cache" first (asked for by the user, 2026-11-21): the
+  server words it, since the old page can't change; it knows a browser by the
+  `Origin` header (`Link::browser`), and adds it when the page's protocol is older or,
+  with the same protocol, its map differs.
 - **Server settings for gameplay** (agreed with the user, 2026-11-21): command line
   options plus a NixOS module option each. The first: who's on the map (M) of the other
   players, `--map-players self|near|all` (default near) and `--map-near` (m, default

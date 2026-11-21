@@ -228,6 +228,21 @@ fn receive(
                     } else {
                         None
                     };
+                    // A web page behind the server is most likely an old copy from the
+                    // browser's cache: say first how to get the new one. An old page
+                    // shows whatever it's told, so the hint has to come from here.
+                    let stale =
+                        protocol < PROTOCOL || (protocol == PROTOCOL && map != terrain.fingerprint);
+                    let refusal = refusal.map(|why| {
+                        if stale && peer.link.browser() {
+                            format!(
+                                "Press Ctrl+F5 to reload the page without the browser's \
+                                 cache: the server runs a newer version of the game.\n\n({why})"
+                            )
+                        } else {
+                            why
+                        }
+                    });
                     if let Some(why) = refusal {
                         peer.tell(&ToClient::Refused(why));
                         peer.link.close();
