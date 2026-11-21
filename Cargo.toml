@@ -6,6 +6,27 @@ license = "MIT OR Apache-2.0"
 description = "Bevy car simulation demo: rigid-body chassis, double A-arm suspension, raycast tires"
 default-run = "car-sim"
 
+# The tests are all in the library: `cargo test` builds only that (once, with the tests),
+# not the apps (which have none) nor doctests (there are none), each of which needs the
+# library built a second time without them.
+[lib]
+doctest = false
+
+[[bin]]
+name = "car-sim"
+path = "src/main.rs"
+test = false
+
+[[bin]]
+name = "editor"
+path = "src/bin/editor.rs"
+test = false
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+test = false
+
 [dependencies]
 bevy = { version = "0.20", default-features = false, features = ["3d", "keyboard", "mouse", "bevy_audio", "bevy_gilrs"] }
 bevy_egui = { version = "0.43", default-features = false, features = ["render", "default_fonts"] }

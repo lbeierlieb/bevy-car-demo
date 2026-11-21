@@ -61,6 +61,10 @@ wish (2026-11-21). Keys: M map, 0 mute, B (held) looks back.
   `nix develop -c bash -c 'CARGO_TARGET_DIR=/repo/target/sandbox cargo clippy --all-targets -j 4 -- -D warnings'`.
   Touch `src/main.rs` first to make clippy actually re-check. Wasm:
   `cargo clippy --target wasm32-unknown-unknown --all-targets -j 4 -- -D warnings` (as the flake's `clippy-wasm` check).
+- Tests: `cargo test --profile release-dev` (no LTO, incremental; the physics tests need
+  the optimisation). All tests are in the library: the apps have `test = false` and the
+  library `doctest = false`, so the crate is built once, with the tests (34 → 17 s for a
+  full rebuild of it; a small change about 10 s).
 - `cargo run` in the dev shell is a wrapper for `--profile release-dev`; build that
   profile, not `dev`, before screenshots.
 - No python/perl installed: `nix shell nixpkgs#python3 -c python3 -I`.
