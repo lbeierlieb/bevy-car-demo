@@ -117,7 +117,7 @@ holds the left button (a drag with x2, y2), `UICLICK` is the window-event click 
 egui (the map, buttons), `EDITKEYS="Digit2@25;ControlLeft+KeyS@60"` taps keys. A view
 of a village road: `EDITCAM="-2986,-1954,45,0,-70"`, the road at (1000, 381). Saving
 or baking in a shot writes the real map and terrain files: `git checkout map assets`.
-`PLACE="x,z,frame"` puts the driven car on the road nearest that map point. Give a shot
+`PLACE="x,z,frame"` puts the driven car on the road nearest that map point (joined, at frame 150 or later, or the join moves it: e.g. by a shop, `JOIN=127.0.0.1 NAME=Anna PLACE="-1476,-1180,150"`, 220 frames). Give a shot
 its own config dir (`XDG_CONFIG_HOME=<scratch>/cfg`) for fresh settings. The start menu
 is closed in shots unless `MENU=1`, the controls screen before it unless `INTRO=1`; `JOIN=127.0.0.1 NAME=Anna` joins a server at once.
 Two players: start the server (`target/sandbox/release-dev/server`, throwaway
@@ -182,6 +182,36 @@ the ECU); a chassis dyno in its own scene (through the gears to fourth, then a f
 pull; wheel and crank power, runs saved with names and notes); towing home, or mom
 fetching you; 3 own bays, one save slot.
 
+## Shops (agreed with the user, 2026-11-21; being built)
+
+The tool windows (3–6) become places on the map to drive to; the keys 3–6 go away.
+`src/shops.rs`. **The server says where they are**: its own list, separate from the map
+(`server --shops FILE`, `services.car-sim.shops`; default `assets/shops.cfg`, embedded:
+lines `kind x z name`, the building's map point), sent as `ToClient::Shops` after the
+welcome (protocol 6). Alone there are none (the plugin is there, idle). The client puts
+each marker (glowing disc, 3.5 m, and a beam) on the nearest paved road at the edge on
+the building's side (`kerb`); names float above within 500 m. Free (no money). Plan, in
+order (✓ done):
+
+1. ✓ server list, protocol, markers and names. 2. Stop on a marker to go in (window opens,
+   parking brake; drive off or Esc leaves). 3. **Ghosts**: a car stopped on a marker,
+   in a shop or in the dyno is a ghost (a flag in its state): no collisions with players'
+   cars or traffic (the server's traffic ignores it), drawn half transparent; it stays a
+   ghost after leaving until it overlaps nobody. So several players use a shop at once.
+4. Shops on the map (M), with a legend. 5. **Gas station**: 95/98/102; the tank keeps
+   its octane, mixing by volume; the engine's knock limit reads the tank's octane (the
+   panel's octane and fuel load sliders go). 6. **Alignment shop**: camber, pressures
+   (from the garage), toe and brake torque/balance (from the panel; into `CarBuild`).
+7. **Paint shop**: the existing paints only. 8. **Showroom**: the showroom window.
+9. **Parts shop**: the garage window without alignment, cam timing and wastegate;
+   repairs; new tires. 10. **Dyno**: the career's chassis dyno scene back (`career/dyno.rs`,
+   `rollers.rs` at c34bfbf), with the ECU window, cam timing and wastegate, and a hold
+   mode (rollers held at an rpm, throttle set) for tuning cells; others see the car
+   parked on the marker; the engine dyno window (5) goes. 11. Clean-up: the panel loses
+   springs, dampers, upper pivot and tire μ (they follow from the parts); **R only puts
+   the car back on the road** (no refuelling, repair or tires, no hint about it); tool
+   windows and keys 3–6 go; help, README.
+
 ## Multiplayer (agreed with the user, 2026-11-19)
 
 A multiplayer sandbox first; the career comes back later, built on it. Native and web
@@ -190,8 +220,7 @@ the web only asks for the name and joins the server the page came from (no playi
 alone, no address field; agreed with the user, 2026-11-21). Alone is just driving the
 default car with traffic (panel 2, gizmos, R, M kept); the tool windows (3–6) are only
 there while joined (`ui::tool_window` checks the `Connection`, the one runtime switch
-of that kind), until they become places on the map to drive to (dealership, garage,
-dyno: planned with the user, later).
+of that kind), until they become shops on the map (see "Shops").
 No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headless:
 `MinimalPlugins` and the world core) runs on the user's VPS.
 

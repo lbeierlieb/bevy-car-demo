@@ -4,14 +4,15 @@
 //! ```text
 //! server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]
 //!        [--map-players self|near|all] [--map-near 200] [--chat on|off]
-//!        [--name-tags on|off]
+//!        [--name-tags on|off] [--shops shops.cfg]
 //!        [--telegram-token-file token --telegram-chat-file chat]
 //! ```
 //!
 //! `--map-players` says who a player sees of the others on their map: nobody (`self`),
 //! the ones within `--map-near` metres (`near`, the default) or everyone (`all`).
 //! `--chat off` keeps the players from chatting (it's on by default), `--name-tags off`
-//! the players' names off their cars (also on by default).
+//! the players' names off their cars (also on by default). `--shops` reads where the
+//! shops are from a file (see `assets/shops.cfg`, the list it has otherwise).
 //!
 //! Without a certificate it makes a throwaway one: only the native game joins that, with
 //! `CAR_SIM_INSECURE=1` (for development).
@@ -35,7 +36,7 @@ fn main() {
         Ok(options) => options,
         Err(e) => {
             eprintln!(
-                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--map-players self|near|all] [--map-near 200] [--chat on|off]\n       [--name-tags on|off]\n       [--telegram-token-file token --telegram-chat-file chat]"
+                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--map-players self|near|all] [--map-near 200] [--chat on|off]\n       [--name-tags on|off] [--shops shops.cfg]\n       [--telegram-token-file token --telegram-chat-file chat]"
             );
             std::process::exit(2);
         }
@@ -76,7 +77,8 @@ fn main() {
             .with_max_players(options.max_players)
             .with_map(options.map_players)
             .with_chat(options.chat)
-            .with_name_tags(options.name_tags),
+            .with_name_tags(options.name_tags)
+            .with_shops(options.shops),
     )
     .insert_resource(traffic::Traffic {
         cars: options.traffic,
@@ -117,6 +119,7 @@ struct Options {
     map_players: car_sim::net::MapPlayers,
     chat: bool,
     name_tags: bool,
+    shops: Vec<car_sim::shops::Shop>,
     telegram_token_file: Option<std::path::PathBuf>,
     telegram_chat_file: Option<std::path::PathBuf>,
 }
@@ -133,6 +136,7 @@ impl Options {
             map_players: car_sim::net::MapPlayers::Near(car_sim::net::server::MAP_NEAR),
             chat: true,
             name_tags: true,
+            shops: Vec::new(),
             telegram_token_file: None,
             telegram_chat_file: None,
         };
@@ -145,6 +149,7 @@ impl Options {
         use car_sim::net::MapPlayers;
         let mut map_players = "near".to_string();
         let mut map_near = car_sim::net::server::MAP_NEAR;
+        let mut shops: Option<std::path::PathBuf> = None;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--port" => options.port = number(&arg, args.next())?,
@@ -159,6 +164,7 @@ impl Options {
                     map_players = args.next().ok_or("--map-players needs self, near or all")?
                 }
                 "--map-near" => map_near = number(&arg, args.next())?,
+                "--shops" => shops = Some(args.next().ok_or("--shops needs a file")?.into()),
                 "--chat" | "--name-tags" => {
                     let on = match args.next().as_deref() {
                         Some("on") => true,
@@ -197,6 +203,12 @@ impl Options {
         if !(map_near.is_finite() && map_near >= 0.0) {
             return Err(format!("--map-near: not a distance: {map_near}"));
         }
+        let text = match &shops {
+            Some(file) => std::fs::read_to_string(file)
+                .map_err(|e| format!("--shops: {}: {e}", file.display()))?,
+            None => car_sim::shops::DEFAULT.to_string(),
+        };
+        options.shops = car_sim::shops::parse(&text).map_err(|e| format!("--shops: {e}"))?;
         if options.cert.is_some() != options.key.is_some() {
             return Err("--cert and --key go together".into());
         }

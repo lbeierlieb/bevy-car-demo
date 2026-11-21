@@ -13,10 +13,11 @@ fn main() {
             help::HelpPlugin,
             // The start menu (after the controls): play alone or join a server.
             online::OnlinePlugin,
+            // The shops a server puts on the map (none alone).
+            shops::ShopsPlugin,
             // Starts in the coupé; R puts the car back on the nearest road as new.
             car::DefaultCarPlugin,
             car::ResetPlugin,
-            // A click on the map (K) drives from there.
             // 1: gizmos, 2: the panel with telemetry, setup sliders and bindings (hidden
             // at first).
             debug::DebugPlugin,

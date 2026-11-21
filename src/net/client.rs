@@ -26,6 +26,7 @@ use crate::looks::{Looks, Motion};
 use crate::physics::collision::Obb;
 use crate::physics::collision::{self, OBSTACLE};
 use crate::physics::rigid_body::RigidBody;
+use crate::shops::Shop;
 use crate::terrain::Terrain;
 use crate::traffic::{self, TrafficCar};
 
@@ -119,6 +120,8 @@ pub struct Connection {
     /// Whether the server has chat on, and the latest lines, oldest first.
     pub chat_on: bool,
     pub chat: VecDeque<ChatLine>,
+    /// The shops on the map, as the server told.
+    pub shops: Vec<Shop>,
     /// The server's clock against ours (every state comes on it).
     clock: ClockOffset,
     /// What we've been told of each car (a state may overtake it, or come later).
@@ -157,6 +160,7 @@ impl Connection {
             pings: HashMap::new(),
             name: name.to_string(),
             chat_on: false,
+            shops: Vec::new(),
             chat: VecDeque::new(),
             clock: ClockOffset::default(),
             known: HashMap::new(),
@@ -362,6 +366,7 @@ fn receive(
                     connection.map.insert(player.id, (player, now));
                 }
             }
+            ToClient::Shops(shops) => connection.shops = shops,
             ToClient::Pings(pings) => {
                 connection.pings = pings.into_iter().collect();
             }

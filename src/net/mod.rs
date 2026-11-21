@@ -462,6 +462,19 @@ mod tests {
     }
 
     #[test]
+    fn a_joining_player_is_told_the_shops() {
+        let listener = LoopbackListener::default();
+        let shops = crate::shops::parse("gas 10 20 Pumps\ndyno -5 7 Rollers").unwrap();
+        let mut server = app();
+        server
+            .add_plugins(ServerPlugin)
+            .insert_resource(Server::new(listener.clone()).with_shops(shops.clone()));
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        run(&mut [&mut server, &mut anna], 10);
+        assert_eq!(connection(&anna).shops, shops);
+    }
+
+    #[test]
     fn the_server_tells_who_joined_and_left() {
         #[derive(Resource, Default)]
         struct Told(Vec<(String, bool, usize)>);

@@ -25,6 +25,7 @@ use super::wire::{decode, encode};
 use super::{ClockOffset, NEAR, RATES, SEND_RATE};
 use crate::looks::{Looks, Motion};
 use crate::physics::rigid_body::RigidBody;
+use crate::shops::Shop;
 use crate::terrain::Terrain;
 use crate::traffic::{Anchor, CarNumbers, TrafficCar, Visitor};
 
@@ -95,6 +96,8 @@ pub struct Server {
     chat: bool,
     /// Whether players' cars show their names.
     name_tags: bool,
+    /// The shops on the map, told to every player who joins.
+    shops: Vec<Shop>,
     /// When states, and the map's players, were last sent (s).
     sent: f64,
     map_sent: f64,
@@ -110,6 +113,7 @@ impl Server {
             map: MapPlayers::Near(MAP_NEAR),
             chat: true,
             name_tags: true,
+            shops: Vec::new(),
             sent: 0.0,
             map_sent: f64::NEG_INFINITY,
             pings_sent: f64::NEG_INFINITY,
@@ -122,6 +126,10 @@ impl Server {
 
     pub fn with_chat(self, chat: bool) -> Self {
         Self { chat, ..self }
+    }
+
+    pub fn with_shops(self, shops: Vec<Shop>) -> Self {
+        Self { shops, ..self }
     }
 
     pub fn with_name_tags(self, name_tags: bool) -> Self {
@@ -282,6 +290,7 @@ fn receive(
                         you: id,
                         chat: server.chat,
                     });
+                    peer.tell(&ToClient::Shops(server.shops.clone()));
                     joined.push((id, name.clone()));
                     present += 1;
                     peer.name = Some(name);

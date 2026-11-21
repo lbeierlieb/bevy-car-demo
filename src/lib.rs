@@ -31,6 +31,7 @@ pub mod osm;
 pub mod physics;
 pub mod relief;
 pub mod scenery;
+pub mod shops;
 pub mod sim;
 pub mod sky;
 pub mod storage;
