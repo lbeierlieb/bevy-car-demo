@@ -14,7 +14,7 @@ impl Plugin for ShotPlugin {
             );
             // Before the car gets its meshes, which would be added to a despawned car.
             app.add_systems(PreUpdate, (pick_car, line_up, place_car));
-            app.add_systems(PreUpdate, start_online);
+            app.add_systems(PreUpdate, (start_online, say));
             app.add_systems(
                 PostUpdate,
                 car_cam
@@ -27,6 +27,21 @@ impl Plugin for ShotPlugin {
                     .after(car_cam)
                     .before(bevy::transform::TransformSystems::Propagate),
             );
+        }
+    }
+}
+
+/// SAY="text@frame[;text@frame…]": writes that in the chat at that frame (on a server).
+fn say(mut frame: Local<u32>, connection: Option<ResMut<crate::net::Connection>>) {
+    *frame += 1;
+    let (Ok(spec), Some(mut connection)) = (std::env::var("SAY"), connection) else {
+        return;
+    };
+    for item in spec.split(';') {
+        if let Some((text, at)) = item.rsplit_once('@')
+            && at.parse() == Ok(*frame)
+        {
+            connection.write(text);
         }
     }
 }

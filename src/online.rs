@@ -1,7 +1,7 @@
 //! Playing alone or on a server: the start menu (name, server address, "Play alone",
 //! "Join server"), what's shown while joining or when it fails, the players' list with
 //! "Leave" while on a server, name tags over the other players' cars, and the players the
-//! server puts on the map (`MapCars`). Joined, the car is put in a lane near the spawn
+//! server puts on the map (`MapCars`), and the chat (`chat`). Joined, the car is put in a lane near the spawn
 //! point, in a spot of its own (by player number).
 
 use bevy::prelude::*;
@@ -34,6 +34,7 @@ impl Plugin for OnlinePlugin {
             open: true,
             settings: Settings::load(),
         })
+        .add_plugins(crate::chat::ChatPlugin)
         .add_systems(Update, (place_on_joining, show_on_map))
         .add_systems(EguiPrimaryContextPass, (menu, players, name_tags));
     }

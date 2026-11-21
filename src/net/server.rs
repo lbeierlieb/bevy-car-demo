@@ -7,13 +7,17 @@
 //! like the other players' cars. Once a second each player is told where the others
 //! are for the map: nobody, the ones near them or everyone, as the server is set
 //! (`MapPlayers`), and every two seconds everyone's ping (the connection's round trip).
+//! With chat on, what a player writes goes to everyone (cleaned up, a few lines at a time
+//! at most), and everyone is told in the chat who joined and left.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::prelude::*;
 
 use super::link::{Link, Listener};
-use super::protocol::{CarState, MapPlayer, PROTOCOL, PlayerId, ToClient, ToServer, TrafficState};
+use super::protocol::{
+    CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, TrafficState, clean_chat,
+};
 use super::wire::{decode, encode};
 use super::{NEAR, RATES, SEND_RATE};
 use crate::looks::Looks;
@@ -33,6 +37,9 @@ const TRAFFIC_PER_MESSAGE: usize = 14;
 const MAP_PER_MESSAGE: usize = 32;
 /// How often the other players' places on the map are sent (per second).
 const MAP_RATE: f64 = 1.0;
+/// The most chat lines a player may write within `CHAT_WINDOW` seconds.
+const CHAT_LINES: usize = 5;
+const CHAT_WINDOW: f64 = 10.0;
 /// How often everyone's ping is sent (per second).
 const PING_RATE: f64 = 0.5;
 /// How near other players are shown on the map by default (m).
@@ -80,6 +87,8 @@ pub struct Server {
     max_players: usize,
     /// Who's shown on the players' maps.
     pub(super) map: MapPlayers,
+    /// Whether players can chat.
+    chat: bool,
     /// When states, and the map's players, were last sent (s).
     sent: f64,
     map_sent: f64,
@@ -93,6 +102,7 @@ impl Server {
             next_id: 1,
             max_players: 32,
             map: MapPlayers::Near(MAP_NEAR),
+            chat: true,
             sent: 0.0,
             map_sent: f64::NEG_INFINITY,
             pings_sent: f64::NEG_INFINITY,
@@ -101,6 +111,10 @@ impl Server {
 
     pub fn with_map(self, map: MapPlayers) -> Self {
         Self { map, ..self }
+    }
+
+    pub fn with_chat(self, chat: bool) -> Self {
+        Self { chat, ..self }
     }
 
     pub fn with_max_players(self, max_players: usize) -> Self {
@@ -129,6 +143,8 @@ pub struct Peer {
     told: HashMap<PlayerId, (u32, f64)>,
     /// When each traffic car's next state is due for them (s).
     told_traffic: HashMap<u32, f64>,
+    /// When they wrote their latest chat lines (s), the last `CHAT_LINES`.
+    chatted: VecDeque<f64>,
 }
 
 impl Peer {
@@ -155,6 +171,7 @@ fn accept(mut commands: Commands, mut server: ResMut<Server>, time: Res<Time<Rea
             revision: 0,
             told: HashMap::new(),
             told_traffic: HashMap::new(),
+            chatted: VecDeque::new(),
         });
     }
 }
@@ -173,6 +190,9 @@ fn receive(
     // What everyone else has to be told afterwards.
     let mut joined = Vec::new();
     let mut left = Vec::new();
+    let mut chat = Vec::new();
+    // Who wrote too much at once.
+    let mut too_fast = HashSet::new();
     for (entity, mut peer, mut transform) in &mut peers {
         while let Some(bytes) = peer.link.receive() {
             let Some(message) = decode::<ToServer>(&bytes) else {
@@ -216,7 +236,10 @@ fn receive(
                     let name = name.trim().to_string();
                     info!("{name} joined (player {})", peer.id);
                     let id = peer.id;
-                    peer.tell(&ToClient::Welcome { you: id });
+                    peer.tell(&ToClient::Welcome {
+                        you: id,
+                        chat: server.chat,
+                    });
                     joined.push((id, name.clone()));
                     present += 1;
                     peer.name = Some(name);
@@ -224,6 +247,22 @@ fn receive(
                 // Nothing else before hello.
                 _ if peer.name.is_none() => {}
                 ToServer::Hello { .. } => {}
+                ToServer::Chat(text) => {
+                    let Some(text) = clean_chat(&text).filter(|_| server.chat) else {
+                        continue;
+                    };
+                    let peer = &mut *peer;
+                    peer.chatted.retain(|&at| now - at < CHAT_WINDOW);
+                    if peer.chatted.len() >= CHAT_LINES {
+                        too_fast.insert(peer.id);
+                        continue;
+                    }
+                    peer.chatted.push_back(now);
+                    chat.push(ToClient::Chat {
+                        from: peer.id,
+                        text,
+                    });
+                }
                 ToServer::Looks(looks) => {
                     peer.looks = Some(*looks);
                     peer.revision += 1;
@@ -297,6 +336,41 @@ fn receive(
                     name: name.clone(),
                 });
             }
+        }
+    }
+    // In the chat: who joined (not told themselves) and who left.
+    if server.chat {
+        for (id, name) in &joined {
+            let line = ToClient::Chat {
+                from: SERVER,
+                text: format!("{name} joined"),
+            };
+            for (_, mut peer, _) in &mut peers {
+                if peer.name.is_some() && peer.id != *id {
+                    peer.tell(&line);
+                }
+            }
+        }
+        for (_, name) in &left {
+            chat.push(ToClient::Chat {
+                from: SERVER,
+                text: format!("{name} left"),
+            });
+        }
+    }
+    // Everyone there hears the chat, and then the ones held back why.
+    for (_, mut peer, _) in &mut peers {
+        if peer.name.is_none() || left.iter().any(|(id, _)| *id == peer.id) {
+            continue;
+        }
+        for line in &chat {
+            peer.tell(line);
+        }
+        if too_fast.contains(&peer.id) {
+            peer.tell(&ToClient::Chat {
+                from: SERVER,
+                text: "Not so fast: wait a few seconds".to_string(),
+            });
         }
     }
     // The ones who left are still there until the commands run.

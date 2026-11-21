@@ -9,6 +9,7 @@ pub mod buildings;
 pub mod camera;
 pub mod car;
 pub mod chassis;
+pub mod chat;
 pub mod cockpit;
 pub mod debug;
 pub mod dyno;

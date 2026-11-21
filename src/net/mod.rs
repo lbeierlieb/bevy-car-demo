@@ -14,7 +14,7 @@ pub mod server;
 pub mod web;
 pub mod wire;
 
-pub use client::{ClientPlugin, Connection, Status};
+pub use client::{ChatLine, ClientPlugin, Connection, Status};
 pub use server::{MapPlayers, Presence, Server, ServerPlugin};
 
 use bevy::time::{Fixed, Real, Time};
@@ -319,6 +319,66 @@ mod tests {
         run(&mut [&mut server, &mut anna], 5);
         assert!(connection(&anna).players.is_empty());
         assert!(proxies(&mut anna).is_empty());
+    }
+
+    /// A player's chat as "who: what" lines ("· what" for the server's).
+    fn chat(app: &App) -> Vec<String> {
+        (connection(app).chat.iter())
+            .map(|line| match &line.from {
+                Some(name) => format!("{name}: {}", line.text),
+                None => format!("· {}", line.text),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn players_chat_with_everyone() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        run(&mut [&mut server, &mut anna], 10);
+        let mut ben = player(&listener, "Ben", 3, 900.0);
+        run(&mut [&mut server, &mut anna, &mut ben], 10);
+        assert!(connection(&anna).chat_on);
+        let anna_writes = |app: &mut App, text: &str| {
+            app.world_mut().resource_mut::<Connection>().write(text);
+        };
+        anna_writes(&mut anna, "  Hello\nBen  ");
+        anna_writes(&mut anna, " \t ");
+        anna_writes(&mut anna, &"x".repeat(300));
+        run(&mut [&mut server, &mut anna, &mut ben], 5);
+        let long = format!("Anna: {}", "x".repeat(protocol::CHAT_LENGTH));
+        assert_eq!(chat(&anna), ["· Ben joined", "Anna: Hello Ben", &long]);
+        assert_eq!(chat(&ben), ["Anna: Hello Ben", &long], "far away too");
+        // Too many at once: the rest is held back, with a word to the writer.
+        for i in 0..6 {
+            anna_writes(&mut anna, &format!("{i}"));
+        }
+        run(&mut [&mut server, &mut anna, &mut ben], 5);
+        assert_eq!(chat(&ben).len(), 2 + 3);
+        assert_eq!(
+            chat(&anna).last().unwrap(),
+            "· Not so fast: wait a few seconds"
+        );
+        ben.world_mut().resource_mut::<Connection>().close();
+        run(&mut [&mut server, &mut anna], 5);
+        assert_eq!(chat(&anna).last().unwrap(), "· Ben left");
+    }
+
+    #[test]
+    fn a_server_without_chat_passes_none_on() {
+        let listener = LoopbackListener::default();
+        let mut server = app();
+        server
+            .add_plugins(ServerPlugin)
+            .insert_resource(Server::new(listener.clone()).with_chat(false));
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut ben = player(&listener, "Ben", 3, 50.0);
+        run(&mut [&mut server, &mut anna, &mut ben], 10);
+        assert!(!connection(&anna).chat_on);
+        anna.world_mut().resource_mut::<Connection>().write("Hello");
+        run(&mut [&mut server, &mut anna, &mut ben], 5);
+        assert!(chat(&anna).is_empty() && chat(&ben).is_empty());
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! player's game does the same on their side. On a server the traffic is the server's:
 //! its cars near us are shown the same way (`ServerTraffic`), and our own traffic stops.
 //! The other players the server puts on our map are kept apart from all that
-//! (`Connection::on_map`).
+//! (`Connection::on_map`), and so is the chat (`Connection::chat`).
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
@@ -16,7 +16,9 @@ use bevy::prelude::*;
 
 use super::SEND_RATE;
 use super::link::Link;
-use super::protocol::{CarState, MapPlayer, PROTOCOL, PlayerId, ToClient, ToServer, TrafficState};
+use super::protocol::{
+    CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, TrafficState, clean_chat,
+};
 use super::wire::{decode, encode};
 use crate::car::{ActiveCar, Car};
 use crate::looks::{Looks, Motion};
@@ -52,6 +54,8 @@ const KEPT: usize = 2;
 /// last sent (once a second), and gone when not sent for this long (s).
 const MAP_PREDICT: f64 = 1.5;
 const MAP_GONE: f64 = 3.0;
+/// Chat lines kept.
+const CHAT_KEPT: usize = 50;
 
 pub struct ClientPlugin;
 
@@ -89,6 +93,16 @@ pub enum Status {
     Lost(String),
 }
 
+/// A line in the chat.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChatLine {
+    /// Who wrote it (as they were called then), or nobody for the server's own lines.
+    pub from: Option<String>,
+    pub text: String,
+    /// When it came (on `Time<Real>`, s).
+    pub at: f64,
+}
+
 /// The connection to a server, while playing on one.
 #[derive(Resource)]
 pub struct Connection {
@@ -98,6 +112,11 @@ pub struct Connection {
     pub players: BTreeMap<PlayerId, String>,
     /// Everyone's round trip to the server (ms), ours too, as last sent.
     pub pings: HashMap<PlayerId, u16>,
+    /// Our name.
+    pub name: String,
+    /// Whether the server has chat on, and the latest lines, oldest first.
+    pub chat_on: bool,
+    pub chat: VecDeque<ChatLine>,
     /// The looks of every car we've been told of.
     looks: HashMap<PlayerId, Looks>,
     /// The other players the server shows on our map, and when each was heard of (s).
@@ -115,6 +134,9 @@ impl Connection {
             status: Status::Joining,
             players: BTreeMap::new(),
             pings: HashMap::new(),
+            name: name.to_string(),
+            chat_on: false,
+            chat: VecDeque::new(),
             looks: HashMap::new(),
             map: HashMap::new(),
             sent_looks: None,
@@ -142,6 +164,14 @@ impl Connection {
                 ..player
             }
         })
+    }
+
+    /// Writes `text` in the chat (as one line, cut to `CHAT_LENGTH`); it shows once it's
+    /// back from the server.
+    pub fn write(&mut self, text: &str) {
+        if let Some(text) = clean_chat(text).filter(|_| self.chat_on) {
+            self.say(&ToServer::Chat(text));
+        }
     }
 
     /// Leaves the server.
@@ -232,9 +262,10 @@ fn receive(
             continue;
         };
         match message {
-            ToClient::Welcome { you } => {
+            ToClient::Welcome { you, chat } => {
                 info!("Joined the server as player {you}");
                 connection.status = Status::Joined { you };
+                connection.chat_on = chat;
             }
             ToClient::Refused(why) => {
                 warn!("The server refused: {why}");
@@ -269,6 +300,21 @@ fn receive(
             }
             ToClient::Pings(pings) => {
                 connection.pings = pings.into_iter().collect();
+            }
+            ToClient::Chat { from, text } => {
+                let from = match (from, &connection.status) {
+                    (SERVER, _) => None,
+                    (id, Status::Joined { you }) if id == *you => Some(connection.name.clone()),
+                    (id, _) => Some(connection.players.get(&id).cloned().unwrap_or_default()),
+                };
+                connection.chat.push_back(ChatLine {
+                    from,
+                    text,
+                    at: now,
+                });
+                if connection.chat.len() > CHAT_KEPT {
+                    connection.chat.pop_front();
+                }
             }
             ToClient::Traffic(cars) => {
                 for state in cars {

@@ -282,6 +282,13 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   round-trip time (`Link::rtt`, `quic.rs` stores `Connection::rtt` every 0.5 s; loopback
   0) and sends everyone `ToClient::Pings` every 2 s; the players window lists them, ours
   too. Protocol 4.
+- **Chat** (asked for by the user, 2026-11-21): server option `--chat on|off` (default
+  on) / `services.car-sim.chat`, told to clients in `Welcome`. `ToServer::Chat`,
+  `ToClient::Chat { from, text }` (`from` = `protocol::SERVER` (0) for the server's own
+  lines: who joined/left, "Not so fast" past 5 lines in 10 s); `clean_chat` makes one
+  line of ≤ 200 characters. Client: `Connection::chat` (last 50), `write`; `chat.rs`
+  shows the last 8 bottom left, fading after 20 s; T opens the field (Enter sends, Esc
+  cancels). Shots: `SAY="text@frame"` writes in the chat.
 - **Telegram** (asked for by the user, 2026-11-20): `server --telegram-token-file F
   --telegram-chat-file F` (module: `services.car-sim.telegram = { tokenFile;
   chatIdFile; }`; both secret, the user manages them with sops; the module hands them

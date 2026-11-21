@@ -102,6 +102,12 @@ in
       description = "How near other players are shown on the map with `mapPlayers = \"near\"` (m).";
     };
 
+    chat = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Whether players can chat (T in the game).";
+    };
+
     telegram = {
       tokenFile = mkOption {
         type = types.nullOr types.str;
@@ -187,6 +193,8 @@ in
               cfg.mapPlayers
               "--map-near"
               cfg.mapNear
+              "--chat"
+              (if cfg.chat then "on" else "off")
             ]
             # The credentials' copies (%d: the service's credentials directory).
             ++ lib.optionals (cfg.telegram.tokenFile != null) [

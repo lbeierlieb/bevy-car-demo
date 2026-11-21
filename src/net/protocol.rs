@@ -7,7 +7,9 @@
 //! them, the nearer the more often, with their looks before the first state and after
 //! every change, and the traffic near them the same way (which car, how it looks, where).
 //! About once a second it also sends where the other players are for the map, as many of
-//! them as the server's settings show, and every two seconds everyone's ping.
+//! them as the server's settings show, and every two seconds everyone's ping. If the
+//! server has chat on (it says so in its welcome), players' chat messages go to everyone,
+//! with the server's own lines (who joined and left) among them.
 
 use bevy::prelude::*;
 
@@ -27,6 +29,22 @@ pub const PROTOCOL: u32 = 4;
 /// A player, numbered by the server.
 pub type PlayerId = u32;
 
+/// The `from` of the server's own chat lines (players are numbered from 1).
+pub const SERVER: PlayerId = 0;
+/// The longest chat message (characters).
+pub const CHAT_LENGTH: usize = 200;
+
+/// A chat message as it's passed on: one line (control characters such as line breaks
+/// made spaces), trimmed, at most `CHAT_LENGTH` characters; nothing if that leaves nothing.
+pub fn clean_chat(text: &str) -> Option<String> {
+    let line: String = (text.chars())
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let line: String = line.trim().chars().take(CHAT_LENGTH).collect();
+    let line = line.trim_end().to_string();
+    (!line.is_empty()).then_some(line)
+}
+
 /// Client to server.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ToServer {
@@ -37,6 +55,8 @@ pub enum ToServer {
     },
     Looks(Box<Looks>),
     State(CarState),
+    /// A chat message for everyone.
+    Chat(String),
 }
 
 /// Server to client.
@@ -44,6 +64,8 @@ pub enum ToServer {
 pub enum ToClient {
     Welcome {
         you: PlayerId,
+        /// Whether the server has chat on.
+        chat: bool,
     },
     Refused(String),
     Joined {
@@ -64,6 +86,11 @@ pub enum ToClient {
     Map(Vec<MapPlayer>),
     /// Every player's round trip to the server (ms), ours too.
     Pings(Vec<(PlayerId, u16)>),
+    /// A chat line from a player (ours too, back from the server) or the server (`SERVER`).
+    Chat {
+        from: PlayerId,
+        text: String,
+    },
 }
 
 impl ToServer {
@@ -223,6 +250,10 @@ impl Wire for ToServer {
                 2u8.put(out);
                 state.put(out);
             }
+            ToServer::Chat(text) => {
+                3u8.put(out);
+                text.put(out);
+            }
         }
     }
 
@@ -235,6 +266,7 @@ impl Wire for ToServer {
             },
             Self::LOOKS => ToServer::Looks(Box::new(r.get()?)),
             2 => ToServer::State(r.get()?),
+            3 => ToServer::Chat(r.get()?),
             _ => return None,
         })
     }
@@ -243,9 +275,10 @@ impl Wire for ToServer {
 impl Wire for ToClient {
     fn put(&self, out: &mut Vec<u8>) {
         match self {
-            ToClient::Welcome { you } => {
+            ToClient::Welcome { you, chat } => {
                 0u8.put(out);
                 you.put(out);
+                chat.put(out);
             }
             ToClient::Refused(why) => {
                 1u8.put(out);
@@ -281,12 +314,20 @@ impl Wire for ToClient {
                 8u8.put(out);
                 pings.put(out);
             }
+            ToClient::Chat { from, text } => {
+                9u8.put(out);
+                from.put(out);
+                text.put(out);
+            }
         }
     }
 
     fn get(r: &mut Reader) -> Option<Self> {
         Some(match r.get::<u8>()? {
-            0 => ToClient::Welcome { you: r.get()? },
+            0 => ToClient::Welcome {
+                you: r.get()?,
+                chat: r.get()?,
+            },
             1 => ToClient::Refused(r.get()?),
             2 => ToClient::Joined {
                 id: r.get()?,
@@ -301,6 +342,10 @@ impl Wire for ToClient {
             6 => ToClient::Traffic(r.get()?),
             7 => ToClient::Map(r.get()?),
             8 => ToClient::Pings(r.get()?),
+            9 => ToClient::Chat {
+                from: r.get()?,
+                text: r.get()?,
+            },
             _ => return None,
         })
     }
