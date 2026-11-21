@@ -332,7 +332,8 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   16 ms for all 13) and `Motion` (steer, spin from rolled, suspension at rest, idling)
   and a `Transform` at the centre of mass, and `visuals.rs` draws it like any car (shared
   materials, bodies cached per chassis and paint). Remaining tells: traffic's suspension
-  doesn't move, its engine idles (matters once remote cars are heard), how it drives.
+  doesn't move, its engine idles (heard since other cars have engine sound; the user is
+  fine with idling NPCs for now), how it drives.
   Tried with a local server and two headless games: name tag over the other player,
   traffic shown, a leaving player's car gone at once.
 - **Parallel worlds** (planned with the user, 2026-11-21, not built): groups of players
@@ -341,8 +342,7 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   sends only a player's world, `populate` counts density per world, traffic `step`
   collides only within a world; the client needs nothing (maybe a message for the UI).
   Per-world settings like `--map-players self` and no tags for hide and seek.
-- Not done yet: other players' engine sound (the synth plays only the driven car; a
-  proxy needs a sound source of its own), the browser path tried in a real browser (no
+- Not done yet: the browser path tried in a real browser (no
   browser here; it builds and links), rate limits on what a player sends (chat has one).
 - Later: sanity checks on snapshots, Safari, career.
 - **Name tags** (agreed with the user, 2026-11-21: in the scene, covered like anything
@@ -865,6 +865,20 @@ loud and rasping), bore (deeper, louder), header length (a quarter-wave resonanc
 turbine (smeared, quieter pulses). The turbo whistles: band-passed noise (Q 4) centred at 1 Hz per shaft rev/s,
 level ∝ share of its limit², more under load. All constants at the top of `audio.rs`,
 none tuned by ear yet. No diverter "pssh" or overrun pops (fuel cut leaves nothing to burn).
+
+Other cars are heard too (asked for by the user, 2026-11-21; `hear_others`): any car
+with `Looks` and `Motion` that isn't a `Car` (remote cars, traffic alone), the nearest 6
+within 150 m (heard from 135 m, so one at the edge doesn't flicker), each an
+`AudioPlayer` of its own on a `Voice` entity (fading out over 0.2 s when dropped). The
+same synth, placed by `Targets::place`: mixed to one source, panned from the camera
+(constant power), as loud as our own at 6 m and falling with 1/distance (faded out over
+the last fifth), a low-pass from 10 kHz at 6 m falling with √distance, and Doppler (the
+whole engine's time scaled by 343/(343 − closing speed), the closing speed from the
+distance's change, smoothed 0.1 s, capped at 100 m/s). Runs in PostUpdate after
+transform propagation (the shot cameras move in PostUpdate). The engine comes from the
+car's latest state, network delay and all, never predicted (agreed with the user: real
+sound is late too). Not done: propagation delay, occlusion, the cost of 6 voices on wasm
+untried (a slow page could lower `VOICES`).
 
 The engine sound goes through bevy_audio, which can't set the output buffer size. An
 attempt to open the output with rodio/cpal directly (fixed 4096-frame buffer against

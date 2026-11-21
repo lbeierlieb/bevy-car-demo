@@ -1,4 +1,4 @@
-//! Engine sound for the active car, synthesised sample by sample from its exhaust pulses.
+//! Engine sound for the active car and the cars around it, synthesised sample by sample from its exhaust pulses.
 //! Each firing sends a pulse down its bank's exhaust; the engine's layout says how many
 //! there are in a cycle and which bank each goes down. A cross-plane V8 fires each bank at
 //! uneven intervals (the burble), a flat four's unequal headers bunch its pulses up in
@@ -12,6 +12,12 @@
 //! deeper and louder, the header primaries add a resonance of their own (short ones ring
 //! higher), and a turbine in the way smears the pulses and quietens them. A turbo whistles
 //! with its shaft speed, louder as it spools under load.
+//!
+//! The cars around (other players' and traffic) are heard too, the nearest few within
+//! 150 m, each its own sound: one source panned to where it is from the camera, quieter
+//! and duller further away, shifted by the Doppler effect as it closes in or pulls away.
+//! What their engines do comes with their latest state (on a server, a network delay
+//! late, as real sound is late by its travel), never predicted.
 //!
 //! The game only publishes targets (engine speed, load, volume, the exhaust, turbo speed);
 //! the synth glides towards them every sample, so nothing steps audibly.
@@ -152,6 +158,27 @@ const WHISTLE_IDLE: f32 = 0.3;
 const WHISTLE_MIN: f32 = 100.0;
 const WHISTLE_MAX: f32 = 6000.0;
 
+/// Other cars are heard up to this far (m), fading out over the last fifth, and a car
+/// starts being heard from a little nearer (so one at the edge doesn't come and go).
+const HEARING: f32 = 150.0;
+const HEARD_FROM: f32 = 0.9;
+/// At most this many other cars at once, the nearest.
+const VOICES: usize = 6;
+/// Another car's engine is as loud as our own at this distance (m, about the chase
+/// camera's), and falls off with the distance beyond.
+const NEAR: f32 = 6.0;
+/// Further away an engine sounds duller: a low-pass falling from this (Hz) at `NEAR` with
+/// the square root of the distance.
+const NEAR_CUTOFF: f32 = 10_000.0;
+/// The speed of sound (m/s), for the Doppler shift, which is capped for jumps.
+const SOUND_SPEED: f32 = 343.0;
+const MAX_CLOSING: f32 = 100.0;
+/// Time constant of the closing speed's smoothing (s): the distance changes in steps with
+/// every frame.
+const CLOSING_SMOOTHING: f32 = 0.1;
+/// A voice no longer needed fades out over this long (s) before it stops.
+const FADE: f32 = 0.2;
+
 /// What an engine sounds like: all the synth needs that doesn't change while it runs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EngineCharacter {
@@ -247,7 +274,12 @@ impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_audio_source::<EngineSynth>()
             .add_systems(Startup, start_engine)
-            .add_systems(Update, update_engine.after(crate::looks::show_cars));
+            .add_systems(Update, update_engine.after(crate::looks::show_cars))
+            // Where everything ended up this frame, the camera included.
+            .add_systems(
+                PostUpdate,
+                hear_others.after(bevy::transform::TransformSystems::Propagate),
+            );
     }
 }
 
@@ -263,6 +295,9 @@ struct Targets {
     exhaust: [AtomicU32; 4],
     /// Turbo shaft speed (revolutions per second), and that relative to its limit.
     turbo: [AtomicU32; 2],
+    /// Where another car is heard from: the pan (-1 left to 1 right), the low-pass's
+    /// cutoff (Hz; 0 for our own car: stereo, unfiltered) and the Doppler factor.
+    place: [AtomicU32; 3],
 }
 
 fn store(atomic: &AtomicU32, value: f32) {
@@ -277,7 +312,19 @@ impl Targets {
     fn new() -> Self {
         let targets = Self::default();
         targets.set_exhaust(ExhaustSound::default());
+        targets.set_place(0.0, 0.0, 1.0);
         targets
+    }
+
+    fn set_place(&self, pan: f32, cutoff: f32, doppler: f32) {
+        for (atomic, value) in self.place.iter().zip([pan, cutoff, doppler]) {
+            store(atomic, value);
+        }
+    }
+
+    fn place(&self) -> (f32, f32, f32) {
+        let [pan, cutoff, doppler] = self.place.each_ref().map(read);
+        (pan, cutoff, doppler)
     }
 
     fn set(&self, rpm: f32, load: f32, volume: f32) {
@@ -377,6 +424,8 @@ struct Shape {
     /// Share of the way the smeared pulse moves towards the bare one each sample (1 without
     /// a turbine).
     smoothing: f32,
+    /// The engine's time passing in a sample (seconds; shifted by Doppler).
+    dt: f32,
 }
 
 /// One bank's exhaust: the last pulse and the resonances it rings.
@@ -434,7 +483,7 @@ impl Bank {
     }
 
     fn next(&mut self, noise: f32, shape: &Shape) -> f32 {
-        let dt = 1.0 / SAMPLE_RATE as f32;
+        let dt = shape.dt;
         let excitation = if self.since < 0.0 {
             0.0
         } else {
@@ -479,6 +528,11 @@ struct EngineVoice {
     turbo_share: f32,
     whistle: Resonator,
     whistle_tuned: f32,
+    /// Where it's heard from (see `Targets::place`), gliding, and the low-pass's state.
+    pan: f32,
+    cutoff: f32,
+    doppler: f32,
+    lowpass: f32,
     /// State of the noise generator.
     seed: u32,
     /// The right sample, waiting for its turn after the left one.
@@ -490,6 +544,8 @@ impl EngineVoice {
         let layout = targets.layout();
         let sound = sound(layout);
         let exhaust = targets.exhaust();
+        // Heard from where it is from the start.
+        let (pan, cutoff, doppler) = targets.place();
         Self {
             targets,
             rpm: 0.0,
@@ -504,6 +560,10 @@ impl EngineVoice {
             turbo_share: 0.0,
             whistle: Resonator::default(),
             whistle_tuned: 0.0,
+            pan,
+            cutoff,
+            doppler,
+            lowpass: 0.0,
             seed: 0x2545_f491,
             right: None,
         }
@@ -547,6 +607,14 @@ impl EngineVoice {
         let (revolutions, share) = self.targets.turbo();
         glide(&mut self.turbo_speed, revolutions.max(0.0), GLIDE);
         glide(&mut self.turbo_share, share.clamp(0.0, 1.5), GLIDE);
+        let (pan, cutoff, doppler) = self.targets.place();
+        glide(&mut self.pan, pan.clamp(-1.0, 1.0), GLIDE);
+        glide(&mut self.doppler, doppler.clamp(0.5, 2.0), GLIDE);
+        if cutoff > 0.0 {
+            glide(&mut self.cutoff, cutoff.clamp(100.0, 20_000.0), GLIDE);
+        }
+        // Doppler: everything about the engine happens faster or slower.
+        let doppler = self.doppler;
 
         // Another engine: its exhaust rings differently.
         let layout = self.targets.layout();
@@ -560,7 +628,8 @@ impl EngineVoice {
         let firings = self.sound.banks.len();
         let before = self.cycle;
         // Every cylinder fires once in two revolutions.
-        self.cycle = (self.cycle + self.rpm / 120.0 * firings as f32 / rate) % firings as f32;
+        self.cycle =
+            (self.cycle + doppler * self.rpm / 120.0 * firings as f32 / rate) % firings as f32;
         if self.cycle.floor() != before.floor() {
             let firing = self.cycle.floor() as usize % firings;
             let strength =
@@ -587,11 +656,12 @@ impl EngineVoice {
                 (off + (full - off) * load) * (1.0 - muffle * MUFFLED[i])
             }),
             noise: 1.0 + (OPEN_NOISE - 1.0) * open,
-            smoothing: 1.0 / (1.0 + TURBINE_SMEAR * turbine * rate),
+            smoothing: 1.0 / (1.0 + TURBINE_SMEAR * turbine * rate / doppler),
+            dt: doppler / rate,
         };
-        let pitch = bore.powf(-BORE_PITCH);
+        let pitch = bore.powf(-BORE_PITCH) * doppler;
         for bank in &mut self.banks {
-            bank.tune(pitch, header);
+            bank.tune(pitch, header * doppler);
         }
         let left = self.noise();
         let right = self.noise();
@@ -600,7 +670,8 @@ impl EngineVoice {
 
         // The turbo whistles around its shaft speed, louder spooled up and under load: a
         // band of noise, retuned as the shaft speeds up.
-        let frequency = (self.turbo_speed * WHISTLE_PITCH).clamp(WHISTLE_MIN, WHISTLE_MAX);
+        let frequency =
+            (doppler * self.turbo_speed * WHISTLE_PITCH).clamp(WHISTLE_MIN, WHISTLE_MAX);
         if (frequency / self.whistle_tuned.max(1.0) - 1.0).abs() > 0.005 {
             self.whistle.tune(frequency, WHISTLE_Q);
             self.whistle_tuned = frequency;
@@ -622,6 +693,14 @@ impl EngineVoice {
         let level = GAIN * self.volume * exhaust_level * (8.0 / firings as f32).sqrt();
         let whistle = GAIN * self.volume * whistle;
         let mix = |near: f32, far: f32| (level * (near + CROSSFEED * far) + whistle).tanh();
+        if self.cutoff > 0.0 {
+            // Another car: one source, duller with distance, panned (constant power).
+            let both = (level * (1.0 + CROSSFEED) / 2.0 * (left + right) + whistle).tanh();
+            let share = 1.0 - (-TAU * self.cutoff / rate).exp();
+            self.lowpass += share * (both - self.lowpass);
+            let angle = (self.pan + 1.0) * PI / 4.0;
+            return (self.lowpass * angle.cos(), self.lowpass * angle.sin());
+        }
         if self.sound.dual {
             (mix(left, right), mix(right, left))
         } else {
@@ -678,20 +757,33 @@ pub struct EngineAudio {
     muted: bool,
 }
 
-impl EngineAudio {
-    /// Plays an engine that sounds like `voice` running as `run` says.
-    fn hear(&self, voice: &EngineCharacter, run: &EngineRun) {
-        let volume = if self.muted || !run.running { 0.0 } else { 1.0 };
-        self.targets.set(run.rpm, run.load, volume);
-        self.targets.set_layout(voice.layout);
-        self.targets.set_exhaust(voice.exhaust);
+impl Targets {
+    /// Plays an engine that sounds like `voice` running as `run` says, at `volume`.
+    fn hear(&self, voice: &EngineCharacter, run: &EngineRun, volume: f32) {
+        let volume = if run.running { volume } else { 0.0 };
+        self.set(run.rpm, run.load, volume);
+        self.set_layout(voice.layout);
+        self.set_exhaust(voice.exhaust);
         let share = if voice.turbo_limit > 0.0 {
             run.turbo_speed / voice.turbo_limit
         } else {
             0.0
         };
-        self.targets.set_turbo(run.turbo_speed / TAU, share);
+        self.set_turbo(run.turbo_speed / TAU, share);
     }
+}
+
+/// Another car's engine being heard: a sound of its own, on an entity of its own.
+#[derive(Component)]
+struct Voice {
+    targets: Arc<Targets>,
+    /// The car it's the engine of, `None` once it's fading out.
+    car: Option<Entity>,
+    /// The distance last frame and how fast the car closes in (m/s, smoothed).
+    distance: f32,
+    closing: f32,
+    /// When a fading voice stops (seconds of game time).
+    until: f64,
 }
 
 fn start_engine(mut commands: Commands, mut synths: ResMut<Assets<EngineSynth>>) {
@@ -720,7 +812,114 @@ fn update_engine(
         engine.targets.set(rpm, load, 0.0);
         return;
     };
-    engine.hear(&looks.engine, &motion.engine);
+    let volume = if engine.muted { 0.0 } else { 1.0 };
+    engine.targets.hear(&looks.engine, &motion.engine, volume);
+}
+
+/// How loud another car's engine is at `distance`, its low-pass's cutoff, and the Doppler
+/// factor for a car closing in at `closing`.
+fn placed(distance: f32, closing: f32) -> (f32, f32, f32) {
+    let near = distance.max(NEAR);
+    let fade = ((HEARING - distance) / (0.2 * HEARING)).clamp(0.0, 1.0);
+    let volume = NEAR / near * fade;
+    let cutoff = NEAR_CUTOFF * (NEAR / near).sqrt();
+    let doppler = SOUND_SPEED / (SOUND_SPEED - closing.clamp(-MAX_CLOSING, MAX_CLOSING));
+    (volume, cutoff, doppler)
+}
+
+/// The engines of the cars around (other players' and traffic: any car seen but not
+/// driven here), the nearest few, heard from the camera.
+#[allow(clippy::type_complexity)]
+fn hear_others(
+    mut commands: Commands,
+    time: Res<Time>,
+    engine: Res<EngineAudio>,
+    mut synths: ResMut<Assets<EngineSynth>>,
+    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    cars: Query<(Entity, &GlobalTransform, &Looks, &Motion), Without<Car>>,
+    mut voices: Query<(Entity, &mut Voice)>,
+) {
+    let now = time.elapsed_secs_f64();
+    let dt = time.delta_secs();
+    let Ok(camera) = cameras.single() else {
+        return;
+    };
+    let ear = camera.translation();
+    let right = camera.right();
+
+    // Who's heard: the nearest within hearing, those already heard a little further.
+    let mut heard = Vec::new();
+    for (car, transform, ..) in &cars {
+        let distance = transform.translation().distance(ear);
+        let voiced = voices.iter().any(|(_, voice)| voice.car == Some(car));
+        let range = if voiced {
+            HEARING
+        } else {
+            HEARING * HEARD_FROM
+        };
+        if distance < range {
+            heard.push((distance, car));
+        }
+    }
+    heard.sort_by(|a, b| a.0.total_cmp(&b.0));
+    heard.truncate(VOICES);
+
+    // Voices whose car isn't heard any more fade out, then stop.
+    for (entity, mut voice) in &mut voices {
+        if let Some(car) = voice.car
+            && !heard.iter().any(|&(_, heard)| heard == car)
+        {
+            voice.car = None;
+            voice.until = now + f64::from(FADE);
+            let (rpm, load, _) = voice.targets.get();
+            voice.targets.set(rpm, load, 0.0);
+        }
+        if voice.car.is_none() && now >= voice.until {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    let master = if engine.muted { 0.0 } else { 1.0 };
+    for (distance, car) in heard {
+        let Ok((_, transform, looks, motion)) = cars.get(car) else {
+            continue;
+        };
+        let pan = pan(transform.translation() - ear, right);
+        if let Some((_, mut voice)) = voices.iter_mut().find(|(_, voice)| voice.car == Some(car)) {
+            if dt > 0.0 {
+                let closing = (voice.distance - distance) / dt;
+                voice.closing += (closing - voice.closing) * (dt / CLOSING_SMOOTHING).min(1.0);
+            }
+            voice.distance = distance;
+            let (volume, cutoff, doppler) = placed(distance, voice.closing);
+            voice
+                .targets
+                .hear(&looks.engine, &motion.engine, master * volume);
+            voice.targets.set_place(pan, cutoff, doppler);
+            continue;
+        }
+        // Newly heard: a voice of its own, set up before it starts.
+        let (volume, cutoff, doppler) = placed(distance, 0.0);
+        let targets = Arc::new(Targets::new());
+        targets.hear(&looks.engine, &motion.engine, master * volume);
+        targets.set_place(pan, cutoff, doppler);
+        commands.spawn((
+            Voice {
+                targets: targets.clone(),
+                car: Some(car),
+                distance,
+                closing: 0.0,
+                until: 0.0,
+            },
+            AudioPlayer(synths.add(EngineSynth { targets })),
+        ));
+    }
+}
+
+/// Pan (-1 left to 1 right) of a sound in direction `to` for a listener whose right is
+/// `right`.
+fn pan(to: Vec3, right: Dir3) -> f32 {
+    to.normalize_or_zero().dot(*right).clamp(-1.0, 1.0)
 }
 
 #[cfg(test)]
@@ -903,6 +1102,33 @@ mod tests {
                 "{revolutions}: {rms} for {set}"
             );
         }
+    }
+
+    #[test]
+    fn other_cars_are_panned_quieter_and_duller_further_away() {
+        let (near, near_cutoff, _) = placed(3.0, 0.0);
+        let (far, far_cutoff, _) = placed(100.0, 0.0);
+        assert_eq!(near, 1.0);
+        assert!(far < 0.1 * near && far_cutoff < 0.5 * near_cutoff);
+        assert_eq!(placed(HEARING, 0.0).0, 0.0);
+        let (_, _, coming) = placed(50.0, 30.0);
+        let (_, _, going) = placed(50.0, -30.0);
+        assert!(coming > 1.05 && going < 0.95);
+
+        // All the way to the right: nothing on the left.
+        let targets = Arc::new(Targets::new());
+        targets.set_layout(Layout::V8);
+        targets.set(3000.0, 0.5, 1.0);
+        targets.set_place(1.0, 5000.0, 1.1);
+        let mut voice = EngineVoice::new(targets);
+        let (mut left, mut right) = (0.0f32, 0.0f32);
+        for _ in 0..SAMPLE_RATE {
+            let (l, r) = voice.frame();
+            assert!(l.is_finite() && r.is_finite() && r.abs() <= 1.0);
+            left = left.max(l.abs());
+            right = right.max(r.abs());
+        }
+        assert!(right > 0.05 && left < 0.01 * right, "{left} {right}");
     }
 
     #[test]
