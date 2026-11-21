@@ -14,12 +14,12 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use bevy::prelude::*;
 
-use super::SEND_RATE;
 use super::link::Link;
 use super::protocol::{
     CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, TrafficState, clean_chat,
 };
 use super::wire::{decode, encode};
+use super::{ClockOffset, SEND_RATE};
 use crate::car::{ActiveCar, Car};
 use crate::looks::{Looks, Motion};
 use crate::physics::collision::Obb;
@@ -43,11 +43,6 @@ const STEP: f32 = 1.0 / 120.0;
 const MOST_ACCELERATION: f32 = 15.0;
 /// A proxy not heard of for this long is gone (out of range) (s).
 const GONE: f64 = 2.0;
-/// How fast the clock offset may rise (s per s): enough to follow a sender whose clock
-/// runs slow (a few hundred parts per million at most) and a route that got slower for
-/// good (20 ms in 4 s), slow enough that it stays near the quickest delivery however many
-/// states come in.
-const RISE: f64 = 0.005;
 /// States kept per car: the last two give the acceleration.
 const KEPT: usize = 2;
 /// A player on the map is carried on along their way for this long past where they were
@@ -177,31 +172,6 @@ impl Connection {
     /// Leaves the server.
     pub fn close(&mut self) {
         self.link.close();
-    }
-}
-
-/// Our clock less a sender's, as low as it's been seen (the clocks' difference plus the
-/// quickest a state came over), rising at most `RISE` per second towards later samples,
-/// so a slower route or a slow clock is followed. By time, not per sample: how many
-/// states come in (the traffic's share one clock) mustn't lift it off the quickest
-/// delivery, or cars would be predicted to a time before their latest state.
-#[derive(Clone, Copy, Debug, Default)]
-struct ClockOffset(Option<(f64, f64)>);
-
-impl ClockOffset {
-    /// Takes in a state stamped `then` (their clock) arriving `now` (ours).
-    fn heard(&mut self, then: f64, now: f64) {
-        let sample = now - then;
-        let offset = match self.0 {
-            Some((offset, at)) if sample > offset => (offset + RISE * (now - at)).min(sample),
-            _ => sample,
-        };
-        self.0 = Some((offset, now));
-    }
-
-    /// The time on their clock that it is `now` on ours, as quickly as states come.
-    fn their(&self, now: f64) -> Option<f64> {
-        self.0.map(|(offset, _)| now - offset)
     }
 }
 

@@ -7,6 +7,8 @@
 //! like the other players' cars. Once a second each player is told where the others
 //! are for the map: nobody, the ones near them or everyone, as the server is set
 //! (`MapPlayers`), and every two seconds everyone's ping (the connection's round trip).
+//! Every state goes out stamped on the server's clock (a player's converted from theirs),
+//! so a player has one clock for every car they're sent.
 //! With chat on, what a player writes goes to everyone (cleaned up, a few lines at a time
 //! at most), and everyone is told in the chat who joined and left.
 
@@ -19,7 +21,7 @@ use super::protocol::{
     CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, TrafficState, clean_chat,
 };
 use super::wire::{decode, encode};
-use super::{NEAR, RATES, SEND_RATE};
+use super::{ClockOffset, NEAR, RATES, SEND_RATE};
 use crate::looks::Looks;
 use crate::physics::rigid_body::RigidBody;
 use crate::terrain::Terrain;
@@ -137,6 +139,9 @@ pub struct Peer {
     /// Their car's latest state and looks (with a revision counting the changes).
     pub state: Option<CarState>,
     pub looks: Option<Looks>,
+    /// Our clock less theirs: their states are passed on stamped on ours, so that every
+    /// car a player is sent is on one clock.
+    clock: ClockOffset,
     revision: u32,
     /// What they've been told of each car near them: its looks' revision, and when its
     /// next state is due (s).
@@ -168,6 +173,7 @@ fn accept(mut commands: Commands, mut server: ResMut<Server>, time: Res<Time<Rea
             heard: now(&time),
             state: None,
             looks: None,
+            clock: ClockOffset::default(),
             revision: 0,
             told: HashMap::new(),
             told_traffic: HashMap::new(),
@@ -283,6 +289,7 @@ fn receive(
                     peer.revision += 1;
                 }
                 ToServer::State(state) => {
+                    peer.clock.heard(state.time, now);
                     if peer.state.is_none_or(|old| state.time > old.time) {
                         peer.state = Some(state);
                         if let Some(looks) = &peer.looks {
@@ -460,9 +467,13 @@ fn send(
         .iter()
         .filter(|peer| now - peer.heard <= FROZEN)
         .filter_map(|peer| {
+            let state = peer.state?;
             Some(Car {
                 id: peer.id,
-                state: peer.state?,
+                state: CarState {
+                    time: peer.clock.ours(state.time)?,
+                    ..state
+                },
                 looks: peer.looks.clone()?,
                 revision: peer.revision,
             })

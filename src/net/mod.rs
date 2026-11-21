@@ -71,6 +71,41 @@ pub fn stamp(real: &Time<Real>, fixed: &Time<Fixed>) -> f64 {
     real.elapsed_secs_f64() - fixed.overstep().as_secs_f64()
 }
 
+/// How fast the clock offset may rise (s per s): enough to follow a sender whose clock
+/// runs slow (a few hundred parts per million at most) and a route that got slower for
+/// good (20 ms in 4 s), slow enough that it stays near the quickest delivery however many
+/// states come in.
+const RISE: f64 = 0.005;
+/// Our clock less a sender's, as low as it's been seen (the clocks' difference plus the
+/// quickest a state came over), rising at most `RISE` per second towards later samples,
+/// so a slower route or a slow clock is followed. By time, not per sample: how many
+/// states come in (the traffic's share one clock) mustn't lift it off the quickest
+/// delivery, or cars would be predicted to a time before their latest state.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ClockOffset(Option<(f64, f64)>);
+
+impl ClockOffset {
+    /// Takes in a state stamped `then` (their clock) arriving `now` (ours).
+    pub(crate) fn heard(&mut self, then: f64, now: f64) {
+        let sample = now - then;
+        let offset = match self.0 {
+            Some((offset, at)) if sample > offset => (offset + RISE * (now - at)).min(sample),
+            _ => sample,
+        };
+        self.0 = Some((offset, now));
+    }
+
+    /// The time on their clock that it is `now` on ours, as quickly as states come.
+    pub(crate) fn their(&self, now: f64) -> Option<f64> {
+        self.0.map(|(offset, _)| now - offset)
+    }
+
+    /// The time on our clock that it was `then` on theirs (as quickly as states come).
+    pub(crate) fn ours(&self, then: f64) -> Option<f64> {
+        self.0.map(|(offset, _)| then + offset)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
