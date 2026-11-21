@@ -193,6 +193,8 @@ pub struct AtShop {
     /// A shop left with Esc (or the button) while still on its marker: not gone into
     /// again until the car has moved off it.
     left: Option<usize>,
+    /// Per kind of shop, whether the car just came into one (until its window is shown).
+    came_in: [bool; ShopKind::ALL.len()],
 }
 
 impl AtShop {
@@ -232,6 +234,9 @@ fn arrive(
     let on = (shops.list.iter()).position(|placed| placed.marker.distance(p) < MARKER_RADIUS);
     if at.shop.is_none() && stopped && on.is_some() && on != at.left {
         at.shop = on;
+        if let Some(placed) = on.and_then(|i| shops.list.get(i)) {
+            at.came_in[placed.shop.kind as usize] = true;
+        }
         car.parking_brake = true;
     }
     ghost.0 = at.shop.is_some() || (stopped && on.is_some());
@@ -246,14 +251,37 @@ fn window(
     mut cars: Query<&mut Car>,
     mut pump: Local<Pump>,
 ) -> Result {
-    let Some(placed) = at.shop.and_then(|i| shops.list.get(i)) else {
-        return Ok(());
-    };
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
         return Ok(());
     };
-    let kind = placed.shop.kind;
     let ctx = contexts.ctx_mut()?;
+    for kind in [ShopKind::Gas, ShopKind::Alignment, ShopKind::Paint] {
+        shop_window(ctx, &shops, &mut at, kind, |ui, _| match kind {
+            ShopKind::Gas => gas_station(ui, &mut car, &mut pump),
+            ShopKind::Alignment => alignment_shop(ui, &mut car),
+            _ => paint_shop(ui, &mut car),
+        });
+    }
+    Ok(())
+}
+
+/// The window of the shop the car is in, if it's of `kind`: `contents` (told whether the
+/// car just came in), then a button to leave. Shops whose contents are elsewhere (the
+/// showroom, the parts shop, the dyno) show theirs with it too. Returns whether it's shown.
+pub fn shop_window(
+    ctx: &egui::Context,
+    shops: &Shops,
+    at: &mut AtShop,
+    kind: ShopKind,
+    contents: impl FnOnce(&mut egui::Ui, bool),
+) -> bool {
+    let Some(placed) = at.shop.and_then(|i| shops.list.get(i)) else {
+        return false;
+    };
+    if placed.shop.kind != kind {
+        return false;
+    }
+    let came_in = std::mem::take(&mut at.came_in[kind as usize]);
     let mut leave = false;
     egui::Window::new(format!("{} ({})", placed.shop.name, kind.title()))
         .id(egui::Id::new("shop"))
@@ -261,14 +289,7 @@ fn window(
         .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {
-            match kind {
-                ShopKind::Gas => gas_station(ui, &mut car, &mut pump),
-                ShopKind::Alignment => alignment_shop(ui, &mut car),
-                ShopKind::Paint => paint_shop(ui, &mut car),
-                _ => {
-                    ui.label("Nothing here yet.");
-                }
-            }
+            contents(ui, came_in);
             ui.separator();
             leave = ui
                 .button("Leave (Esc)")
@@ -278,7 +299,7 @@ fn window(
     if leave {
         at.leave();
     }
-    Ok(())
+    true
 }
 
 /// The paints, as swatches: a click repaints the car.

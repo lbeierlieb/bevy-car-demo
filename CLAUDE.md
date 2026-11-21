@@ -550,7 +550,7 @@ catalogue entries, and things like swap subframes are named so they can be price
   lower body is a loft with wheel wells; the cabin a loft with glass, roof and pillars;
   an open car's windscreen is a one-sided pane in a frame (two cabin points). One mesh
   with vertex colours. The cockpit is placed by the chassis' eye point.
-- **Showroom (6) and garage (4)** are both in `garage.rs`; both go through `start`
+- **Showroom (car dealers) and garage (4)** are both in `garage.rs`; both go through `start`
   and `fit`. A changed `CarBuild` respawns the car's entity (its meshes are children);
   an engine-only change swaps it in while driving.
 - **Traction control** (my addition, on by default, a checkbox in the panel): without

@@ -21,8 +21,9 @@ use crate::physics::engine::hardware::EngineHardware;
 use crate::physics::engine::maps::{self, EngineMaps};
 use crate::physics::engine::parts::{HEADERS, INTERCOOLER, Parts, SLOTS};
 use crate::physics::tire::COMPOUNDS;
+use crate::shops::{AtShop, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
-use crate::ui::{ToolInput, collapse_tool, tool_window};
+use crate::ui::{ToolInput, tool_window};
 use crate::wheels::{self, TireSize, Wheel};
 use crate::workshop::{self, Work};
 
@@ -40,9 +41,8 @@ impl Plugin for GaragePlugin {
 
 #[derive(Resource)]
 struct Garage {
-    /// Whether the garage and the showroom were expanded last frame.
+    /// Whether the garage was expanded last frame.
     expanded: bool,
-    showroom_expanded: bool,
     /// The showroom: the chassis looked at, and the engine option and paint picked for it.
     showroom: Showroom,
     /// The car the draft was taken from, and what's picked so far: the car's build and
@@ -69,7 +69,6 @@ impl Default for Garage {
         let stock = CarSetup::default();
         Self {
             expanded: false,
-            showroom_expanded: false,
             showroom: Showroom {
                 chassis: stock.build.chassis,
                 engine: 0,
@@ -242,7 +241,7 @@ fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
             chassis.name,
             chassis.class.to_lowercase()
         ));
-        ui.label("6: showroom");
+        ui.label("Another car: at a car dealer");
     });
     let combo = |ui: &mut egui::Ui, id: &str, chosen: &mut usize, names: &[&str]| {
         egui::ComboBox::from_id_salt(id)
@@ -840,36 +839,32 @@ fn start(
     });
 }
 
-/// Every car as it leaves the factory, to pick one and drive it.
+/// The car dealer: every car as it leaves the factory, to pick one and drive it.
 fn showroom(
     mut commands: Commands,
     mut contexts: EguiContexts,
-    input: ToolInput,
     terrain: Res<Terrain>,
     active_car: Res<ActiveCar>,
     mut cars: Query<(Entity, &mut Car)>,
     mut garage: ResMut<Garage>,
+    (shops, mut at): (Res<Shops>, ResMut<AtShop>),
 ) -> Result {
     let Some((entity, mut car)) = active(&mut cars, active_car.0) else {
         return Ok(());
     };
     let ctx = contexts.ctx_mut()?;
-    let tool = ("Showroom", KeyCode::Digit6);
-    let expanded = &mut garage.showroom_expanded;
-    let Some((window, opened)) = tool_window(ctx, tool, 3, &input, expanded) else {
-        return Ok(());
-    };
-    if opened {
-        // Start at the car being driven.
-        garage.showroom = Showroom {
-            chassis: car.setup.build.chassis,
-            engine: 0,
-            paint: car.setup.build.paint,
-        };
-    }
     let mut shown = garage.showroom;
     let mut drive = false;
-    window.default_width(560.0).show(ctx, |ui| {
+    shop_window(ctx, &shops, &mut at, ShopKind::Showroom, |ui, came_in| {
+        if came_in {
+            garage.status.clear();
+            // Start at the car being driven.
+            shown = Showroom {
+                chassis: car.setup.build.chassis,
+                engine: 0,
+                paint: car.setup.build.paint,
+            };
+        }
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 for (i, chassis) in CHASSIS.iter().enumerate() {
@@ -883,12 +878,15 @@ fn showroom(
                     }
                 }
             });
-            ui.separator();
+            ui.add_space(16.0);
             ui.vertical(|ui| {
                 ui.set_width(330.0);
                 drive = brochure(ui, &mut shown);
             });
         });
+        if !garage.status.is_empty() {
+            ui.label(&garage.status);
+        }
     });
     if drive {
         let mut build = CarBuild::factory(shown.chassis);
@@ -900,9 +898,6 @@ fn showroom(
         start(&mut commands, &terrain, &mut garage, entity, &mut car);
     }
     garage.showroom = shown;
-    if drive {
-        collapse_tool(ctx, tool.0);
-    }
     Ok(())
 }
 
@@ -951,7 +946,7 @@ fn brochure(ui: &mut egui::Ui, shown: &mut Showroom) -> bool {
     } else {
         format!("On {front} at the front, {rear} at the rear")
     });
-    ui.label("(4, the garage, fits any engine there's room for)");
+    ui.label("(A parts shop fits any engine there's room for)");
     ui.add_space(4.0);
     ui.strong("Paint");
     ui.horizontal_wrapped(|ui| {
