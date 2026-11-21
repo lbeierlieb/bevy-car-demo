@@ -261,6 +261,11 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   evaluates both modes into a JSON summary. Building flake outputs here works through
   `nix build 'git+file:///repo#…'` (copies only tracked files; stage new ones first),
   unlike `.#…`).
+- Timing logs (for cars jumping): the server warns every 10 s that it didn't keep up
+  (frames over 40 ms, simulation behind the clock; nothing when fine); the client logs
+  every 10 s the farthest a new state of a near car (sent ≥ 10/s) landed from its
+  prediction and how many states came over 30 ms past the quickest (meaningless in shots
+  here: a few frames per second; `shot.sh` hides info lines anyway).
 - Checking a deployed server from outside: `CAR_SIM_SERVER=host cargo test --profile
   release-dev join_a_real_server -- --ignored --nocapture` (says hello with this build's
   protocol and map, prints the answer). "No answer" with the page loading over HTTPS

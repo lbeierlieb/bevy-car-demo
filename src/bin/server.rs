@@ -78,7 +78,7 @@ fn main() {
     .insert_resource(traffic::Traffic {
         cars: options.traffic,
     })
-    .add_systems(Update, report);
+    .add_systems(Update, (report, timing));
     if let Some(telegram) = telegram {
         telegram.send("The server started".to_string());
         app.insert_resource(telegram)
@@ -202,6 +202,62 @@ fn report(
             players.iter().count(),
             traffic.iter().count()
         );
+    }
+}
+
+/// Whether the server keeps up: every 10 s that it didn't (a frame took over 40 ms, or the
+/// simulation fell behind the clock by more than a step's overstep), the longest frame
+/// and how far behind.
+#[cfg(not(target_arch = "wasm32"))]
+fn timing(
+    real: bevy::prelude::Res<bevy::prelude::Time<bevy::time::Real>>,
+    fixed: bevy::prelude::Res<bevy::prelude::Time<bevy::prelude::Fixed>>,
+    mut state: bevy::prelude::Local<Option<Timing>>,
+) {
+    let now = real.elapsed_secs_f64();
+    let behind = now - fixed.elapsed_secs_f64();
+    let state = state.get_or_insert(Timing::new(now, behind));
+    let dt = real.delta_secs_f64();
+    state.longest = state.longest.max(dt);
+    state.slow += usize::from(dt > 0.04);
+    state.frames += 1;
+    if now - state.since >= 10.0 {
+        let lost = behind - state.behind;
+        if state.slow > 0 || lost > 0.02 {
+            bevy::log::warn!(
+                "Last {:.0} s: {} of {} frames over 40 ms, the longest {:.0} ms; simulation \
+                 fell {:.0} ms behind the clock",
+                now - state.since,
+                state.slow,
+                state.frames,
+                state.longest * 1000.0,
+                lost * 1000.0
+            );
+        }
+        *state = Timing::new(now, behind);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct Timing {
+    since: f64,
+    /// The clock less the simulation's time when this stretch began (s).
+    behind: f64,
+    longest: f64,
+    slow: usize,
+    frames: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Timing {
+    fn new(since: f64, behind: f64) -> Self {
+        Self {
+            since,
+            behind,
+            longest: 0.0,
+            slow: 0,
+            frames: 0,
+        }
     }
 }
 

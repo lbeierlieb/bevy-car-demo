@@ -55,6 +55,10 @@ const MAP_PREDICT: f64 = 1.5;
 const MAP_GONE: f64 = 3.0;
 /// Chat lines kept.
 const CHAT_KEPT: usize = 50;
+/// How often what `Report` gathered is logged (s).
+const REPORT: f64 = 10.0;
+/// A state this much past the quickest counts as late (s).
+const LATE: f64 = 0.03;
 
 pub struct ClientPlugin;
 
@@ -124,6 +128,23 @@ pub struct Connection {
     /// The looks last sent of our car, and when its state was (s).
     sent_looks: Option<Looks>,
     sent: f64,
+    /// How the cars' states came lately, logged every `REPORT` seconds.
+    report: Report,
+}
+
+/// How far new states landed from where the ones before predicted the cars, and how late
+/// they came (for telling whether cars jump because of the server or the way here).
+#[derive(Default)]
+struct Report {
+    since: f64,
+    states: usize,
+    /// The farthest a new state of a car near us (sent 10 times a second or more) was from
+    /// its prediction (m), and whose.
+    jump: (f32, CarId),
+    /// The latest a state came, past the quickest (s).
+    late: f64,
+    /// States more than `LATE` past the quickest.
+    late_count: usize,
 }
 
 impl Connection {
@@ -142,6 +163,7 @@ impl Connection {
             map: HashMap::new(),
             sent_looks: None,
             sent: f64::NEG_INFINITY,
+            report: Report::default(),
         };
         connection.say(&ToServer::Hello {
             protocol: PROTOCOL,
@@ -275,6 +297,11 @@ fn receive(
             ToClient::Cars(states) => {
                 for (id, state) in states {
                     connection.clock.heard(state.time, now);
+                    let report = &mut connection.report;
+                    report.states += 1;
+                    let late = connection.clock.ours(state.time).map_or(0.0, |t| now - t);
+                    report.late = report.late.max(late);
+                    report.late_count += usize::from(late > LATE);
                     if let Some(known) = connection.known.get_mut(&id) {
                         known.heard = now;
                     }
@@ -282,6 +309,16 @@ fn receive(
                     if let Some((_, mut car, ..)) = found {
                         car.heard = now;
                         if car.states.back().is_none_or(|last| state.time > last.time) {
+                            // Only cars sent often (near): far ones go further between
+                            // states, but nobody sees them jump.
+                            let last = car.states.back().unwrap().time;
+                            if state.time - last <= 0.11 {
+                                let (predicted, _) = predict(&car.states, state.time);
+                                let jump = predicted.position.distance(state.position);
+                                if jump > report.jump.0 {
+                                    report.jump = (jump, id);
+                                }
+                            }
                             car.states.push_back(state);
                             if car.states.len() > KEPT {
                                 car.states.pop_front();
@@ -344,6 +381,25 @@ fn receive(
                 }
             }
         }
+    }
+    let report = &mut connection.report;
+    if now - report.since >= REPORT {
+        if report.states > 0 {
+            info!(
+                "Last {REPORT} s: {} car states, of a car near the farthest {:.2} m from its \
+                 prediction (car {}); {} came over {:.0} ms later than the quickest, the latest {:.0} ms",
+                report.states,
+                report.jump.0,
+                report.jump.1,
+                report.late_count,
+                LATE * 1000.0,
+                report.late * 1000.0
+            );
+        }
+        *report = Report {
+            since: now,
+            ..Report::default()
+        };
     }
     (connection.map).retain(|_, &mut (_, heard)| now - heard < MAP_GONE);
     (connection.known).retain(|_, known| now - known.heard < FORGET);
