@@ -12,6 +12,7 @@ use bevy_egui::egui::{self, Align2, Color32, FontId};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::camera::ChaseCamera;
+use crate::car::{ActiveCar, Car};
 use crate::net::wire::{Reader, Wire};
 use crate::net::{Connection, Status};
 use crate::terrain::Terrain;
@@ -21,6 +22,10 @@ pub const DEFAULT: &str = include_str!("../assets/shops.cfg");
 
 /// A car within this distance of a marker's middle is on it (m).
 pub const MARKER_RADIUS: f32 = 3.5;
+/// A car going slower than this (m/s) on a marker goes in; once in, it has left when this
+/// far from the marker's middle (m).
+const STOPPED: f32 = 1.5;
+const LEAVE: f32 = 6.0;
 /// Names float above markers nearer than this (m).
 const LABEL_RANGE: f32 = 500.0;
 
@@ -172,9 +177,89 @@ pub struct ShopsPlugin;
 impl Plugin for ShopsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Shops>()
-            .add_systems(Update, place)
-            .add_systems(EguiPrimaryContextPass, labels);
+            .init_resource::<AtShop>()
+            .add_systems(Update, (place, arrive).chain())
+            .add_systems(EguiPrimaryContextPass, (labels, window));
     }
+}
+
+/// The shop the driven car is in, if any (its place in `Shops::list`).
+#[derive(Resource, Default)]
+pub struct AtShop {
+    pub shop: Option<usize>,
+    /// A shop left with Esc (or the button) while still on its marker: not gone into
+    /// again until the car has moved off it.
+    left: Option<usize>,
+}
+
+impl AtShop {
+    fn leave(&mut self) {
+        self.left = self.shop.take();
+    }
+}
+
+/// Stopping on a marker is going into its shop (with the parking brake pulled); moving
+/// off it, leaving.
+fn arrive(
+    shops: Res<Shops>,
+    mut at: ResMut<AtShop>,
+    active: Res<ActiveCar>,
+    mut cars: Query<&mut Car>,
+    keys: Res<ButtonInput<KeyCode>>,
+) {
+    let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
+        *at = AtShop::default();
+        return;
+    };
+    let p = car.body.position.xz();
+    let near = |i: Option<usize>| {
+        i.and_then(|i| shops.list.get(i))
+            .is_some_and(|placed| placed.marker.distance(p) < LEAVE)
+    };
+    if !near(at.left) {
+        at.left = None;
+    }
+    if at.shop.is_some() {
+        if !near(at.shop) || keys.just_pressed(KeyCode::Escape) {
+            at.leave();
+        }
+        return;
+    }
+    if car.body.velocity.length() > STOPPED {
+        return;
+    }
+    let on = (shops.list.iter()).position(|placed| placed.marker.distance(p) < MARKER_RADIUS);
+    if on.is_some() && on != at.left {
+        at.shop = on;
+        car.parking_brake = true;
+    }
+}
+
+/// The window of the shop the car is in.
+fn window(mut contexts: EguiContexts, shops: Res<Shops>, mut at: ResMut<AtShop>) -> Result {
+    let Some(placed) = at.shop.and_then(|i| shops.list.get(i)) else {
+        return Ok(());
+    };
+    let kind = placed.shop.kind;
+    let ctx = contexts.ctx_mut()?;
+    let mut leave = false;
+    egui::Window::new(format!("{} ({})", placed.shop.name, kind.title()))
+        .id(egui::Id::new("shop"))
+        .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 40.0))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.label("Nothing here yet.");
+            ui.separator();
+            leave = ui
+                .button("Leave (Esc)")
+                .on_hover_text("Or drive off the marker (Space releases the parking brake)")
+                .clicked();
+        });
+    if leave {
+        at.leave();
+    }
+    Ok(())
 }
 
 /// Where a car stops for the building at `p`: on the nearest paved road, at the edge on the
@@ -193,10 +278,10 @@ fn place(
     mut commands: Commands,
     connection: Option<Res<Connection>>,
     mut shops: ResMut<Shops>,
+    mut at: ResMut<AtShop>,
     markers: Query<Entity, With<Marker>>,
     terrain: Res<Terrain>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    (mut meshes, mut materials): (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
 ) {
     let wanted: &[Shop] = match connection.as_deref() {
         Some(c) if matches!(c.status, Status::Joined { .. }) => &c.shops,
@@ -206,6 +291,7 @@ fn place(
     if current.eq(wanted.iter()) {
         return;
     }
+    *at = AtShop::default();
     for marker in &markers {
         commands.entity(marker).despawn();
     }

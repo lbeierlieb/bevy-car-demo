@@ -193,7 +193,7 @@ each marker (glowing disc, 3.5 m, and a beam) on the nearest paved road at the e
 the building's side (`kerb`); names float above within 500 m. Free (no money). Plan, in
 order (✓ done):
 
-1. ✓ server list, protocol, markers and names. 2. Stop on a marker to go in (window opens,
+1. ✓ server list, protocol, markers and names. 2. ✓ Stop on a marker to go in (window opens,
    parking brake; drive off or Esc leaves). 3. **Ghosts**: a car stopped on a marker,
    in a shop or in the dyno is a ghost (a flag in its state): no collisions with players'
    cars or traffic (the server's traffic ignores it), drawn half transparent; it stays a
