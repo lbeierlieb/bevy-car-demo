@@ -114,11 +114,7 @@ impl Plugin for CorePlugin {
             ..default()
         })
         .add_plugins((
-            (
-                WorldPlugin,
-                scenery::SceneryPlugin,
-                traffic::TrafficLooksPlugin,
-            ),
+            (WorldPlugin, scenery::SceneryPlugin),
             input::InputPlugin,
             wheel_base::WheelBasePlugin,
             car::CarPlugin,

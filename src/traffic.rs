@@ -9,18 +9,20 @@
 //! loose rigid body on its box from then on, sliding and tumbling to a stop. Cars come
 //! and go out of sight around the players: every simulated `Car` and every `Anchor` (on
 //! the server, the players driving elsewhere). `TrafficPlugin` is the simulation alone
-//! (the server has it), `TrafficLooksPlugin` gives the cars their meshes.
+//! (the server has it). Each car also has the `Looks` and `Motion` of its chassis as it
+//! leaves the factory (`show`), so it's drawn (and sent to players) like any other car.
 
 pub mod network;
 
 use std::collections::VecDeque;
-use std::f32::consts::FRAC_PI_2;
 
 use bevy::prelude::*;
 
+use crate::audio::EngineRun;
 use crate::body::Wheels;
-use crate::car::{Car, body_box};
+use crate::car::{Car, CarSetup, body_box};
 use crate::chassis::{CHASSIS, PAINTS};
+use crate::looks::{Looks, Motion, WheelMotion};
 use crate::physics::collision::{self, Contact, GROUND, OBSTACLE, Obb};
 use crate::physics::rigid_body::RigidBody;
 use crate::terrain::Terrain;
@@ -80,8 +82,8 @@ const DRIVETRAIN_MASS: f32 = 230.0;
 /// rad/s, s).
 const STILL: f32 = 0.05;
 const SETTLE_TIME: f32 = 2.0;
-/// The rim's radius relative to the tire's.
-const RIM: f32 = 0.64;
+/// What a traffic car's engine shows (rpm): idling, whatever it does.
+const IDLE_RPM: f32 = 850.0;
 
 /// How many traffic cars drive around each player (the panel's traffic density).
 #[derive(Resource)]
@@ -107,7 +109,9 @@ impl Plugin for TrafficPlugin {
                 commands.insert_resource(network);
             })
             .init_resource::<Source>()
+            .init_resource::<FactoryLooks>()
             .add_systems(Update, populate.run_if(is_own))
+            .add_systems(Update, show.after(populate).before(crate::looks::show_cars))
             .add_systems(FixedUpdate, step.after(crate::sim::simulate).run_if(is_own));
     }
 }
@@ -133,13 +137,42 @@ pub struct Visitor {
     pub hull: Obb,
 }
 
-/// The traffic cars' meshes, and posing them.
-pub struct TrafficLooksPlugin;
+/// What each chassis looks like as it leaves the factory (with its base engine), made
+/// when first needed.
+#[derive(Resource, Default)]
+pub struct FactoryLooks(Vec<Option<Looks>>);
 
-impl Plugin for TrafficLooksPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<Meshes>()
-            .add_systems(Update, (add_meshes, pose).chain().after(populate));
+impl FactoryLooks {
+    /// The factory's `chassis` (in `CHASSIS`) in `paint` (in `PAINTS`).
+    pub fn get(&mut self, chassis: usize, paint: usize) -> Looks {
+        if self.0.is_empty() {
+            self.0 = vec![None; CHASSIS.len()];
+        }
+        let mut looks = self.0[chassis]
+            .get_or_insert_with(|| Looks::of(&CarSetup::factory(chassis, 0)))
+            .clone();
+        looks.build.paint = paint;
+        looks
+    }
+}
+
+/// Gives every traffic car the looks of its chassis, and shows how it moves: where its
+/// centre of mass is (its `Transform`, as for any car with `Looks`), its wheels rolling
+/// and steering on a suspension at rest, and its engine idling.
+fn show(
+    mut commands: Commands,
+    mut factory: ResMut<FactoryLooks>,
+    mut new: Query<(Entity, &TrafficCar, &mut Transform), Without<Looks>>,
+    mut cars: Query<(&TrafficCar, &Looks, &mut Transform, &mut Motion)>,
+) {
+    for (entity, car, mut transform) in &mut new {
+        let looks = factory.get(car.chassis, car.paint);
+        *transform = car.transform(&looks);
+        commands.entity(entity).insert((car.motion(&looks), looks));
+    }
+    for (car, looks, mut transform, mut motion) in &mut cars {
+        *transform = car.transform(looks);
+        *motion = car.motion(looks);
     }
 }
 
@@ -371,49 +404,6 @@ struct Spawner {
     next_id: u32,
 }
 
-/// The meshes and materials traffic cars are made of.
-#[derive(Resource)]
-
-struct Meshes {
-    /// A body for each chassis and paint, made when first needed.
-    bodies: Vec<Option<Handle<Mesh>>>,
-    wheel: Handle<Mesh>,
-    bar: Handle<Mesh>,
-    paint: Handle<StandardMaterial>,
-    rubber: Handle<StandardMaterial>,
-    alloy: Handle<StandardMaterial>,
-    dark: Handle<StandardMaterial>,
-}
-
-impl FromWorld for Meshes {
-    fn from_world(world: &mut World) -> Self {
-        let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-        let mut flat = |color: Color, roughness: f32| {
-            materials.add(StandardMaterial {
-                base_color: color,
-                perceptual_roughness: roughness,
-                ..default()
-            })
-        };
-        let (paint, rubber, alloy, dark) = (
-            flat(Color::WHITE, 0.45),
-            flat(Color::srgb(0.06, 0.06, 0.06), 0.9),
-            flat(Color::srgb(0.62, 0.64, 0.67), 0.4),
-            flat(Color::srgb(0.12, 0.12, 0.13), 0.6),
-        );
-        let mut meshes = world.resource_mut::<Assets<Mesh>>();
-        Self {
-            bodies: vec![None; CHASSIS.len() * PAINTS.len()],
-            wheel: meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(14).build()),
-            bar: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-            paint,
-            rubber,
-            alloy,
-            dark,
-        }
-    }
-}
-
 impl Spawner {
     fn new(network: &Network) -> Self {
         let mut spots = Vec::new();
@@ -438,20 +428,6 @@ impl Spawner {
             next_id: 1,
         }
     }
-}
-
-/// One of the wheels' parts, posed from its car.
-#[derive(Component)]
-struct WheelPart {
-    corner: usize,
-    kind: WheelKind,
-}
-
-#[derive(Clone, Copy)]
-enum WheelKind {
-    Tire,
-    Rim,
-    Spoke,
 }
 
 /// Whom traffic drives around.
@@ -558,44 +534,6 @@ fn populate(
     ));
 }
 
-/// Gives new traffic cars their body and wheels.
-fn add_meshes(
-    mut commands: Commands,
-    cars: Query<(Entity, &TrafficCar), Added<TrafficCar>>,
-    mut parts: ResMut<Meshes>,
-    mut meshes: ResMut<Assets<Mesh>>,
-) {
-    for (entity, car) in &cars {
-        let (chassis, paint) = (car.chassis, car.paint);
-        let model = &CHASSIS[chassis];
-        let body_mesh = parts.bodies[chassis * PAINTS.len() + paint]
-            .get_or_insert_with(|| {
-                let [r, g, b] = PAINTS[paint].1;
-                meshes.add(model.body.mesh(&model.wheels(), Color::srgb(r, g, b)))
-            })
-            .clone();
-        commands
-            .entity(entity)
-            .insert(Visibility::default())
-            .with_children(|parent| {
-                parent.spawn((Mesh3d(body_mesh), MeshMaterial3d(parts.paint.clone())));
-                for corner in 0..4 {
-                    for (kind, mesh, material) in [
-                        (WheelKind::Tire, &parts.wheel, &parts.rubber),
-                        (WheelKind::Rim, &parts.wheel, &parts.alloy),
-                        (WheelKind::Spoke, &parts.bar, &parts.dark),
-                    ] {
-                        parent.spawn((
-                            WheelPart { corner, kind },
-                            Mesh3d(mesh.clone()),
-                            MeshMaterial3d(material.clone()),
-                        ));
-                    }
-                }
-            });
-    }
-}
-
 impl TrafficCar {
     /// A car of `chassis` (in `CHASSIS`) and `paint` with its front axle `s` along `leg`'s
     /// lane, driving off at a little under the limit.
@@ -672,6 +610,34 @@ impl TrafficCar {
             rolled: 0.0,
             steer: 0.0,
             still: 0.0,
+        }
+    }
+
+    /// Where its centre of mass is, for a car that `looks` so (its `Transform`).
+    pub fn transform(&self, looks: &Looks) -> Transform {
+        let rotation = self.body.rotation;
+        Transform::from_translation(self.body.position - rotation * looks.body_offset)
+            .with_rotation(rotation)
+    }
+
+    /// What moves on it, for a car that `looks` so: the wheels roll and the front ones
+    /// steer, on a suspension at rest; the engine idles.
+    pub fn motion(&self, looks: &Looks) -> Motion {
+        Motion {
+            wheels: std::array::from_fn(|corner| {
+                let axle = &looks.axles[corner / 2];
+                WheelMotion {
+                    theta: axle.geometry.design_angle(),
+                    steer: if corner < 2 { self.steer } else { 0.0 },
+                    spin: self.rolled / axle.radius,
+                }
+            }),
+            engine: EngineRun {
+                running: true,
+                rpm: IDLE_RPM,
+                load: 0.0,
+                turbo_speed: 0.0,
+            },
         }
     }
 
@@ -972,48 +938,6 @@ fn tumble(car: &mut TrafficCar, terrain: &Terrain, contacts: &mut Vec<Contact>, 
     body.integrate_position(dt);
     let forward = body.rotation * Vec3::NEG_Z;
     car.rolled += body.velocity.dot(forward) * dt;
-}
-
-/// Puts the cars where they are and turns and steers their wheels.
-fn pose(
-    mut cars: Query<(&TrafficCar, &mut Transform), Without<WheelPart>>,
-    mut parts: Query<(&WheelPart, &ChildOf, &mut Transform)>,
-) {
-    for (car, mut transform) in &mut cars {
-        transform.translation = car.body.position;
-        transform.rotation = car.body.rotation;
-    }
-    for (part, child_of, mut transform) in &mut parts {
-        let Ok((car, _)) = cars.get(child_of.parent()) else {
-            continue;
-        };
-        let w = &car.wheels;
-        let axle = part.corner / 2;
-        let side = if part.corner % 2 == 0 { -1.0 } else { 1.0 };
-        let radius = w.radius[axle];
-        let width = w.width[axle];
-        let z = if axle == 0 { -0.5 } else { 0.5 } * w.wheelbase;
-        let steer = if axle == 0 { car.steer } else { 0.0 };
-        let rotation = Quat::from_rotation_y(steer)
-            * Quat::from_rotation_x(-car.rolled / radius)
-            * Quat::from_rotation_z(FRAC_PI_2);
-        let (rotation, scale) = match part.kind {
-            WheelKind::Tire => (rotation, Vec3::new(radius, width, radius)),
-            WheelKind::Rim => (
-                rotation,
-                Vec3::new(RIM * radius, width + 0.01, RIM * radius),
-            ),
-            WheelKind::Spoke => (
-                rotation,
-                Vec3::new(1.9 * RIM * radius, width + 0.02, 0.22 * radius),
-            ),
-        };
-        *transform = Transform {
-            translation: Vec3::new(side * w.track[axle] / 2.0, radius, z),
-            rotation,
-            scale,
-        };
-    }
 }
 
 #[cfg(test)]
