@@ -201,7 +201,7 @@ order (✓ done):
    (`CarState::ghost`; `shops` sets `net::WantsGhost`, `client::haunt` puts `looks::Ghost`
    on our car, `move_cars` on remote ones; `push_off_remote_cars` skips ghosts, the server
    removes a ghost's `traffic::Visitor`; `visuals` swaps in a second, blended material set.)
-4. ✓ Shops on the map (M), with a legend (`map::MapLegend`). 5. **Gas station**: 95/98/102; the tank keeps
+4. ✓ Shops on the map (M), with a legend (`map::MapLegend`). 5. ✓ **Gas station**: 95/98/102; the tank keeps
    its octane, mixing by volume; the engine's knock limit reads the tank's octane (the
    panel's octane and fuel load sliders go). 6. **Alignment shop**: camber, pressures
    (from the garage), toe and brake torque/balance (from the panel; into `CarBuild`).
@@ -571,8 +571,9 @@ catalogue entries, and things like swap subframes are named so they can be price
   (ECU idle speed follows the cam). With all-wheel drive, locked front wheels drag the
   rear ones along through the centre differential. Unsteered test runs leave the road
   within a few seconds in the quick cars.
-- **Fuel** (`physics/fuel.rs`, agreed with the user: R and the panel's fuel load slider
-  refill, no stations; with starvation): each chassis has a `Tank` (litres, centre
+- **Fuel** (`physics/fuel.rs`; filled at gas stations (95/98/102, the tank's octane mixes by
+  volume, `Fuel::fill`, and the car sets `EngineBuild::octane` from it every step); R
+  still refills until the shops are done; with starvation): each chassis has a `Tank` (litres, centre
   behind the front axle and height; mid-engined Calder and rear-engined Rheon up front).
   The engine reports what it injects (`Engine::fuel_flow`) and gets `fuel_supply`, a
   share of it. Level kept in f64 (a step's burn vanishes against a full tank in f32).

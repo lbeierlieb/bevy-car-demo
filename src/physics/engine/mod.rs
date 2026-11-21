@@ -31,6 +31,8 @@ use hardware::EngineHardware;
 use maps::EngineMaps;
 use thermal::Thermal;
 
+use crate::physics::fuel::PUMP_OCTANE;
+
 pub const AMBIENT_PRESSURE: f32 = 101_325.0;
 pub const AMBIENT_TEMPERATURE: f32 = 298.0;
 /// Gas constant of air (J/(kg·K)) and its ratio of specific heats.
@@ -90,7 +92,7 @@ pub struct EngineBuild {
     pub hardware: EngineHardware,
     pub maps: EngineMaps,
     pub ecu: Ecu,
-    /// Research octane number of the fuel.
+    /// Research octane number of the fuel: a car sets it from what's in its tank.
     pub octane: f32,
 }
 
@@ -98,7 +100,7 @@ impl EngineBuild {
     /// The maps for `hardware` (baked now unless it's a factory engine) and a factory tune
     /// of a `model` ECU for 95 octane.
     pub fn new(hardware: EngineHardware, model: ecu::EcuModel) -> Self {
-        let octane = 95.0;
+        let octane = PUMP_OCTANE;
         let maps = EngineMaps::for_hardware(&hardware);
         let ecu = Ecu::calibrated(&hardware, &maps, octane, model);
         Self {

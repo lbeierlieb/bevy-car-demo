@@ -17,6 +17,8 @@ const SLOSH_TIME: f32 = 0.4;
 /// How long the fuel in the lines and the rail keeps the injectors fed once the pickup
 /// draws air, and how quickly the pressure comes back (s).
 const LINES_TIME: f32 = 0.25;
+/// What a car comes with (RON).
+pub const PUMP_OCTANE: f32 = 95.0;
 
 /// Where a chassis has its tank and how big it is.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -35,6 +37,8 @@ pub struct Fuel {
     /// little to take off a full tank in single precision).
     litres: f64,
     pub burnt: f64,
+    /// Its research octane number: fuels of different grades in the tank mix by volume.
+    octane: f32,
     /// Distance driven since filling up (m).
     pub distance: f64,
     /// The acceleration the fuel has settled to, sideways and lengthwise, as a share of
@@ -49,6 +53,7 @@ impl Fuel {
         Self {
             litres: litres.into(),
             burnt: 0.0,
+            octane: PUMP_OCTANE,
             distance: 0.0,
             slosh: 0.0,
             supply: 1.0,
@@ -58,6 +63,26 @@ impl Fuel {
     /// What's left (L).
     pub fn litres(&self) -> f32 {
         self.litres as f32
+    }
+
+    /// Its research octane number.
+    pub fn octane(&self) -> f32 {
+        self.octane
+    }
+
+    /// Fills in `litres` of fuel of `octane` (RON), up to what fits into `tank`: the
+    /// octane numbers mix by volume (near enough for pump grades). Filling up starts the
+    /// consumption over.
+    pub fn fill(&mut self, tank: &Tank, litres: f32, octane: f32) {
+        let before = self.litres;
+        let added = f64::from(litres.max(0.0)).min(f64::from(tank.litres) - before);
+        if added <= 0.0 {
+            return;
+        }
+        self.litres = before + added;
+        let mixed = (before * f64::from(self.octane) + added * f64::from(octane)) / self.litres;
+        self.octane = mixed as f32;
+        (self.burnt, self.distance) = (0.0, 0.0);
     }
 
     /// Mass of the fuel (kg).
@@ -105,6 +130,22 @@ mod tests {
         height: 0.35,
     };
     const LEVEL: Vec3 = Vec3::new(0.0, 9.81, 0.0);
+
+    #[test]
+    fn grades_mix_by_volume() {
+        let mut fuel = Fuel::new(20.0);
+        fuel.fill(&TANK, 20.0, 102.0);
+        assert_eq!(fuel.litres(), 40.0);
+        assert!((fuel.octane() - 98.5).abs() < 1e-4, "{}", fuel.octane());
+        // Only what fits goes in.
+        fuel.fill(&TANK, 30.0, 95.0);
+        assert_eq!(fuel.litres(), 50.0);
+        assert!((fuel.octane() - 97.8).abs() < 1e-4, "{}", fuel.octane());
+        // An empty tank takes the grade put in.
+        let mut fuel = Fuel::new(0.0);
+        fuel.fill(&TANK, 5.0, 98.0);
+        assert_eq!(fuel.octane(), 98.0);
+    }
 
     fn settle(fuel: &mut Fuel, force: Vec3) {
         for _ in 0..240 {

@@ -441,9 +441,10 @@ pub fn fuel(ui: &mut egui::Ui, car: &Car) {
         ""
     };
     ui.label(format!(
-        "fuel {:.1} of {:.0} L    now {now}{starving}",
+        "fuel {:.1} of {:.0} L, {:.1} octane    now {now}{starving}",
         fuel.litres(),
-        tank.litres
+        tank.litres,
+        fuel.octane()
     ));
     let average = fuel
         .average()
@@ -458,7 +459,7 @@ pub fn fuel(ui: &mut egui::Ui, car: &Car) {
         fuel.distance / 1000.0,
         fuel.burnt,
     ))
-    .on_hover_text("Starts again when the tank is filled: R, or the fuel load slider");
+    .on_hover_text("Starts again when the tank is filled at a gas station");
 }
 
 fn telemetry(ui: &mut egui::Ui, car: &Car) {
@@ -514,7 +515,7 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
     });
 }
 
-/// The engine (built in the garage) and the fuel.
+/// The engine (built in the garage).
 fn engine_setup(ui: &mut egui::Ui, car: &mut Car) {
     ui.strong("Engine");
     let engine = &mut car.setup.engine;
@@ -523,24 +524,10 @@ fn engine_setup(ui: &mut egui::Ui, car: &mut Car) {
         engine.build.hardware.name,
         engine.drive.name()
     ));
-    let build = &mut engine.build;
-    ui.add(egui::Slider::new(&mut build.octane, 89.0..=102.0).text("Fuel octane (RON)"))
-        .on_hover_text("The factory tune is for 95; lower knocks");
 }
 
 fn setup(ui: &mut egui::Ui, car: &mut Car) {
     engine_setup(ui, car);
-    let mut fill = car.fuel.litres() / car.setup.tank.litres * 100.0;
-    let tank = car.setup.tank.litres;
-    if ui
-        .add(
-            egui::Slider::new(&mut fill, 0.0..=100.0).text(format!("Fuel load % (of {tank:.0} L)")),
-        )
-        .on_hover_text("Fills (or drains) the tank to this now and on every reset (R)")
-        .changed()
-    {
-        car.refuel(fill / 100.0);
-    }
     let setup = &mut car.setup;
     for (name, axle) in [("Front", &mut setup.front), ("Rear", &mut setup.rear)] {
         ui.strong(name);

@@ -168,6 +168,7 @@ fn apply_controls(car: &mut Car, dt: f32) {
     let speed = car.forward_speed();
     car.drivetrain.engine.airspeed = speed;
     car.drivetrain.engine.fuel_supply = car.fuel.supply;
+    car.setup.engine.build.octane = car.fuel.octane();
     let Car {
         setup,
         corners,
