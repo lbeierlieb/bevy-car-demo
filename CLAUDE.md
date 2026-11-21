@@ -353,7 +353,9 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   browser here; it builds and links), rate limits on what a player sends (chat has one).
 - Later: sanity checks on snapshots, Safari, career.
 - **Name tags** (agreed with the user, 2026-11-21: in the scene, covered like anything
-  else; just on or off, in the players window, saved as `tags on|off` in online.cfg):
+  else; on or off is the server's choice, `--name-tags on|off` (default on) /
+  `services.car-sim.nameTags`: off, players' cars get no `Tag`; no client toggle since
+  2026-11-21, at the user's wish):
   `name_tags.rs`, each name rasterised once with ab_glyph in egui's Ubuntu-Light (no
   bevy_text in the build) into a texture on an unlit, blended quad facing the camera,
   scaled with distance (constant size on screen), within 150 m. Systems that move the

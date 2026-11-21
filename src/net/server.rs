@@ -93,6 +93,8 @@ pub struct Server {
     pub(super) map: MapPlayers,
     /// Whether players can chat.
     chat: bool,
+    /// Whether players' cars show their names.
+    name_tags: bool,
     /// When states, and the map's players, were last sent (s).
     sent: f64,
     map_sent: f64,
@@ -107,6 +109,7 @@ impl Server {
             max_players: 32,
             map: MapPlayers::Near(MAP_NEAR),
             chat: true,
+            name_tags: true,
             sent: 0.0,
             map_sent: f64::NEG_INFINITY,
             pings_sent: f64::NEG_INFINITY,
@@ -119,6 +122,10 @@ impl Server {
 
     pub fn with_chat(self, chat: bool) -> Self {
         Self { chat, ..self }
+    }
+
+    pub fn with_name_tags(self, name_tags: bool) -> Self {
+        Self { name_tags, ..self }
     }
 
     pub fn with_max_players(self, max_players: usize) -> Self {
@@ -495,7 +502,7 @@ fn send(
                 },
                 looks: peer.looks.clone()?,
                 revision: peer.revision,
-                tag: peer.name.clone(),
+                tag: peer.name.clone().filter(|_| server.name_tags),
                 player: Some(peer.id),
             })
         });

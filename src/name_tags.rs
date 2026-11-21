@@ -3,8 +3,8 @@
 //! drawn once into a texture (white with a dark outline, in egui's font through
 //! ab_glyph) on a quad that faces the camera, scaled with its distance so it stays about
 //! the same size on screen. They're covered by whatever is in front of them (houses,
-//! trees, the ground, other cars), like anything else. The player can switch them off
-//! (`NameTags`).
+//! trees, the ground, other cars), like anything else. Whether players' cars have names
+//! is the server's choice (`--name-tags`).
 
 use std::collections::HashMap;
 
@@ -27,21 +27,11 @@ const OUTLINE: i32 = 3;
 /// The longest name drawn (characters).
 const LONGEST: usize = 32;
 
-/// Whether name tags show.
-#[derive(Resource)]
-pub struct NameTags(pub bool);
-
-impl Default for NameTags {
-    fn default() -> Self {
-        Self(true)
-    }
-}
-
 pub struct NameTagPlugin;
 
 impl Plugin for NameTagPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<NameTags>().add_systems(
+        app.add_systems(
             PostUpdate,
             (spawn, place)
                 .chain()
@@ -120,7 +110,6 @@ fn spawn(
 
 /// Puts each tag over its car, facing the camera at a size for its distance.
 fn place(
-    on: Res<NameTags>,
     cameras: Query<&Transform, (With<Camera3d>, Without<Label>)>,
     cars: Query<&Transform, (With<RemoteCar>, Without<Label>)>,
     mut labels: Query<(&Label, &mut Transform, &mut Visibility)>,
@@ -133,7 +122,7 @@ fn place(
             .get(label.car)
             .map(|car| car.translation + Vec3::Y * HEIGHT);
         let distance = at.map_or(f32::INFINITY, |at| at.distance(eye.translation));
-        let shown = on.0 && distance <= RANGE;
+        let shown = distance <= RANGE;
         visibility.set_if_neq(if shown {
             Visibility::Inherited
         } else {

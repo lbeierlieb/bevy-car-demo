@@ -4,12 +4,14 @@
 //! ```text
 //! server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]
 //!        [--map-players self|near|all] [--map-near 200] [--chat on|off]
+//!        [--name-tags on|off]
 //!        [--telegram-token-file token --telegram-chat-file chat]
 //! ```
 //!
 //! `--map-players` says who a player sees of the others on their map: nobody (`self`),
 //! the ones within `--map-near` metres (`near`, the default) or everyone (`all`).
-//! `--chat off` keeps the players from chatting (it's on by default).
+//! `--chat off` keeps the players from chatting (it's on by default), `--name-tags off`
+//! the players' names off their cars (also on by default).
 //!
 //! Without a certificate it makes a throwaway one: only the native game joins that, with
 //! `CAR_SIM_INSECURE=1` (for development).
@@ -33,7 +35,7 @@ fn main() {
         Ok(options) => options,
         Err(e) => {
             eprintln!(
-                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--map-players self|near|all] [--map-near 200] [--chat on|off]\n       [--telegram-token-file token --telegram-chat-file chat]"
+                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--map-players self|near|all] [--map-near 200] [--chat on|off]\n       [--name-tags on|off]\n       [--telegram-token-file token --telegram-chat-file chat]"
             );
             std::process::exit(2);
         }
@@ -73,7 +75,8 @@ fn main() {
         net::Server::new(listener)
             .with_max_players(options.max_players)
             .with_map(options.map_players)
-            .with_chat(options.chat),
+            .with_chat(options.chat)
+            .with_name_tags(options.name_tags),
     )
     .insert_resource(traffic::Traffic {
         cars: options.traffic,
@@ -113,6 +116,7 @@ struct Options {
     max_players: usize,
     map_players: car_sim::net::MapPlayers,
     chat: bool,
+    name_tags: bool,
     telegram_token_file: Option<std::path::PathBuf>,
     telegram_chat_file: Option<std::path::PathBuf>,
 }
@@ -128,6 +132,7 @@ impl Options {
             max_players: 32,
             map_players: car_sim::net::MapPlayers::Near(car_sim::net::server::MAP_NEAR),
             chat: true,
+            name_tags: true,
             telegram_token_file: None,
             telegram_chat_file: None,
         };
@@ -154,11 +159,16 @@ impl Options {
                     map_players = args.next().ok_or("--map-players needs self, near or all")?
                 }
                 "--map-near" => map_near = number(&arg, args.next())?,
-                "--chat" => {
-                    options.chat = match args.next().as_deref() {
+                "--chat" | "--name-tags" => {
+                    let on = match args.next().as_deref() {
                         Some("on") => true,
                         Some("off") => false,
-                        _ => return Err("--chat needs on or off".into()),
+                        _ => return Err(format!("{arg} needs on or off")),
+                    };
+                    if arg == "--chat" {
+                        options.chat = on;
+                    } else {
+                        options.name_tags = on;
                     }
                 }
                 "--telegram-token-file" => {

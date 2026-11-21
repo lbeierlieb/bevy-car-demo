@@ -442,6 +442,26 @@ mod tests {
     }
 
     #[test]
+    fn a_server_without_name_tags_shows_no_names() {
+        let listener = LoopbackListener::default();
+        let mut server = app();
+        server
+            .add_plugins(ServerPlugin)
+            .insert_resource(Server::new(listener.clone()).with_name_tags(false));
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut ben = player(&listener, "Ben", 3, 50.0);
+        run(&mut [&mut server, &mut anna, &mut ben], 60);
+        let seen = remote(&mut anna);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].3, None, "Ben's car shows no name");
+        assert_eq!(
+            connection(&anna).players.values().collect::<Vec<_>>(),
+            ["Ben"],
+            "he's still in the players' list"
+        );
+    }
+
+    #[test]
     fn the_server_tells_who_joined_and_left() {
         #[derive(Resource, Default)]
         struct Told(Vec<(String, bool, usize)>);

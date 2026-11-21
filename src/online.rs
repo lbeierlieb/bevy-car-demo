@@ -1,6 +1,6 @@
 //! Playing alone or on a server: the start menu (name, server address, "Play alone",
 //! "Join server"), what's shown while joining or when it fails, the players' list with
-//! "Leave" and name tags on or off (`name_tags`) while on a server, and the players the
+//! "Leave" while on a server, name tags (`name_tags`), and the players the
 //! server puts on the map (`MapCars`), and the chat (`chat`). Joined, the car is put in a lane near the spawn
 //! point, in a spot of its own (by player number).
 
@@ -12,7 +12,7 @@ use crate::car::{ActiveCar, Car, SETTINGS};
 use crate::chassis::PAINTS;
 use crate::help::Intro;
 use crate::map::{MapCar, MapCars};
-use crate::name_tags::{NameTagPlugin, NameTags};
+use crate::name_tags::NameTagPlugin;
 use crate::net::{self, Connection, Status};
 use crate::terrain::Terrain;
 use crate::traffic::network::{Leg, Network};
@@ -29,7 +29,6 @@ impl Plugin for OnlinePlugin {
     fn build(&self, app: &mut App) {
         let settings = Settings::load();
         app.add_plugins((crate::chat::ChatPlugin, NameTagPlugin))
-            .insert_resource(NameTags(settings.tags))
             .insert_resource(Menu {
                 open: true,
                 settings,
@@ -46,26 +45,21 @@ pub struct Menu {
     settings: Settings,
 }
 
-/// The player's name, the server last joined and whether name tags show, kept between runs
+/// The player's name and the server last joined, kept between runs
 /// (`~/.config/car-sim/settings/online.cfg`).
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Settings {
     name: String,
     address: String,
-    tags: bool,
 }
 
 impl Settings {
     fn load() -> Self {
-        let mut settings = Self {
-            tags: true,
-            ..Self::default()
-        };
+        let mut settings = Self::default();
         for line in SETTINGS.load("online").unwrap_or_default().lines() {
             match line.split_once(' ') {
                 Some(("name", name)) => settings.name = name.trim().to_string(),
                 Some(("address", address)) => settings.address = address.trim().to_string(),
-                Some(("tags", tags)) => settings.tags = tags.trim() != "off",
                 _ => {}
             }
         }
@@ -78,12 +72,7 @@ impl Settings {
     }
 
     fn save(&self) {
-        let text = format!(
-            "name {}\naddress {}\ntags {}\n",
-            self.name,
-            self.address,
-            if self.tags { "on" } else { "off" }
-        );
+        let text = format!("name {}\naddress {}\n", self.name, self.address);
         if let Err(e) = SETTINGS.save("online", &text) {
             warn!("Couldn't save the online settings: {e}");
         }
@@ -168,13 +157,11 @@ fn menu(
     Ok(())
 }
 
-/// On a server: who's there with their pings (ours too), name tags on or off, and leaving
-/// it.
+/// On a server: who's there with their pings (ours too), and leaving it.
 fn players(
     mut commands: Commands,
     mut contexts: EguiContexts,
     mut menu: ResMut<Menu>,
-    mut tags: ResMut<NameTags>,
     connection: Option<ResMut<Connection>>,
 ) -> Result {
     let Some(mut connection) = connection else {
@@ -201,14 +188,6 @@ fn players(
                     ui.end_row();
                 }
             });
-            ui.separator();
-            if ui
-                .checkbox(&mut menu.settings.tags, "Names over the cars")
-                .changed()
-            {
-                tags.0 = menu.settings.tags;
-                menu.settings.save();
-            }
             ui.separator();
             if ui.button("Leave the server").clicked() {
                 connection.close();

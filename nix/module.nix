@@ -108,6 +108,12 @@ in
       description = "Whether players can chat (T in the game).";
     };
 
+    nameTags = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Whether the players' cars show their names.";
+    };
+
     telegram = {
       tokenFile = mkOption {
         type = types.nullOr types.str;
@@ -195,6 +201,8 @@ in
               cfg.mapNear
               "--chat"
               (if cfg.chat then "on" else "off")
+              "--name-tags"
+              (if cfg.nameTags then "on" else "off")
             ]
             # The credentials' copies (%d: the service's credentials directory).
             ++ lib.optionals (cfg.telegram.tokenFile != null) [
