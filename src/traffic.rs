@@ -110,6 +110,7 @@ impl Plugin for TrafficPlugin {
             })
             .init_resource::<Source>()
             .init_resource::<FactoryLooks>()
+            .init_resource::<CarNumbers>()
             .add_systems(Update, populate.run_if(is_own))
             .add_systems(Update, show.after(populate).before(crate::looks::show_cars))
             .add_systems(FixedUpdate, step.after(crate::sim::simulate).run_if(is_own));
@@ -117,7 +118,8 @@ impl Plugin for TrafficPlugin {
 }
 
 /// Where the traffic comes from: simulated here (alone, and on the server), or from the
-/// server (a player on one), whose cars are only shown here.
+/// server (a player on one): then there is none here, the server's cars come like any
+/// other car the server sends (`net::client::RemoteCar`).
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Source {
     #[default]
@@ -135,6 +137,26 @@ fn is_own(source: Res<Source>) -> bool {
 pub struct Visitor {
     pub body: RigidBody,
     pub hull: Obb,
+}
+
+/// Numbers for the cars: one counter for the traffic and (on the server) the players'
+/// cars, so a car's number doesn't tell which it is.
+#[derive(Resource)]
+pub struct CarNumbers(u32);
+
+impl Default for CarNumbers {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
+impl CarNumbers {
+    /// A number no car had yet.
+    pub fn take(&mut self) -> u32 {
+        let number = self.0;
+        self.0 = self.0.wrapping_add(1);
+        number
+    }
 }
 
 /// What each chassis looks like as it leaves the factory (with its base engine), made
@@ -184,7 +206,7 @@ pub struct Anchor;
 /// A traffic car.
 #[derive(Component)]
 pub struct TrafficCar {
-    /// Its number, for the server to tell players which is which.
+    /// Its number (from `CarNumbers`), for the server to tell players which is which.
     pub id: u32,
     /// What it looks like: its chassis (in `CHASSIS`) and paint (in `PAINTS`).
     pub chassis: usize,
@@ -400,8 +422,6 @@ struct Spawner {
     rng: Rng,
     /// The first cars may appear nearer, before anything is seen.
     started: bool,
-    /// The next car's number.
-    next_id: u32,
 }
 
 impl Spawner {
@@ -425,7 +445,6 @@ impl Spawner {
             spots,
             rng: Rng(0x2545_f491_4f6c_dd1d),
             started: false,
-            next_id: 1,
         }
     }
 }
@@ -438,12 +457,14 @@ type Player = Or<(With<Car>, With<Anchor>)>;
 /// behind by everyone go (and when there are too many, the one farthest from anyone,
 /// among those only near players with too many). Players near each other share the cars
 /// around them, so the traffic is as dense where many drive as where one does.
+#[allow(clippy::too_many_arguments)]
 fn populate(
     mut commands: Commands,
     traffic: Res<Traffic>,
     network: Res<Network>,
     terrain: Res<Terrain>,
     mut spawner: ResMut<Spawner>,
+    mut numbers: ResMut<CarNumbers>,
     players: Query<&Transform, Player>,
     others: Query<(Entity, &TrafficCar)>,
 ) {
@@ -526,8 +547,7 @@ fn populate(
     let keen = rng.range(KEEN);
     let seed = rng.0;
     let mut car = TrafficCar::new(&network, &terrain, chassis, paint, leg, s, keen, seed);
-    car.id = spawner.next_id;
-    spawner.next_id = spawner.next_id.wrapping_add(1);
+    car.id = numbers.take();
     commands.spawn((
         Transform::from_translation(car.body.position).with_rotation(car.body.rotation),
         car,
@@ -548,7 +568,7 @@ impl TrafficCar {
         keen: f32,
         seed: u64,
     ) -> Self {
-        let mut car = Self::shown(chassis, paint);
+        let mut car = Self::parked(chassis, paint);
         let wheels = car.wheels;
         let mut driver = Driver {
             route: VecDeque::from([leg]),
@@ -581,9 +601,8 @@ impl TrafficCar {
         car
     }
 
-    /// A car of `chassis` (in `CHASSIS`) and `paint` without a driver, at the origin: one
-    /// driven on the server, shown where it says.
-    pub fn shown(chassis: usize, paint: usize) -> Self {
+    /// A car of `chassis` (in `CHASSIS`) and `paint` without a driver, at the origin.
+    fn parked(chassis: usize, paint: usize) -> Self {
         let model = &CHASSIS[chassis];
         let wheels = model.wheels();
         let mut hull = body_box(model, &model.wheels);
@@ -641,15 +660,11 @@ impl TrafficCar {
         }
     }
 
-    /// How far its wheels have rolled (m) and its front wheels' steering angle (rad).
-    pub fn wheels_turned(&self) -> (f32, f32) {
-        (self.rolled, self.steer)
-    }
-
-    /// Sets how far its wheels have rolled and how they're steered.
-    pub fn turn_wheels(&mut self, rolled: f32, steer: f32) {
-        self.rolled = rolled;
-        self.steer = steer;
+    /// How fast its centre of mass moves, for a car that `looks` so.
+    pub fn center_velocity(&self, looks: &Looks) -> Vec3 {
+        let body = &self.body;
+        let arm = -(body.rotation * looks.body_offset);
+        body.velocity + body.angular_velocity.cross(arm)
     }
 
     /// Sets the body on the ground under its axles, moving at `speed` and turning at

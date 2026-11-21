@@ -5,7 +5,9 @@
 //! (unreliably: a lost one is soon replaced). The server welcomes it (or refuses it),
 //! tells everyone who joins and leaves, and sends each player the states of the cars near
 //! them, the nearer the more often, with their looks before the first state and after
-//! every change, and the traffic near them the same way (which car, how it looks, where).
+//! every change, the name a car shows, if any, and when a car is out of range or gone. Every car is sent alike, the traffic's
+//! and the other players' (numbered by one counter, never by the player), so nothing on
+//! the wire tells them apart but the names the server chooses to show.
 //! About once a second it also sends where the other players are for the map, as many of
 //! them as the server's settings show, and every two seconds everyone's ping. If the
 //! server has chat on (it says so in its welcome), players' chat messages go to everyone,
@@ -24,10 +26,14 @@ use crate::physics::tire::COMPOUNDS;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 5;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
+
+/// A car the server sends: a traffic car or a player's, numbered by the server (not by
+/// the player: which car is whose isn't said).
+pub type CarId = u32;
 
 /// The `from` of the server's own chat lines (players are numbered from 1).
 pub const SERVER: PlayerId = 0;
@@ -76,11 +82,20 @@ pub enum ToClient {
         id: PlayerId,
     },
     Looks {
-        id: PlayerId,
+        car: CarId,
         looks: Box<Looks>,
     },
-    States(Vec<(PlayerId, CarState)>),
-    Traffic(Vec<TrafficState>),
+    /// Where cars are and how they move.
+    Cars(Vec<(CarId, CarState)>),
+    /// The name a car shows over it from now on, or none.
+    Tag {
+        car: CarId,
+        name: Option<String>,
+    },
+    /// A car out of range, or gone altogether.
+    Gone {
+        car: CarId,
+    },
     /// Other players to show on the map (a player missing from every message for a while
     /// is no longer shown).
     Map(Vec<MapPlayer>),
@@ -110,12 +125,13 @@ impl ToClient {
     pub fn reliable(&self) -> bool {
         !matches!(
             self,
-            ToClient::States(_) | ToClient::Traffic(_) | ToClient::Map(_) | ToClient::Pings(_)
+            ToClient::Cars(_) | ToClient::Map(_) | ToClient::Pings(_)
         )
     }
 }
 
-/// Where a car is and how it moves, at `time` on its driver's clock (s).
+/// Where a car is and how it moves, at `time` on its sender's clock (s): the driver's
+/// to the server, the server's to the players.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CarState {
     pub time: f64,
@@ -125,24 +141,6 @@ pub struct CarState {
     pub velocity: Vec3,
     pub angular_velocity: Vec3,
     pub motion: Motion,
-}
-
-/// A traffic car: which, what it looks like, and where it is at `time` on the server's
-/// clock (s). Its reference point is on the ground midway between the axles.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TrafficState {
-    pub id: u32,
-    /// In `CHASSIS` and `PAINTS`.
-    pub chassis: usize,
-    pub paint: usize,
-    pub time: f64,
-    pub position: Vec3,
-    pub rotation: Quat,
-    pub velocity: Vec3,
-    pub angular_velocity: Vec3,
-    /// How far its wheels have rolled (m), and its front wheels' steering angle (rad).
-    pub rolled: f32,
-    pub steer: f32,
 }
 
 /// Another player's car on the map: where it is and goes (xz, on the ground), which way
@@ -181,50 +179,6 @@ impl Wire for MapPlayer {
                 0
             },
             ..player
-        })
-    }
-}
-
-impl Wire for TrafficState {
-    fn put(&self, out: &mut Vec<u8>) {
-        self.id.put(out);
-        self.chassis.put(out);
-        self.paint.put(out);
-        self.time.put(out);
-        self.position.put(out);
-        self.rotation.put(out);
-        self.velocity.put(out);
-        self.angular_velocity.put(out);
-        self.rolled.put(out);
-        self.steer.put(out);
-    }
-    fn get(r: &mut Reader) -> Option<Self> {
-        let state = Self {
-            id: r.get()?,
-            chassis: r.get()?,
-            paint: r.get()?,
-            time: r.get()?,
-            position: r.get()?,
-            rotation: r.get()?,
-            velocity: r.get()?,
-            angular_velocity: r.get()?,
-            rolled: r.get()?,
-            steer: r.get()?,
-        };
-        // A chassis or paint a newer server has and this game doesn't: shown as the first
-        // one, rather than not at all.
-        Some(Self {
-            chassis: if state.chassis < CHASSIS.len() {
-                state.chassis
-            } else {
-                0
-            },
-            paint: if state.paint < PAINTS.len() {
-                state.paint
-            } else {
-                0
-            },
-            ..state
         })
     }
 }
@@ -293,18 +247,19 @@ impl Wire for ToClient {
                 3u8.put(out);
                 id.put(out);
             }
-            ToClient::Looks { id, looks } => {
+            ToClient::Looks { car, looks } => {
                 Self::LOOKS.put(out);
-                id.put(out);
+                car.put(out);
                 looks.put(out);
             }
-            ToClient::States(states) => {
+            ToClient::Cars(cars) => {
                 5u8.put(out);
-                states.put(out);
-            }
-            ToClient::Traffic(cars) => {
-                6u8.put(out);
                 cars.put(out);
+            }
+            ToClient::Tag { car, name } => {
+                6u8.put(out);
+                car.put(out);
+                name.put(out);
             }
             ToClient::Map(players) => {
                 7u8.put(out);
@@ -318,6 +273,10 @@ impl Wire for ToClient {
                 9u8.put(out);
                 from.put(out);
                 text.put(out);
+            }
+            ToClient::Gone { car } => {
+                10u8.put(out);
+                car.put(out);
             }
         }
     }
@@ -335,17 +294,21 @@ impl Wire for ToClient {
             },
             3 => ToClient::Left { id: r.get()? },
             Self::LOOKS => ToClient::Looks {
-                id: r.get()?,
+                car: r.get()?,
                 looks: Box::new(r.get()?),
             },
-            5 => ToClient::States(r.get()?),
-            6 => ToClient::Traffic(r.get()?),
+            5 => ToClient::Cars(r.get()?),
+            6 => ToClient::Tag {
+                car: r.get()?,
+                name: r.get()?,
+            },
             7 => ToClient::Map(r.get()?),
             8 => ToClient::Pings(r.get()?),
             9 => ToClient::Chat {
                 from: r.get()?,
                 text: r.get()?,
             },
+            10 => ToClient::Gone { car: r.get()? },
             _ => return None,
         })
     }
@@ -639,7 +602,7 @@ mod tests {
             let bytes = encode(&message);
             assert_eq!(decode::<ToServer>(&bytes), Some(message), "{chassis}");
             let reply = ToClient::Looks {
-                id: 3,
+                car: 3,
                 looks: Box::new(looks),
             };
             assert_eq!(decode::<ToClient>(&encode(&reply)), Some(reply));
@@ -659,6 +622,14 @@ mod tests {
         let bytes = encode(&ToServer::State(state));
         assert!(bytes.len() < 130, "{} bytes", bytes.len());
         assert_eq!(decode::<ToServer>(&bytes), Some(ToServer::State(state)));
+    }
+
+    #[test]
+    fn tags_come_through() {
+        for name in [Some("Anna".to_string()), None] {
+            let message = ToClient::Tag { car: 7, name };
+            assert_eq!(decode::<ToClient>(&encode(&message)), Some(message));
+        }
     }
 
     #[test]

@@ -1,10 +1,11 @@
-//! The server's side: players join, their cars' states go to the players near them (the
-//! nearer, the more often), their looks before that and after every change. A player
+//! The server's side: players join, and every car's state goes to the players near it (the
+//! nearer, the more often), its looks before that and after every change, and the name
+//! it shows (players' cars their player's, traffic none). The traffic's cars and the
+//! players' are sent alike, numbered by one counter (`traffic::CarNumbers`). A player
 //! who falls silent is frozen for the others (and traffic stops coming for them), and
 //! dropped after a while. Each player is an entity with a `Peer`, and a `traffic::Anchor`
 //! and `traffic::Visitor` while their car is heard from, so traffic drives around them,
-//! keeps its distance and crashes into them. Each player is sent the traffic near them
-//! like the other players' cars. Once a second each player is told where the others
+//! keeps its distance and crashes into them. Once a second each player is told where the others
 //! are for the map: nobody, the ones near them or everyone, as the server is set
 //! (`MapPlayers`), and every two seconds everyone's ping (the connection's round trip).
 //! Every state goes out stamped on the server's clock (a player's converted from theirs),
@@ -18,14 +19,14 @@ use bevy::prelude::*;
 
 use super::link::{Link, Listener};
 use super::protocol::{
-    CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, TrafficState, clean_chat,
+    CarId, CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, clean_chat,
 };
 use super::wire::{decode, encode};
 use super::{ClockOffset, NEAR, RATES, SEND_RATE};
-use crate::looks::Looks;
+use crate::looks::{Looks, Motion};
 use crate::physics::rigid_body::RigidBody;
 use crate::terrain::Terrain;
-use crate::traffic::{Anchor, TrafficCar, Visitor};
+use crate::traffic::{Anchor, CarNumbers, TrafficCar, Visitor};
 
 /// A player not heard from for this long is frozen for the others, and for this long
 /// dropped (s).
@@ -35,7 +36,6 @@ const TIMEOUT: f64 = 30.0;
 const CELL: f32 = 128.0;
 /// The most states in one message (a datagram holds about 1200 bytes).
 const STATES_PER_MESSAGE: usize = 8;
-const TRAFFIC_PER_MESSAGE: usize = 14;
 const MAP_PER_MESSAGE: usize = 32;
 /// How often the other players' places on the map are sent (per second).
 const MAP_RATE: f64 = 1.0;
@@ -60,12 +60,14 @@ pub struct ServerPlugin;
 
 impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Presence>().add_systems(
-            Update,
-            (accept, receive, send)
-                .chain()
-                .run_if(resource_exists::<Server>),
-        );
+        app.add_message::<Presence>()
+            .init_resource::<CarNumbers>()
+            .add_systems(
+                Update,
+                (accept, receive, send)
+                    .chain()
+                    .run_if(resource_exists::<Server>),
+            );
     }
 }
 
@@ -131,6 +133,8 @@ impl Server {
 #[derive(Component)]
 pub struct Peer {
     pub id: PlayerId,
+    /// Their car's number (from `CarNumbers`, like the traffic's).
+    pub car: CarId,
     link: Box<dyn Link>,
     /// Their name, once they've said hello.
     pub name: Option<String>,
@@ -143,13 +147,18 @@ pub struct Peer {
     /// car a player is sent is on one clock.
     clock: ClockOffset,
     revision: u32,
-    /// What they've been told of each car near them: its looks' revision, and when its
-    /// next state is due (s).
-    told: HashMap<PlayerId, (u32, f64)>,
-    /// When each traffic car's next state is due for them (s).
-    told_traffic: HashMap<u32, f64>,
+    /// What they've been told of each car near them.
+    told: HashMap<CarId, Told>,
     /// When they wrote their latest chat lines (s), the last `CHAT_LINES`.
     chatted: VecDeque<f64>,
+}
+
+/// What a player has been told of a car: its looks' revision and the name it shows, and
+/// when its next state is due (s).
+struct Told {
+    revision: u32,
+    tag: Option<String>,
+    due: f64,
 }
 
 impl Peer {
@@ -162,12 +171,18 @@ fn now(time: &Time<Real>) -> f64 {
     time.elapsed_secs_f64()
 }
 
-fn accept(mut commands: Commands, mut server: ResMut<Server>, time: Res<Time<Real>>) {
+fn accept(
+    mut commands: Commands,
+    mut server: ResMut<Server>,
+    mut numbers: ResMut<CarNumbers>,
+    time: Res<Time<Real>>,
+) {
     while let Some(link) = server.listener.accept() {
         let id = server.next_id;
         server.next_id += 1;
         commands.spawn(Peer {
             id,
+            car: numbers.take(),
             link,
             name: None,
             heard: now(&time),
@@ -176,7 +191,6 @@ fn accept(mut commands: Commands, mut server: ResMut<Server>, time: Res<Time<Rea
             clock: ClockOffset::default(),
             revision: 0,
             told: HashMap::new(),
-            told_traffic: HashMap::new(),
             chatted: VecDeque::new(),
         });
     }
@@ -412,22 +426,22 @@ fn receive(
         });
         for (_, mut peer, _) in &mut peers {
             if peer.name.is_some() && peer.id != id {
-                peer.told.remove(&id);
                 peer.tell(&ToClient::Left { id });
             }
         }
     }
 }
 
-/// Sends each player the states of the cars near them (with their looks when they're
-/// new to them or changed), each as often as its distance asks for, and every
-/// `1 / MAP_RATE` seconds the players on their map.
+/// Sends each player the states of the cars near them (with their looks and name when
+/// they're new to them or changed), each as often as its distance asks for, the traffic's
+/// and the other players' alike; and every `1 / MAP_RATE` seconds the players on their
+/// map.
 fn send(
     mut server: ResMut<Server>,
     time: Res<Time<Real>>,
     fixed: Res<Time<Fixed>>,
     mut peers: Query<&mut Peer>,
-    traffic: Query<&TrafficCar>,
+    traffic: Query<(&TrafficCar, &Looks, &Motion)>,
 ) {
     let now = now(&time);
     if now - server.sent < 1.0 / SEND_RATE {
@@ -456,55 +470,60 @@ fn send(
         }
     }
 
-    // The cars there are to see: heard from lately, with looks.
+    // The cars there are to see: the players' heard from lately, with looks, and the
+    // traffic, all on our clock.
     struct Car {
-        id: PlayerId,
+        id: CarId,
         state: CarState,
         looks: Looks,
         revision: u32,
+        tag: Option<String>,
+        /// Whose it is, for the map.
+        player: Option<PlayerId>,
     }
-    let cars: Vec<Car> = peers
+    let stamp = super::stamp(&time, &fixed);
+    let players = peers
         .iter()
         .filter(|peer| now - peer.heard <= FROZEN)
         .filter_map(|peer| {
             let state = peer.state?;
             Some(Car {
-                id: peer.id,
+                id: peer.car,
                 state: CarState {
                     time: peer.clock.ours(state.time)?,
                     ..state
                 },
                 looks: peer.looks.clone()?,
                 revision: peer.revision,
+                tag: peer.name.clone(),
+                player: Some(peer.id),
             })
-        })
-        .collect();
+        });
+    let traffic = traffic.iter().map(|(car, looks, motion)| {
+        let at = car.transform(looks);
+        Car {
+            id: car.id,
+            state: CarState {
+                time: stamp,
+                position: at.translation,
+                rotation: at.rotation,
+                velocity: car.center_velocity(looks),
+                angular_velocity: car.body.angular_velocity,
+                motion: *motion,
+            },
+            looks: looks.clone(),
+            revision: 1,
+            tag: None,
+            player: None,
+        }
+    });
+    let cars: Vec<Car> = players.chain(traffic).collect();
     let cell = |p: Vec3| ((p.x / CELL).floor() as i32, (p.z / CELL).floor() as i32);
     let mut grid: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
     for (i, car) in cars.iter().enumerate() {
         grid.entry(cell(car.state.position)).or_default().push(i);
     }
     let reach = (NEAR / CELL).ceil() as i32;
-    let stamp = super::stamp(&time, &fixed);
-    let traffic: Vec<TrafficState> = traffic
-        .iter()
-        .map(|car| {
-            let (rolled, steer) = car.wheels_turned();
-            TrafficState {
-                id: car.id,
-                chassis: car.chassis,
-                paint: car.paint,
-                time: stamp,
-                position: car.body.position,
-                rotation: car.body.rotation,
-                velocity: car.body.velocity,
-                angular_velocity: car.body.angular_velocity,
-                rolled,
-                steer,
-            }
-        })
-        .collect();
-    let present: HashSet<u32> = traffic.iter().map(|car| car.id).collect();
     // How often something this far away is due, and when next.
     let due_after = |distance: f32| {
         let rate = RATES
@@ -519,47 +538,72 @@ fn send(
         let Some(own) = peer.state.filter(|_| peer.name.is_some()) else {
             continue;
         };
+        let peer = &mut *peer;
         let (cx, cz) = cell(own.position);
         let mut states = Vec::new();
+        let mut messages = Vec::new();
+        let mut near = HashSet::new();
         for x in cx - reach..=cx + reach {
             for z in cz - reach..=cz + reach {
                 for &i in grid.get(&(x, z)).into_iter().flatten() {
                     let car = &cars[i];
                     let distance = car.state.position.distance(own.position);
-                    if car.id == peer.id || distance > NEAR {
+                    if car.id == peer.car || distance > NEAR {
                         continue;
                     }
-                    let (revision, due) = peer.told.get(&car.id).copied().unwrap_or((0, 0.0));
-                    if revision != car.revision {
-                        peer.tell(&ToClient::Looks {
-                            id: car.id,
+                    near.insert(car.id);
+                    let told = peer.told.entry(car.id).or_insert(Told {
+                        revision: 0,
+                        tag: None,
+                        due: 0.0,
+                    });
+                    if told.revision != car.revision {
+                        told.revision = car.revision;
+                        messages.push(ToClient::Looks {
+                            car: car.id,
                             looks: Box::new(car.looks.clone()),
                         });
                     }
-                    let due = if now >= due {
+                    if told.tag != car.tag {
+                        told.tag.clone_from(&car.tag);
+                        messages.push(ToClient::Tag {
+                            car: car.id,
+                            name: car.tag.clone(),
+                        });
+                    }
+                    if now >= told.due {
                         states.push((car.id, car.state));
-                        due_after(distance)
-                    } else {
-                        due
-                    };
-                    peer.told.insert(car.id, (car.revision, due));
+                        told.due = due_after(distance);
+                    }
                 }
             }
         }
+        // What's out of range (or gone) goes, and is told afresh when it's back.
+        peer.told.retain(|&car, _| {
+            let kept = near.contains(&car);
+            if !kept {
+                messages.push(ToClient::Gone { car });
+            }
+            kept
+        });
+        for message in &messages {
+            peer.tell(message);
+        }
         for chunk in states.chunks(STATES_PER_MESSAGE) {
-            peer.tell(&ToClient::States(chunk.to_vec()));
+            peer.tell(&ToClient::Cars(chunk.to_vec()));
         }
 
         if map_due {
             let shown: Vec<MapPlayer> = (cars.iter())
-                .filter(|car| car.id != peer.id)
-                .filter(|car| match map {
+                .filter_map(|car| Some((car, car.player?)))
+                .filter(|&(_, player)| player != peer.id)
+                .filter(|(car, _)| match map {
                     MapPlayers::Nobody => false,
                     MapPlayers::Near(within) => car.state.position.distance(own.position) <= within,
                     MapPlayers::Everyone => true,
                 })
-                .map(|car| MapPlayer {
-                    id: car.id,
+                .map(|(car, player)| MapPlayer {
+                    id: player,
                     position: car.state.position.xz(),
                     velocity: car.state.velocity.xz(),
                     forward: (car.state.rotation * Vec3::NEG_Z)
@@ -571,26 +615,6 @@ fn send(
             for chunk in shown.chunks(MAP_PER_MESSAGE) {
                 peer.tell(&ToClient::Map(chunk.to_vec()));
             }
-        }
-
-        // The traffic near them (there's little of it: no grid needed).
-        let mut cars = Vec::new();
-        let peer = &mut *peer;
-        peer.told_traffic.retain(|id, _| present.contains(id));
-        for car in &traffic {
-            let distance = car.position.distance(own.position);
-            if distance > NEAR {
-                peer.told_traffic.remove(&car.id);
-                continue;
-            }
-            let due = peer.told_traffic.entry(car.id).or_insert(0.0);
-            if now >= *due {
-                cars.push(*car);
-                *due = due_after(distance);
-            }
-        }
-        for chunk in cars.chunks(TRAFFIC_PER_MESSAGE) {
-            peer.tell(&ToClient::Traffic(chunk.to_vec()));
         }
     }
 }

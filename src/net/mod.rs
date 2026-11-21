@@ -1,7 +1,7 @@
 //! Multiplayer: each player simulates their own car and sends its state to a dedicated
-//! server, which passes the states on to the players near it; other players' cars are
-//! shown as proxies (see `client`). Traffic is the server's (see "Multiplayer" in the
-//! notes). `ServerPlugin` and `ClientPlugin` do nothing until there's a `Server` or a
+//! server, which passes the states on to the players near it, with its traffic's alike;
+//! a player shows them all as remote cars (see `client`), and has no traffic of their
+//! own (see "Multiplayer" in the notes). `ServerPlugin` and `ClientPlugin` do nothing until there's a `Server` or a
 //! `Connection` resource.
 
 pub mod client;
@@ -113,7 +113,7 @@ mod tests {
     use bevy::prelude::*;
     use bevy::time::TimeUpdateStrategy;
 
-    use super::client::Proxy;
+    use super::client::{RemoteCar, Tag};
     use super::link::LoopbackListener;
     use super::*;
     use crate::car::{ActiveCar, Car, CarSetup};
@@ -186,12 +186,19 @@ mod tests {
         app.world_mut().get_mut::<Car>(entity).unwrap()
     }
 
-    /// The other players' cars a player sees: number, where, and their looks.
-    fn proxies(app: &mut App) -> Vec<(u32, Vec3, Option<Looks>)> {
+    /// The cars a player is sent: number, where, their looks and the name they show.
+    fn remote(app: &mut App) -> Vec<(u32, Vec3, Option<Looks>, Option<String>)> {
         (app.world_mut()
-            .query::<(&Proxy, &Transform, Option<&Looks>)>())
+            .query::<(&RemoteCar, &Transform, Option<&Looks>, Option<&Tag>)>())
         .iter(app.world())
-        .map(|(proxy, transform, looks)| (proxy.id, transform.translation, looks.cloned()))
+        .map(|(car, transform, looks, tag)| {
+            (
+                car.id,
+                transform.translation,
+                looks.cloned(),
+                tag.map(|tag| tag.0.clone()),
+            )
+        })
         .collect()
     }
 
@@ -239,15 +246,16 @@ mod tests {
             run(&mut [&mut server, &mut anna, &mut ben], 1);
         }
         let ben_at = car(&mut ben).body.position;
-        let seen = proxies(&mut anna);
+        let seen = remote(&mut anna);
         assert_eq!(seen.len(), 1);
-        let (_, at, looks) = &seen[0];
+        let (_, at, looks, tag) = &seen[0];
         assert_eq!(looks.as_ref(), Some(&Looks::of(&car(&mut ben).setup)));
+        assert_eq!(tag.as_deref(), Some("Ben"), "his car shows his name");
         // Predicted to where he is by now, short only of the frame or two on the way.
         let behind = ben_at.x - at.x;
         println!("Anna sees Ben {behind:.2} m behind where he is");
         assert!((-0.1..0.6).contains(&behind), "{behind}");
-        assert_eq!(proxies(&mut ben).len(), 1);
+        assert_eq!(remote(&mut ben).len(), 1);
     }
 
     #[test]
@@ -281,16 +289,16 @@ mod tests {
         let mut ben = player(&listener, "Ben", 3, 480.0);
         run(&mut [&mut server, &mut anna, &mut ben], 60);
         assert_eq!(connection(&anna).players.len(), 1, "knows who's there");
-        assert!(proxies(&mut anna).is_empty() && proxies(&mut ben).is_empty());
+        assert!(remote(&mut anna).is_empty() && remote(&mut ben).is_empty());
         car(&mut ben).body.position.x = -300.0;
         run(&mut [&mut server, &mut anna, &mut ben], 30);
-        let seen = proxies(&mut anna);
+        let seen = remote(&mut anna);
         assert_eq!(seen.len(), 1);
         assert!(seen[0].2.is_some(), "with looks");
         // Far apart again: the proxy goes.
         car(&mut ben).body.position.x = 480.0;
         run(&mut [&mut server, &mut anna, &mut ben], 180);
-        assert!(proxies(&mut anna).is_empty());
+        assert!(remote(&mut anna).is_empty());
     }
 
     #[test]
@@ -366,11 +374,11 @@ mod tests {
         let mut anna = player(&listener, "Anna", 3, 0.0);
         let mut ben = player(&listener, "Ben", 3, 50.0);
         run(&mut [&mut server, &mut anna, &mut ben], 60);
-        assert_eq!(proxies(&mut anna).len(), 1);
+        assert_eq!(remote(&mut anna).len(), 1);
         ben.world_mut().resource_mut::<Connection>().close();
         run(&mut [&mut server, &mut anna], 5);
         assert!(connection(&anna).players.is_empty());
-        assert!(proxies(&mut anna).is_empty());
+        assert!(remote(&mut anna).is_empty());
     }
 
     /// A player's chat as "who: what" lines ("· what" for the server's).
@@ -484,7 +492,7 @@ mod tests {
     }
 
     /// On a server, the traffic is the server's: a player sees its cars near them where
-    /// the server has them, and none of their own.
+    /// the server has them, sent like any car (looks, no name), and none of their own.
     #[test]
     fn players_see_the_servers_traffic() {
         use crate::traffic::{TrafficCar, TrafficPlugin};
@@ -498,35 +506,69 @@ mod tests {
         let mut anna = player_on(&listener, "Anna", 3, spawn, terrain);
         anna.add_plugins(TrafficPlugin);
         run(&mut [&mut server, &mut anna], 120);
-        let on_server: Vec<(u32, Vec3)> = (server.world_mut().query::<&TrafficCar>())
+        let on_server: Vec<(u32, Vec3, Looks)> = (server.world_mut())
+            .query::<(&TrafficCar, &Transform, &Looks)>()
             .iter(server.world())
-            .map(|car| (car.id, car.body.position))
+            .map(|(car, at, looks)| (car.id, at.translation, looks.clone()))
             .collect();
-        let seen: Vec<(u32, Vec3, bool)> = (anna.world_mut())
-            .query::<(&TrafficCar, Option<&client::ServerTraffic>)>()
-            .iter(anna.world())
-            .map(|(car, shown)| {
-                (
-                    shown.map_or(0, |s| s.id),
-                    car.body.position,
-                    shown.is_some(),
-                )
-            })
-            .collect();
+        let seen = remote(&mut anna);
         println!(
             "{} cars on the server, {} seen",
             on_server.len(),
             seen.len()
         );
         assert!(seen.len() >= 10, "{} seen", seen.len());
-        assert!(
-            seen.iter().all(|&(.., shown)| shown),
-            "no traffic of her own"
-        );
-        for (id, at, _) in &seen {
-            let (_, there) = on_server.iter().find(|(i, _)| i == id).unwrap();
+        let own = (anna.world_mut().query::<&TrafficCar>())
+            .iter(anna.world())
+            .count();
+        assert_eq!(own, 0, "no traffic of her own");
+        for (id, at, looks, tag) in &seen {
+            let (_, there, factory) = on_server.iter().find(|(i, ..)| i == id).unwrap();
             assert!(at.distance(*there) < 5.0, "car {id} {at} is at {there}");
+            assert_eq!(looks.as_ref(), Some(factory));
+            assert_eq!(*tag, None);
         }
+    }
+
+    /// The server numbers the players' cars and the traffic with one counter, apart from
+    /// the players' own numbers.
+    #[test]
+    fn cars_are_numbered_apart_from_players() {
+        use crate::traffic::TrafficPlugin;
+        let listener = LoopbackListener::default();
+        let mut server = app_on(Terrain::baked());
+        server
+            .add_plugins((ServerPlugin, TrafficPlugin))
+            .insert_resource(Server::new(listener.clone()));
+        let terrain = Terrain::baked();
+        let (spawn, _) = terrain.road_spawns(1, 0.0)[0];
+        let mut anna = player_on(&listener, "Anna", 3, spawn, terrain);
+        run(&mut [&mut server, &mut anna], 60);
+        // Ben joins with traffic already numbered.
+        let mut ben = player_on(
+            &listener,
+            "Ben",
+            0,
+            spawn + Vec2::new(0.0, 20.0),
+            Terrain::baked(),
+        );
+        run(&mut [&mut server, &mut anna, &mut ben], 60);
+        let ben_id = connection(&anna)
+            .players
+            .iter()
+            .find(|(_, name)| *name == "Ben")
+            .map(|(&id, _)| id)
+            .unwrap();
+        let seen = remote(&mut anna);
+        let (bens_car, ..) = seen
+            .iter()
+            .find(|(.., tag)| tag.as_deref() == Some("Ben"))
+            .unwrap();
+        assert_ne!(*bens_car, ben_id, "his car's number isn't his");
+        let mut ids: Vec<u32> = seen.iter().map(|(id, ..)| *id).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), seen.len());
     }
 
     /// A car the server's catalogues don't have (a newer game's) gets a clear refusal.
@@ -582,7 +624,8 @@ mod tests {
         }
     }
 
-    /// A car's first state arriving before its looks: the proxy still gets them.
+    /// A car's first state arriving before its looks: the car still gets them, and its
+    /// name.
     #[test]
     fn a_state_overtaking_the_looks_still_shows_the_car() {
         let listener = LoopbackListener::default();
@@ -605,8 +648,9 @@ mod tests {
             car,
         ));
         run(&mut [&mut server, &mut anna, &mut ben], 60);
-        let seen = proxies(&mut ben);
+        let seen = remote(&mut ben);
         assert_eq!(seen.len(), 1);
         assert!(seen[0].2.is_some(), "Anna's car has its looks");
+        assert_eq!(seen[0].3.as_deref(), Some("Anna"));
     }
 }

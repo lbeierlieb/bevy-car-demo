@@ -1,4 +1,5 @@
-//! Name tags over the other players' cars, in the scene like anything else: each name is
+//! Name tags over the cars the server gives a name (`net::client::Tag`: the other
+//! players' cars, or none), in the scene like anything else: each name is
 //! drawn once into a texture (white with a dark outline, in egui's font through
 //! ab_glyph) on a quad that faces the camera, scaled with its distance so it stays about
 //! the same size on screen. They're covered by whatever is in front of them (houses,
@@ -13,8 +14,7 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use crate::net::Connection;
-use crate::net::client::Proxy;
+use crate::net::client::{RemoteCar, Tag};
 
 /// Tags show over cars nearer than this (m), their bottom this far above the car's middle.
 pub const RANGE: f32 = 150.0;
@@ -56,41 +56,37 @@ impl Plugin for NameTagPlugin {
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PlaceTags;
 
-/// A name tag over a proxy.
+/// A name tag over a car.
 #[derive(Component)]
-struct Tag {
-    proxy: Entity,
+struct Label {
+    car: Entity,
     name: String,
     /// Width over height.
     aspect: f32,
 }
 
-/// A tag for each proxy whose player has a name (a new one when the name changes); the
-/// tags of proxies that are gone go too.
-#[allow(clippy::too_many_arguments)]
+/// A label for each car with a name (a new one when the name changes); the labels of cars
+/// that are gone or lost their name go too.
 fn spawn(
     mut commands: Commands,
-    connection: Option<Res<Connection>>,
-    proxies: Query<(Entity, &Proxy)>,
-    tags: Query<(Entity, &Tag)>,
+    named: Query<(Entity, &Tag), With<RemoteCar>>,
+    labels: Query<(Entity, &Label)>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut quad: Local<Option<Handle<Mesh>>>,
 ) {
-    let names: HashMap<Entity, &String> = (proxies.iter())
-        .filter_map(|(entity, proxy)| Some((entity, connection.as_ref()?.players.get(&proxy.id)?)))
-        .collect();
-    let mut tagged = HashMap::new();
-    for (entity, tag) in &tags {
-        if names.get(&tag.proxy) == Some(&&tag.name) {
-            tagged.insert(tag.proxy, entity);
+    let names: HashMap<Entity, &String> = named.iter().map(|(car, tag)| (car, &tag.0)).collect();
+    let mut labelled = HashMap::new();
+    for (entity, label) in &labels {
+        if names.get(&label.car) == Some(&&label.name) {
+            labelled.insert(label.car, entity);
         } else {
             commands.entity(entity).despawn();
         }
     }
-    for (proxy, name) in names {
-        if tagged.contains_key(&proxy) {
+    for (car, name) in names {
+        if labelled.contains_key(&car) {
             continue;
         }
         let (image, aspect) = draw(name);
@@ -107,8 +103,8 @@ fn spawn(
             .get_or_insert_with(|| meshes.add(Rectangle::new(1.0, 1.0)))
             .clone();
         commands.spawn((
-            Tag {
-                proxy,
+            Label {
+                car,
                 name: name.clone(),
                 aspect,
             },
@@ -125,16 +121,16 @@ fn spawn(
 /// Puts each tag over its car, facing the camera at a size for its distance.
 fn place(
     on: Res<NameTags>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<Tag>)>,
-    proxies: Query<&Transform, (With<Proxy>, Without<Tag>)>,
-    mut tags: Query<(&Tag, &mut Transform, &mut Visibility)>,
+    cameras: Query<&Transform, (With<Camera3d>, Without<Label>)>,
+    cars: Query<&Transform, (With<RemoteCar>, Without<Label>)>,
+    mut labels: Query<(&Label, &mut Transform, &mut Visibility)>,
 ) {
     let Ok(eye) = cameras.single() else {
         return;
     };
-    for (tag, mut transform, mut visibility) in &mut tags {
-        let at = proxies
-            .get(tag.proxy)
+    for (label, mut transform, mut visibility) in &mut labels {
+        let at = cars
+            .get(label.car)
             .map(|car| car.translation + Vec3::Y * HEIGHT);
         let distance = at.map_or(f32::INFINITY, |at| at.distance(eye.translation));
         let shown = on.0 && distance <= RANGE;
@@ -150,7 +146,7 @@ fn place(
         *transform = Transform {
             translation: at + Vec3::Y * height / 2.0,
             rotation: eye.rotation,
-            scale: Vec3::new(height * tag.aspect, height, 1.0),
+            scale: Vec3::new(height * label.aspect, height, 1.0),
         };
     }
 }

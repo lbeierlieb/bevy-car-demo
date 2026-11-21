@@ -115,6 +115,22 @@ impl Wire for String {
     }
 }
 
+impl<T: Wire> Wire for Option<T> {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.is_some().put(out);
+        if let Some(x) = self {
+            x.put(out);
+        }
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        Some(if r.get::<bool>()? {
+            Some(r.get()?)
+        } else {
+            None
+        })
+    }
+}
+
 impl<T: Wire> Wire for Vec<T> {
     fn put(&self, out: &mut Vec<u8>) {
         u16::try_from(self.len()).expect("too long").put(out);

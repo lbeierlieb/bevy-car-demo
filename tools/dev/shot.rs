@@ -399,7 +399,15 @@ fn wheel_log(
 /// from `distance` m away towards `bearing` (degrees from north, clockwise), `height` m up.
 fn proxy_cam(
     mut cams: Query<&mut Transform, With<Camera3d>>,
-    proxies: Query<&Transform, (With<crate::net::client::Proxy>, Without<Camera3d>)>,
+    // The named remote cars: the other players'.
+    proxies: Query<
+        &Transform,
+        (
+            With<crate::net::client::RemoteCar>,
+            With<crate::net::client::Tag>,
+            Without<Camera3d>,
+        ),
+    >,
 ) {
     let Ok(spec) = std::env::var("PROXYCAM") else {
         return;

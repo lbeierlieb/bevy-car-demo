@@ -1,12 +1,13 @@
 //! A player's side: say hello, send the car being driven (its looks when they change, its
-//! state `SEND_RATE` times a second), and show the cars of the players nearby as proxies:
-//! entities with their `Looks` and `Motion` (so they're drawn and heard like any car),
-//! where they are by now: carried on from their latest state (dead reckoning), turning as
-//! they turned and speeding up or slowing down as they did between their last two states
-//! (`predict`). What's drawn closes on that smoothly (`Drawn`), so a new state that
-//! disagrees doesn't make a car jump. A car only pushes itself off a proxy; the other
-//! player's game does the same on their side. On a server the traffic is the server's:
-//! its cars near us are shown the same way (`ServerTraffic`), and our own traffic stops.
+//! state `SEND_RATE` times a second), and show the cars the server sends, the traffic's
+//! and the other players' alike, as `RemoteCar`s: entities with their `Looks` and
+//! `Motion` (so they're drawn and heard like any car) and the name they show, if any
+//! (`Tag`), where they are by now: carried on from their latest state (dead reckoning),
+//! turning as they turned and speeding up or slowing down as they did between their last
+//! two states (`predict`). What's drawn closes on that smoothly (`Drawn`), so a new state
+//! that disagrees doesn't make a car jump. A car only pushes itself off a remote car; the
+//! other player's game (or the server, for traffic) does the same on their side. On a
+//! server there's no traffic of our own: the server's comes as remote cars.
 //! The other players the server puts on our map are kept apart from all that
 //! (`Connection::on_map`), and so is the chat (`Connection::chat`).
 
@@ -16,7 +17,7 @@ use bevy::prelude::*;
 
 use super::link::Link;
 use super::protocol::{
-    CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, TrafficState, clean_chat,
+    CarId, CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, clean_chat,
 };
 use super::wire::{decode, encode};
 use super::{ClockOffset, SEND_RATE};
@@ -41,8 +42,11 @@ const STEP: f32 = 1.0 / 120.0;
 /// The most acceleration believed from two states (m/s²): more is a crash, which doesn't
 /// go on.
 const MOST_ACCELERATION: f32 = 15.0;
-/// A proxy not heard of for this long is gone (out of range) (s).
+/// A car not heard of for this long is gone (should the server's word be lost) (s).
 const GONE: f64 = 2.0;
+/// What we've been told of a car (its looks and name) is kept this long after it was
+/// last heard of (s): the server tells it again when the car comes back into range.
+const FORGET: f64 = 30.0;
 /// States kept per car: the last two give the acceleration.
 const KEPT: usize = 2;
 /// A player on the map is carried on along their way for this long past where they were
@@ -58,17 +62,16 @@ impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (receive, dress_proxies, send, (move_proxies, remove_proxies))
+            (receive, dress_cars, send, (move_cars, remove_cars))
                 .chain()
                 .after(crate::looks::show_cars)
                 .run_if(resource_exists::<Connection>),
         )
-        .init_resource::<TrafficClock>()
         .init_resource::<traffic::Source>()
-        .add_systems(PreUpdate, (traffic_source, move_traffic).chain())
+        .add_systems(PreUpdate, switch_source)
         .add_systems(
             FixedUpdate,
-            push_off_proxies
+            push_off_remote_cars
                 .after(crate::sim::simulate)
                 .run_if(resource_exists::<Connection>),
         );
@@ -112,8 +115,10 @@ pub struct Connection {
     /// Whether the server has chat on, and the latest lines, oldest first.
     pub chat_on: bool,
     pub chat: VecDeque<ChatLine>,
-    /// The looks of every car we've been told of.
-    looks: HashMap<PlayerId, Looks>,
+    /// The server's clock against ours (every state comes on it).
+    clock: ClockOffset,
+    /// What we've been told of each car (a state may overtake it, or come later).
+    known: HashMap<CarId, Known>,
     /// The other players the server shows on our map, and when each was heard of (s).
     map: HashMap<PlayerId, (MapPlayer, f64)>,
     /// The looks last sent of our car, and when its state was (s).
@@ -132,7 +137,8 @@ impl Connection {
             name: name.to_string(),
             chat_on: false,
             chat: VecDeque::new(),
-            looks: HashMap::new(),
+            clock: ClockOffset::default(),
+            known: HashMap::new(),
             map: HashMap::new(),
             sent_looks: None,
             sent: f64::NEG_INFINITY,
@@ -175,35 +181,30 @@ impl Connection {
     }
 }
 
-/// The server's clock less ours, for the traffic: one clock for all its cars.
-#[derive(Resource, Default)]
-struct TrafficClock(ClockOffset);
-
-/// A traffic car on the server, shown here.
-#[derive(Component)]
-pub struct ServerTraffic {
-    pub id: u32,
-    states: VecDeque<TrafficState>,
+/// A car's looks and name as we were told, and when it was last heard of (s).
+#[derive(Default)]
+struct Known {
+    looks: Option<Looks>,
+    tag: Option<String>,
     heard: f64,
-    /// Where it is by now, as a body to run into.
-    pub body: RigidBody,
-    drawn: Drawn,
 }
 
-/// Another player's car.
+/// A car the server sends: another player's or a traffic car (nothing tells which).
 #[derive(Component)]
-pub struct Proxy {
-    pub id: PlayerId,
+pub struct RemoteCar {
+    pub id: CarId,
     /// The latest states, oldest first.
     states: VecDeque<CarState>,
-    /// Their clock against ours.
-    clock: ClockOffset,
     /// When it was last heard of (our clock, s).
     heard: f64,
     /// Where it is by now, as a body to run into (moving, but never pushed).
     pub body: Option<RigidBody>,
     drawn: Drawn,
 }
+
+/// The name a remote car shows over it.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct Tag(pub String);
 
 fn now(time: &Time<Real>) -> f64 {
     time.elapsed_secs_f64()
@@ -212,10 +213,8 @@ fn now(time: &Time<Real>) -> f64 {
 fn receive(
     mut commands: Commands,
     mut connection: ResMut<Connection>,
-    mut traffic_clock: ResMut<TrafficClock>,
     time: Res<Time<Real>>,
-    mut proxies: Query<(Entity, &mut Proxy)>,
-    mut traffic_cars: Query<&mut ServerTraffic>,
+    mut cars: Query<(Entity, &mut RemoteCar, Option<&Looks>, Option<&Tag>)>,
 ) {
     let now = now(&time);
     let connection = &mut *connection;
@@ -223,8 +222,8 @@ fn receive(
         let Some(message) = decode::<ToClient>(&bytes) else {
             if bytes.first() == Some(&ToClient::LOOKS) {
                 warn!(
-                    "Another player drives a car this game doesn't know (a newer version): \
-                     it isn't shown"
+                    "The server sent a car this game doesn't know (it's from a newer \
+                     version): it isn't shown"
                 );
             } else {
                 warn!("The server sent something unreadable");
@@ -247,21 +246,79 @@ fn receive(
             ToClient::Left { id } => {
                 connection.players.remove(&id);
                 connection.pings.remove(&id);
-                connection.looks.remove(&id);
                 connection.map.remove(&id);
-                for (entity, proxy) in &proxies {
-                    if proxy.id == id {
-                        commands.entity(entity).despawn();
-                    }
-                }
             }
-            ToClient::Looks { id, looks } => {
-                for (entity, proxy) in &proxies {
-                    if proxy.id == id {
+            ToClient::Looks { car, looks } => {
+                for (entity, remote, shown, _) in &cars {
+                    if remote.id == car && shown != Some(&*looks) {
                         commands.entity(entity).insert((*looks).clone());
                     }
                 }
-                connection.looks.insert(id, *looks);
+                let known = connection.known.entry(car).or_default();
+                known.looks = Some(*looks);
+                known.heard = now;
+            }
+            ToClient::Tag { car, name } => {
+                for (entity, remote, _, shown) in &cars {
+                    if remote.id != car || shown.map(|tag| &tag.0) == name.as_ref() {
+                        continue;
+                    }
+                    match &name {
+                        Some(name) => commands.entity(entity).insert(Tag(name.clone())),
+                        None => commands.entity(entity).remove::<Tag>(),
+                    };
+                }
+                let known = connection.known.entry(car).or_default();
+                known.tag = name;
+                known.heard = now;
+            }
+            ToClient::Cars(states) => {
+                for (id, state) in states {
+                    connection.clock.heard(state.time, now);
+                    if let Some(known) = connection.known.get_mut(&id) {
+                        known.heard = now;
+                    }
+                    let found = cars.iter_mut().find(|(_, car, ..)| car.id == id);
+                    if let Some((_, mut car, ..)) = found {
+                        car.heard = now;
+                        if car.states.back().is_none_or(|last| state.time > last.time) {
+                            car.states.push_back(state);
+                            if car.states.len() > KEPT {
+                                car.states.pop_front();
+                            }
+                        }
+                        continue;
+                    }
+                    // A car new to us (or back in range).
+                    let mut entity = commands.spawn((
+                        RemoteCar {
+                            id,
+                            states: VecDeque::from([state]),
+                            heard: now,
+                            body: None,
+                            drawn: Drawn::default(),
+                        },
+                        Transform::from_translation(state.position).with_rotation(state.rotation),
+                        state.motion,
+                    ));
+                    if let Some(known) = connection.known.get(&id) {
+                        if let Some(looks) = &known.looks {
+                            entity.insert(looks.clone());
+                        }
+                        if let Some(name) = &known.tag {
+                            entity.insert(Tag(name.clone()));
+                        }
+                    }
+                }
+            }
+            ToClient::Gone { car } => {
+                for (entity, remote, ..) in &cars {
+                    if remote.id == car {
+                        commands.entity(entity).despawn();
+                    }
+                }
+                // A state still on its way mustn't bring it back with its looks.
+                connection.known.remove(&car);
             }
             ToClient::Map(players) => {
                 for player in players {
@@ -286,97 +343,38 @@ fn receive(
                     connection.chat.pop_front();
                 }
             }
-            ToClient::Traffic(cars) => {
-                for state in cars {
-                    traffic_clock.0.heard(state.time, now);
-                    let found = traffic_cars.iter_mut().find(|car| car.id == state.id);
-                    if let Some(mut car) = found {
-                        car.heard = now;
-                        if car.states.back().is_none_or(|last| state.time > last.time) {
-                            car.states.push_back(state);
-                            if car.states.len() > KEPT {
-                                car.states.pop_front();
-                            }
-                        }
-                        continue;
-                    }
-                    let car = TrafficCar::shown(state.chassis, state.paint);
-                    commands.spawn((
-                        ServerTraffic {
-                            id: state.id,
-                            states: VecDeque::from([state]),
-                            heard: now,
-                            body: car.body.clone(),
-                            drawn: Drawn::default(),
-                        },
-                        Transform::from_translation(state.position).with_rotation(state.rotation),
-                        car,
-                    ));
-                }
-            }
-            ToClient::States(states) => {
-                for (id, state) in states {
-                    let found = proxies.iter_mut().find(|(_, proxy)| proxy.id == id);
-                    if let Some((_, mut proxy)) = found {
-                        proxy.heard = now;
-                        proxy.clock.heard(state.time, now);
-                        if proxy
-                            .states
-                            .back()
-                            .is_none_or(|last| state.time > last.time)
-                        {
-                            proxy.states.push_back(state);
-                            if proxy.states.len() > KEPT {
-                                proxy.states.pop_front();
-                            }
-                        }
-                        continue;
-                    }
-                    // A car new to us (or back in range).
-                    let mut clock = ClockOffset::default();
-                    clock.heard(state.time, now);
-                    let mut entity = commands.spawn((
-                        Proxy {
-                            id,
-                            states: VecDeque::from([state]),
-                            clock,
-                            heard: now,
-                            body: None,
-                            drawn: Drawn::default(),
-                        },
-                        Transform::from_translation(state.position).with_rotation(state.rotation),
-                        state.motion,
-                    ));
-                    if let Some(looks) = connection.looks.get(&id) {
-                        entity.insert(looks.clone());
-                    }
-                }
-            }
         }
     }
     (connection.map).retain(|_, &mut (_, heard)| now - heard < MAP_GONE);
+    (connection.known).retain(|_, known| now - known.heard < FORGET);
     let ended = matches!(connection.status, Status::Lost(_) | Status::Refused(_));
     if !connection.link.is_open() && !ended {
         let why = (connection.link.problem())
             .unwrap_or_else(|| "The connection to the server was lost".to_string());
         warn!("{why}");
         connection.status = Status::Lost(why);
-        for (entity, _) in &proxies {
+        for (entity, ..) in &cars {
             commands.entity(entity).despawn();
         }
     }
 }
 
-/// Gives a proxy its car's looks once they're here: a state can overtake them (it comes
-/// as a datagram, they come over the stream) and spawn the proxy first.
-fn dress_proxies(
+/// Gives a remote car its looks and name once they're here: a state can overtake them
+/// (it comes as a datagram, they come over the stream) and spawn the car first.
+fn dress_cars(
     mut commands: Commands,
     connection: Res<Connection>,
-    proxies: Query<(Entity, &Proxy), Without<Looks>>,
+    cars: Query<(Entity, &RemoteCar, Has<Looks>, Has<Tag>)>,
 ) {
-    for (entity, proxy) in &proxies {
-        if let Some(looks) = connection.looks.get(&proxy.id) {
+    for (entity, car, has_looks, has_tag) in &cars {
+        let Some(known) = connection.known.get(&car.id) else {
+            continue;
+        };
+        if !has_looks && let Some(looks) = &known.looks {
             commands.entity(entity).insert(looks.clone());
+        }
+        if !has_tag && let Some(name) = &known.tag {
+            commands.entity(entity).insert(Tag(name.clone()));
         }
     }
 }
@@ -413,22 +411,22 @@ fn send(
     }
 }
 
-/// Shows each proxy where it's predicted to be by now, and keeps its body there.
-fn move_proxies(
+/// Shows each remote car where it's predicted to be by now, and keeps its body there.
+fn move_cars(
     time: Res<Time<Real>>,
-    mut proxies: Query<(&mut Proxy, &mut Transform, &mut Motion, Option<&Looks>)>,
+    connection: Res<Connection>,
+    mut cars: Query<(&mut RemoteCar, &mut Transform, &mut Motion, Option<&Looks>)>,
 ) {
-    let now = now(&time);
+    let Some(their) = connection.clock.their(now(&time)) else {
+        return;
+    };
     let dt = time.delta_secs();
-    for (mut proxy, mut transform, mut motion, looks) in &mut proxies {
-        let proxy = &mut *proxy;
-        let Some(their) = proxy.clock.their(now) else {
-            continue;
-        };
-        let (by_now, ahead) = predict(&proxy.states, their);
-        (transform.translation, transform.rotation) = proxy.drawn.follow(&by_now, dt);
+    for (mut car, mut transform, mut motion, looks) in &mut cars {
+        let car = &mut *car;
+        let (by_now, ahead) = predict(&car.states, their);
+        (transform.translation, transform.rotation) = car.drawn.follow(&by_now, dt);
         // The wheels roll on as fast as they did between the last two states.
-        let (before, latest) = (proxy.states.front().unwrap(), proxy.states.back().unwrap());
+        let (before, latest) = (car.states.front().unwrap(), car.states.back().unwrap());
         *motion = latest.motion;
         if latest.time > before.time {
             let between = (latest.time - before.time) as f32;
@@ -436,7 +434,7 @@ fn move_proxies(
                 wheel.spin += (wheel.spin - was.spin) / between * ahead;
             }
         }
-        proxy.body = looks.map(|looks| {
+        car.body = looks.map(|looks| {
             let mut body =
                 RigidBody::new(by_now.position, by_now.rotation, looks.mass, looks.inertia);
             body.velocity = by_now.velocity;
@@ -481,32 +479,7 @@ impl Kinematics {
     }
 }
 
-/// A state of a car, to carry on from.
-trait Snapshot: Copy {
-    fn time(&self) -> f64;
-    fn kinematics(&self) -> Kinematics;
-}
-
-impl Snapshot for CarState {
-    fn time(&self) -> f64 {
-        self.time
-    }
-
-    fn kinematics(&self) -> Kinematics {
-        Kinematics {
-            position: self.position,
-            rotation: self.rotation,
-            velocity: self.velocity,
-            angular_velocity: self.angular_velocity,
-        }
-    }
-}
-
-impl Snapshot for TrafficState {
-    fn time(&self) -> f64 {
-        self.time
-    }
-
+impl CarState {
     fn kinematics(&self) -> Kinematics {
         Kinematics {
             position: self.position,
@@ -519,8 +492,8 @@ impl Snapshot for TrafficState {
 
 /// The acceleration from `before` to `after`, in the car's frame (so a steady turn has
 /// none: the velocity turns with the car), along and across it only (not the bumps).
-fn acceleration<S: Snapshot>(before: &S, after: &S) -> Vec3 {
-    let between = after.time() - before.time();
+fn acceleration(before: &CarState, after: &CarState) -> Vec3 {
+    let between = after.time - before.time;
     if !(0.001..=1.0).contains(&between) {
         return Vec3::ZERO;
     }
@@ -531,13 +504,13 @@ fn acceleration<S: Snapshot>(before: &S, after: &S) -> Vec3 {
 
 /// Where a car is at `time` (its clock): its latest state carried on with the
 /// acceleration between its last two (up to `PREDICT`), and how long after that state.
-fn predict<S: Snapshot>(states: &VecDeque<S>, time: f64) -> (Kinematics, f32) {
+fn predict(states: &VecDeque<CarState>, time: f64) -> (Kinematics, f32) {
     let latest = states.back().unwrap();
     let acceleration = match states.len() {
         n if n >= 2 => acceleration(&states[n - 2], latest),
         _ => Vec3::ZERO,
     };
-    let ahead = (time - latest.time()).clamp(0.0, PREDICT) as f32;
+    let ahead = (time - latest.time).clamp(0.0, PREDICT) as f32;
     (latest.kinematics().ahead(acceleration, ahead), ahead)
 }
 
@@ -566,34 +539,24 @@ impl Drawn {
     }
 }
 
-/// Proxies not heard of for a while are out of range.
-fn remove_proxies(
-    mut commands: Commands,
-    time: Res<Time<Real>>,
-    proxies: Query<(Entity, &Proxy)>,
-    traffic_cars: Query<(Entity, &ServerTraffic)>,
-) {
+/// Remote cars not heard of for a while are out of range.
+fn remove_cars(mut commands: Commands, time: Res<Time<Real>>, cars: Query<(Entity, &RemoteCar)>) {
     let now = now(&time);
-    for (entity, proxy) in &proxies {
-        if now - proxy.heard > GONE {
-            commands.entity(entity).despawn();
-        }
-    }
-    for (entity, car) in &traffic_cars {
+    for (entity, car) in &cars {
         if now - car.heard > GONE {
             commands.entity(entity).despawn();
         }
     }
 }
 
-/// On a server the traffic is the server's (and what was there goes); off it, our own
-/// again (and the server's goes).
-fn traffic_source(
+/// On a server the traffic is the server's (and ours goes); off it, our own again (and
+/// the server's cars go, the other players' with them).
+fn switch_source(
     mut commands: Commands,
     connection: Option<Res<Connection>>,
     mut source: ResMut<traffic::Source>,
-    mut clock: ResMut<TrafficClock>,
-    cars: Query<Entity, With<TrafficCar>>,
+    traffic: Query<Entity, With<TrafficCar>>,
+    remote: Query<Entity, With<RemoteCar>>,
 ) {
     let wanted = match connection.map(|c| c.status.clone()) {
         Some(Status::Joined { .. }) => traffic::Source::Server,
@@ -601,55 +564,22 @@ fn traffic_source(
     };
     if *source != wanted {
         *source = wanted;
-        clock.0 = ClockOffset::default();
-        for entity in &cars {
+        for entity in traffic.iter().chain(&remote) {
             commands.entity(entity).despawn();
         }
     }
 }
 
-/// Shows each of the server's traffic cars where it's predicted to be by now, and keeps
-/// its body there.
-fn move_traffic(
-    time: Res<Time<Real>>,
-    clock: Res<TrafficClock>,
-    mut cars: Query<(&mut ServerTraffic, &mut TrafficCar)>,
-) {
-    let Some(their) = clock.0.their(now(&time)) else {
-        return;
-    };
-    let dt = time.delta_secs();
-    for (mut shown, mut car) in &mut cars {
-        let shown = &mut *shown;
-        let (by_now, ahead) = predict(&shown.states, their);
-        (car.body.position, car.body.rotation) = shown.drawn.follow(&by_now, dt);
-        car.body.velocity = by_now.velocity;
-        car.body.angular_velocity = by_now.angular_velocity;
-        let latest = shown.states.back().unwrap();
-        let forward = latest.rotation * Vec3::NEG_Z;
-        car.turn_wheels(
-            latest.rolled + latest.velocity.dot(forward) * ahead,
-            latest.steer,
-        );
-        shown.body.position = by_now.position;
-        shown.body.rotation = by_now.rotation;
-        shown.body.velocity = by_now.velocity;
-        shown.body.angular_velocity = by_now.angular_velocity;
-    }
-}
-
-/// Our cars push themselves off the proxies they run into (the proxies aren't moved: the
-/// other player's game pushes theirs off ours).
-fn push_off_proxies(
+/// Our cars push themselves off the remote cars they run into (those aren't moved: the
+/// other player's game pushes theirs off ours, the server its traffic).
+fn push_off_remote_cars(
     time: Res<Time>,
     mut cars: Query<&mut Car>,
-    proxies: Query<(&Proxy, &Looks)>,
-    traffic_cars: Query<(&ServerTraffic, &TrafficCar)>,
+    remote: Query<(&RemoteCar, &Looks)>,
 ) {
     let dt = time.delta_secs();
-    let others: Vec<(RigidBody, Obb)> = (proxies.iter())
-        .filter_map(|(proxy, looks)| Some((proxy.body.clone()?, looks.hull)))
-        .chain((traffic_cars.iter()).map(|(shown, car)| (shown.body.clone(), car.hull)))
+    let others: Vec<(RigidBody, Obb)> = (remote.iter())
+        .filter_map(|(car, looks)| Some((car.body.clone()?, looks.hull)))
         .collect();
     for mut car in &mut cars {
         let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
@@ -675,7 +605,7 @@ mod tests {
 
     /// A state of a car on a circle of `radius` around the origin at `speed`, braking at
     /// `braking`, `time` into it (and its speed then).
-    fn on_circle(radius: f32, speed: f32, braking: f32, time: f64) -> TrafficState {
+    fn on_circle(radius: f32, speed: f32, braking: f32, time: f64) -> CarState {
         let t = time as f32;
         let speed = speed - braking * t;
         let angle = (speed + braking * t / 2.0) * t / radius;
@@ -683,17 +613,13 @@ mod tests {
         let rotation = Quat::from_rotation_y(angle);
         // Starts at (radius, 0, 0) heading -z, turning left (around +y).
         let position = Vec3::new(radius * angle.cos(), 0.0, -radius * angle.sin());
-        TrafficState {
-            id: 0,
-            chassis: 0,
-            paint: 0,
+        CarState {
             time,
             position,
             rotation,
             velocity: rotation * Vec3::new(0.0, 0.0, -speed),
             angular_velocity: Vec3::new(0.0, yaw_rate, 0.0),
-            rolled: 0.0,
-            steer: 0.0,
+            motion: Motion::default(),
         }
     }
 
@@ -722,17 +648,13 @@ mod tests {
 
     #[test]
     fn a_car_braking_to_a_stop_stays_stopped() {
-        let state = |time: f64, speed: f32| TrafficState {
-            id: 0,
-            chassis: 0,
-            paint: 0,
+        let state = |time: f64, speed: f32| CarState {
             time,
             position: Vec3::ZERO,
             rotation: Quat::IDENTITY,
             velocity: Vec3::new(0.0, 0.0, -speed),
             angular_velocity: Vec3::new(0.0, 0.2, 0.0),
-            rolled: 0.0,
-            steer: 0.0,
+            motion: Motion::default(),
         };
         // 2 m/s, braking at 6 m/s²: stopped after 1/3 s, 0.33 m on.
         let states = VecDeque::from([state(0.0, 3.0), state(1.0 / 6.0, 2.0)]);
