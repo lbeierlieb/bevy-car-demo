@@ -243,6 +243,8 @@ struct Driver {
     /// Share of the limit this driver likes to go.
     keen: f32,
     rng: Rng,
+    /// The way ahead along `route` from `start`, built again only when they change.
+    path: Path,
 }
 
 /// The way ahead of a driver, along the lanes of its route with the corners at the
@@ -252,6 +254,8 @@ struct Path {
     points: Vec<Vec2>,
     at: Vec<f32>,
     limits: Vec<f32>,
+    /// The speed the bend at each point allows (m/s).
+    bends: Vec<f32>,
     /// Where the second leg begins (past the corner into it), if there's one.
     seam: Option<f32>,
 }
@@ -261,6 +265,7 @@ impl Path {
         self.points.clear();
         self.at.clear();
         self.limits.clear();
+        self.bends.clear();
         self.seam = None;
     }
 
@@ -348,6 +353,15 @@ impl Path {
             }
             from = into;
         }
+        self.bends = (0..self.points.len())
+            .map(|k| {
+                let (back, _) = self.point(self.at[k] - CHORD);
+                let (ahead, _) = self.point(self.at[k] + CHORD);
+                let p = self.points[k];
+                let turn = (p - back).angle_to(ahead - p).abs();
+                (CORNERING * CHORD / turn.max(1e-3)).sqrt()
+            })
+            .collect();
     }
 }
 
@@ -392,8 +406,10 @@ impl Rng {
 
 impl Driver {
     /// Plans the route at least `LOOKAHEAD` past the front axle: at each junction a way
-    /// at random, wide roads more likely, turning round at dead ends.
-    fn plan(&mut self, network: &Network) {
+    /// at random, wide roads more likely, turning round at dead ends. Whether it planned
+    /// more.
+    fn plan(&mut self, network: &Network) -> bool {
+        let mut planned = false;
         let mut ahead = -self.start - self.along;
         for &leg in &self.route {
             ahead += network.lane(leg).length();
@@ -414,7 +430,9 @@ impl Driver {
             };
             ahead += network.lane(next).length();
             self.route.push_back(next);
+            planned = true;
         }
+        planned
     }
 }
 
@@ -582,9 +600,10 @@ impl TrafficCar {
             speed: 0.0,
             keen,
             rng: Rng(seed | 1),
+            path: Path::default(),
         };
         driver.plan(network);
-        let mut path = Path::default();
+        let path = &mut driver.path;
         path.build(network, &driver.route, driver.start);
         // Starting at a little under the lowest limit just ahead.
         let lowest = (path.at.iter().zip(&path.limits))
@@ -749,11 +768,10 @@ fn step(
         )
         .chain(visitors.iter().map(|v| Vehicle::of(&v.body, &v.hull)))
         .collect();
-    let mut path = Path::default();
     let mut contacts = Vec::new();
     for (i, mut car) in traffic.iter_mut().enumerate() {
         if car.driver.is_some() {
-            drive(&mut car, i, &vehicles, &network, &terrain, &mut path, dt);
+            drive(&mut car, i, &vehicles, &network, &terrain, dt);
         } else {
             tumble(&mut car, &terrain, &mut contacts, dt);
         }
@@ -825,15 +843,16 @@ fn drive(
     vehicles: &[Vehicle],
     network: &Network,
     terrain: &Terrain,
-    path: &mut Path,
     dt: f32,
 ) {
     let wheelbase = car.wheels.wheelbase;
     let Some(driver) = car.driver.as_mut() else {
         return;
     };
-    driver.plan(network);
-    path.build(network, &driver.route, driver.start);
+    let mut path = std::mem::take(&mut driver.path);
+    if driver.plan(network) || path.points.is_empty() {
+        path.build(network, &driver.route, driver.start);
+    }
     // Past the corner into the next leg, that leg is the one it's on.
     while let Some(seam) = path.seam.filter(|&seam| driver.along >= seam) {
         let leg = driver.route.pop_front().unwrap();
@@ -853,12 +872,7 @@ fn drive(
         if d > LOOKAHEAD {
             break;
         }
-        let (back, _) = path.point(path.at[k] - CHORD);
-        let (ahead, _) = path.point(path.at[k] + CHORD);
-        let p = path.points[k];
-        let turn = (p - back).angle_to(ahead - p).abs();
-        let bend = (CORNERING * CHORD / turn.max(1e-3)).sqrt();
-        let v = (driver.keen * path.limits[k]).min(bend);
+        let v = (driver.keen * path.limits[k]).min(path.bends[k]);
         allowed = allowed.min((v * v + 2.0 * COMFORT_BRAKING * d).sqrt());
     }
 
@@ -928,6 +942,7 @@ fn drive(
     let steer = heading.angle_to(direction);
     let speed = driver.speed;
     let rear = driver.rear;
+    driver.path = path;
     car.steer = -steer;
     car.rolled += speed * dt;
     car.place(terrain, front, rear, speed, yaw_rate);
@@ -1041,7 +1056,6 @@ mod tests {
             }
         }
         let dt = 1.0 / 120.0;
-        let mut path = Path::default();
         let mut contacts = Vec::new();
         let mut travelled = 0.0;
         let mut too_fast = 0;
@@ -1053,7 +1067,7 @@ mod tests {
                 .collect();
             for (i, car) in cars.iter_mut().enumerate() {
                 if car.driver.is_some() {
-                    drive(car, i, &vehicles, &network, &terrain, &mut path, dt);
+                    drive(car, i, &vehicles, &network, &terrain, dt);
                     let driver = car.driver.as_ref().unwrap();
                     travelled += driver.speed * dt;
                     let limit = network.limit(driver.route[0], driver.start + driver.along);
@@ -1097,6 +1111,7 @@ mod tests {
         // Each driver's front axle is on its lane.
         for car in cars.iter().filter(|car| car.driver.is_some()) {
             let driver = car.driver.as_ref().unwrap();
+            let mut path = Path::default();
             path.build(&network, &driver.route, driver.start);
             let (front, _) = path.point(driver.along);
             let forward = car.body.rotation * Vec3::NEG_Z;

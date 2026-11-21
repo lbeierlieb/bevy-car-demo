@@ -575,7 +575,7 @@ catalogue entries, and things like swap subframes are named so they can be price
   `RigidBody` on its box (down to the ground) with ground and obstacle contacts, asleep
   once still. Spawn 260–550 m from the player (50 m at the start), despawn past 700 m
   (crashed 350 m). `drivers_follow_the_roads` runs 30 cars for a minute (~1 crash at a
-  merge, about 0.1 ms per step for all). Not done: right of way, overtaking, sounds,
+  merge, about 0.26 ms per step for all; each driver keeps its path, rebuilt only when the route changes: rebuilt every step it was 0.85 ms, and a small VPS server couldn't keep up). Not done: right of way, overtaking, sounds,
   wrecks blocking a lane hold the queue behind them until they despawn.
 - Not done: the engine sound per layout was never listened to (no audio in the
   sandbox); other suspension types; turbo kits limited by bay room; prices and saved
