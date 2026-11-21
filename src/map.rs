@@ -2,8 +2,12 @@
 //! colours as one image, with roads, houses and the cars drawn on top. Drag to move,
 //! scroll to zoom. A click is a `MapClicked` message for whatever the app does with it
 //! (the sandbox's `TeleportPlugin` puts the car on the nearest road there). Driving goes
-//! on underneath.
+//! on underneath. The ground image is built a few rows per frame from startup, so the
+//! map opens at once.
 
+use std::time::Duration;
+
+use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Rect, Shape, Stroke, pos2, vec2};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
@@ -11,7 +15,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use crate::buildings::Footprint;
 use crate::car::{ActiveCar, Car};
 use crate::input::WheelInput;
-use crate::terrain::{RoadKind, Terrain};
+use crate::terrain::{self, RoadKind, Terrain};
 
 /// Metres per pixel of the ground image: 1920 pixels across this map, within the 2048
 /// that every GPU (and WebGL2) supports as a texture size.
@@ -24,6 +28,9 @@ const MIN_SCALE: f32 = 0.2;
 const PLACE_WITHIN: f32 = 250.0;
 /// Narrowest a road is drawn, in screen points, however far out the map is zoomed.
 const MIN_ROAD_WIDTH: f32 = 1.5;
+/// Time per frame spent building the ground image until it's done (it takes about 0.1 s
+/// natively).
+const BUILD_BUDGET: Duration = Duration::from_millis(3);
 
 const BACKGROUND: Color32 = Color32::from_rgb(28, 30, 34);
 const PANEL: Color32 = Color32::from_rgba_premultiplied(10, 12, 16, 190);
@@ -40,7 +47,11 @@ impl Plugin for MapPlugin {
             .add_systems(Update, toggle)
             .add_systems(
                 EguiPrimaryContextPass,
-                draw.run_if(|view: Res<MapView>| view.open),
+                (
+                    prepare.run_if(|view: Res<MapView>| view.layers.is_none()),
+                    draw.run_if(|view: Res<MapView>| view.open),
+                )
+                    .chain(),
             );
     }
 }
@@ -82,7 +93,9 @@ pub struct MapView {
     center: Vec2,
     /// Metres per screen point; 0 until the map is first drawn, which fits the whole map.
     scale: f32,
-    /// Built the first time the map opens.
+    /// The ground image while it's being built.
+    ground: Option<GroundImage>,
+    /// Built from startup (see `prepare`).
     layers: Option<Layers>,
 }
 
@@ -94,6 +107,7 @@ impl Default for MapView {
             key: KeyCode::KeyK,
             center: Vec2::ZERO,
             scale: 0.0,
+            ground: None,
             layers: None,
         }
     }
@@ -102,7 +116,47 @@ impl Default for MapView {
 impl MapView {
     /// Forgets the drawn layers, so they're built again from the map (after a re-bake).
     pub fn rebuild(&mut self) {
+        self.ground = None;
         self.layers = None;
+    }
+}
+
+/// The ground in its land use colours, a pixel per `PIXEL` metres, built row by row.
+struct GroundImage {
+    size: [usize; 2],
+    pixels: Vec<Color32>,
+}
+
+impl GroundImage {
+    fn new(terrain: &Terrain) -> Self {
+        let size = terrain.half_size() * 2.0 / PIXEL;
+        let size = [size.x as usize, size.y as usize];
+        Self {
+            size,
+            pixels: Vec::with_capacity(size[0] * size[1]),
+        }
+    }
+
+    /// Builds rows for up to `budget`; whether the image is complete.
+    fn advance(&mut self, terrain: &Terrain, budget: Duration) -> bool {
+        let start = Instant::now();
+        let [w, h] = self.size;
+        while self.pixels.len() < w * h {
+            let py = self.pixels.len() / w;
+            for px in 0..w {
+                let p = (Vec2::new(px as f32, py as f32) + 0.5) * PIXEL - terrain.half_size();
+                // The bare terrain's slope: the roads are drawn over it anyway, and their
+                // lookup made this three times slower.
+                let up = terrain.land(p.x, p.y).1.y;
+                let class = terrain.land_class(p.x, p.y);
+                let color = terrain::ground_color(class, up, py * w + px);
+                self.pixels.push(color32(color));
+            }
+            if start.elapsed() >= budget {
+                break;
+            }
+        }
+        self.pixels.len() == w * h
     }
 }
 
@@ -115,19 +169,10 @@ struct Layers {
 }
 
 impl Layers {
-    fn new(ctx: &egui::Context, terrain: &Terrain) -> Self {
-        let size = terrain.half_size() * 2.0;
-        let (w, h) = ((size.x / PIXEL) as usize, (size.y / PIXEL) as usize);
-        let mut pixels = Vec::with_capacity(w * h);
-        for py in 0..h {
-            for px in 0..w {
-                let p = (Vec2::new(px as f32, py as f32) + 0.5) * PIXEL - terrain.half_size();
-                pixels.push(color32(terrain.ground_color_at(p.x, p.y, py * w + px)));
-            }
-        }
+    fn new(ctx: &egui::Context, terrain: &Terrain, image: GroundImage) -> Self {
         let ground = ctx.load_texture(
             "map ground",
-            egui::ColorImage::new([w, h], pixels),
+            egui::ColorImage::new(image.size, image.pixels),
             egui::TextureOptions::NEAREST,
         );
         let road_bounds = terrain
@@ -194,6 +239,26 @@ fn toggle(
     }
 }
 
+/// Builds the ground image a little every frame from startup (all at once if the map is
+/// already open), then the layers.
+fn prepare(mut contexts: EguiContexts, terrain: Res<Terrain>, mut view: ResMut<MapView>) -> Result {
+    let budget = if view.open {
+        Duration::MAX
+    } else {
+        BUILD_BUDGET
+    };
+    let ground = view
+        .ground
+        .get_or_insert_with(|| GroundImage::new(&terrain));
+    if !ground.advance(&terrain, budget) {
+        return Ok(());
+    }
+    let ctx = contexts.ctx_mut()?;
+    let image = view.ground.take().expect("built above");
+    view.layers = Some(Layers::new(ctx, &terrain, image));
+    Ok(())
+}
+
 fn draw(
     mut contexts: EguiContexts,
     terrain: Res<Terrain>,
@@ -211,9 +276,6 @@ fn draw(
     let fit = (2.0 * half.x / screen.width()).max(2.0 * half.y / screen.height()) * 1.05;
     if view.scale <= 0.0 {
         view.scale = fit;
-    }
-    if view.layers.is_none() {
-        view.layers = Some(Layers::new(ctx, &terrain));
     }
     let clicked = egui::Area::new(egui::Id::new("map"))
         .order(egui::Order::Foreground)
@@ -252,7 +314,7 @@ fn draw(
                 Rect::from_min_max(a, b).intersects(screen)
             };
             let painter = ui.painter_at(screen);
-            let layers = view.layers.as_ref().expect("map layers built above");
+            let layers = view.layers.as_ref().expect("map layers built by `prepare`");
             painter.rect_filled(screen, 0.0, BACKGROUND);
             painter.image(
                 layers.ground.id(),

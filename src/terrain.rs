@@ -597,12 +597,6 @@ impl Terrain {
         }
     }
 
-    /// Ground colour at (x, z), as the terrain is drawn there.
-    pub fn ground_color_at(&self, x: f32, z: f32, variation: usize) -> [f32; 4] {
-        let (_, normal) = self.sample(x, z);
-        ground_color(self.land_class(x, z), normal.y, variation)
-    }
-
     /// Whether (x, z) is inside the map, away from the rim that slopes down at its edge.
     pub fn inside(&self, x: f32, z: f32) -> bool {
         let inner = self.half_size() - RIM;
@@ -1113,7 +1107,7 @@ fn land_surface(class: u8) -> Surface {
 
 /// Ground colour for a land use class (see `tools/bake`), with steep natural slopes
 /// showing bare earth.
-fn ground_color(class: u8, up: f32, variation: usize) -> [f32; 4] {
+pub fn ground_color(class: u8, up: f32, variation: usize) -> [f32; 4] {
     let jitter = (hash(variation as u32) - 0.5) * 0.04;
     let base = match class {
         1 => Vec3::new(0.42, 0.56, 0.33),     // residential: gardens
