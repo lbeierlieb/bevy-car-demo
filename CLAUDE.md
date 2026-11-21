@@ -310,6 +310,31 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   started" and who joined/left (`net::Presence` messages from `net::server`) through
   `ureq` from a thread of its own.
   Tried here only against Telegram with a fake token (401, logged, token kept out).
+- **Every car from the server alike** (agreed with the user, 2026-11-21, so players can
+  hide in traffic; in progress, steps below): one `CarId` counter on the server for
+  traffic and player cars, never tied to a `PlayerId` on the wire (players list, chat,
+  pings keep `PlayerId`). `ToClient::Cars(Vec<(CarId, CarState)>)` (unreliable),
+  `ToClient::Looks { car, looks }` (reliable, by revision; traffic gets one too),
+  `ToClient::Tag { car, name: Option<String> }` (what name the car shows, if any: players'
+  names today, named NPCs or none later). The server stamps every state on its own
+  clock (player states converted with a per-peer `ClockOffset`), so the client has one
+  clock and a car's own clock gives nothing away. Server: every car is an entity with
+  `CarId`, `Looks` and its latest `CarState`; one sending loop over all of them. Client
+  joined: one `RemoteCar` (states, `Drawn`, body for contacts, `Looks`/`Motion`,
+  optional `Tag`), dead reckoned like players (no rail prediction); no local traffic.
+  Alone (and on the server): `TrafficCar` simulates as before, `traffic::show` gives it
+  `Looks` (factory looks cached per chassis and paint) and `Motion` (steer, spin from
+  rolled, suspension at rest, idle engine) and a `Transform` at the centre of mass, and
+  `visuals.rs` draws it like any car. Remaining tells: traffic's suspension doesn't
+  move, its engine idles (matters once remote cars are heard), how it drives.
+  Steps: 1. local traffic through `Looks`/`Motion`; 2. server clock for all states;
+  3. protocol 5 (`CarId`, `Cars`/`Looks`/`Tag`, `RemoteCar`); 4. notes.
+- **Parallel worlds** (planned with the user, 2026-11-21, not built): groups of players
+  in a challenge (race, hide and seek) separate from the normal world and each other.
+  Built on the above: a world component on cars, peers and anchors; the sending loop
+  sends only a player's world, `populate` counts density per world, traffic `step`
+  collides only within a world; the client needs nothing (maybe a message for the UI).
+  Per-world settings like `--map-players self` and no tags for hide and seek.
 - Not done yet: other players' engine sound (the synth plays only the driven car; a
   proxy needs a sound source of its own), the browser path tried in a real browser (no
   browser here; it builds and links), rate limits on what a player sends (chat has one).
