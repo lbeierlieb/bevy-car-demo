@@ -7,6 +7,8 @@
 //! disagrees doesn't make a car jump. A car only pushes itself off a proxy; the other
 //! player's game does the same on their side. On a server the traffic is the server's:
 //! its cars near us are shown the same way (`ServerTraffic`), and our own traffic stops.
+//! The other players the server puts on our map are kept apart from all that
+//! (`Connection::on_map`).
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
@@ -14,7 +16,7 @@ use bevy::prelude::*;
 
 use super::SEND_RATE;
 use super::link::Link;
-use super::protocol::{CarState, PROTOCOL, PlayerId, ToClient, ToServer, TrafficState};
+use super::protocol::{CarState, MapPlayer, PROTOCOL, PlayerId, ToClient, ToServer, TrafficState};
 use super::wire::{decode, encode};
 use crate::car::{ActiveCar, Car};
 use crate::looks::{Looks, Motion};
@@ -46,6 +48,10 @@ const GONE: f64 = 2.0;
 const RISE: f64 = 0.005;
 /// States kept per car: the last two give the acceleration.
 const KEPT: usize = 2;
+/// A player on the map is carried on along their way for this long past where they were
+/// last sent (once a second), and gone when not sent for this long (s).
+const MAP_PREDICT: f64 = 1.5;
+const MAP_GONE: f64 = 3.0;
 
 pub struct ClientPlugin;
 
@@ -92,6 +98,8 @@ pub struct Connection {
     pub players: BTreeMap<PlayerId, String>,
     /// The looks of every car we've been told of.
     looks: HashMap<PlayerId, Looks>,
+    /// The other players the server shows on our map, and when each was heard of (s).
+    map: HashMap<PlayerId, (MapPlayer, f64)>,
     /// The looks last sent of our car, and when its state was (s).
     sent_looks: Option<Looks>,
     sent: f64,
@@ -105,6 +113,7 @@ impl Connection {
             status: Status::Joining,
             players: BTreeMap::new(),
             looks: HashMap::new(),
+            map: HashMap::new(),
             sent_looks: None,
             sent: f64::NEG_INFINITY,
         };
@@ -118,6 +127,18 @@ impl Connection {
 
     fn say(&mut self, message: &ToServer) {
         self.link.send(message.reliable(), encode(message));
+    }
+
+    /// The other players the server puts on our map, where they are by `now` (on
+    /// `Time<Real>`): carried on at their speed for a little while.
+    pub fn on_map(&self, now: f64) -> impl Iterator<Item = MapPlayer> + '_ {
+        self.map.values().map(move |&(player, heard)| {
+            let ahead = (now - heard).clamp(0.0, MAP_PREDICT) as f32;
+            MapPlayer {
+                position: player.position + player.velocity * ahead,
+                ..player
+            }
+        })
     }
 
     /// Leaves the server.
@@ -222,6 +243,7 @@ fn receive(
             ToClient::Left { id } => {
                 connection.players.remove(&id);
                 connection.looks.remove(&id);
+                connection.map.remove(&id);
                 for (entity, proxy) in &proxies {
                     if proxy.id == id {
                         commands.entity(entity).despawn();
@@ -235,6 +257,11 @@ fn receive(
                     }
                 }
                 connection.looks.insert(id, *looks);
+            }
+            ToClient::Map(players) => {
+                for player in players {
+                    connection.map.insert(player.id, (player, now));
+                }
             }
             ToClient::Traffic(cars) => {
                 for state in cars {
@@ -304,6 +331,7 @@ fn receive(
             }
         }
     }
+    (connection.map).retain(|_, &mut (_, heard)| now - heard < MAP_GONE);
     let ended = matches!(connection.status, Status::Lost(_) | Status::Refused(_));
     if !connection.link.is_open() && !ended {
         let why = (connection.link.problem())

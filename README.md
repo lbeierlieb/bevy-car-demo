@@ -101,8 +101,13 @@ server is a program of its own, run headless:
 
 ```sh
 cargo run --bin server -- --cert fullchain.pem --key key.pem   # options: --port, --traffic, --max-players,
+                                                               # --map-players, --map-near,
                                                                # --telegram-token-file with --telegram-chat-file
 ```
+
+Who a player sees of the others on their map (K) is the server's choice:
+`--map-players self` (nobody), `near` (within `--map-near` metres, 200 by default; the
+default) or `all` (everyone, wherever they are).
 
 It needs a real certificate for browsers to join (WebTransport). Without `--cert` and
 `--key` it makes a throwaway one, which only the native game joins, with
@@ -132,6 +137,7 @@ joins this server):
             openFirewall = true;          # UDP 4433, TCP 80 (and 443 with the web version)
             web.enable = true;            # https://cars.example.org: the game in the browser
             # port = 4433; traffic = 20; maxPlayers = 32;
+            # mapPlayers = "near"; mapNear = 200;  # others on the map: "self", "near" or "all"
             # A Telegram bot says who joins and leaves (the token file e.g. from sops-nix):
             # telegram = {
             #   tokenFile = config.sops.secrets.car-sim-telegram-token.path;

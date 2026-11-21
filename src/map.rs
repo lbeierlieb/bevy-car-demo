@@ -1,5 +1,6 @@
 //! Map of the whole area (K, or a wheel button bound to "Map"): the ground in its land use
-//! colours as one image, with roads, houses and the cars drawn on top. Drag to move,
+//! colours as one image, with roads, houses and the cars drawn on top (the app's own,
+//! and whatever others it lists in `MapCars`, e.g. other players). Drag to move,
 //! scroll to zoom. A click is a `MapClicked` message for whatever the app does with it
 //! (the sandbox's `TeleportPlugin` puts the car on the nearest road there). Driving goes
 //! on underneath. The ground image is built a few rows per frame from startup, so the
@@ -43,6 +44,7 @@ impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MapView>()
             .init_resource::<MapMarks>()
+            .init_resource::<MapCars>()
             .add_message::<MapClicked>()
             .add_systems(Update, toggle)
             .add_systems(
@@ -75,6 +77,19 @@ pub struct MapMarks(pub Vec<MapMark>);
 pub struct MapMark {
     pub at: Vec2,
     pub color: [u8; 3],
+    pub label: String,
+}
+
+/// Cars other than the app's own to show (other players, as a server tells): an arrow in
+/// their paint and a label each.
+#[derive(Resource, Default)]
+pub struct MapCars(pub Vec<MapCar>);
+
+pub struct MapCar {
+    pub at: Vec2,
+    /// Which way it points (a unit vector, x east, z south).
+    pub forward: Vec2,
+    pub color: Color,
     pub label: String,
 }
 
@@ -264,7 +279,7 @@ fn draw(
     terrain: Res<Terrain>,
     active: Option<Res<ActiveCar>>,
     cars: Query<&Car>,
-    marks: Res<MapMarks>,
+    (marks, others): (Res<MapMarks>, Res<MapCars>),
     mut view: ResMut<MapView>,
     mut clicks: MessageWriter<MapClicked>,
 ) -> Result {
@@ -358,35 +373,38 @@ fn draw(
                 );
             }
 
-            // The cars as arrows, the one being driven larger and outlined in white.
+            // The cars as arrows, the one being driven last, larger and outlined in white.
+            for other in &others.0 {
+                let at = to_screen(other.at);
+                arrow(
+                    &painter,
+                    at,
+                    other.forward,
+                    8.0,
+                    other.color,
+                    Color32::BLACK,
+                );
+                label(
+                    &painter,
+                    at + vec2(12.0, 0.0),
+                    Align2::LEFT_CENTER,
+                    &other.label,
+                );
+            }
             let mut cars: Vec<&Car> = cars.iter().collect();
             cars.sort_by_key(|car| car.index == active);
             for car in cars {
                 let driven = car.index == active;
-                let at = to_screen(car.body.position.xz());
                 let forward = (car.body.rotation * Vec3::NEG_Z)
                     .xz()
                     .normalize_or(Vec2::NEG_Y);
-                let (ahead, side) = (vec2(forward.x, forward.y), vec2(-forward.y, forward.x));
-                let size = if driven { 11.0 } else { 8.0 };
-                let points = vec![
-                    at + ahead * size,
-                    at - ahead * size * 0.7 + side * size * 0.7,
-                    at - ahead * size * 0.3,
-                    at - ahead * size * 0.7 - side * size * 0.7,
-                ];
-                let outline = if driven {
-                    Color32::WHITE
+                let (size, outline) = if driven {
+                    (11.0, Color32::WHITE)
                 } else {
-                    Color32::BLACK
+                    (8.0, Color32::BLACK)
                 };
-                // Not convex (the notch at the back), so filled as two triangles.
-                let fill = color32(car.setup.color.to_linear().to_f32_array());
-                for tri in [[0, 1, 2], [0, 2, 3]] {
-                    let tri = tri.iter().map(|&i| points[i]).collect();
-                    painter.add(Shape::convex_polygon(tri, fill, Stroke::NONE));
-                }
-                painter.add(Shape::closed_line(points, Stroke::new(1.5, outline)));
+                let at = to_screen(car.body.position.xz());
+                arrow(&painter, at, forward, size, car.setup.color, outline);
             }
 
             scale_bar(&painter, screen, scale);
@@ -441,6 +459,31 @@ fn teleport(
 }
 
 /// A bar of a round length (1, 2 or 5 times a power of ten metres) about 120 points long.
+/// A car pointing along `forward`, `size` points from its middle to its nose.
+fn arrow(
+    painter: &egui::Painter,
+    at: Pos2,
+    forward: Vec2,
+    size: f32,
+    color: Color,
+    outline: Color32,
+) {
+    let (ahead, side) = (vec2(forward.x, forward.y), vec2(-forward.y, forward.x));
+    let points = vec![
+        at + ahead * size,
+        at - ahead * size * 0.7 + side * size * 0.7,
+        at - ahead * size * 0.3,
+        at - ahead * size * 0.7 - side * size * 0.7,
+    ];
+    // Not convex (the notch at the back), so filled as two triangles.
+    let fill = color32(color.to_linear().to_f32_array());
+    for tri in [[0, 1, 2], [0, 2, 3]] {
+        let tri = tri.iter().map(|&i| points[i]).collect();
+        painter.add(Shape::convex_polygon(tri, fill, Stroke::NONE));
+    }
+    painter.add(Shape::closed_line(points, Stroke::new(1.5, outline)));
+}
+
 fn scale_bar(painter: &egui::Painter, screen: Rect, scale: f32) {
     let target = 120.0 * scale;
     let power = 10f32.powf(target.log10().floor());

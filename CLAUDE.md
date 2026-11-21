@@ -265,6 +265,14 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   first one and skips another player's unknown car with a warning), traffic behaviour
   (simulated on the server), and a re-bake (fingerprint). With `web.enable` the web
   build updates with the server (`nixos-rebuild` restarts it, dropping everyone).
+- **Server settings for gameplay** (agreed with the user, 2026-11-21): command line
+  options plus a NixOS module option each. The first: who's on the map (K) of the other
+  players, `--map-players self|near|all` (default near) and `--map-near` (m, default
+  200) / `services.car-sim.mapPlayers`, `mapNear`. The client knows nothing of it: the
+  server sends `ToClient::Map` (id, position, velocity, forward, paint; unreliable) once
+  a second with whoever the setting shows; the client keeps each for 3 s, carries it on
+  at its speed (`Connection::on_map`), and `online.rs` hands them to the map as
+  `map::MapCars` (the map itself knows nothing of networking). Protocol 3.
 - **Telegram** (asked for by the user, 2026-11-20): `server --telegram-token-file F
   --telegram-chat-file F` (module: `services.car-sim.telegram = { tokenFile;
   chatIdFile; }`; both secret, the user manages them with sops; the module hands them
@@ -273,7 +281,7 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `ureq` from a thread of its own.
   Tried here only against Telegram with a fake token (401, logged, token kept out).
 - Not done yet: other players' engine sound (the synth plays only the driven car; a
-  proxy needs a sound source of its own), other players on the map (K), name tags hidden
+  proxy needs a sound source of its own), name tags hidden
   behind houses, the browser path tried in a real browser (no browser here; it builds
   and links), rate limits on what a player sends.
 - Later: chat, sanity checks on snapshots, Safari, career.

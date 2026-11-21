@@ -3,8 +3,12 @@
 //!
 //! ```text
 //! server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]
+//!        [--map-players self|near|all] [--map-near 200]
 //!        [--telegram-token-file token --telegram-chat-file chat]
 //! ```
+//!
+//! `--map-players` says who a player sees of the others on their map: nobody (`self`),
+//! the ones within `--map-near` metres (`near`, the default) or everyone (`all`).
 //!
 //! Without a certificate it makes a throwaway one: only the native game joins that, with
 //! `CAR_SIM_INSECURE=1` (for development).
@@ -28,7 +32,7 @@ fn main() {
         Ok(options) => options,
         Err(e) => {
             eprintln!(
-                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--telegram-token-file token --telegram-chat-file chat]"
+                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--map-players self|near|all] [--map-near 200]\n       [--telegram-token-file token --telegram-chat-file chat]"
             );
             std::process::exit(2);
         }
@@ -64,7 +68,11 @@ fn main() {
         LogPlugin::default(),
     ))
     .add_plugins((WorldPlugin, net::ServerPlugin))
-    .insert_resource(net::Server::new(listener).with_max_players(options.max_players))
+    .insert_resource(
+        net::Server::new(listener)
+            .with_max_players(options.max_players)
+            .with_map(options.map_players),
+    )
     .insert_resource(traffic::Traffic {
         cars: options.traffic,
     })
@@ -91,6 +99,7 @@ struct Options {
     key: Option<std::path::PathBuf>,
     traffic: usize,
     max_players: usize,
+    map_players: car_sim::net::MapPlayers,
     telegram_token_file: Option<std::path::PathBuf>,
     telegram_chat_file: Option<std::path::PathBuf>,
 }
@@ -104,6 +113,7 @@ impl Options {
             key: None,
             traffic: 20,
             max_players: 32,
+            map_players: car_sim::net::MapPlayers::Near(car_sim::net::server::MAP_NEAR),
             telegram_token_file: None,
             telegram_chat_file: None,
         };
@@ -113,6 +123,9 @@ impl Options {
                 .parse()
                 .map_err(|_| format!("{arg}: not a number: {value}"))
         }
+        use car_sim::net::MapPlayers;
+        let mut map_players = "near".to_string();
+        let mut map_near = car_sim::net::server::MAP_NEAR;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--port" => options.port = number(&arg, args.next())?,
@@ -123,6 +136,10 @@ impl Options {
                         number::<usize>(&arg, args.next())?.min(car_sim::traffic::MOST_CARS)
                 }
                 "--max-players" => options.max_players = number(&arg, args.next())?,
+                "--map-players" => {
+                    map_players = args.next().ok_or("--map-players needs self, near or all")?
+                }
+                "--map-near" => map_near = number(&arg, args.next())?,
                 "--telegram-token-file" => {
                     options.telegram_token_file = Some(
                         args.next()
@@ -139,6 +156,15 @@ impl Options {
                 }
                 _ => return Err(format!("unknown option {arg}")),
             }
+        }
+        options.map_players = match map_players.as_str() {
+            "self" => MapPlayers::Nobody,
+            "near" => MapPlayers::Near(map_near),
+            "all" => MapPlayers::Everyone,
+            other => return Err(format!("--map-players: self, near or all, not {other}")),
+        };
+        if !(map_near.is_finite() && map_near >= 0.0) {
+            return Err(format!("--map-near: not a distance: {map_near}"));
         }
         if options.cert.is_some() != options.key.is_some() {
             return Err("--cert and --key go together".into());

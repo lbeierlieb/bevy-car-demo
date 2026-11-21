@@ -83,6 +83,25 @@ in
       description = "The most players at once.";
     };
 
+    mapPlayers = mkOption {
+      type = types.enum [
+        "self"
+        "near"
+        "all"
+      ];
+      default = "near";
+      description = ''
+        Who a player sees of the others on their map: nobody (`self`), the ones within
+        {option}`services.car-sim.mapNear` metres (`near`) or everyone (`all`).
+      '';
+    };
+
+    mapNear = mkOption {
+      type = types.ints.unsigned;
+      default = 200;
+      description = "How near other players are shown on the map with `mapPlayers = \"near\"` (m).";
+    };
+
     telegram = {
       tokenFile = mkOption {
         type = types.nullOr types.str;
@@ -164,6 +183,10 @@ in
               cfg.traffic
               "--max-players"
               cfg.maxPlayers
+              "--map-players"
+              cfg.mapPlayers
+              "--map-near"
+              cfg.mapNear
             ]
             # The credentials' copies (%d: the service's credentials directory).
             ++ lib.optionals (cfg.telegram.tokenFile != null) [

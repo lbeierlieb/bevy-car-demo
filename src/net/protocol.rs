@@ -6,6 +6,8 @@
 //! tells everyone who joins and leaves, and sends each player the states of the cars near
 //! them, the nearer the more often, with their looks before the first state and after
 //! every change, and the traffic near them the same way (which car, how it looks, where).
+//! About once a second it also sends where the other players are for the map, as many of
+//! them as the server's settings show.
 
 use bevy::prelude::*;
 
@@ -20,7 +22,7 @@ use crate::physics::tire::COMPOUNDS;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -40,13 +42,26 @@ pub enum ToServer {
 /// Server to client.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ToClient {
-    Welcome { you: PlayerId },
+    Welcome {
+        you: PlayerId,
+    },
     Refused(String),
-    Joined { id: PlayerId, name: String },
-    Left { id: PlayerId },
-    Looks { id: PlayerId, looks: Box<Looks> },
+    Joined {
+        id: PlayerId,
+        name: String,
+    },
+    Left {
+        id: PlayerId,
+    },
+    Looks {
+        id: PlayerId,
+        looks: Box<Looks>,
+    },
     States(Vec<(PlayerId, CarState)>),
     Traffic(Vec<TrafficState>),
+    /// Other players to show on the map (a player missing from every message for a while
+    /// is no longer shown).
+    Map(Vec<MapPlayer>),
 }
 
 impl ToServer {
@@ -64,7 +79,10 @@ impl ToClient {
     pub const LOOKS: u8 = 4;
 
     pub fn reliable(&self) -> bool {
-        !matches!(self, ToClient::States(_) | ToClient::Traffic(_))
+        !matches!(
+            self,
+            ToClient::States(_) | ToClient::Traffic(_) | ToClient::Map(_)
+        )
     }
 }
 
@@ -96,6 +114,46 @@ pub struct TrafficState {
     /// How far its wheels have rolled (m), and its front wheels' steering angle (rad).
     pub rolled: f32,
     pub steer: f32,
+}
+
+/// Another player's car on the map: where it is and goes (xz, on the ground), which way
+/// it points and its paint (in `PAINTS`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MapPlayer {
+    pub id: PlayerId,
+    pub position: Vec2,
+    pub velocity: Vec2,
+    /// A unit vector.
+    pub forward: Vec2,
+    pub paint: usize,
+}
+
+impl Wire for MapPlayer {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.id.put(out);
+        self.position.put(out);
+        self.velocity.put(out);
+        self.forward.put(out);
+        self.paint.put(out);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        let player = Self {
+            id: r.get()?,
+            position: r.get()?,
+            velocity: r.get()?,
+            forward: r.get::<Vec2>()?.normalize_or(Vec2::NEG_Y),
+            paint: r.get()?,
+        };
+        // A paint a newer server has: the first one.
+        Some(Self {
+            paint: if player.paint < PAINTS.len() {
+                player.paint
+            } else {
+                0
+            },
+            ..player
+        })
+    }
 }
 
 impl Wire for TrafficState {
@@ -213,6 +271,10 @@ impl Wire for ToClient {
                 6u8.put(out);
                 cars.put(out);
             }
+            ToClient::Map(players) => {
+                7u8.put(out);
+                players.put(out);
+            }
         }
     }
 
@@ -231,6 +293,7 @@ impl Wire for ToClient {
             },
             5 => ToClient::States(r.get()?),
             6 => ToClient::Traffic(r.get()?),
+            7 => ToClient::Map(r.get()?),
             _ => return None,
         })
     }

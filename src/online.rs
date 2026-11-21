@@ -1,14 +1,17 @@
 //! Playing alone or on a server: the start menu (name, server address, "Play alone",
 //! "Join server"), what's shown while joining or when it fails, the players' list with
-//! "Leave" while on a server, and name tags over the other players' cars. Joined, the car
-//! is put in a lane near the spawn point, in a spot of its own (by player number).
+//! "Leave" while on a server, name tags over the other players' cars, and the players the
+//! server puts on the map (`MapCars`). Joined, the car is put in a lane near the spawn
+//! point, in a spot of its own (by player number).
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car, SETTINGS};
+use crate::chassis::PAINTS;
 use crate::help::Intro;
+use crate::map::{MapCar, MapCars};
 use crate::net::client::Proxy;
 use crate::net::{self, Connection, Status};
 use crate::terrain::Terrain;
@@ -31,7 +34,7 @@ impl Plugin for OnlinePlugin {
             open: true,
             settings: Settings::load(),
         })
-        .add_systems(Update, place_on_joining)
+        .add_systems(Update, (place_on_joining, show_on_map))
         .add_systems(EguiPrimaryContextPass, (menu, players, name_tags));
     }
 }
@@ -214,6 +217,33 @@ fn place_on_joining(
     for mut car in cars.iter_mut().filter(|car| car.index == active.0) {
         car.place(&terrain, p, yaw);
     }
+}
+
+/// The other players the server tells us of, on the map.
+fn show_on_map(
+    connection: Option<Res<Connection>>,
+    time: Res<Time<Real>>,
+    mut map: ResMut<MapCars>,
+) {
+    let Some(connection) = connection else {
+        if !map.0.is_empty() {
+            map.0.clear();
+        }
+        return;
+    };
+    let now = time.elapsed_secs_f64();
+    map.0 = connection
+        .on_map(now)
+        .map(|player| {
+            let [r, g, b] = PAINTS[player.paint].1;
+            MapCar {
+                at: player.position,
+                forward: player.forward,
+                color: Color::srgb(r, g, b),
+                label: (connection.players.get(&player.id).cloned()).unwrap_or_default(),
+            }
+        })
+        .collect();
 }
 
 /// Up to `SPOTS` places in the lanes (not on bridges), nearest the spawn point first, at

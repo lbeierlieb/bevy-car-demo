@@ -15,7 +15,7 @@ pub mod web;
 pub mod wire;
 
 pub use client::{ClientPlugin, Connection, Status};
-pub use server::{Presence, Server, ServerPlugin};
+pub use server::{MapPlayers, Presence, Server, ServerPlugin};
 
 use bevy::time::{Fixed, Real, Time};
 
@@ -233,6 +233,39 @@ mod tests {
         car(&mut ben).body.position.x = 480.0;
         run(&mut [&mut server, &mut anna, &mut ben], 180);
         assert!(proxies(&mut anna).is_empty());
+    }
+
+    #[test]
+    fn the_server_decides_who_is_on_the_map() {
+        // Who Anna has on her map, with Ben 400 m away and then 100 m.
+        let on_map = |map: MapPlayers| {
+            let listener = LoopbackListener::default();
+            let mut server = server(&listener);
+            server.world_mut().resource_mut::<Server>().map = map;
+            let mut anna = player(&listener, "Anna", 3, 0.0);
+            let mut ben = player(&listener, "Ben", 3, 400.0);
+            run(&mut [&mut server, &mut anna, &mut ben], 90);
+            let now = anna.world().resource::<Time<Real>>().elapsed_secs_f64();
+            let far: Vec<_> = connection(&anna).on_map(now).collect();
+            car(&mut ben).body.position.x = 100.0;
+            run(&mut [&mut server, &mut anna, &mut ben], 90);
+            let now = anna.world().resource::<Time<Real>>().elapsed_secs_f64();
+            let near: Vec<_> = connection(&anna).on_map(now).collect();
+            (far, near)
+        };
+        let (far, near) = on_map(MapPlayers::Nobody);
+        assert!(far.is_empty() && near.is_empty());
+        let (far, near) = on_map(MapPlayers::Near(200.0));
+        assert!(far.is_empty());
+        assert_eq!(near.len(), 1);
+        assert!((near[0].position.x - 100.0).abs() < 1.0, "{:?}", near[0]);
+        let (far, near) = on_map(MapPlayers::Everyone);
+        assert_eq!(far.len(), 1);
+        assert!((far[0].position.x - 400.0).abs() < 1.0, "{:?}", far[0]);
+        assert_eq!(near.len(), 1);
+        // Ben's paint, pointing his way (the factory car faces -z at yaw 0).
+        assert_eq!(far[0].paint, CarSetup::factory(3, 0).build.paint);
+        assert!(far[0].forward.distance(Vec2::NEG_Y) < 0.01, "{:?}", far[0]);
     }
 
     #[test]

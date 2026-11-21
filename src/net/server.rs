@@ -4,14 +4,16 @@
 //! dropped after a while. Each player is an entity with a `Peer`, and a `traffic::Anchor`
 //! and `traffic::Visitor` while their car is heard from, so traffic drives around them,
 //! keeps its distance and crashes into them. Each player is sent the traffic near them
-//! like the other players' cars.
+//! like the other players' cars. Once a second each player is told where the others
+//! are for the map: nobody, the ones near them or everyone, as the server is set
+//! (`MapPlayers`).
 
 use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
 use super::link::{Link, Listener};
-use super::protocol::{CarState, PROTOCOL, PlayerId, ToClient, ToServer, TrafficState};
+use super::protocol::{CarState, MapPlayer, PROTOCOL, PlayerId, ToClient, ToServer, TrafficState};
 use super::wire::{decode, encode};
 use super::{NEAR, RATES, SEND_RATE};
 use crate::looks::Looks;
@@ -28,6 +30,20 @@ const CELL: f32 = 128.0;
 /// The most states in one message (a datagram holds about 1200 bytes).
 const STATES_PER_MESSAGE: usize = 8;
 const TRAFFIC_PER_MESSAGE: usize = 14;
+const MAP_PER_MESSAGE: usize = 32;
+/// How often the other players' places on the map are sent (per second).
+const MAP_RATE: f64 = 1.0;
+/// How near other players are shown on the map by default (m).
+pub const MAP_NEAR: f32 = 200.0;
+
+/// Which other players a player sees on their map (their own car is always there).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MapPlayers {
+    Nobody,
+    /// The ones within this distance (m).
+    Near(f32),
+    Everyone,
+}
 
 pub struct ServerPlugin;
 
@@ -60,8 +76,11 @@ pub struct Server {
     next_id: PlayerId,
     /// The most players at once.
     max_players: usize,
-    /// When states were last sent (s).
+    /// Who's shown on the players' maps.
+    pub(super) map: MapPlayers,
+    /// When states, and the map's players, were last sent (s).
     sent: f64,
+    map_sent: f64,
 }
 
 impl Server {
@@ -70,8 +89,14 @@ impl Server {
             listener: Box::new(listener),
             next_id: 1,
             max_players: 32,
+            map: MapPlayers::Near(MAP_NEAR),
             sent: 0.0,
+            map_sent: f64::NEG_INFINITY,
         }
+    }
+
+    pub fn with_map(self, map: MapPlayers) -> Self {
+        Self { map, ..self }
     }
 
     pub fn with_max_players(self, max_players: usize) -> Self {
@@ -295,7 +320,8 @@ fn receive(
 }
 
 /// Sends each player the states of the cars near them (with their looks when they're
-/// new to them or changed), each as often as its distance asks for.
+/// new to them or changed), each as often as its distance asks for, and every
+/// `1 / MAP_RATE` seconds the players on their map.
 fn send(
     mut server: ResMut<Server>,
     time: Res<Time<Real>>,
@@ -308,6 +334,11 @@ fn send(
         return;
     }
     server.sent = now;
+    let map_due = now - server.map_sent >= 1.0 / MAP_RATE - 0.5 / SEND_RATE;
+    if map_due {
+        server.map_sent = now;
+    }
+    let map = server.map;
 
     // The cars there are to see: heard from lately, with looks.
     struct Car {
@@ -397,6 +428,29 @@ fn send(
         }
         for chunk in states.chunks(STATES_PER_MESSAGE) {
             peer.tell(&ToClient::States(chunk.to_vec()));
+        }
+
+        if map_due {
+            let shown: Vec<MapPlayer> = (cars.iter())
+                .filter(|car| car.id != peer.id)
+                .filter(|car| match map {
+                    MapPlayers::Nobody => false,
+                    MapPlayers::Near(within) => car.state.position.distance(own.position) <= within,
+                    MapPlayers::Everyone => true,
+                })
+                .map(|car| MapPlayer {
+                    id: car.id,
+                    position: car.state.position.xz(),
+                    velocity: car.state.velocity.xz(),
+                    forward: (car.state.rotation * Vec3::NEG_Z)
+                        .xz()
+                        .normalize_or(Vec2::NEG_Y),
+                    paint: car.looks.build.paint,
+                })
+                .collect();
+            for chunk in shown.chunks(MAP_PER_MESSAGE) {
+                peer.tell(&ToClient::Map(chunk.to_vec()));
+            }
         }
 
         // The traffic near them (there's little of it: no grid needed).
