@@ -27,6 +27,13 @@ impl Plugin for ShotPlugin {
                     .after(car_cam)
                     .before(bevy::transform::TransformSystems::Propagate),
             );
+            app.add_systems(
+                PostUpdate,
+                proxy_cam
+                    .after(traffic_cam)
+                    .before(crate::name_tags::PlaceTags)
+                    .before(bevy::transform::TransformSystems::Propagate),
+            );
         }
     }
 }
@@ -386,6 +393,27 @@ fn wheel_log(
         ffb.level,
         ffb.problem
     );
+}
+
+/// PROXYCAM="distance,height,bearing": look at the other player's car nearest to ours
+/// from `distance` m away towards `bearing` (degrees from north, clockwise), `height` m up.
+fn proxy_cam(
+    mut cams: Query<&mut Transform, With<Camera3d>>,
+    proxies: Query<&Transform, (With<crate::net::client::Proxy>, Without<Camera3d>)>,
+) {
+    let Ok(spec) = std::env::var("PROXYCAM") else {
+        return;
+    };
+    let v: Vec<f32> = spec.split(',').map(|s| s.parse().unwrap()).collect();
+    let Some(car) = proxies.iter().next() else {
+        return;
+    };
+    let target = car.translation;
+    let bearing = v[2].to_radians();
+    let eye = target + Vec3::new(bearing.sin() * v[0], v[1], -bearing.cos() * v[0]);
+    for mut t in &mut cams {
+        *t = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+    }
 }
 
 /// TRAFFICCAM="back,height[,nth]": follow the nth (default 0) nearest traffic car to the

@@ -1,18 +1,18 @@
 //! Playing alone or on a server: the start menu (name, server address, "Play alone",
 //! "Join server"), what's shown while joining or when it fails, the players' list with
-//! "Leave" while on a server, name tags over the other players' cars, and the players the
+//! "Leave" and name tags on or off (`name_tags`) while on a server, and the players the
 //! server puts on the map (`MapCars`), and the chat (`chat`). Joined, the car is put in a lane near the spawn
 //! point, in a spot of its own (by player number).
 
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Align2, Color32, FontId};
+use bevy_egui::egui::{self, Align2};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car, SETTINGS};
 use crate::chassis::PAINTS;
 use crate::help::Intro;
 use crate::map::{MapCar, MapCars};
-use crate::net::client::Proxy;
+use crate::name_tags::{NameTagPlugin, NameTags};
 use crate::net::{self, Connection, Status};
 use crate::terrain::Terrain;
 use crate::traffic::network::{Leg, Network};
@@ -22,21 +22,20 @@ use crate::traffic::network::{Leg, Network};
 const SPOTS: usize = 16;
 const SPACING: f32 = 15.0;
 const SPOT_RANGE: f32 = 400.0;
-/// Name tags show over cars nearer than this (m), this far above their middle.
-const TAG_RANGE: f32 = 150.0;
-const TAG_HEIGHT: f32 = 1.6;
 
 pub struct OnlinePlugin;
 
 impl Plugin for OnlinePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Menu {
-            open: true,
-            settings: Settings::load(),
-        })
-        .add_plugins(crate::chat::ChatPlugin)
-        .add_systems(Update, (place_on_joining, show_on_map))
-        .add_systems(EguiPrimaryContextPass, (menu, players, name_tags));
+        let settings = Settings::load();
+        app.add_plugins((crate::chat::ChatPlugin, NameTagPlugin))
+            .insert_resource(NameTags(settings.tags))
+            .insert_resource(Menu {
+                open: true,
+                settings,
+            })
+            .add_systems(Update, (place_on_joining, show_on_map))
+            .add_systems(EguiPrimaryContextPass, (menu, players));
     }
 }
 
@@ -47,21 +46,26 @@ pub struct Menu {
     settings: Settings,
 }
 
-/// The player's name and the server last joined, kept between runs
+/// The player's name, the server last joined and whether name tags show, kept between runs
 /// (`~/.config/car-sim/settings/online.cfg`).
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Settings {
     name: String,
     address: String,
+    tags: bool,
 }
 
 impl Settings {
     fn load() -> Self {
-        let mut settings = Self::default();
+        let mut settings = Self {
+            tags: true,
+            ..Self::default()
+        };
         for line in SETTINGS.load("online").unwrap_or_default().lines() {
             match line.split_once(' ') {
                 Some(("name", name)) => settings.name = name.trim().to_string(),
                 Some(("address", address)) => settings.address = address.trim().to_string(),
+                Some(("tags", tags)) => settings.tags = tags.trim() != "off",
                 _ => {}
             }
         }
@@ -74,7 +78,12 @@ impl Settings {
     }
 
     fn save(&self) {
-        let text = format!("name {}\naddress {}\n", self.name, self.address);
+        let text = format!(
+            "name {}\naddress {}\ntags {}\n",
+            self.name,
+            self.address,
+            if self.tags { "on" } else { "off" }
+        );
         if let Err(e) = SETTINGS.save("online", &text) {
             warn!("Couldn't save the online settings: {e}");
         }
@@ -159,11 +168,13 @@ fn menu(
     Ok(())
 }
 
-/// On a server: who's there with their pings (ours too), and leaving it.
+/// On a server: who's there with their pings (ours too), name tags on or off, and leaving
+/// it.
 fn players(
     mut commands: Commands,
     mut contexts: EguiContexts,
     mut menu: ResMut<Menu>,
+    mut tags: ResMut<NameTags>,
     connection: Option<ResMut<Connection>>,
 ) -> Result {
     let Some(mut connection) = connection else {
@@ -190,6 +201,15 @@ fn players(
                     ui.end_row();
                 }
             });
+            ui.separator();
+            if ui
+                .checkbox(&mut menu.settings.tags, "Names over the cars")
+                .changed()
+            {
+                tags.0 = menu.settings.tags;
+                menu.settings.save();
+            }
+            ui.separator();
             if ui.button("Leave the server").clicked() {
                 connection.close();
                 commands.remove_resource::<Connection>();
@@ -285,47 +305,6 @@ fn joining_spots(terrain: &Terrain, network: &Network) -> Vec<(Vec2, f32)> {
         }
     }
     spots
-}
-
-/// The other players' names over their cars.
-fn name_tags(
-    mut contexts: EguiContexts,
-    connection: Option<Res<Connection>>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
-    proxies: Query<(&Proxy, &Transform)>,
-) -> Result {
-    let Some(connection) = connection else {
-        return Ok(());
-    };
-    let Ok((camera, eye)) = cameras.single() else {
-        return Ok(());
-    };
-    let painter = contexts
-        .ctx_mut()?
-        .layer_painter(egui::LayerId::background());
-    for (proxy, transform) in &proxies {
-        let at = transform.translation + Vec3::Y * TAG_HEIGHT;
-        if at.distance(eye.translation()) > TAG_RANGE {
-            continue;
-        }
-        let (Some(name), Ok(p)) = (
-            connection.players.get(&proxy.id),
-            camera.world_to_viewport(eye, at),
-        ) else {
-            continue;
-        };
-        let p = egui::pos2(p.x, p.y);
-        let font = FontId::proportional(15.0);
-        painter.text(
-            p + egui::vec2(1.0, 1.0),
-            Align2::CENTER_BOTTOM,
-            name,
-            font.clone(),
-            Color32::BLACK,
-        );
-        painter.text(p, Align2::CENTER_BOTTOM, name, font, Color32::WHITE);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -13,6 +13,10 @@ bevy_egui = { version = "0.43", default-features = false, features = ["render", 
 miniz_oxide = "0.9"
 # The map file (`osm.rs`, shared with the bake).
 quick-xml = "0.42"
+# Name tags over other players' cars are drawn into textures in egui's font (both already
+# built for egui and winit).
+ab_glyph = "0.2.32"
+epaint_default_fonts = "0.36.2"
 
 # Force feedback for steering wheels goes straight to the kernel's evdev interface.
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -136,6 +136,11 @@ left, the sunlit side), up, and ahead. Side views of five:
 `LINEUP=3,1 CARCAM="-3.6,1.9,4.6"`; from the driver's seat: keys `2c`.
 `TRAFFICCAM="back,height[,nth]"` follows the nth nearest traffic car from behind, e.g.
 `TRAFFICCAM="9,2.2,1" bash tools/dev/shot.sh out.png 200 2`.
+`PROXYCAM="distance,height,bearing"` looks at the other player's car from that far
+towards the bearing (degrees from north). Two players side by side (the second needs
+`PLACE` after it has joined, or the join puts it elsewhere): Anna with
+`PLACE="-2986,-1954,150"` and many frames, Ben with `PLACE="-2986,-1975,150"` sees her
+ahead. Egui headers can't be clicked open in shots (change `default_open` for a shot).
 
 ### Virtual wheel (`tools/dev/fakewheel`)
 
@@ -297,10 +302,15 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `ureq` from a thread of its own.
   Tried here only against Telegram with a fake token (401, logged, token kept out).
 - Not done yet: other players' engine sound (the synth plays only the driven car; a
-  proxy needs a sound source of its own), name tags hidden
-  behind houses, the browser path tried in a real browser (no browser here; it builds
-  and links), rate limits on what a player sends.
-- Later: chat, sanity checks on snapshots, Safari, career.
+  proxy needs a sound source of its own), the browser path tried in a real browser (no
+  browser here; it builds and links), rate limits on what a player sends (chat has one).
+- Later: sanity checks on snapshots, Safari, career.
+- **Name tags** (agreed with the user, 2026-11-21: in the scene, covered like anything
+  else; just on or off, in the players window, saved as `tags on|off` in online.cfg):
+  `name_tags.rs`, each name rasterised once with ab_glyph in egui's Ubuntu-Light (no
+  bevy_text in the build) into a texture on an unlit, blended quad facing the camera,
+  scaled with distance (constant size on screen), within 150 m. Systems that move the
+  camera after `Update` go before `name_tags::PlaceTags`.
 
 ## Wheel support
 

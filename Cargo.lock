@@ -2238,8 +2238,10 @@ dependencies = [
 name = "car-sim"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "bevy",
  "bevy_egui",
+ "epaint_default_fonts",
  "evdev",
  "js-sys",
  "miniz_oxide 0.9.1",
