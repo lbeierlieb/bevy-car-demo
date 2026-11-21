@@ -13,6 +13,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Car, CarSetup};
+use crate::chassis::{CarBuild, PAINTS};
 use crate::garage;
 use crate::map::{MapLegend, MapMark, MapMarks};
 use crate::net::wire::{Reader, Wire};
@@ -263,6 +264,7 @@ fn window(
             match kind {
                 ShopKind::Gas => gas_station(ui, &mut car, &mut pump),
                 ShopKind::Alignment => alignment_shop(ui, &mut car),
+                ShopKind::Paint => paint_shop(ui, &mut car),
                 _ => {
                     ui.label("Nothing here yet.");
                 }
@@ -279,15 +281,42 @@ fn window(
     Ok(())
 }
 
-/// Camber, toe, pressures and the brakes, set on the car as they're moved.
-fn alignment_shop(ui: &mut egui::Ui, car: &mut Car) {
+/// The paints, as swatches: a click repaints the car.
+fn paint_shop(ui: &mut egui::Ui, car: &mut Car) {
     let mut build = car.setup.build.clone();
-    garage::alignment(ui, &mut build, &car.setup);
+    ui.label(format!("Now: {}", PAINTS[build.paint].0));
+    egui::Grid::new("paints").num_columns(5).show(ui, |ui| {
+        for (i, (name, [r, g, b])) in PAINTS.iter().enumerate() {
+            let color = Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+            let swatch = egui::Button::new("")
+                .fill(color)
+                .min_size(egui::vec2(56.0, 36.0))
+                .selected(i == build.paint);
+            if ui.add(swatch).on_hover_text(*name).clicked() {
+                build.paint = i;
+            }
+            if i % 5 == 4 {
+                ui.end_row();
+            }
+        }
+    });
+    rebuild(car, build);
+}
+
+/// `car` rebuilt as `build`, where it is (if that changed anything).
+fn rebuild(car: &mut Car, build: CarBuild) {
     if build != car.setup.build {
         let engine = &car.setup.engine;
         let setup = CarSetup::new(build, engine.parts.clone(), engine.build.clone());
         *car = car.rebuilt(setup);
     }
+}
+
+/// Camber, toe, pressures and the brakes, set on the car as they're moved.
+fn alignment_shop(ui: &mut egui::Ui, car: &mut Car) {
+    let mut build = car.setup.build.clone();
+    garage::alignment(ui, &mut build, &car.setup);
+    rebuild(car, build);
 }
 
 /// The gas station's grades: name and research octane number.

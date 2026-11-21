@@ -205,7 +205,7 @@ order (✓ done):
    its octane, mixing by volume; the engine's knock limit reads the tank's octane (the
    panel's octane and fuel load sliders go). 6. **Alignment shop**: camber, pressures
    (from the garage), toe and brake torque/balance (from the panel; into `CarBuild`).
-7. **Paint shop**: the existing paints only. 8. **Showroom**: the showroom window.
+7. ✓ **Paint shop**: the existing paints only (swatches; gone from the garage). 8. **Showroom**: the showroom window.
 9. **Parts shop**: the garage window without alignment, cam timing and wastegate;
    repairs; new tires. 10. **Dyno**: the career's chassis dyno scene back (`career/dyno.rs`,
    `rollers.rs` at c34bfbf), with the ECU window, cam timing and wastegate, and a hold

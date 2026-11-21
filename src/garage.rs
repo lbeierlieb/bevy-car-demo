@@ -255,9 +255,6 @@ fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
             });
     };
     egui::Grid::new("car").num_columns(2).show(ui, |ui| {
-        ui.label("Paint");
-        combo(ui, "paint", &mut draft.paint, &PAINTS.map(|(name, _)| name));
-        ui.end_row();
         ui.label("Gearbox")
             .on_hover_text("Any gearbox made for the chassis' layout");
         egui::ComboBox::from_id_salt("gearbox")
