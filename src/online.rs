@@ -1,5 +1,6 @@
 //! Playing alone or on a server: the start menu (name, server address, "Play alone",
-//! "Join server"), what's shown while joining or when it fails, the players' list with
+//! "Join server"; on the web only the name and "Join", for the server the page came
+//! from), what's shown while joining or when it fails, the players' list with
 //! "Leave" while on a server, name tags (`name_tags`), and the players the
 //! server puts on the map (`MapCars`), and the chat (`chat`). Joined, the car is put in a lane near the spawn
 //! point, in a spot of its own (by player number).
@@ -63,9 +64,9 @@ impl Settings {
                 _ => {}
             }
         }
-        // On the web, the server the page came from.
+        // On the web, always the server the page came from.
         #[cfg(target_arch = "wasm32")]
-        if settings.address.is_empty() {
+        {
             settings.address = net::web::page_host().unwrap_or_default();
         }
         settings
@@ -134,19 +135,27 @@ fn menu(
             ui.label("Your name");
             ui.text_edit_singleline(&mut settings.name);
             ui.end_row();
-            ui.label("Server");
-            ui.add(egui::TextEdit::singleline(&mut settings.address).hint_text("cars.example.org"));
-            ui.end_row();
+            // On the web, the page's server is joined: no address to give.
+            if !cfg!(target_arch = "wasm32") {
+                ui.label("Server");
+                ui.add(
+                    egui::TextEdit::singleline(&mut settings.address).hint_text("cars.example.org"),
+                );
+                ui.end_row();
+            }
         });
         ui.horizontal(|ui| {
-            if ui.button("Play alone").clicked() {
+            // On the web, the page came from the server: always online.
+            if !cfg!(target_arch = "wasm32") && ui.button("Play alone").clicked() {
                 menu.open = false;
             }
             let can_join = !settings.address.trim().is_empty() && !settings.name.trim().is_empty();
-            if ui
-                .add_enabled(can_join, egui::Button::new("Join server"))
-                .clicked()
-            {
+            let join = if cfg!(target_arch = "wasm32") {
+                "Join"
+            } else {
+                "Join server"
+            };
+            if ui.add_enabled(can_join, egui::Button::new(join)).clicked() {
                 settings.save();
                 let link = net::connect(&settings.address);
                 commands.insert_resource(Connection::new(link, settings.name.trim(), &terrain));
