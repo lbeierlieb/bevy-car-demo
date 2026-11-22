@@ -14,7 +14,7 @@ use crate::camera::ChaseCamera;
 use crate::map::{MapLegend, MapMark, MapMarks};
 use crate::net::wire::{Reader, Wire};
 use crate::net::{Connection, Status};
-use crate::shops::{float_label, kerb, spawn_marker};
+use crate::shops::{float_label, spawn_marker};
 use crate::terrain::Terrain;
 
 /// The repo's list (`assets/events.cfg`), for tests: the server has none of its own.
@@ -60,7 +60,8 @@ impl EventKind {
 pub struct Event {
     pub kind: EventKind,
     pub name: String,
-    /// Where it is (map x and z); the marker goes on the nearest paved road.
+    /// Where its marker is (map x and z), exactly (unlike a shop's, it isn't moved to a
+    /// road: a parking lot is a good place for one).
     pub at: Vec2,
 }
 
@@ -120,10 +121,8 @@ impl Wire for Event {
 /// An event where the client put it.
 pub struct Placed {
     pub event: Event,
-    /// The marker's middle (map x and z), on the nearest paved road.
+    /// The marker's middle (map x and z): the event's point.
     pub marker: Vec2,
-    /// Along the road there (yaw).
-    pub yaw: f32,
 }
 
 /// The events on the map: the server's, once joined; none alone.
@@ -172,7 +171,7 @@ fn place(
     }
     events.list = (wanted.iter())
         .map(|event| {
-            let (marker, yaw) = kerb(&terrain, event.at);
+            let marker = event.at;
             let entity = spawn_marker(
                 &mut commands,
                 &mut meshes,
@@ -185,7 +184,6 @@ fn place(
             Placed {
                 event: event.clone(),
                 marker,
-                yaw,
             }
         })
         .collect();
@@ -236,6 +234,7 @@ fn labels(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physics::surface::Surface;
 
     #[test]
     fn the_list_reads() {
@@ -251,15 +250,14 @@ mod tests {
     }
 
     #[test]
-    fn every_event_is_on_a_road() {
+    fn every_event_is_on_paved_ground() {
         let terrain = Terrain::baked();
         for event in parse(LIST).unwrap() {
-            let (marker, _) = kerb(&terrain, event.at);
+            let surface = terrain.surface(event.at.x, event.at.y);
             assert!(
-                marker.distance(event.at) < 5.0,
-                "{} is {:.0} m from a paved road",
+                matches!(surface, Surface::Asphalt | Surface::Cobbles),
+                "{} is on {surface:?}",
                 event.name,
-                marker.distance(event.at)
             );
         }
     }

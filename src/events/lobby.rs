@@ -176,10 +176,11 @@ fn follow(
     // Our spot by the round's marker: (where, yaw).
     let spot = |round: &Round| {
         let event = connection.events.get(usize::from(round.event))?;
+        // Without the traffic network, by the nearest road.
         let (marker, yaw) = kerb(&terrain, event.at);
         let spots = network
             .as_deref()
-            .map(|network| lane_spots(network, marker, SPOT_RANGE, SPOTS))
+            .map(|network| lane_spots(network, event.at, SPOT_RANGE, SPOTS))
             .unwrap_or_default();
         let slot = round.slot(you);
         Some(

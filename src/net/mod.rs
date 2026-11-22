@@ -868,7 +868,6 @@ mod tests {
                     list: vec![Placed {
                         event: events[0].clone(),
                         marker: Vec2::ZERO,
-                        yaw: 0.0,
                     }],
                 });
             app
