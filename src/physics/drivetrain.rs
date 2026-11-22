@@ -321,6 +321,8 @@ impl Drivetrain {
     /// driven wheels at `wheel_omega`, rad/s averaged). Reverse only goes in when (nearly)
     /// stopped (`speed` in m/s).
     pub fn select_gate(&mut self, engine: &EngineSetup, gate: i8, speed: f32, wheel_omega: f32) {
+        // A shifter's gates past the gearbox's top gear give the top gear.
+        let gate = gate.min(engine.top_gear());
         let lever = gate;
         // Reverse is refused while rolling forward (backing up quickly must keep it).
         let gate = if gate < 0 && speed > REVERSE_SPEED {
@@ -811,6 +813,14 @@ mod tests {
             drivetrain.step(&engine, 0.0, None, 30.0, true, dt);
         }
         assert_eq!(drivetrain.gear, 2);
+        // A gate past the top gear (a 7-gate shifter on a smaller box) gives the top gear.
+        let top = engine.top_gear();
+        drivetrain.select_gate(&engine, top + 2, 10.0, 30.0);
+        for _ in 0..60 {
+            drivetrain.step(&engine, 0.0, None, 30.0, true, dt);
+        }
+        assert_eq!(drivetrain.gear, top);
+        assert_eq!(drivetrain.grinding, None);
     }
 
     #[test]
