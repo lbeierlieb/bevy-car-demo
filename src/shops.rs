@@ -602,12 +602,12 @@ mod tests {
         );
         assert!(parse("gas 1 Pumps").is_err());
         assert!(parse("gas 1 2").is_err());
-        let shops = parse("dyno -2601.5 -3784  Rollwerk  Dyno # under the shop").unwrap();
+        let shops = parse("dyno -2601.5 -3784  Rollenprüfstand  Süd # under the shop").unwrap();
         assert_eq!(
             shops,
             [Shop {
                 kind: ShopKind::Dyno,
-                name: "Rollwerk Dyno".into(),
+                name: "Rollenprüfstand Süd".into(),
                 at: Vec2::new(-2601.5, -3784.0),
             }]
         );
