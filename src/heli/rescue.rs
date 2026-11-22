@@ -384,7 +384,10 @@ fn carry(flight: &mut Flight, car: &mut Car, terrain: &Terrain, dt: f32) {
         return;
     }
     let (position, rotation) = carry.at(s, flight.end, flight.yaw);
-    let (before, was) = (car.body.position, car.body.rotation);
+    // The velocities along the path: from the body as the simulation left it, they fed
+    // back on themselves (each step's velocity moved the body before it was set again) and
+    // swung to over 100 m/s, which cooked the tires the moment they touched down.
+    let (before, was) = carry.at(s - dt, flight.end, flight.yaw);
     let body = &mut car.body;
     body.position = position;
     body.rotation = rotation;
@@ -482,13 +485,16 @@ mod tests {
         let dt = 1.0 / 120.0;
         let mut t = 0.0;
         let mut highest = f32::NEG_INFINITY;
+        let mut fastest = 0.0f32;
         while app.world().resource::<Rescued>().0 || t < 0.1 {
             app.world_mut()
                 .resource_mut::<Time>()
                 .advance_by(std::time::Duration::from_secs_f32(dt));
             app.update();
             t += dt;
-            highest = highest.max(app.world().get::<Car>(entity).unwrap().body.position.y);
+            let carried = app.world().get::<Car>(entity).unwrap();
+            highest = highest.max(carried.body.position.y);
+            fastest = fastest.max(carried.body.velocity.length());
             assert!(t < 120.0, "never let go");
         }
         let car = app.world().get::<Car>(entity).unwrap().clone();
@@ -496,6 +502,12 @@ mod tests {
             highest > car.body.position.y + LIFT_HEIGHT.0 - 1.0,
             "not lifted"
         );
+        // Carried at its pace (a velocity off the path slid the tires when set down).
+        assert!(fastest < 20.0, "carried at {fastest} m/s");
+        let hottest = (car.corners.iter())
+            .flat_map(|corner| corner.tread.surface)
+            .fold(0.0f32, f32::max);
+        assert!(hottest < 30.0, "tires at {hottest} °C");
         (t, car, to, facing)
     }
 
