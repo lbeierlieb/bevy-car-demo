@@ -35,10 +35,12 @@ const SPOOL_DOWN: f32 = 0.4;
 const TURBO_SHARE: f32 = 0.75;
 /// Pulling hard, a driver shifts up from somewhere between these shares of the band
 /// between idle and the redline (the keener the higher); the less of the engine's torque
-/// it takes, the earlier, down to the lowest the next gear allows when it takes none and
-/// all the way up at this share; it shifts down below idle plus `SHIFT_DOWN` (rpm).
+/// it would take, the earlier, down to the lowest the next gear allows when it takes none
+/// and all the way up at `PULLING_HARD`; wanting more, later, up to `FLOORED` of the band
+/// at twice that; it shifts down below idle plus `SHIFT_DOWN` (rpm).
 const SHIFT_UP: (f32, f32) = (0.22, 0.45);
 const PULLING_HARD: f32 = 0.4;
+const FLOORED: f32 = 0.7;
 const SHIFT_DOWN: f32 = 450.0;
 /// The next gear must leave this much over the down shift point (rpm).
 const SHIFT_MARGIN: f32 = 300.0;
@@ -47,6 +49,10 @@ const SHIFT_HOLD: f32 = 1.0;
 /// Pulling away, the clutch slips with the engine at idle plus this (rpm), more for keen
 /// drivers.
 const LAUNCH: (f32, f32) = (500.0, 1100.0);
+/// The most of the engine's torque a driver uses, from the calmest to the keenest, but
+/// as much as it takes to speed up at this at least (m/s²; in weak or heavy cars).
+const POWER_SHARE: (f32, f32) = (0.45, 0.8);
+const LEAST_PULL: f32 = 0.6;
 
 /// A chassis' factory drivetrain, as far as its sound needs.
 pub struct Powertrain {
@@ -169,41 +175,90 @@ impl Shifter {
     fn up_rpm(&self, demand: f32) -> f32 {
         let p = self.powertrain;
         let share = SHIFT_UP.0 + (SHIFT_UP.1 - SHIFT_UP.0) * self.eager;
-        let hard = p.idle + share * (p.redline - p.idle);
+        let band = p.redline - p.idle;
+        let hard = p.idle + share * band;
         let easy = self.down_rpm() + 2.0 * SHIFT_MARGIN;
-        easy + (hard - easy).max(0.0) * (demand / PULLING_HARD).clamp(0.0, 1.0)
+        let floored = p.idle + FLOORED * band;
+        let t = demand / PULLING_HARD;
+        if t < 1.0 {
+            easy + (hard - easy).max(0.0) * t.max(0.0)
+        } else {
+            hard + (floored - hard).max(0.0) * (t - 1.0).min(1.0)
+        }
     }
 
     fn down_rpm(&self) -> f32 {
         self.powertrain.idle + SHIFT_DOWN
     }
 
+    /// The most of the engine's torque this driver uses.
+    fn share(&self) -> f32 {
+        POWER_SHARE.0 + (POWER_SHARE.1 - POWER_SHARE.0) * self.eager
+    }
+
+    /// The engine's rpm pulling away in first, the clutch slipping.
+    fn launch(&self) -> f32 {
+        self.powertrain.idle + LAUNCH.0 + (LAUNCH.1 - LAUNCH.0) * self.eager
+    }
+
+    /// The most a car of `mass` going at `speed` (m/s) up a `grade` (the sine of the
+    /// slope) speeds up in the gear it's in with as much of the engine as the driver
+    /// uses: less up hills and in heavy, weak or tall-geared cars, and nothing pulls
+    /// while it shifts (m/s², negative when it slows down even so).
+    pub fn most_acceleration(&self, mass: f32, speed: f32, grade: f32) -> f32 {
+        let p = self.powertrain;
+        let drag = p.force(mass, speed, 0.0, grade);
+        if self.since < p.shift_time {
+            return -drag / mass;
+        }
+        let gear = self.gear;
+        let mut rpm = p.locked(gear, speed).max(p.idle);
+        if gear == 0 {
+            rpm = rpm.max(self.launch());
+        }
+        let full = p.torque_at(rpm) * p.gears[gear] * p.final_drive * EFFICIENCY / p.radius;
+        let calm = (self.share() * full - drag) / mass;
+        calm.max(LEAST_PULL.min((full - drag) / mass))
+    }
+
     /// One step of a car of `mass` going at `speed` (m/s), speeding up at `acceleration`
-    /// (m/s², negative braking) up a `grade` (the sine of the slope).
-    pub fn step(&mut self, mass: f32, speed: f32, acceleration: f32, grade: f32, dt: f32) {
+    /// (m/s², negative braking) up a `grade` (the sine of the slope), when the driver
+    /// would like `wanted` (shifting down when the gear it's in can't give it).
+    pub fn step(
+        &mut self,
+        mass: f32,
+        speed: f32,
+        (acceleration, wanted): (f32, f32),
+        grade: f32,
+        dt: f32,
+    ) {
         let p = self.powertrain;
         let force = p.force(mass, speed, acceleration, grade);
+        let wanted = p.force(mass, speed, wanted, grade);
         self.since += dt;
         if speed < 0.5 {
             self.gear = 0;
         } else if self.since > SHIFT_HOLD {
+            // How much of the engine's torque the driver would use in a gear.
             let demand = |gear: usize| {
                 let rpm = p.locked(gear, speed).max(p.idle);
-                p.engine_torque(gear, force) / p.torque_at(rpm).max(1.0)
+                p.engine_torque(gear, wanted) / p.torque_at(rpm).max(1.0)
             };
-            let fits = |gear: usize| demand(gear) < 0.85;
-            let (up, down) = (self.up_rpm(1.0), self.down_rpm());
+            let fits = |gear: usize| demand(gear) < self.share();
+            let down = self.down_rpm();
             let next = self.gear + 1;
+            let locked = p.locked(self.gear, speed);
             if next < p.gears.len()
-                && p.locked(self.gear, speed) > self.up_rpm(demand(self.gear))
+                && locked > self.up_rpm(demand(self.gear))
                 && p.locked(next, speed) > down + SHIFT_MARGIN
-                && fits(next)
             {
                 self.gear = next;
                 self.since = 0.0;
             } else if self.gear > 0
-                && (p.locked(self.gear, speed) < down
-                    || (!fits(self.gear) && p.locked(self.gear - 1, speed) < up))
+                && (locked < down
+                    || (!fits(self.gear)
+                        && p.locked(self.gear - 1, speed)
+                            < self.up_rpm(demand(self.gear - 1)) - SHIFT_MARGIN))
             {
                 self.gear -= 1;
                 self.since = 0.0;
@@ -212,7 +267,7 @@ impl Shifter {
         let shifting = self.since < p.shift_time;
         let locked = p.locked(self.gear, speed);
         // Pulling away in first, the clutch slips; anywhere else below idle it's apart.
-        let launch = p.idle + LAUNCH.0 + (LAUNCH.1 - LAUNCH.0) * self.eager;
+        let launch = self.launch();
         let target = if self.gear == 0 && force > 0.0 && acceleration > 0.05 {
             locked.max(launch)
         } else {
@@ -246,12 +301,6 @@ impl Shifter {
             turbo_speed: self.turbo,
         }
     }
-
-    /// The gear it's in (from 0).
-    #[cfg(test)]
-    pub fn gear(&self) -> usize {
-        self.gear
-    }
 }
 
 /// An engine idling, for a car whose driver's gone.
@@ -269,8 +318,56 @@ mod tests {
     use super::*;
     use crate::chassis::CHASSIS;
 
+    /// A driver wanting `wanted` (m/s²) up to `top` (m/s) on a `grade` for `seconds`:
+    /// the speeds it reached each second, and the gears it shifted into on the way.
+    fn drive(shifter: &mut Shifter, mass: f32, grade: f32, top: f32, seconds: f32) -> Drive {
+        let dt = 1.0 / 60.0;
+        let mut drive = Drive::default();
+        let mut speed = 0.0;
+        let mut gear = shifter.gear;
+        for i in 0..(seconds / dt) as usize {
+            let wanted = 1.4 * (1.0 - (speed / top).powi(4));
+            let a = wanted.min(shifter.most_acceleration(mass, speed, grade));
+            let before = speed;
+            speed = (speed + a * dt).max(0.0);
+            shifter.step(mass, speed, ((speed - before) / dt, wanted), grade, dt);
+            if shifter.gear != gear {
+                gear = shifter.gear;
+                drive.shifts.push((gear + 1, (speed * 3.6).round()));
+            }
+            drive.low = drive.low.min(shifter.rpm);
+            drive.high = drive.high.max(shifter.rpm);
+            if drive.to_100.is_none() && speed >= 100.0 / 3.6 {
+                drive.to_100 = Some(i as f32 * dt);
+            }
+        }
+        drive.speed = speed;
+        drive
+    }
+
+    struct Drive {
+        shifts: Vec<(usize, f32)>,
+        low: f32,
+        high: f32,
+        to_100: Option<f32>,
+        speed: f32,
+    }
+
+    impl Default for Drive {
+        fn default() -> Self {
+            Self {
+                shifts: Vec::new(),
+                low: f32::INFINITY,
+                high: 0.0,
+                to_100: None,
+                speed: 0.0,
+            }
+        }
+    }
+
     /// Every chassis pulls away, shifts up through the gears with the rpm between idle
-    /// and the redline, and cruises at 100 km/h in a high gear at a light load.
+    /// and the redline, gets to 100 km/h (the weak and heavy ones later) and cruises
+    /// in a high gear at a light load; up a 10 % slope it still does 50.
     #[test]
     fn traffic_shifts_through_the_gears() {
         let start = std::time::Instant::now();
@@ -278,42 +375,57 @@ mod tests {
             Powertrain::factory(chassis);
         }
         println!("torque curves in {:?}", start.elapsed());
-        let dt = 1.0 / 60.0;
+        let mut times = Vec::new();
         for (chassis, model) in CHASSIS.iter().enumerate() {
             let p = Powertrain::factory(chassis);
             let mass = model.mass + 230.0;
             let peak = p.torque.iter().map(|t| t.1).fold(0.0, f32::max);
             for eager in [0.0, 1.0] {
+                let run = drive(&mut Shifter::new(p, eager), mass, 0.0, 130.0 / 3.6, 50.0);
                 let mut shifter = Shifter::new(p, eager);
-                let (mut speed, mut gear, mut shifts) = (0.0, 0, Vec::new());
-                let (mut low, mut high) = (f32::INFINITY, 0.0f32);
-                while speed < 100.0 / 3.6 {
-                    speed += 1.4 * dt;
-                    shifter.step(mass, speed, 1.4, 0.0, dt);
-                    if shifter.gear() != gear {
-                        assert_eq!(shifter.gear(), gear + 1, "{}", model.name);
-                        gear = shifter.gear();
-                        shifts.push((speed * 3.6).round());
-                    }
-                    low = low.min(shifter.rpm);
-                    high = high.max(shifter.rpm);
-                }
-                for _ in 0..600 {
-                    shifter.step(mass, speed, 0.0, 0.0, dt);
-                }
-                let run = shifter.run();
+                drive(&mut shifter, mass, 0.0, 100.0 / 3.6, 80.0);
+                let cruise = shifter.run();
+                let mut climber = Shifter::new(p, eager);
+                let climb = drive(&mut climber, mass, 0.1, 60.0 / 3.6, 40.0);
                 println!(
-                    "{:24} {peak:4.0} N·m, eager {eager}: shifts at {shifts:?} km/h, \
-                     {low:.0}–{high:.0} rpm; 100 km/h in {} at {:.0} rpm, load {:.2}",
+                    "{:10} {peak:4.0} N·m, eager {eager}: 0–100 in {:4.1} s, shifts {:?}, \
+                     {:.0}–{:.0} rpm; at 100 in {} at {:.0} rpm, load {:.2}; \
+                     up 10 %: {:.0} km/h in {}",
                     model.name,
-                    shifter.gear() + 1,
-                    run.rpm,
-                    run.load
+                    run.to_100.unwrap_or(f32::NAN),
+                    run.shifts,
+                    run.low,
+                    run.high,
+                    shifter.gear + 1,
+                    cruise.rpm,
+                    cruise.load,
+                    climb.speed * 3.6,
+                    climber.gear + 1,
                 );
-                assert!(low >= p.idle - 1.0 && high < p.redline, "{}", model.name);
-                assert!(shifter.gear() + 3 >= p.gears.len(), "{}", model.name);
-                assert!(run.load > 0.05 && run.load < 0.5, "{}", model.name);
+                assert!(
+                    run.low >= p.idle - 1.0 && run.high < p.redline,
+                    "{}",
+                    model.name
+                );
+                assert!(
+                    run.shifts.windows(2).all(|w| w[1].0 == w[0].0 + 1),
+                    "{} shifts only up",
+                    model.name
+                );
+                assert!(run.to_100.is_some_and(|t| t < 40.0), "{}", model.name);
+                assert!(shifter.gear + 3 >= p.gears.len(), "{}", model.name);
+                assert!(cruise.load > 0.05 && cruise.load < 0.5, "{}", model.name);
+                assert!(climb.speed > 50.0 / 3.6, "{}", model.name);
+                times.push((model.name, eager, run.to_100.unwrap()));
             }
         }
+        let time = |name, eager| {
+            (times.iter())
+                .find(|t| t.0 == name && t.1 == eager)
+                .unwrap()
+                .2
+        };
+        assert!(time("Vespera", 0.0) < time("Carrow", 0.0));
+        assert!(time("Vespera", 1.0) < time("Vespera", 0.0));
     }
 }

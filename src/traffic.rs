@@ -5,7 +5,8 @@
 //! along the lane, the rear axle is dragged after it, and the body sits on the ground
 //! under the wheels. The speed follows the limits, slowing for bends and junctions
 //! ahead, and keeps a distance to whatever is in the lane ahead (the intelligent driver
-//! model). Any knock against another car (or the player's) ends the drive: the car is a
+//! model), no quicker than the engine pulls in the gear the driver's in (`powertrain.rs`,
+//! which also runs the engine for its sound). Any knock against another car (or the player's) ends the drive: the car is a
 //! loose rigid body on its box from then on, sliding and tumbling to a stop. Cars come
 //! and go out of sight around the players: every simulated `Car` and every `Anchor` (on
 //! the server, the players driving elsewhere). `TrafficPlugin` is the simulation alone
@@ -1025,9 +1026,12 @@ fn drive(
                 .max(0.0);
         acceleration -= ACCELERATION * (wanted / gap.max(0.1)).powi(2);
     }
+    // No more than the engine gives in the gear it's in.
+    let wanted = acceleration;
+    let acceleration = acceleration.min(driver.shifter.most_acceleration(mass, v, grade));
     driver.speed = (v + acceleration.max(-HARDEST_BRAKING) * dt).max(0.0);
     let acceleration = (driver.speed - v) / dt.max(1e-6);
-    (driver.shifter).step(mass, driver.speed, acceleration, grade, dt);
+    (driver.shifter).step(mass, driver.speed, (acceleration, wanted), grade, dt);
     let (front, direction) = path.point(driver.along);
     let old = (front - driver.rear).normalize_or(direction);
     driver.along += driver.speed * dt;

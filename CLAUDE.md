@@ -538,13 +538,11 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `switch_source` removes traffic and remote cars when joining or leaving. Name tags
   follow `Tag`. Alone (and on the server): `TrafficCar` simulates as before,
   `traffic::show` gives it `Looks` (`FactoryLooks`, per chassis with its base engine,
-  16 ms for all 13) and `Motion` (steer, spin from rolled, suspension at rest, idling standing, 2000 rpm
-  at 20 % load moving)
+  16 ms for all 13) and `Motion` (steer, spin from rolled, suspension at rest, the
+  engine from the driver's `traffic::powertrain::Shifter`)
   and a `Transform` at the centre of mass, and `visuals.rs` draws it like any car (shared
   materials, bodies cached per chassis and paint). Remaining tells: traffic's suspension
-  doesn't move, its engine (heard since other cars have engine sound) only idles
-  standing and holds 2000 rpm at 20 % load moving (blended over 0–3 m/s; asked for by
-  the user, no gears), how it drives.
+  doesn't move, how it drives.
   Tried with a local server and two headless games: name tag over the other player,
   traffic shown, a leaving player's car gone at once.
 - **Parallel worlds** (planned with the user, 2026-11-21, not built): groups of players
@@ -783,7 +781,20 @@ catalogue entries, and things like swap subframes are named so they can be price
   `RigidBody` on its box (down to the ground) with ground and obstacle contacts, asleep
   once still. Spawn 260–550 m from the player (50 m at the start), despawn past 700 m
   (crashed 350 m). `drivers_follow_the_roads` runs 30 cars for a minute (~1 crash at a
-  merge, about 0.26 ms per step for all; each driver keeps its path, rebuilt only when the route changes: rebuilt every step it was 0.85 ms, and a small VPS server couldn't keep up). Not done: right of way, overtaking, sounds,
+  merge, about 0.21 ms per step for all; each driver keeps its path, rebuilt only when the route changes: rebuilt every step it was 0.85 ms, and a small VPS server couldn't keep up).
+  **Engines and gears** (`traffic/powertrain.rs`, asked for by the user, 2026-11-22: proper
+  engine sound and accelerations, cheaply): per chassis its factory gears, final drive,
+  driven wheels and the base engine's full-throttle torque curve (`Powertrain`, every
+  500 rpm, 55 ms for all 13, made when first needed); per driver a `Shifter` (keenness
+  sets the shift points, launch rpm and how much of the torque it uses, 45–80 %, but
+  enough for 0.6 m/s² if the car has it): shifts up earlier the less torque it would
+  take, later wanting more than it gets, down below idle + 450 or when the gear can't give
+  what the IDM wants (kickdown); clutch slips pulling away; load = engine torque for the
+  wheel force (acceleration, slope from the body's pitch, rolling, air) over the curve;
+  0.4 s without pull per shift; turbos spool with rpm and load. The IDM's acceleration is
+  capped by `most_acceleration` (0–100: 23 s keen; calm 23 s Vespera to 37 s Minim; all
+  do 60 up 10 %; `traffic_shifts_through_the_gears` prints every car). Only the server's
+  `Motion` changes: no protocol bump. Not done: right of way, overtaking, sounds,
   wrecks blocking a lane hold the queue behind them until they despawn.
 - Not done: the engine sound per layout was never listened to (no audio in the
   sandbox); other suspension types; turbo kits limited by bay room; prices and saved
