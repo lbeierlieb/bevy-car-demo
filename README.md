@@ -108,11 +108,24 @@ parts, repair the engine and fit new tires; and dyno shops put the car on a chas
 in a room under the shop, for power runs, holding it at an rpm and throttle, ECU tuning,
 cam timing and the wastegate. A car at a shop is a ghost: other cars drive through it.
 
+It can also put **events** on the map (red markers). The first is the **car hunt**: stop
+on its marker to join the lobby there. The first player in is hunted, everyone after
+that hunts. The hunted can hand that part to another player, sets the head start
+(10 s), the time to get away (10 min), traffic (on), where a hunter's R puts the car
+(nowhere, the nearest road or the start; the hunted never resets) and the cars (everyone
+their own, or muscle vs rally: muscle cars for the hunters, a rally car for the hunted),
+and starts the hunt. It runs in a world of its own: its players see only each other and
+the hunt's own traffic, all with names and on the map, and nobody outside sees them.
+The hunters wait for the head start, and win once the hunted has been slower than
+10 km/h for 10 s; the hunted wins when the time is up. Afterwards everyone is back at
+the marker, in its lobby, with their own car. Other groups can start their own hunts at
+the same marker meanwhile.
+
 A server is a program of its own, run headless:
 
 ```sh
 cargo run --bin server -- --cert fullchain.pem --key key.pem   # options: --port, --traffic, --max-players,
-                                                               # --map-players, --map-near, --chat, --name-tags, --shops,
+                                                               # --map-players, --map-near, --chat, --name-tags, --shops, --events,
                                                                # --telegram-token-file with --telegram-chat-file
 ```
 
@@ -121,7 +134,8 @@ Who a player sees of the others on their map (M) is the server's choice:
 default) or `all` (everyone, wherever they are). `--chat off` switches the chat off,
 `--name-tags off` the names over the players' cars. `--shops shops.cfg` says where the
 shops are (lines of kind, x, z and name; `assets/shops.cfg`, the repo's list, explains
-them); without it there are none.
+them); without it there are none. `--events events.cfg` likewise says where the events
+are (`assets/events.cfg`).
 
 It needs a real certificate for browsers to join (WebTransport). Without `--cert` and
 `--key` it makes a throwaway one, which only the native game joins, with
@@ -155,6 +169,8 @@ joins this server):
             # chat = true; nameTags = true;
             # Where the shops are (null: none), e.g. the repo's list:
             # shops = "${car-sim}/assets/shops.cfg";
+            # Where the events are (null: none), e.g. the repo's list:
+            # events = "${car-sim}/assets/events.cfg";
             # A Telegram bot says who joins and leaves (the token file e.g. from sops-nix):
             # telegram = {
             #   tokenFile = config.sops.secrets.car-sim-telegram-token.path;
@@ -281,6 +297,7 @@ tire grip force, cyan for roll centres.
 | `src/editor/`, `src/bin/editor.rs` | The map editor |
 | `src/osm.rs` | The map file's reader and writer (shared with the bake) |
 | `src/shops.rs` | Shops on the map (from the server): going in, gas station, alignment, paint |
+| `src/events/` | Events on the map (from the server): the car hunt's lobby, rounds and rules |
 | `src/garage.rs` | The car dealers' showroom and the parts shops |
 | `src/dyno/`, `src/ecu_ui.rs` | The dyno shops' room: rollers, runs, holds, ECU tuning, cam timing |
 | `src/workshop.rs` | Baking engine maps in the background, and their cache |

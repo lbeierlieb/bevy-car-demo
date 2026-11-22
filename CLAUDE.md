@@ -110,7 +110,9 @@ so clicks on a window must come after that (`T` presses the key T, `E` Enter).
 Shops need a server (`JOIN=127.0.0.1`, see below) and `PLACE` at the building's point
 (the car lands on the marker and goes in): gas `-2603,-1736`, car dealer
 `-1476,-1213`, alignment `-1480,-1305`, paint `3500,-63`, parts `-1950,-3160`, dyno
-`-2601,-3784` (then `CLICK="527,138,180"` is "Onto the rollers"; in the room the
+`-2601,-3784` (then `CLICK="527,138,180"` is "Onto the rollers";
+the car hunt's marker `-95,2341` with `--events assets/events.cfg`, its lobby window opens
+at once; in the room the
 window's tabs are at y 62: Runs 659, ECU tune 715, Cams and boost 810; "Hold" (659, 179)
 on the Runs tab; a hold needs ~200 frames more to settle).
 The editor (`BIN=editor`, hooked by `EditorShotPlugin`): `EDITCAM="x,z,height,yaw,pitch"`
@@ -228,7 +230,7 @@ Not done yet: dyno runs aren't saved; the HUD shows the parked car's gauges whil
 dyno's room; alone, a car can't be changed at all (and an empty tank alone is the end of
 the drive).
 
-## Events (agreed with the user, 2026-11-22; being built)
+## Events (agreed with the user, 2026-11-22; built the same day)
 
 Like shops, places on the map that the server lists (`server --events FILE`,
 `services.car-sim.events`; repo list `assets/events.cfg`, lines `kind x z name`, names
@@ -257,6 +259,24 @@ from the street Reckenneusig, about (−100, 2340)):
   start); the hunted wins when the time runs out. If the hunted leaves, the round ends.
 - Afterwards everyone is back in the normal world at the marker, in the lobby menu (the
   next round's lobby there, if any). Fuel, tires and wear of a player's own car carry over.
+
+As built: `traffic::Realm` (component; none = `Realm::NORMAL`) on peers and traffic cars;
+`Traffic::realms` overrides the density per realm; `populate` and `step` work per realm;
+the server's send loop, map and chat only within a realm, and in any realm but the normal
+one tags are on and the map shows everyone. `src/events/`: `mod.rs` (list, `parse`,
+markers, map marks: `MapMarks`/`MapLegend` are keyed by owner now), `hunt.rs` (rules,
+`Settings`, `Round`, `Phase`, `Outcome`, `Action`, their wire), `rounds.rs` (server:
+`Rounds`, `run_rounds` in `ServerPlugin` between `receive` and `send`; gives and takes
+only the realms it manages; one lobby per event, a round over merges into the waiting
+one), `lobby.rs` (client: `arrive` asks to enter when stopped on a marker, drive 8 m or
+Esc leaves; `follow` places the car at `online::lane_spots` near the marker by slot,
+lends via despawn/spawn and keeps our `Car` in `EventState::lent`, sets `car::Held` and
+`car::ResetRule`; `window`: lobby window and the bar at the top). Protocol 7:
+`ToClient::Events`, `Round(Option<Round>)`, `Busy`, `ToServer::Event(Action)`. Times are
+on the server's clock (`Connection::server_time`). Shops and event markers are hidden
+in a running round (`Connection::in_running_round`). Tests: `realms_see_only_themselves`,
+`a_car_hunt_runs_in_a_realm_of_its_own`, `a_hunt_lends_cars_and_gives_them_back`.
+Not done: races; a round's own chat lines (who caught whom) for the server's chat.
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 
