@@ -33,10 +33,47 @@ impl Plugin for HudPlugin {
     }
 }
 
-fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) -> Result {
-    let Some(car) = cars.iter().find(|car| car.index == active.0) else {
+/// How slowly the gauges' needles follow: the time constants (s) of the fuel gauge (slow,
+/// like a real one, which also hides the fuel sloshing) and the coolant gauge.
+const FUEL_LAG: f32 = 2.5;
+const COOLANT_LAG: f32 = 1.2;
+
+/// What the fuel and coolant gauges show: their needles swing towards the car's values
+/// with a lag, and start where they belong for a car shown afresh.
+#[derive(Default)]
+struct Needles {
+    car: Option<Entity>,
+    fuel: f32,
+    coolant: f32,
+}
+
+impl Needles {
+    fn follow(&mut self, entity: Entity, car: &Car, dt: f32) {
+        let fuel = (car.fuel.litres() / car.setup.tank.litres).clamp(0.0, 1.0);
+        let coolant = car.drivetrain.engine.thermal.coolant;
+        if self.car != Some(entity) {
+            *self = Self {
+                car: Some(entity),
+                fuel,
+                coolant,
+            };
+        }
+        self.fuel += (fuel - self.fuel) * (1.0 - (-dt / FUEL_LAG).exp());
+        self.coolant += (coolant - self.coolant) * (1.0 - (-dt / COOLANT_LAG).exp());
+    }
+}
+
+fn hud(
+    mut contexts: EguiContexts,
+    active: Res<ActiveCar>,
+    cars: Query<(Entity, &Car)>,
+    time: Res<Time>,
+    mut needles: Local<Needles>,
+) -> Result {
+    let Some((entity, car)) = cars.iter().find(|(_, car)| car.index == active.0) else {
         return Ok(());
     };
+    needles.follow(entity, car, time.delta_secs());
     let engine = &car.setup.engine;
     let rpm = car.drivetrain.rpm;
     let top = engine.rev_scale();
@@ -152,7 +189,7 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
             }
         });
 
-    tires(contexts.ctx_mut()?, car);
+    tires(contexts.ctx_mut()?, car, &needles);
     Ok(())
 }
 
@@ -183,7 +220,7 @@ const BLUE: Color32 = Color32::from_rgb(90, 150, 240);
 /// green right, red overheated) with its worn share darkened from the top, the core
 /// temperature in the middle, and the pressure below. Right of them, the coolant and fuel
 /// gauges (see `coolant_gauge`, `fuel_gauge`).
-fn tires(ctx: &egui::Context, car: &Car) {
+fn tires(ctx: &egui::Context, car: &Car, needles: &Needles) {
     let size = 2.0 * TIRE + TIRE_GAP + vec2(16.0 + GAUGES_GAP + 2.0 * COLUMN, 16.0 + PRESSURE_ROW);
     egui::Area::new(egui::Id::new("tires"))
         .anchor(
@@ -246,8 +283,8 @@ fn tires(ctx: &egui::Context, car: &Car) {
                     pos2(right, rect.bottom() - 8.0),
                 )
             };
-            coolant_gauge(painter, column(1.0), car);
-            fuel_gauge(painter, column(0.0), car);
+            coolant_gauge(painter, column(1.0), needles.coolant);
+            fuel_gauge(painter, column(0.0), needles.fuel, car);
         });
 }
 
@@ -283,11 +320,10 @@ fn gauge_layout(
     (symbol, bar)
 }
 
-/// The fuel left as four segments from E to F under a fuel pump, the pump lit orange
+/// The fuel left (`share`, as the needle shows it) as four segments from E to F under a fuel pump, the pump lit orange
 /// when low and red while the engine starves (so is the bar).
-fn fuel_gauge(painter: &egui::Painter, column: egui::Rect, car: &Car) {
+fn fuel_gauge(painter: &egui::Painter, column: egui::Rect, share: f32, car: &Car) {
     let (symbol, bar) = gauge_layout(painter, column, ("F", "E"));
-    let share = (car.fuel.litres() / car.setup.tank.litres).clamp(0.0, 1.0);
     let (color, light) = if car.fuel.supply < 0.95 {
         (RED, RED)
     } else if share < FUEL_LOW {
@@ -323,12 +359,11 @@ fn fuel_gauge(painter: &egui::Painter, column: egui::Rect, car: &Car) {
     fuel_pump(painter, symbol, light);
 }
 
-/// The coolant's temperature from C to H under a thermometer in waves: the scale's top
+/// The coolant's temperature (as the needle shows it) from C to H under a thermometer in waves: the scale's top
 /// marked red from where the engine takes damage, the pointer (and the symbol) blue while
 /// cold, orange when hot and red past the limit.
-fn coolant_gauge(painter: &egui::Painter, column: egui::Rect, car: &Car) {
+fn coolant_gauge(painter: &egui::Painter, column: egui::Rect, kelvin: f32) {
     let (symbol, bar) = gauge_layout(painter, column, ("H", "C"));
-    let kelvin = car.drivetrain.engine.thermal.coolant;
     let (cold, hot) = COOLANT_SCALE;
     let y = |kelvin: f32| {
         let share = ((kelvin - cold) / (hot - cold)).clamp(0.0, 1.0);
