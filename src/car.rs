@@ -647,8 +647,6 @@ pub enum ResetRule {
     Road,
     /// Nothing.
     Never,
-    /// Puts it here (xz), facing along this yaw.
-    To(Vec2, f32),
 }
 
 /// Keyboard and wheel to controls for the active car; any other car holds all brakes. Q/E
@@ -750,19 +748,18 @@ fn reset_car(
     wheel: Res<WheelInput>,
     active: Res<ActiveCar>,
     terrain: Res<Terrain>,
-    mut cars: Query<(Entity, &mut Car)>,
+    cars: Query<(Entity, &Car)>,
     (away, rule): (Res<Away>, Res<ResetRule>),
     mut rescue: ResMut<Rescue>,
 ) {
     if (keys.just_pressed(KeyCode::KeyR) || wheel.reset) && !away.0 && !rescue.busy() {
-        for (entity, mut car) in cars.iter_mut().filter(|(_, car)| car.index == active.0) {
+        for (entity, car) in cars.iter().filter(|(_, car)| car.index == active.0) {
             match *rule {
                 ResetRule::Road => {
                     let (p, yaw) = car.road_spot(&terrain);
-                    rescue.call(entity, &car, &terrain, p, yaw);
+                    rescue.call(entity, car, &terrain, p, yaw);
                 }
                 ResetRule::Never => {}
-                ResetRule::To(p, yaw) => car.place(&terrain, p, yaw),
             }
         }
     }

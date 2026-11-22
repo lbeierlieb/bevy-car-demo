@@ -23,28 +23,6 @@ pub const TAG_RANGE: f32 = 15.0;
 pub const HEAD_START: (u16, u16) = (0, 120);
 pub const DURATION: (u16, u16) = (60, 3600);
 
-/// Where a hunter's R puts their car, if anywhere (the hunted's never moves it).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Reset {
-    Never,
-    /// On the nearest road, as everywhere else.
-    Road,
-    /// Back where they started.
-    Start,
-}
-
-impl Reset {
-    pub const ALL: [Reset; 3] = [Self::Never, Self::Road, Self::Start];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Never => "Not at all",
-            Self::Road => "To the nearest road",
-            Self::Start => "To the start",
-        }
-    }
-}
-
 /// Which cars are driven.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cars {
@@ -108,7 +86,9 @@ pub struct Settings {
     pub duration: u16,
     /// Whether there's traffic (a round's own).
     pub traffic: bool,
-    pub reset: Reset,
+    /// Whether a hunter's R calls the rescue helicopter (the time it takes is their
+    /// penalty for crashing); the hunted's never does.
+    pub hunters_reset: bool,
     pub cars: Cars,
     pub catch: Catch,
 }
@@ -119,7 +99,7 @@ impl Default for Settings {
             head_start: 10,
             duration: 600,
             traffic: true,
-            reset: Reset::Road,
+            hunters_reset: true,
             cars: Cars::Own,
             catch: Catch::Tag,
         }
@@ -230,15 +210,6 @@ pub enum Action {
     Start,
 }
 
-impl Wire for Reset {
-    fn put(&self, out: &mut Vec<u8>) {
-        (*self as u8).put(out);
-    }
-    fn get(r: &mut Reader) -> Option<Self> {
-        Self::ALL.get(usize::from(r.get::<u8>()?)).copied()
-    }
-}
-
 impl Wire for Cars {
     fn put(&self, out: &mut Vec<u8>) {
         (*self as u8).put(out);
@@ -262,7 +233,7 @@ impl Wire for Settings {
         self.head_start.put(out);
         self.duration.put(out);
         self.traffic.put(out);
-        self.reset.put(out);
+        self.hunters_reset.put(out);
         self.cars.put(out);
         self.catch.put(out);
     }
@@ -271,7 +242,7 @@ impl Wire for Settings {
             head_start: r.get()?,
             duration: r.get()?,
             traffic: r.get()?,
-            reset: r.get()?,
+            hunters_reset: r.get()?,
             cars: r.get()?,
             catch: r.get()?,
         })

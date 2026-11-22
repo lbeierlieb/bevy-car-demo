@@ -989,7 +989,7 @@ mod tests {
     fn a_hunt_lends_cars_and_gives_them_back() {
         use crate::car::{Held, ResetRule};
         use crate::chassis::CHASSIS;
-        use crate::events::hunt::{Action, Cars, Reset, Settings};
+        use crate::events::hunt::{Action, Cars, Settings};
         let listener = LoopbackListener::default();
         let mut server = hunt_server(&listener);
         let mut anna = hunter(&listener, "Anna", 0.0);
@@ -1012,7 +1012,7 @@ mod tests {
         };
         let settings = Settings {
             head_start: 2,
-            reset: Reset::Start,
+            hunters_reset: false,
             cars: Cars::MuscleVsRally,
             traffic: false,
             ..Settings::default()
@@ -1032,10 +1032,11 @@ mod tests {
         );
         assert!(!all[h].world().resource::<Held>().0);
         assert_eq!(*all[h].world().resource::<ResetRule>(), ResetRule::Never);
-        assert!(matches!(
+        assert_eq!(
             *all[k].world().resource::<ResetRule>(),
-            ResetRule::To(..)
-        ));
+            ResetRule::Never,
+            "hunters can't reset"
+        );
         run(&mut all, 150);
         assert!(!all[k].world().resource::<Held>().0, "off they go");
         // The hunted stands still and is caught; both have their own cars back.

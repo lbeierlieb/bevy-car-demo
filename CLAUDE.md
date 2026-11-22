@@ -56,7 +56,7 @@ there, at the user's wish, 2026-11-22), and
 gas without moving for 3 s (R). Added alone: in neutral, stalled, wrecked engine, empty
 tank (stating the problem only, since 2026-11-22). R (`ResetPlugin`) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
 right-hand lane on roads with traffic lanes), carried there by the rescue helicopter (see
-"Helicopters"; `ResetRule::To`, a hunt's "to the start", still jumps). The map teleport was removed at the user's
+"Helicopters"). The map teleport was removed at the user's
 wish (2026-11-21). Keys: M map, 0 mute, B (held) looks back.
 
 ## Sandbox workflow
@@ -253,8 +253,9 @@ Baunach, (−87, 2286), the `amenity=parking` area's centroid):
   is the hunted, all later ones hunters. The hunted can click another name to make them
   the hunted, sets the options and starts (at least one hunter). No late joining.
 - Options (the hunted's): head start (10 s), time until the hunted wins (10 min),
-  traffic (on), hunters' reset ("not at all", "to the nearest road" (default), "to the
-  start"; the hunted can never reset), cars ("player cars" (default) or "muscle vs
+  traffic (on), "hunters can reset" (on; R calls the rescue
+  helicopter, whose time is the penalty for crashing; "to the start" was dropped at the
+  user's wish, 2026-11-22; the hunted can never reset), cars ("player cars" (default) or "muscle vs
   rally": hunters get the Harrow muscle car with the 5.0 V8 (M50, its base engine), the
   hunted the Skarn rally car, factory builds, full and on fresh tires; a lent car leaves
   no trace, players get their own car back afterwards as it was), how the hunters win

@@ -9,7 +9,7 @@ use bevy_egui::egui::{self, Align2, Color32, RichText};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::Events;
-use super::hunt::{Action, CAUGHT_TIME, Cars, Catch, Phase, Reset, Round};
+use super::hunt::{Action, CAUGHT_TIME, Cars, Catch, Phase, Round};
 use crate::car::{ActiveCar, Car, CarSetup, Held, ResetRule};
 use crate::chassis::CHASSIS;
 use crate::net::{Connection, Status, Touching, WantsGhost};
@@ -240,11 +240,10 @@ fn follow(
             } else {
                 car.place(&terrain, p, yaw);
             }
-            *rule = match round.settings.reset {
-                _ if hunted => ResetRule::Never,
-                Reset::Never => ResetRule::Never,
-                Reset::Road => ResetRule::Road,
-                Reset::Start => ResetRule::To(p, yaw),
+            *rule = if round.settings.hunters_reset && !hunted {
+                ResetRule::Road
+            } else {
+                ResetRule::Never
             };
         }
     }
@@ -490,14 +489,9 @@ fn settings_grid(ui: &mut egui::Ui, settings: &mut super::hunt::Settings) {
     ui.label("Traffic");
     ui.checkbox(&mut settings.traffic, "");
     ui.end_row();
-    ui.label("Hunters' reset (R)");
-    egui::ComboBox::from_id_salt("hunt reset")
-        .selected_text(settings.reset.title())
-        .show_ui(ui, |ui| {
-            for reset in Reset::ALL {
-                ui.selectable_value(&mut settings.reset, reset, reset.title());
-            }
-        });
+    ui.label("Hunters can reset (R)");
+    ui.checkbox(&mut settings.hunters_reset, "")
+        .on_hover_text("A helicopter carries a hunter's car back to the road: it takes a while");
     ui.end_row();
     ui.label("The hunters");
     egui::ComboBox::from_id_salt("hunt catch")

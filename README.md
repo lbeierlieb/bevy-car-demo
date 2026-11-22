@@ -111,8 +111,9 @@ cam timing and the wastegate. A car at a shop is a ghost: other cars drive throu
 It can also put **events** on the map (red markers). The first is the **car hunt**: stop
 on its marker to join the lobby there. The first player in is hunted, everyone after
 that hunts. The hunted can hand that part to another player, sets the head start
-(10 s), the time to get away (10 min), traffic (on), where a hunter's R puts the car
-(nowhere, the nearest road or the start; the hunted never resets) and the cars (everyone
+(10 s), the time to get away (10 min), traffic (on), whether the hunters can reset
+(R: the rescue helicopter carries them back to the road, which takes a while; the hunted
+never can) and the cars (everyone
 their own, or muscle vs rally: muscle cars for the hunters, a rally car for the hunted)
 and how the hunters win ("Tag them", the default: touching the hunted's car, or keeping
 it slow; "Stop them": only keeping it slow), and starts the hunt. It runs in a world of its own: its players see only each other and

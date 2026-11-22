@@ -32,7 +32,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 10;
+pub const PROTOCOL: u32 = 11;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -756,7 +756,7 @@ mod tests {
             hunted: 1,
             settings: Settings {
                 cars: Cars::MuscleVsRally,
-                reset: Reset::Start,
+                hunters_reset: false,
                 ..Settings::default()
             },
             phase: Phase::Lobby {
