@@ -14,7 +14,7 @@ pub mod server;
 pub mod web;
 pub mod wire;
 
-pub use client::{ChatLine, ClientPlugin, Connection, Status, WantsGhost};
+pub use client::{ChatLine, ClientPlugin, Connection, Status, Touching, WantsGhost};
 pub use server::{MapPlayers, Presence, Server, ServerPlugin};
 
 use bevy::time::{Fixed, Real, Time};
@@ -845,6 +845,89 @@ mod tests {
         assert_eq!(connection(all[3]).busy.len(), 1);
     }
 
+    /// A server with a car hunt at the origin.
+    fn hunt_server(listener: &LoopbackListener) -> App {
+        let events = crate::events::parse("hunt 0 0 Hunt").unwrap();
+        let mut server = server(listener);
+        (server.world_mut().resource_mut::<Server>()).set_events(events);
+        server
+    }
+
+    /// A player's game with the events' lobby, the car hunt at the origin on its map.
+    fn hunter(listener: &LoopbackListener, name: &str, x: f32) -> App {
+        use crate::car::{Held, ResetRule};
+        use crate::events::{Events, Placed, lobby::LobbyPlugin};
+        let event = crate::events::parse("hunt 0 0 Hunt").unwrap().remove(0);
+        let mut app = player(listener, name, 3, x);
+        app.add_plugins(LobbyPlugin)
+            .init_resource::<Held>()
+            .init_resource::<ResetRule>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .insert_resource(Events {
+                list: vec![Placed {
+                    event,
+                    marker: Vec2::ZERO,
+                }],
+            });
+        app
+    }
+
+    /// Tagging: a hunter's car touching the hunted's ends the round at once.
+    #[test]
+    fn a_hunter_tags_the_hunted() {
+        use crate::events::hunt::{Action, Catch, Ending, Phase, Settings};
+        let listener = LoopbackListener::default();
+        let mut server = hunt_server(&listener);
+        let mut anna = hunter(&listener, "Anna", 0.0);
+        let mut ben = hunter(&listener, "Ben", 3.0);
+        let mut all = [&mut server, &mut anna, &mut ben];
+        run(&mut all, 30);
+        let lobby = round(all[1]).expect("in the lobby by stopping on the marker");
+        let you = |app: &App| match connection(app).status {
+            Status::Joined { you } => you,
+            _ => panic!("not joined"),
+        };
+        let (h, k) = if you(all[1]) == lobby.hunted {
+            (1, 2)
+        } else {
+            (2, 1)
+        };
+        let settings = Settings {
+            head_start: 0,
+            traffic: false,
+            catch: Catch::Tag,
+            ..Settings::default()
+        };
+        act(all[h], Action::Settings(settings));
+        act(all[h], Action::Start);
+        run(&mut all, 10);
+        assert!(round(all[k]).unwrap().running());
+        // Apart first (they waited as ghosts, which the shops' plugin, not here, would stop
+        // wanting), then the hunter's car into the hunted's.
+        for i in [h, k] {
+            all[i].world_mut().resource_mut::<WantsGhost>().0 = false;
+        }
+        car(all[k]).body.position.x += 30.0;
+        run(&mut all, 30);
+        assert!(round(all[k]).unwrap().running(), "nobody touched yet");
+        let at = car(all[h]).body.position;
+        car(all[k]).body.position = at + Vec3::X * 1.5;
+        run(&mut all, 20);
+        let after = round(all[h]).unwrap();
+        let Phase::Lobby {
+            last: Some(outcome),
+        } = &after.phase
+        else {
+            panic!("still {:?}", after.phase);
+        };
+        let hunter_name = if k == 1 { "Anna" } else { "Ben" };
+        let Ending::Tagged { by, after } = &outcome.ending else {
+            panic!("{outcome:?}");
+        };
+        assert_eq!(by, hunter_name);
+        assert!(*after < 2.0, "{after}");
+    }
+
     /// A player's game in a car hunt: stopping on the marker goes in, the round lends
     /// the cars it says, holds the hunters for the head start and sets what R does; at
     /// the end everyone has their own car back, as it was.
@@ -853,27 +936,10 @@ mod tests {
         use crate::car::{Held, ResetRule};
         use crate::chassis::CHASSIS;
         use crate::events::hunt::{Action, Cars, Reset, Settings};
-        use crate::events::{Events, Placed, lobby::LobbyPlugin};
         let listener = LoopbackListener::default();
-        let events = crate::events::parse("hunt 0 0 Hunt").unwrap();
-        let mut server = server(&listener);
-        (server.world_mut().resource_mut::<Server>()).set_events(events.clone());
-        let in_game = |name: &str, x: f32| {
-            let mut app = player(&listener, name, 3, x);
-            app.add_plugins(LobbyPlugin)
-                .init_resource::<Held>()
-                .init_resource::<ResetRule>()
-                .init_resource::<ButtonInput<KeyCode>>()
-                .insert_resource(Events {
-                    list: vec![Placed {
-                        event: events[0].clone(),
-                        marker: Vec2::ZERO,
-                    }],
-                });
-            app
-        };
-        let mut anna = in_game("Anna", 0.0);
-        let mut ben = in_game("Ben", 3.0);
+        let mut server = hunt_server(&listener);
+        let mut anna = hunter(&listener, "Anna", 0.0);
+        let mut ben = hunter(&listener, "Ben", 3.0);
         car(&mut anna).refuel(0.5);
         let annas_fuel = car(&mut anna).fuel.litres();
         let mut all = [&mut server, &mut anna, &mut ben];

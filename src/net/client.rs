@@ -76,6 +76,7 @@ impl Plugin for ClientPlugin {
         )
         .init_resource::<traffic::Source>()
         .init_resource::<WantsGhost>()
+        .init_resource::<Touching>()
         .add_systems(Update, haunt.before(send))
         .add_systems(PreUpdate, switch_source)
         .add_systems(
@@ -694,6 +695,11 @@ fn switch_source(
 #[derive(Resource, Default)]
 pub struct WantsGhost(pub bool);
 
+/// The remote cars ours has touched since whoever wants to know last took them (for the
+/// car hunt's tag), each once.
+#[derive(Resource, Default)]
+pub struct Touching(pub Vec<CarId>);
+
 /// Makes our car a ghost, or not, as `WantsGhost` and the cars around it say (never
 /// alone).
 fn haunt(
@@ -733,14 +739,15 @@ fn push_off_remote_cars(
     time: Res<Time>,
     mut cars: Query<&mut Car, Without<Ghost>>,
     remote: Query<(&RemoteCar, &Looks), Without<Ghost>>,
+    mut touching: ResMut<Touching>,
 ) {
     let dt = time.delta_secs();
-    let others: Vec<(RigidBody, Obb)> = (remote.iter())
-        .filter_map(|(car, looks)| Some((car.body.clone()?, looks.hull)))
+    let others: Vec<(CarId, RigidBody, Obb)> = (remote.iter())
+        .filter_map(|(car, looks)| Some((car.id, car.body.clone()?, looks.hull)))
         .collect();
     for mut car in &mut cars {
         let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
-        for (body, other) in &others {
+        for (id, body, other) in &others {
             let mut body = body.clone();
             let other = other.placed(body.position, body.rotation);
             let reach = hull.radius() + other.radius();
@@ -751,6 +758,9 @@ fn push_off_remote_cars(
                 let impulse =
                     collision::resolve(&mut car.body, Some(&mut body), &[contact], OBSTACLE, dt);
                 car.knocks += impulse / car.body.mass;
+                if !touching.0.contains(id) {
+                    touching.0.push(*id);
+                }
             }
         }
     }

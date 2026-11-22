@@ -9,10 +9,10 @@ use bevy_egui::egui::{self, Align2, Color32, RichText};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::Events;
-use super::hunt::{Action, CAUGHT_TIME, Cars, Phase, Reset, Round};
+use super::hunt::{Action, CAUGHT_TIME, Cars, Catch, Phase, Reset, Round};
 use crate::car::{ActiveCar, Car, CarSetup, Held, ResetRule};
 use crate::chassis::CHASSIS;
-use crate::net::{Connection, Status, WantsGhost};
+use crate::net::{Connection, Status, Touching, WantsGhost};
 use crate::online::lane_spots;
 use crate::shops::{MARKER_RADIUS, kerb};
 use crate::terrain::Terrain;
@@ -24,6 +24,8 @@ const STOPPED: f32 = 1.5;
 const LEAVE: f32 = 8.0;
 /// Asking to go in again after this long without an answer (s).
 const ASK_AGAIN: f64 = 1.0;
+/// The cars ours touched go to the server at most this often (s).
+const TOUCHES_EVERY: f64 = 0.2;
 /// The players' spots by the marker: within this far of it (m), at most this many.
 const SPOT_RANGE: f32 = 300.0;
 const SPOTS: usize = 32;
@@ -39,7 +41,7 @@ impl Plugin for LobbyPlugin {
         app.init_resource::<EventState>()
             .add_systems(
                 Update,
-                (follow, arrive)
+                (follow, arrive, report_touches)
                     .chain()
                     .after(crate::shops::arrive)
                     .run_if(resource_exists::<Connection>),
@@ -64,6 +66,8 @@ pub struct EventState {
     /// When the round under way started on our clock (s, `Time<Real>`), should the
     /// server's clock not be known yet.
     started: f64,
+    /// When we last told the server which cars ours touched (s, `Time<Real>`).
+    reported: f64,
 }
 
 impl Default for EventState {
@@ -75,6 +79,7 @@ impl Default for EventState {
             asked: f64::NEG_INFINITY,
             stood: None,
             started: 0.0,
+            reported: f64::NEG_INFINITY,
         }
     }
 }
@@ -149,6 +154,27 @@ fn arrive(
             }
         }
         Some(true) => state.stood = None,
+    }
+}
+
+/// In a round under way that tagging ends, tells the server which cars ours touched (it
+/// checks whose they are and when), at most every `TOUCHES_EVERY`.
+fn report_touches(
+    mut connection: ResMut<Connection>,
+    mut touching: ResMut<Touching>,
+    mut state: ResMut<EventState>,
+    time: Res<Time<Real>>,
+) {
+    let tagging = (connection.round.as_ref())
+        .is_some_and(|round| round.running() && round.settings.catch == Catch::Tag);
+    let now = time.elapsed_secs_f64();
+    if !tagging {
+        touching.0.clear();
+    } else if !touching.0.is_empty() && now - state.reported >= TOUCHES_EVERY {
+        state.reported = now;
+        for car in std::mem::take(&mut touching.0) {
+            connection.act(Action::Touched(car));
+        }
     }
 }
 
@@ -296,10 +322,7 @@ fn window(
                         ui.label(RichText::new(last.text()).strong().size(16.0));
                         ui.separator();
                     }
-                    ui.label(
-                        "The hunted has to get away. The hunters catch them by keeping them \
-                         slower than 10 km/h for 10 s.",
-                    );
+                    ui.label(round.settings.catch.rule());
                     ui.add_space(4.0);
                     egui::Grid::new("event players")
                         .num_columns(3)
@@ -434,6 +457,15 @@ fn settings_grid(ui: &mut egui::Ui, settings: &mut super::hunt::Settings) {
         .show_ui(ui, |ui| {
             for reset in Reset::ALL {
                 ui.selectable_value(&mut settings.reset, reset, reset.title());
+            }
+        });
+    ui.end_row();
+    ui.label("The hunters");
+    egui::ComboBox::from_id_salt("hunt catch")
+        .selected_text(settings.catch.title())
+        .show_ui(ui, |ui| {
+            for catch in Catch::ALL {
+                ui.selectable_value(&mut settings.catch, catch, catch.title());
             }
         });
     ui.end_row();

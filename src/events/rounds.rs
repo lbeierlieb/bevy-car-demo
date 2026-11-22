@@ -7,7 +7,10 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use super::hunt::{Action, CAUGHT_SPEED, CAUGHT_TIME, Ending, Outcome, Phase, Round};
+use super::hunt::{
+    Action, CAUGHT_SPEED, CAUGHT_TIME, Catch, Ending, Outcome, Phase, Round, TAG_RANGE,
+};
+use crate::net::protocol::CarId;
 use crate::net::protocol::{PlayerId, ToClient};
 use crate::net::server::{Peer, Server};
 use crate::traffic::{Realm, Traffic};
@@ -88,6 +91,10 @@ pub fn run_rounds(
             ))
         })
         .collect();
+    // Whose car is whose.
+    let owners: HashMap<CarId, PlayerId> = (peers.iter())
+        .map(|(_, peer, _)| (peer.car, peer.id))
+        .collect();
     let name = |player: PlayerId| {
         present
             .get(&player)
@@ -160,6 +167,40 @@ pub fn run_rounds(
                     hunt.round.hunted = other;
                     hunt.hunted_name = name(other);
                     hunt.changed = true;
+                }
+            }
+            Action::Touched(car) => {
+                let (Some(&other), Some(hunt)) =
+                    (owners.get(&car), mine.map(|i| &mut rounds.list[i]))
+                else {
+                    continue;
+                };
+                let Phase::Running { start, .. } = hunt.round.phase else {
+                    continue;
+                };
+                let hunted = hunt.round.hunted;
+                let hunter = match () {
+                    _ if player == hunted => other,
+                    _ if other == hunted => player,
+                    _ => continue,
+                };
+                let hunting = start + f64::from(hunt.round.settings.head_start);
+                let at = |p: PlayerId| present.get(&p).and_then(|p| p.1);
+                let near =
+                    (at(player).zip(at(other))).is_some_and(|(a, b)| a.distance(b) < TAG_RANGE);
+                if hunt.round.settings.catch == Catch::Tag
+                    && hunt.has(hunter)
+                    && now >= hunting
+                    && near
+                {
+                    let by = name(hunter);
+                    end(
+                        hunt,
+                        Ending::Tagged {
+                            by,
+                            after: (now - hunting) as f32,
+                        },
+                    );
                 }
             }
             Action::Start => {

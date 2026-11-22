@@ -5,16 +5,20 @@
 //! rest hunters; the hunted sets the options, may hand the part to another and starts it
 //! (with at least one hunter). Running, it's in a realm of its own: everyone starts by the
 //! marker, the hunters held for the head start; they win once the hunted's car has been
-//! slower than `CAUGHT_SPEED` for `CAUGHT_TIME` (anywhere), the hunted when the time is
-//! up. If the hunted leaves, or every hunter, it ends. Then everyone is back at the marker,
+//! slower than `CAUGHT_SPEED` for `CAUGHT_TIME` (anywhere), or (with `Catch::Tag`) once a
+//! hunter's car touches it, the hunted when the time is up. If the hunted leaves, or every hunter, it ends. Then everyone is back at the marker,
 //! in its lobby.
 
+use crate::net::protocol::CarId;
 use crate::net::protocol::PlayerId;
 use crate::net::wire::{Reader, Wire};
 
 /// The hunted is caught slower than this for this long (m/s, s).
 pub const CAUGHT_SPEED: f32 = 10.0 / 3.6;
 pub const CAUGHT_TIME: f64 = 10.0;
+/// A touch counts only if the two cars are this near on the server (m): their states can be
+/// a little behind, but not further apart than that.
+pub const TAG_RANGE: f32 = 15.0;
 /// What the hunted can set the head start and the time to win to (s).
 pub const HEAD_START: (u16, u16) = (0, 120);
 pub const DURATION: (u16, u16) = (60, 3600);
@@ -61,6 +65,40 @@ impl Cars {
     }
 }
 
+/// How the hunters catch the hunted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Catch {
+    /// Keep them slow (`CAUGHT_SPEED` for `CAUGHT_TIME`).
+    Stop,
+    /// Touch their car, or keep them slow.
+    Tag,
+}
+
+impl Catch {
+    pub const ALL: [Catch; 2] = [Self::Stop, Self::Tag];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Stop => "Stop them",
+            Self::Tag => "Tag them",
+        }
+    }
+
+    /// The rule, for people.
+    pub fn rule(self) -> &'static str {
+        match self {
+            Self::Stop => {
+                "The hunted has to get away. The hunters catch them by keeping them slower \
+                 than 10 km/h for 10 s."
+            }
+            Self::Tag => {
+                "The hunted has to get away. The hunters catch them by touching their car \
+                 (or by keeping them slower than 10 km/h for 10 s)."
+            }
+        }
+    }
+}
+
 /// What the hunted sets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {
@@ -72,6 +110,7 @@ pub struct Settings {
     pub traffic: bool,
     pub reset: Reset,
     pub cars: Cars,
+    pub catch: Catch,
 }
 
 impl Default for Settings {
@@ -82,6 +121,7 @@ impl Default for Settings {
             traffic: true,
             reset: Reset::Road,
             cars: Cars::Own,
+            catch: Catch::Tag,
         }
     }
 }
@@ -102,6 +142,9 @@ impl Settings {
 pub enum Ending {
     /// The hunters stopped the hunted, this long after the head start (s).
     Caught(f32),
+    /// A hunter (as they were called) touched the hunted's car, this long after the head
+    /// start (s).
+    Tagged { by: String, after: f32 },
     /// The hunted got away: the time was up.
     Escaped,
     /// The hunted left.
@@ -122,15 +165,13 @@ impl Outcome {
     /// For people.
     pub fn text(&self) -> String {
         let name = &self.hunted;
-        match self.ending {
-            Ending::Caught(after) => {
-                let after = after.max(0.0) as u32;
-                format!(
-                    "The hunters caught {name} after {}:{:02}",
-                    after / 60,
-                    after % 60
-                )
-            }
+        let time = |after: f32| {
+            let after = after.max(0.0) as u32;
+            format!("{}:{:02}", after / 60, after % 60)
+        };
+        match &self.ending {
+            Ending::Caught(after) => format!("The hunters caught {name} after {}", time(*after)),
+            Ending::Tagged { by, after } => format!("{by} tagged {name} after {}", time(*after)),
             Ending::Escaped => format!("{name} got away"),
             Ending::HuntedLeft => format!("{name} left the hunt: it's over"),
             Ending::NoHunters => format!("Every hunter left: {name} got away"),
@@ -181,6 +222,8 @@ pub enum Action {
     Leave,
     /// The hunted's settings.
     Settings(Settings),
+    /// Our car touched this one (a player's, we hope: the server checks), for a tag.
+    Touched(CarId),
     /// The hunted hands the part to this player.
     Hunted(PlayerId),
     /// The hunted starts the round.
@@ -205,6 +248,15 @@ impl Wire for Cars {
     }
 }
 
+impl Wire for Catch {
+    fn put(&self, out: &mut Vec<u8>) {
+        (*self as u8).put(out);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        Self::ALL.get(usize::from(r.get::<u8>()?)).copied()
+    }
+}
+
 impl Wire for Settings {
     fn put(&self, out: &mut Vec<u8>) {
         self.head_start.put(out);
@@ -212,6 +264,7 @@ impl Wire for Settings {
         self.traffic.put(out);
         self.reset.put(out);
         self.cars.put(out);
+        self.catch.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         Some(Self {
@@ -220,6 +273,7 @@ impl Wire for Settings {
             traffic: r.get()?,
             reset: r.get()?,
             cars: r.get()?,
+            catch: r.get()?,
         })
     }
 }
@@ -227,7 +281,7 @@ impl Wire for Settings {
 impl Wire for Outcome {
     fn put(&self, out: &mut Vec<u8>) {
         self.hunted.put(out);
-        match self.ending {
+        match &self.ending {
             Ending::Caught(after) => {
                 0u8.put(out);
                 after.put(out);
@@ -235,6 +289,11 @@ impl Wire for Outcome {
             Ending::Escaped => 1u8.put(out),
             Ending::HuntedLeft => 2u8.put(out),
             Ending::NoHunters => 3u8.put(out),
+            Ending::Tagged { by, after } => {
+                4u8.put(out);
+                by.put(out);
+                after.put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -244,6 +303,10 @@ impl Wire for Outcome {
             1 => Ending::Escaped,
             2 => Ending::HuntedLeft,
             3 => Ending::NoHunters,
+            4 => Ending::Tagged {
+                by: r.get()?,
+                after: r.get()?,
+            },
             _ => return None,
         };
         Some(Self { hunted, ending })
@@ -303,6 +366,10 @@ impl Wire for Action {
                 player.put(out);
             }
             Action::Start => 4u8.put(out),
+            Action::Touched(car) => {
+                5u8.put(out);
+                car.put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -312,6 +379,7 @@ impl Wire for Action {
             2 => Action::Settings(r.get()?),
             3 => Action::Hunted(r.get()?),
             4 => Action::Start,
+            5 => Action::Touched(r.get()?),
             _ => return None,
         })
     }
