@@ -1074,13 +1074,14 @@ fn tumble(car: &mut TrafficCar, terrain: &Terrain, contacts: &mut Vec<Contact>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terrain::Spawn;
 
     /// Players near each other share the traffic around them; one far away has their
     /// own.
     #[test]
     fn traffic_is_shared_by_players_near_each_other() {
         let terrain = Terrain::baked();
-        let (spawn, _) = terrain.road_spawns(1, 0.0)[0];
+        let (spawn, _) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
         // Two players 80 m apart, a third on the roads 2 km or more away.
         let network = Network::new(&terrain);
         let far = Spawner::new(&network)
@@ -1127,7 +1128,7 @@ mod tests {
         let mut rng = Rng(12345);
         let mut cars: Vec<TrafficCar> = Vec::new();
         // Thirty cars on the roads near the spawn point.
-        let center = terrain.road_spawns(1, 0.0)[0].0;
+        let center = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0].0;
         let mut spots: Vec<_> = spawner
             .spots
             .iter()

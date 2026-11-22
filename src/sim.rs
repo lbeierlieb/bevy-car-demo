@@ -266,6 +266,7 @@ mod tests {
     use crate::car::{CarSetup, Controls, heading};
     use crate::chassis::{CHASSIS, SUSPENSIONS};
     use crate::physics::tire::RACE;
+    use crate::terrain::Spawn;
     use std::f32::consts::{PI, TAU};
 
     fn run(car: &mut Car, terrain: &Terrain, seconds: f32) {
@@ -277,7 +278,7 @@ mod tests {
 
     /// A car on the road at the first spawn point, pointing along the road.
     fn test_car(terrain: &Terrain) -> Car {
-        let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
+        let (p, yaw) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
         Car::spawn_at(0, CarSetup::default(), terrain, p.x, p.y, yaw)
     }
 
@@ -306,7 +307,7 @@ mod tests {
     #[test]
     fn every_car_stands_on_its_wheels_and_pulls_away() {
         let terrain = Terrain::baked();
-        let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
+        let (p, yaw) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
         for (index, chassis) in CHASSIS.iter().enumerate() {
             for option in 0..chassis.engines.len() {
                 let setup = CarSetup::factory(index, option);
@@ -436,7 +437,7 @@ mod tests {
     #[test]
     fn traction_control_keeps_a_big_engine_from_spinning_its_wheels() {
         let terrain = Terrain::baked();
-        let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
+        let (p, yaw) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
         // The muscle car with the 6.2 V8, floored in first.
         let launch = |traction_control: bool| {
             let mut car = Car::spawn_at(0, CarSetup::factory(6, 1), &terrain, p.x, p.y, yaw);

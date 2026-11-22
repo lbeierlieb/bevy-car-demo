@@ -14,7 +14,7 @@ use crate::physics::suspension::{ArmGeometry, AxleSetup, Corner};
 use crate::physics::tire::TireParams;
 
 use crate::storage::Folder;
-use crate::terrain::Terrain;
+use crate::terrain::{Spawn, Terrain};
 use crate::wheels::{HUB_INERTIA, Wheel};
 
 /// Everything the simulation needs to know about a car, worked out from what it's built
@@ -605,9 +605,9 @@ impl Plugin for ResetPlugin {
     }
 }
 
-fn spawn_default_car(mut commands: Commands, terrain: Res<Terrain>) {
+fn spawn_default_car(mut commands: Commands, terrain: Res<Terrain>, spawn: Res<Spawn>) {
     // On the road at the spawn point.
-    let (p, yaw) = terrain.road_spawns(1, 0.0)[0];
+    let (p, yaw) = terrain.road_spawns(&spawn, 1, 0.0)[0];
     let car = Car::spawn_at(0, CarSetup::default(), &terrain, p.x, p.y, yaw);
     commands.spawn((Transform::from_translation(car.body.position), car));
 }
@@ -769,7 +769,7 @@ mod tests {
     #[test]
     fn a_reset_puts_the_car_on_the_nearest_road() {
         let terrain = Terrain::baked();
-        let (spawn, yaw) = terrain.road_spawns(1, 0.0)[0];
+        let (spawn, yaw) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
         // 40 m off the road to the side, lying on its roof.
         let side = Vec2::new(yaw.cos(), -yaw.sin());
         let off = spawn + 40.0 * side;

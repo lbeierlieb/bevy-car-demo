@@ -7,7 +7,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy_egui::input::EguiWantsInput;
 
 use crate::map::{MapClicked, MapView};
-use crate::terrain::Terrain;
+use crate::terrain::{Spawn, Terrain};
 
 /// Speeds the wheel steps through (m/s), and the one to start at.
 const SPEEDS: [f32; 9] = [2.0, 5.0, 10.0, 20.0, 40.0, 80.0, 150.0, 300.0, 600.0];
@@ -48,8 +48,8 @@ impl FlyCamera {
     }
 }
 
-fn spawn(mut commands: Commands, terrain: Res<Terrain>) {
-    let (spot, _) = terrain.road_spawns(1, 0.0)[0];
+fn spawn(mut commands: Commands, terrain: Res<Terrain>, start: Res<Spawn>) {
+    let (spot, _) = terrain.road_spawns(&start, 1, 0.0)[0];
     let camera = FlyCamera {
         yaw: 0.0,
         pitch: -0.5,

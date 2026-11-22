@@ -118,7 +118,7 @@ mod tests {
     use super::*;
     use crate::car::{ActiveCar, Car, CarSetup};
     use crate::looks::{Looks, Motion};
-    use crate::terrain::Terrain;
+    use crate::terrain::{Spawn, Terrain};
 
     const FRAME: f64 = 1.0 / 60.0;
 
@@ -577,7 +577,7 @@ mod tests {
             .add_plugins((ServerPlugin, TrafficPlugin))
             .insert_resource(Server::new(listener.clone()));
         let terrain = Terrain::baked();
-        let (spawn, _) = terrain.road_spawns(1, 0.0)[0];
+        let (spawn, _) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
         let mut anna = player_on(&listener, "Anna", 3, spawn, terrain);
         anna.add_plugins(TrafficPlugin);
         run(&mut [&mut server, &mut anna], 120);
@@ -616,7 +616,7 @@ mod tests {
             .add_plugins((ServerPlugin, TrafficPlugin))
             .insert_resource(Server::new(listener.clone()));
         let terrain = Terrain::baked();
-        let (spawn, _) = terrain.road_spawns(1, 0.0)[0];
+        let (spawn, _) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
         let mut anna = player_on(&listener, "Anna", 3, spawn, terrain);
         run(&mut [&mut server, &mut anna], 60);
         // Ben joins with traffic already numbered.
@@ -667,7 +667,7 @@ mod tests {
             .add_plugins((ServerPlugin, TrafficPlugin))
             .insert_resource(Server::new(listener.clone()));
         let terrain = Terrain::baked();
-        let (spawn, _) = terrain.road_spawns(1, 0.0)[0];
+        let (spawn, _) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
         let mut anna = player_on(&listener, "Anna", 3, spawn, terrain);
         let mut ben = player_on(
             &listener,

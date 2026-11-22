@@ -32,11 +32,43 @@ const ROAD_FADE: f32 = 3.0;
 /// deck, one under it on the road below.
 const LEVEL_REACH: f32 = 1.0;
 
+/// Where the cars start: they're placed on the nearest paved road, facing along it in the
+/// direction closest to the heading. Not part of the map: the server says where (alone,
+/// it's the default, in Gerach).
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct Spawn {
+    /// Map point (x east, z south, m).
+    pub at: Vec2,
+    /// Compass degrees (0 north, 90 east); none faces the way with more road behind.
+    pub heading: Option<f32>,
+}
+
+impl Spawn {
+    /// In Gerach, facing south.
+    pub const DEFAULT: Spawn = Spawn {
+        at: Vec2::new(-2984.5, -2007.2),
+        heading: Some(180.0),
+    };
+
+    /// The heading as a direction in the map frame (x east, z south).
+    fn direction(&self) -> Option<Vec2> {
+        let h = self.heading?.to_radians();
+        Some(Vec2::new(h.sin(), -h.cos()))
+    }
+}
+
+impl Default for Spawn {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Terrain::load());
+        app.insert_resource(Terrain::load())
+            .init_resource::<Spawn>();
     }
 }
 
@@ -169,10 +201,6 @@ pub struct Terrain {
     /// Chunk side in cells, and the chunks, row-major in z.
     chunk_cells: usize,
     chunks: Vec<Chunk>,
-    /// Where the cars start (they're placed on the nearest paved road), and the direction
-    /// they should face along it (zero if none).
-    spawn: Vec2,
-    spawn_heading: Vec2,
     /// Height above sea level of the map's y = 0 (its lowest point).
     pub base: f32,
     pub roads: Vec<Road>,
@@ -268,8 +296,8 @@ impl Terrain {
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
         let cell = r.f32();
         let chunk_cells = r.u32() as usize;
-        let spawn = Vec2::new(r.f32(), r.f32());
-        let spawn_heading = Vec2::new(r.f32(), r.f32());
+        // The spawn point and heading the bake used to write (unused).
+        r.take(16);
         let base = r.f32();
         let n = cells_x + 1;
         let mut heights = vec![0.0; n * (cells_z + 1)];
@@ -366,8 +394,6 @@ impl Terrain {
             heights,
             chunk_cells,
             chunks,
-            spawn,
-            spawn_heading,
             base,
             road_grid: RoadGrid::new(&roads, half),
             roads,
@@ -398,8 +424,6 @@ impl Terrain {
                     classes: vec![PAVED],
                 })
                 .collect(),
-            spawn: Vec2::ZERO,
-            spawn_heading: Vec2::NEG_Y,
             base: 0.0,
             roads: Vec::new(),
             road_grid: RoadGrid::new(&[], Vec2::splat(cells as f32 * 2.0)),
@@ -644,16 +668,15 @@ impl Terrain {
     /// (position in xz, yaw facing along the road). The first is the closest point on the
     /// road to the spawn point, facing in the road direction closest to the spawn heading;
     /// the others line up behind it.
-    pub fn road_spawns(&self, count: usize, spacing: f32) -> Vec<(Vec2, f32)> {
+    pub fn road_spawns(&self, spawn: &Spawn, count: usize, spacing: f32) -> Vec<(Vec2, f32)> {
         let (road, i, start) = self
-            .closest_on_road(self.spawn, |r| r.kind.paved() && r.width >= 5.0)
+            .closest_on_road(spawn.at, |r| r.kind.paved() && r.width >= 5.0)
             .expect("map has no paved roads");
         // Face along the spawn heading; without one, so there's more road behind.
         let n = road.points.len();
-        let forward = if self.spawn_heading == Vec2::ZERO {
-            i >= n / 2
-        } else {
-            (road.points[i + 1] - road.points[i]).dot(self.spawn_heading) >= 0.0
+        let forward = match spawn.direction() {
+            None => i >= n / 2,
+            Some(heading) => (road.points[i + 1] - road.points[i]).dot(heading) >= 0.0,
         };
         // Walk backwards from the start; the cars face the other way.
         let behind: Vec<Vec2> = if forward {
@@ -1159,15 +1182,16 @@ mod tests {
     #[test]
     fn spawns_lie_on_a_road() {
         let terrain = Terrain::baked();
-        let spawns = terrain.road_spawns(3, 9.0);
+        let spawn = Spawn::DEFAULT;
+        let spawns = terrain.road_spawns(&spawn, 3, 9.0);
         assert_eq!(spawns.len(), 3);
         assert!(spawns[0].0.distance(spawns[2].0) > 10.0);
-        // At the baked spawn point (Gerach), facing along the spawn heading.
-        assert!(spawns[0].0.distance(terrain.spawn) < 30.0);
+        // At the spawn point (Gerach), facing along the spawn heading.
+        assert!(spawns[0].0.distance(spawn.at) < 30.0);
         for (p, yaw) in &spawns {
             let facing = Vec2::new(-yaw.sin(), -yaw.cos());
             assert!(
-                facing.dot(terrain.spawn_heading) > 0.5,
+                facing.dot(spawn.direction().unwrap()) > 0.5,
                 "facing {facing} at {p}"
             );
         }

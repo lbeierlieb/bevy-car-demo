@@ -15,7 +15,7 @@ use crate::help::Intro;
 use crate::map::{MapCar, MapCars};
 use crate::name_tags::NameTagPlugin;
 use crate::net::{self, Connection, Status};
-use crate::terrain::Terrain;
+use crate::terrain::{Spawn, Terrain};
 use crate::traffic::network::{Leg, Network};
 
 /// Spots for joining cars in the lanes near the spawn point: how many, at least how far
@@ -235,7 +235,7 @@ fn place_on_joining(
         return;
     }
     *placed = Some(you);
-    let (start, _) = terrain.road_spawns(1, 0.0)[0];
+    let (start, _) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
     let spots = lane_spots(&network, start, SPOT_RANGE, SPOTS);
     let Some(&(p, yaw)) = spots.get(you as usize % spots.len().max(1)) else {
         return;
@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn joining_cars_get_spots_of_their_own() {
         let terrain = Terrain::baked();
-        let (start, _) = terrain.road_spawns(1, 0.0)[0];
+        let (start, _) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
         let spots = lane_spots(&Network::new(&terrain), start, SPOT_RANGE, SPOTS);
         assert_eq!(spots.len(), SPOTS);
     }
