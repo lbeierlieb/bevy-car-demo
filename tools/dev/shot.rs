@@ -471,7 +471,8 @@ fn traffic_cam(
 }
 
 /// PLACE="x,z,frame": put the car being driven on the road nearest map point (x, z) at
-/// that frame.
+/// that frame (with PLACE_EXACT=1 exactly there, e.g. on an event's marker in a parking
+/// lot).
 fn place_car(
     terrain: Res<crate::terrain::Terrain>,
     active: Res<crate::car::ActiveCar>,
@@ -491,7 +492,10 @@ fn place_car(
     };
     let target = Vec2::new(v[0], v[1]);
     let heading = (car.body.rotation * Vec3::NEG_Z).xz();
-    if let Some((spot, yaw)) = terrain.drive_spot(target, heading) {
+    if std::env::var("PLACE_EXACT").is_ok() {
+        let yaw = crate::car::heading(car.body.rotation);
+        car.place(&terrain, target, yaw);
+    } else if let Some((spot, yaw)) = terrain.drive_spot(target, heading) {
         car.place(&terrain, spot, yaw);
     }
 }
