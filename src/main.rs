@@ -15,6 +15,8 @@ fn main() {
             online::OnlinePlugin,
             // The shops a server puts on the map (none alone).
             shops::ShopsPlugin,
+            // The events a server puts on the map: a car hunt (none alone).
+            events::EventsPlugin,
             // Starts in the coupé; R puts the car back on the nearest road.
             car::DefaultCarPlugin,
             car::ResetPlugin,

@@ -179,15 +179,14 @@ fn mark(conflicts: Res<Conflicts>, mut marks: ResMut<MapMarks>) {
     if !conflicts.is_changed() {
         return;
     }
-    marks.0.clear();
-    if let Some(c) = conflicts.current.and_then(|i| conflicts.list.get(i)) {
-        marks.0.push(MapMark {
-            at: c.at,
-            color: [230, 40, 30],
-            label: c.name.clone(),
-            label_below: f32::INFINITY,
-        });
-    }
+    let current = conflicts.current.and_then(|i| conflicts.list.get(i));
+    let mark = current.map(|c| MapMark {
+        at: c.at,
+        color: [230, 40, 30],
+        label: c.name.clone(),
+        label_below: f32::INFINITY,
+    });
+    marks.0.insert("conflicts", mark.into_iter().collect());
 }
 
 fn labels(

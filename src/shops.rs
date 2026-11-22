@@ -462,7 +462,7 @@ fn place(
     shops.list = (wanted.iter())
         .map(|shop| {
             let (marker, yaw) = kerb(&terrain, shop.at);
-            spawn_marker(
+            let entity = spawn_marker(
                 &mut commands,
                 &mut meshes,
                 &mut materials,
@@ -470,6 +470,7 @@ fn place(
                 marker,
                 shop.kind.color(),
             );
+            commands.entity(entity).insert(Marker);
             Placed {
                 shop: shop.clone(),
                 marker,
@@ -479,7 +480,7 @@ fn place(
         .collect();
     // On the map: each shop in its kind's colour, and a legend of the kinds there are; the
     // names only zoomed in, or they'd crowd the whole map.
-    marks.0 = (shops.list.iter())
+    let shop_marks = (shops.list.iter())
         .map(|placed| MapMark {
             at: placed.marker,
             color: placed.shop.kind.color(),
@@ -487,21 +488,23 @@ fn place(
             label_below: MAP_NAMES_BELOW,
         })
         .collect();
-    legend.0 = (ShopKind::ALL.into_iter())
+    marks.0.insert("shops", shop_marks);
+    let kinds = (ShopKind::ALL.into_iter())
         .filter(|&kind| shops.list.iter().any(|placed| placed.shop.kind == kind))
         .map(|kind| (kind.color(), kind.title().to_string()))
         .collect();
+    legend.0.insert("shops", kinds);
 }
 
-/// A marker of `color` on the ground at `at`.
-fn spawn_marker(
+/// A marker of `color` on the ground at `at` (also the events').
+pub fn spawn_marker(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     terrain: &Terrain,
     at: Vec2,
     [r, g, b]: [u8; 3],
-) {
+) -> Entity {
     let color = Color::srgb_u8(r, g, b);
     let mut glow = |alpha: f32| {
         materials.add(StandardMaterial {
@@ -516,7 +519,6 @@ fn spawn_marker(
     let ground = terrain.sample(at.x, at.y).0;
     commands
         .spawn((
-            Marker,
             Transform::from_xyz(at.x, ground, at.y),
             Visibility::default(),
         ))
@@ -533,7 +535,8 @@ fn spawn_marker(
                 Transform::from_xyz(0.0, 20.0, 0.0),
                 NotShadowCaster,
             ));
-        });
+        })
+        .id()
 }
 
 /// The shops' names above their markers, when they're near and in view.
@@ -552,33 +555,48 @@ fn labels(
     let ctx = contexts.ctx_mut()?;
     let painter = ctx.layer_painter(egui::LayerId::background());
     for placed in &shops.list {
-        let at = placed.marker;
-        let ground = terrain.sample(at.x, at.y).0;
-        let top = Vec3::new(at.x, ground + 3.5, at.y);
-        let distance = top.distance(view.translation());
-        if distance > LABEL_RANGE {
-            continue;
-        }
-        let Ok(screen) = camera.world_to_viewport(view, top) else {
-            continue;
-        };
         let kind = placed.shop.kind;
-        let [r, g, b] = kind.color();
-        let text = format!("{}\n{}  {:.0} m", placed.shop.name, kind.title(), distance);
-        let galley = painter.layout_no_wrap(text, FontId::proportional(14.0), Color32::WHITE);
-        let rect = Align2::CENTER_BOTTOM
-            .anchor_size(egui::pos2(screen.x, screen.y), galley.size())
-            .expand(5.0);
-        painter.rect_filled(rect, 4.0, Color32::from_black_alpha(170));
-        painter.rect_stroke(
-            rect,
-            4.0,
-            egui::Stroke::new(1.5, Color32::from_rgb(r, g, b)),
-            egui::StrokeKind::Inside,
+        let label = (
+            placed.marker,
+            &*placed.shop.name,
+            kind.title(),
+            kind.color(),
         );
-        painter.galley(rect.min + egui::vec2(5.0, 5.0), galley, Color32::WHITE);
+        float_label(&painter, (camera, view), &terrain, label);
     }
     Ok(())
+}
+
+/// A marker's name and what it is, floating above it (at `at`, in `color`) when it's in
+/// view within `LABEL_RANGE` (also the events').
+pub fn float_label(
+    painter: &egui::Painter,
+    (camera, view): (&Camera, &GlobalTransform),
+    terrain: &Terrain,
+    (at, name, title, [r, g, b]): (Vec2, &str, &str, [u8; 3]),
+) {
+    let ground = terrain.sample(at.x, at.y).0;
+    let top = Vec3::new(at.x, ground + 3.5, at.y);
+    let distance = top.distance(view.translation());
+    if distance > LABEL_RANGE {
+        return;
+    }
+    let Ok(screen) = camera.world_to_viewport(view, top) else {
+        return;
+    };
+    let text = format!("{name}\n{title}  {distance:.0} m");
+    let galley = painter.layout_no_wrap(text, FontId::proportional(14.0), Color32::WHITE);
+    let rect = Align2::CENTER_BOTTOM
+        .anchor_size(egui::pos2(screen.x, screen.y), galley.size())
+        .expand(5.0);
+    painter.rect_filled(rect, 4.0, Color32::from_black_alpha(170));
+    painter.rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.5, Color32::from_rgb(r, g, b)),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(rect.min + egui::vec2(5.0, 5.0), galley, Color32::WHITE);
 }
 
 #[cfg(test)]

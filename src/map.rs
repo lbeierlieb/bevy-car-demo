@@ -6,6 +6,7 @@
 //! on underneath. The ground image is built a few rows per frame from startup, so the
 //! map opens at once.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use bevy::platform::time::Instant;
@@ -59,8 +60,16 @@ impl Plugin for MapPlugin {
 
 /// Spots an app wants on the map (places, destinations): a dot each, and a label once
 /// zoomed in far enough.
+/// Each app part's marks under its own key (e.g. "shops"), so they don't overwrite each
+/// other's.
 #[derive(Resource, Default)]
-pub struct MapMarks(pub Vec<MapMark>);
+pub struct MapMarks(pub BTreeMap<&'static str, Vec<MapMark>>);
+
+impl MapMarks {
+    pub fn iter(&self) -> impl Iterator<Item = &MapMark> {
+        self.0.values().flatten()
+    }
+}
 
 pub struct MapMark {
     pub at: Vec2,
@@ -71,9 +80,10 @@ pub struct MapMark {
     pub label_below: f32,
 }
 
-/// What the marks' colours mean, listed in a corner of the map.
+/// What the marks' colours mean, listed in a corner of the map (under keys like
+/// `MapMarks`').
 #[derive(Resource, Default)]
-pub struct MapLegend(pub Vec<([u8; 3], String)>);
+pub struct MapLegend(pub BTreeMap<&'static str, Vec<([u8; 3], String)>>);
 
 /// Cars other than the app's own to show (other players, as a server tells): an arrow in
 /// their paint and a label each.
@@ -350,7 +360,7 @@ fn draw(
                 }
             }
 
-            for mark in &marks.0 {
+            for mark in marks.iter() {
                 let at = to_screen(mark.at);
                 let [r, g, b] = mark.color;
                 let color = Color32::from_rgb(r, g, b);
@@ -400,12 +410,13 @@ fn draw(
             }
 
             // The legend, top left: a dot and what it means per line.
-            if !legend.0.is_empty() {
+            let legend: Vec<_> = legend.0.values().flatten().collect();
+            if !legend.is_empty() {
                 let (line, inset) = (20.0, 12.0);
-                let size = vec2(170.0, line * legend.0.len() as f32);
+                let size = vec2(170.0, line * legend.len() as f32);
                 let rect = Rect::from_min_size(screen.left_top() + vec2(inset, inset), size);
                 painter.rect_filled(rect.expand(6.0), 4.0, PANEL);
-                for (i, ([r, g, b], text)) in legend.0.iter().enumerate() {
+                for (i, ([r, g, b], text)) in legend.iter().enumerate() {
                     let middle = rect.left_top() + vec2(6.0, line * (i as f32 + 0.5));
                     let color = Color32::from_rgb(*r, *g, *b);
                     painter.circle(middle, 6.0, color, Stroke::new(1.5, Color32::BLACK));

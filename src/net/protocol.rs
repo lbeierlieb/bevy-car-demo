@@ -3,7 +3,7 @@
 //! A client says hello (protocol version, the map's fingerprint, the player's name), then
 //! sends its car's looks whenever they change (reliably) and its state ~30 times a second
 //! (unreliably: a lost one is soon replaced). The server welcomes it (or refuses it) and
-//! tells it where the shops are (its own list, separate from the map), then
+//! tells it where the shops and events are (its own lists, separate from the map), then
 //! tells everyone who joins and leaves, and sends each player the states of the cars near
 //! them, the nearer the more often, with their looks before the first state and after
 //! every change, the name a car shows, if any, and when a car is out of range or gone. Every car is sent alike, the traffic's
@@ -19,6 +19,7 @@ use bevy::prelude::*;
 use super::wire::{Reader, Wire};
 use crate::audio::{EngineCharacter, EngineRun, ExhaustSound};
 use crate::chassis::{CHASSIS, CLUTCHES, CarBuild, FACTORY_TOE, GEARBOXES, PAINTS, SUSPENSIONS};
+use crate::events::Event;
 use crate::looks::{AxleLooks, Looks, Motion, WheelMotion};
 use crate::physics::collision::Obb;
 use crate::physics::engine::families::Layout;
@@ -28,7 +29,7 @@ use crate::shops::Shop;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 6;
+pub const PROTOCOL: u32 = 7;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -110,6 +111,8 @@ pub enum ToClient {
     },
     /// The shops on the map, told after the welcome.
     Shops(Vec<Shop>),
+    /// The events on the map, told after the shops.
+    Events(Vec<Event>),
 }
 
 impl ToServer {
@@ -288,6 +291,10 @@ impl Wire for ToClient {
                 11u8.put(out);
                 shops.put(out);
             }
+            ToClient::Events(events) => {
+                12u8.put(out);
+                events.put(out);
+            }
         }
     }
 
@@ -320,6 +327,7 @@ impl Wire for ToClient {
             },
             10 => ToClient::Gone { car: r.get()? },
             11 => ToClient::Shops(r.get()?),
+            12 => ToClient::Events(r.get()?),
             _ => return None,
         })
     }
@@ -654,6 +662,13 @@ mod tests {
     fn the_shops_come_through() {
         let shops = crate::shops::parse(crate::shops::LIST).unwrap();
         let message = ToClient::Shops(shops);
+        assert_eq!(decode::<ToClient>(&encode(&message)), Some(message));
+    }
+
+    #[test]
+    fn the_events_come_through() {
+        let events = crate::events::parse(crate::events::LIST).unwrap();
+        let message = ToClient::Events(events);
         assert_eq!(decode::<ToClient>(&encode(&message)), Some(message));
     }
 

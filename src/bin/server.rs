@@ -4,7 +4,7 @@
 //! ```text
 //! server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]
 //!        [--map-players self|near|all] [--map-near 200] [--chat on|off]
-//!        [--name-tags on|off] [--shops shops.cfg]
+//!        [--name-tags on|off] [--shops shops.cfg] [--events events.cfg]
 //!        [--telegram-token-file token --telegram-chat-file chat]
 //! ```
 //!
@@ -12,7 +12,8 @@
 //! the ones within `--map-near` metres (`near`, the default) or everyone (`all`).
 //! `--chat off` keeps the players from chatting (it's on by default), `--name-tags off`
 //! the players' names off their cars (also on by default). `--shops` reads where the
-//! shops are from a file (e.g. `assets/shops.cfg`; without one there are none).
+//! shops are from a file (e.g. `assets/shops.cfg`; without one there are none), `--events`
+//! where the events are (e.g. `assets/events.cfg`; likewise).
 //!
 //! Without a certificate it makes a throwaway one: only the native game joins that, with
 //! `CAR_SIM_INSECURE=1` (for development).
@@ -36,7 +37,7 @@ fn main() {
         Ok(options) => options,
         Err(e) => {
             eprintln!(
-                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--map-players self|near|all] [--map-near 200] [--chat on|off]\n       [--name-tags on|off] [--shops shops.cfg]\n       [--telegram-token-file token --telegram-chat-file chat]"
+                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--map-players self|near|all] [--map-near 200] [--chat on|off]\n       [--name-tags on|off] [--shops shops.cfg] [--events events.cfg]\n       [--telegram-token-file token --telegram-chat-file chat]"
             );
             std::process::exit(2);
         }
@@ -78,7 +79,8 @@ fn main() {
             .with_map(options.map_players)
             .with_chat(options.chat)
             .with_name_tags(options.name_tags)
-            .with_shops(options.shops),
+            .with_shops(options.shops)
+            .with_events(options.events),
     )
     .insert_resource(traffic::Traffic {
         cars: options.traffic,
@@ -121,6 +123,7 @@ struct Options {
     chat: bool,
     name_tags: bool,
     shops: Vec<car_sim::shops::Shop>,
+    events: Vec<car_sim::events::Event>,
     telegram_token_file: Option<std::path::PathBuf>,
     telegram_chat_file: Option<std::path::PathBuf>,
 }
@@ -138,6 +141,7 @@ impl Options {
             chat: true,
             name_tags: true,
             shops: Vec::new(),
+            events: Vec::new(),
             telegram_token_file: None,
             telegram_chat_file: None,
         };
@@ -151,6 +155,7 @@ impl Options {
         let mut map_players = "near".to_string();
         let mut map_near = car_sim::net::server::MAP_NEAR;
         let mut shops: Option<std::path::PathBuf> = None;
+        let mut events: Option<std::path::PathBuf> = None;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--port" => options.port = number(&arg, args.next())?,
@@ -166,6 +171,7 @@ impl Options {
                 }
                 "--map-near" => map_near = number(&arg, args.next())?,
                 "--shops" => shops = Some(args.next().ok_or("--shops needs a file")?.into()),
+                "--events" => events = Some(args.next().ok_or("--events needs a file")?.into()),
                 "--chat" | "--name-tags" => {
                     let on = match args.next().as_deref() {
                         Some("on") => true,
@@ -208,6 +214,11 @@ impl Options {
             let text = std::fs::read_to_string(file)
                 .map_err(|e| format!("--shops: {}: {e}", file.display()))?;
             options.shops = car_sim::shops::parse(&text).map_err(|e| format!("--shops: {e}"))?;
+        }
+        if let Some(file) = &events {
+            let text = std::fs::read_to_string(file)
+                .map_err(|e| format!("--events: {}: {e}", file.display()))?;
+            options.events = car_sim::events::parse(&text).map_err(|e| format!("--events: {e}"))?;
         }
         if options.cert.is_some() != options.key.is_some() {
             return Err("--cert and --key go together".into());

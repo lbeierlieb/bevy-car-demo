@@ -26,6 +26,7 @@ use super::protocol::{
 };
 use super::wire::{decode, encode};
 use super::{ClockOffset, NEAR, RATES, SEND_RATE};
+use crate::events::Event;
 use crate::looks::{Looks, Motion};
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
@@ -101,6 +102,8 @@ pub struct Server {
     name_tags: bool,
     /// The shops on the map, told to every player who joins.
     shops: Vec<Shop>,
+    /// The events on the map, likewise.
+    events: Vec<Event>,
     /// When states, and the map's players, were last sent (s).
     sent: f64,
     map_sent: f64,
@@ -117,6 +120,7 @@ impl Server {
             chat: true,
             name_tags: true,
             shops: Vec::new(),
+            events: Vec::new(),
             sent: 0.0,
             map_sent: f64::NEG_INFINITY,
             pings_sent: f64::NEG_INFINITY,
@@ -133,6 +137,10 @@ impl Server {
 
     pub fn with_shops(self, shops: Vec<Shop>) -> Self {
         Self { shops, ..self }
+    }
+
+    pub fn with_events(self, events: Vec<Event>) -> Self {
+        Self { events, ..self }
     }
 
     pub fn with_name_tags(self, name_tags: bool) -> Self {
@@ -295,6 +303,7 @@ fn receive(
                         chat: server.chat,
                     });
                     peer.tell(&ToClient::Shops(server.shops.clone()));
+                    peer.tell(&ToClient::Events(server.events.clone()));
                     joined.push((id, name.clone()));
                     present += 1;
                     peer.name = Some(name);

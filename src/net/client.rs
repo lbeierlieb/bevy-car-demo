@@ -22,6 +22,7 @@ use super::protocol::{
 use super::wire::{decode, encode};
 use super::{ClockOffset, SEND_RATE};
 use crate::car::{ActiveCar, Car};
+use crate::events::Event;
 use crate::looks::{Ghost, Looks, Motion};
 use crate::physics::collision::Obb;
 use crate::physics::collision::{self, OBSTACLE};
@@ -124,6 +125,8 @@ pub struct Connection {
     pub chat: VecDeque<ChatLine>,
     /// The shops on the map, as the server told.
     pub shops: Vec<Shop>,
+    /// The events on the map, likewise.
+    pub events: Vec<Event>,
     /// The server's clock against ours (every state comes on it).
     clock: ClockOffset,
     /// What we've been told of each car (a state may overtake it, or come later).
@@ -163,6 +166,7 @@ impl Connection {
             name: name.to_string(),
             chat_on: false,
             shops: Vec::new(),
+            events: Vec::new(),
             chat: VecDeque::new(),
             clock: ClockOffset::default(),
             known: HashMap::new(),
@@ -369,6 +373,7 @@ fn receive(
                 }
             }
             ToClient::Shops(shops) => connection.shops = shops,
+            ToClient::Events(events) => connection.events = events,
             ToClient::Pings(pings) => {
                 connection.pings = pings.into_iter().collect();
             }

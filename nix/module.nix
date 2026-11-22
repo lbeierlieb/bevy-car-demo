@@ -125,6 +125,17 @@ in
       '';
     };
 
+    events = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      example = lib.literalExpression ''"''${car-sim}/assets/events.cfg"'';
+      description = ''
+        A file saying where the events on the map are (lines of kind, x, z and name, as in
+        the repo's assets/events.cfg, e.g. a car hunt; their markers go on the nearest paved
+        road). Null: no events.
+      '';
+    };
+
     telegram = {
       tokenFile = mkOption {
         type = types.nullOr types.str;
@@ -218,6 +229,10 @@ in
             ++ lib.optionals (cfg.shops != null) [
               "--shops"
               "${cfg.shops}"
+            ]
+            ++ lib.optionals (cfg.events != null) [
+              "--events"
+              "${cfg.events}"
             ]
             # The credentials' copies (%d: the service's credentials directory).
             ++ lib.optionals (cfg.telegram.tokenFile != null) [

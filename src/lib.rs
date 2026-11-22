@@ -16,6 +16,7 @@ pub mod dyno;
 pub mod ecu_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod editor;
+pub mod events;
 pub mod fences;
 pub mod garage;
 pub mod help;
