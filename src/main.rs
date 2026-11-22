@@ -24,7 +24,7 @@ fn main() {
             // at first).
             debug::DebugPlugin,
             ui::PanelPlugin,
-            // The garage, the showroom, the chassis dyno and the ECU tuning (in it), the
+            // The garage (on its lift), the showroom, the chassis dyno and the ECU tuning (in it), the
             // alignment lift, the pumps and the paint booth are at shops.
             garage::GaragePlugin,
             dyno::DynoPlugin,

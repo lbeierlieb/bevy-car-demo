@@ -5,6 +5,8 @@
 //! parts; it repairs the engine and fits new tires. The alignment (`alignment`) is set at
 //! alignment shops.
 //!
+//! The parts shop's window is in its workshop (`bay`), with the car up on a lift.
+//!
 //! Parts on the cylinder side need the engine's maps baked again (see `workshop`), which
 //! takes a few seconds, while the car keeps its old engine.
 
@@ -28,6 +30,8 @@ use crate::terrain::Terrain;
 use crate::wheels::{self, TireSize, Wheel};
 use crate::workshop::{self, Work};
 
+mod bay;
+
 const WARNING: egui::Color32 = egui::Color32::from_rgb(255, 170, 60);
 
 pub struct GaragePlugin;
@@ -35,8 +39,9 @@ pub struct GaragePlugin;
 impl Plugin for GaragePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Garage>()
+            .add_plugins(bay::BayPlugin)
             .add_systems(Update, bake)
-            .add_systems(EguiPrimaryContextPass, (window, showroom));
+            .add_systems(EguiPrimaryContextPass, showroom);
     }
 }
 
@@ -184,49 +189,36 @@ fn fit(
     commands.spawn((Transform::from_translation(new.body.position), new));
 }
 
-/// The parts shop: what's fitted to the car and its engine, its condition and repairs.
-fn window(
-    mut commands: Commands,
-    mut contexts: EguiContexts,
-    terrain: Res<Terrain>,
-    active_car: Res<ActiveCar>,
-    mut cars: Query<(Entity, &mut Car)>,
-    mut garage: ResMut<Garage>,
-    (shops, mut at): (Res<Shops>, ResMut<AtShop>),
-) -> Result {
-    let Some((entity, mut car)) = active(&mut cars, active_car.0) else {
-        return Ok(());
-    };
-    let ctx = contexts.ctx_mut()?;
-    let mut build_now = false;
-    shop_window(ctx, &shops, &mut at, ShopKind::Parts, |ui, came_in| {
-        let garage = &mut *garage;
-        if came_in || garage.car != Some(car.index) {
-            // Take the parts from the car again when it comes in.
-            garage.car = Some(car.index);
-            garage.draft = (car.setup.build.clone(), car.setup.engine.parts.clone());
-            garage.same_wheels = car.setup.build.wheels[0] == car.setup.build.wheels[1];
-            garage.status.clear();
-        }
-        egui::ScrollArea::vertical()
-            .max_height(ui.ctx().content_rect().height() - 160.0)
-            .show(ui, |ui| {
-                car_parts(ui, &mut garage.draft.0);
-                wheel_parts(ui, &mut garage.draft.0, &mut garage.same_wheels);
-                ui.separator();
-                engine(ui, garage);
-                build_now = build(ui, garage, &car);
-                condition(ui, &mut car);
-                ui.separator();
-                egui::CollapsingHeader::new("Engine parts")
-                    .default_open(true)
-                    .show(ui, |ui| parts(ui, garage));
-            });
-    });
-    if build_now {
-        start(&mut commands, &terrain, &mut garage, entity, &mut car);
+/// Takes the parts from the car again (when it comes onto the lift).
+fn take_draft(garage: &mut Garage, car: &Car) {
+    garage.car = Some(car.index);
+    garage.draft = (car.setup.build.clone(), car.setup.engine.parts.clone());
+    garage.same_wheels = car.setup.build.wheels[0] == car.setup.build.wheels[1];
+    garage.status.clear();
+}
+
+/// The parts shop's window (in the workshop, `bay`): what's fitted to the car and its
+/// engine, its condition and repairs. True when "Build" was clicked.
+fn parts_shop(ui: &mut egui::Ui, garage: &mut Garage, car: &mut Car) -> bool {
+    if garage.car != Some(car.index) {
+        take_draft(garage, car);
     }
-    Ok(())
+    let mut build_now = false;
+    egui::ScrollArea::vertical()
+        .max_height(ui.ctx().content_rect().height() - 140.0)
+        .show(ui, |ui| {
+            car_parts(ui, &mut garage.draft.0);
+            wheel_parts(ui, &mut garage.draft.0, &mut garage.same_wheels);
+            ui.separator();
+            engine(ui, garage);
+            build_now = build(ui, garage, car);
+            condition(ui, car);
+            ui.separator();
+            egui::CollapsingHeader::new("Engine parts")
+                .default_open(true)
+                .show(ui, |ui| parts(ui, garage));
+        });
+    build_now
 }
 
 /// What's fitted to the chassis.

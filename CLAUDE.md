@@ -252,7 +252,16 @@ as built, in order:
    (60 frames to the thickest). 8. ✓ **Showroom**: the showroom window
    (`shops::shop_window` draws a shop's window for other modules, saying when the car came in).
 9. ✓ **Parts shop**: the garage window without alignment, cam timing and wastegate;
-   repairs; new tires. 10. ✓ **Dyno** (`dyno/`): the career's chassis dyno room back
+   repairs; new tires. Since 2026-11-22 (asked for by the user, "car on a lift") a scene
+   like the alignment bay's (`garage/bay.rs`): "Onto the lift" puts the car (drawn from
+   `Looks`, engine off, wheels hanging at `DROOP`) up on a blue two-post lift (`RAISE`
+   1.3 m) in a workshop 260 m under the marker; the arms' pads go under the sills behind
+   the front wheels and ahead of the rear ones, made afresh for another chassis. The draft's
+   engine stands on an engine stand in front of the car (family size and layout: inline,
+   V or flat; a turbo if it has one), the draft's tires in a rack at the back; workbench
+   with pegboard, tool chest, shelves of boxes, roller door, oil drain. The parts window
+   (`garage::parts_shop`) is on the right; the draft is taken from the car on entering.
+   Shots: the shop's button at (516, 123), "Back to the car" at (903, 677). 10. ✓ **Dyno** (`dyno/`): the career's chassis dyno room back
    (`mod.rs`, `rollers.rs`, `chart.rs`). A copy of the car runs in the room 200 m under
    the marker; the driven car stays parked there, a ghost (`car::Away` holds its input and
    R, `EngineAudio::hushed`); the engine (tune, cam timing, wastegate, wear) and the fuel
@@ -749,7 +758,7 @@ catalogue entries, and things like swap subframes are named so they can be price
   lower body is a loft with wheel wells; the cabin a loft with glass, roof and pillars;
   an open car's windscreen is a one-sided pane in a frame (two cabin points). One mesh
   with vertex colours. The cockpit is placed by the chassis' eye point.
-- **Showroom (car dealers) and garage (parts shops)** are both in `garage.rs`; both go through `start`
+- **Showroom (car dealers) and garage (parts shops)** are both in `garage/mod.rs`; both go through `start`
   and `fit`. A changed `CarBuild` respawns the car's entity (its meshes are children);
   an engine-only change swaps it in while driving.
 - **Traction control** (my addition, on by default, a checkbox in the panel): without
@@ -971,7 +980,7 @@ phasing, VTEC-style cam switching).
   local storage on the web) with the build they were made for; loading reads over the
   engine's factory tune and warns if the build differs. Swapping the engine build in
   the setup panel replaces the tune with the new build's factory tune.
-- Garage (parts shops, `src/garage.rs`): parts from a catalogue (`parts.rs`: a slot per kind of
+- Garage (parts shops, `src/garage/`): parts from a catalogue (`parts.rs`: a slot per kind of
   part, each part a function fitting it onto the engine's hardware, relative to it; a
   factory version is a block and a selection); cam-gear timing and wastegate spring are
   set in the dyno's room (`dyno::cams`). The car's `EngineSetup.parts` says
