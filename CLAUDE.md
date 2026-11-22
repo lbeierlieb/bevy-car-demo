@@ -53,7 +53,7 @@ bars are hidden by default. Hints over the road say what's wrong, what to press 
 that does: gas with the parking brake on, reverse asked for while rolling
 (`car::ReverseRefused`, a message from `drive`), on the rev limiter in first gear (only
 there, at the user's wish, 2026-11-22), and
-gas without moving for 3 s (R). Added alone: in neutral, stalled, wrecked engine, empty
+gas without moving for 3 s (R). In neutral with the parking brake on, the neutral hint comes first (the brake's only once a gear is in; 2026-11-22). Added alone: in neutral, stalled, wrecked engine, empty
 tank (stating the problem only, since 2026-11-22). R (`ResetPlugin`) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
 right-hand lane on roads with traffic lanes), carried there by the rescue helicopter (see
 "Helicopters"). The map teleport was removed at the user's

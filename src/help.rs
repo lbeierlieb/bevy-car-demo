@@ -121,9 +121,9 @@ enum Hint {
     NoFuel,
     Stalled,
     Off,
+    Neutral,
     ParkingBrake,
     Reverse,
-    Neutral,
     RevLimit,
     Stuck,
 }
@@ -134,9 +134,9 @@ impl Hint {
         Hint::NoFuel,
         Hint::Stalled,
         Hint::Off,
+        Hint::Neutral,
         Hint::ParkingBrake,
         Hint::Reverse,
-        Hint::Neutral,
         Hint::RevLimit,
         Hint::Stuck,
     ];
@@ -211,7 +211,9 @@ fn hints(
         Hint::NoFuel => gas && no_fuel && !blown,
         Hint::Stalled => gas && !running && !off && !cranking && !blown && !no_fuel,
         Hint::Off => gas && off && !cranking && !blown,
-        Hint::ParkingBrake => gas && car.parking_brake && standing,
+        // Only once a gear is in: revving in neutral at the start, neutral comes first
+        // (asked for by the user).
+        Hint::ParkingBrake => gas && car.parking_brake && standing && gear != 0,
         Hint::Reverse => reverse,
         Hint::Neutral => gas && running && gear == 0 && standing,
         // Only in first: past it, the driver knows about shifting (asked for by the user).
