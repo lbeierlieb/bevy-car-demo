@@ -686,6 +686,14 @@ fn bake(map: &str, lat: &str, lon: &str, size: &str, out: &str) -> Result<(), Er
         .iter()
         .map(|c| Marker::road_in_building(c, &roads, &road_ways, &buildings))
         .collect();
+    // Narrow roads widen where they run on into wider ones.
+    roads::taper(&mut roads);
+    let tapered = roads
+        .iter()
+        .flat_map(|r| r.ends)
+        .filter(|e| e.1 > 0.0)
+        .count();
+    eprintln!("tapered {tapered} road ends into wider roads");
     // Barriers along roads moved off them; those still on one (crossing it without a
     // gate) are listed.
     let mut fence_list = fences::drop_on_bridges(fence_list, &roads);
@@ -872,6 +880,8 @@ fn bake(map: &str, lat: &str, lon: &str, size: &str, out: &str) -> Result<(), Er
     // road count u32, then per road: kind u8 (0 asphalt, 1 gravel, 2 water, 3 cobbles,
     // 4 dirt), bridge u8 (0 or 1), width f32, crown f32 (fall per metre to the edges),
     // roughness f32 (ISO 8608's displacement spectrum at 0.1 cycles/m, in 10⁻⁶ m³),
+    // per end (first point, last point) the width there and the length it tapers to the
+    // road's width over (0: none) f32,
     // point count u32, points (x, z in cm, height above the lowest point in mm; 0 for
     // waterways): the first as i32, the others as i16 steps from the one before,
     // feature count u32, then per feature: road u32, kind u8 (0 bump, 1 hump, 2 table,
@@ -894,7 +904,7 @@ fn bake(map: &str, lat: &str, lon: &str, size: &str, out: &str) -> Result<(), Er
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&14u32.to_le_bytes());
+    put(&15u32.to_le_bytes());
     put(&(cells_x as u32).to_le_bytes());
     put(&(cells_z as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
@@ -948,6 +958,10 @@ fn bake(map: &str, lat: &str, lon: &str, size: &str, out: &str) -> Result<(), Er
         put(&(road.width as f32).to_le_bytes());
         put(&(road.crown() as f32).to_le_bytes());
         put(&(road.roughness as f32).to_le_bytes());
+        for (width, length) in road.ends {
+            put(&(width as f32).to_le_bytes());
+            put(&(length as f32).to_le_bytes());
+        }
         put(&(road.points.len() as u32).to_le_bytes());
         // Centimetres along, millimetres up: the first point as is, then the steps.
         let mut last = [0i32; 3];

@@ -24,6 +24,15 @@ const UNDER_DECK: f64 = 1.05;
 const UNDER_DECK_REACH: f64 = 0.8;
 /// Weight of the lidar on a bridge, where it shows the ground under the deck.
 const BRIDGE_TRUST: f64 = 1e-4;
+/// Where a road runs on into a wider one, it widens to it over this many metres per metre
+/// of difference (each edge moving out 1 in 16)...
+const TAPER_PER_METRE: f64 = 8.0;
+/// ...but over this many metres at least and at most, and never over more than half the
+/// road.
+const TAPER_SHORTEST: f64 = 6.0;
+const TAPER_LONGEST: f64 = 30.0;
+/// Width differences smaller than this aren't tapered (m).
+const TAPER_LEAST: f64 = 0.25;
 
 /// A road's surface, or a waterway.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -40,6 +49,11 @@ pub struct Road {
     pub kind: RoadKind,
     pub width: f64,
     pub bridge: bool,
+    /// Per end (first point, last point): the width there and the length it tapers to
+    /// `width` over (0: no taper), where the road runs on into a wider one (`taper`).
+    pub ends: [(f64, f64); 2],
+    /// The width at each point (`width` but where an end tapers).
+    pub widths: Vec<f64>,
     /// Smoothed centreline, at most `STEP` apart, through every mapped point.
     pub points: Vec<Point>,
     /// The OSM node each point is, if it's a mapped one.
@@ -189,10 +203,13 @@ impl Road {
             points.push(p[i + 1]);
             nodes.push(Some(mapped[i + 1].0));
         }
+        let widths = vec![width; points.len()];
         Road {
             kind,
             width,
             bridge,
+            ends: [(width, 0.0); 2],
+            widths,
             points,
             nodes,
             heights: Vec::new(),
@@ -221,6 +238,92 @@ impl Road {
 
     pub fn drivable(&self) -> bool {
         self.kind != RoadKind::Water
+    }
+
+    /// The width `along` metres from the first point of a road `total` long: `width`,
+    /// widened towards each tapered end's width with a smoothstep. The game's
+    /// `Road::width_at` does the same.
+    pub fn width_at(&self, along: f64, total: f64) -> f64 {
+        let mut width = self.width;
+        for ((end, length), from_end) in self.ends.iter().zip([along, total - along]) {
+            if *length > 0.0 {
+                let t = (1.0 - from_end / length).clamp(0.0, 1.0);
+                width += (end - self.width) * t * t * (3.0 - 2.0 * t);
+            }
+        }
+        width
+    }
+
+    /// The widest the road gets.
+    pub fn widest(&self) -> f64 {
+        self.ends.iter().fold(self.width, |w, e| w.max(e.0))
+    }
+}
+
+/// Where two drivable roads on the ground run on into each other end to end (the only two
+/// ends at a mapped node, no road passing through it) and differ in width, widens the
+/// narrower one's end to the wider one's width (see `TAPER_PER_METRE`), so the edge
+/// doesn't step out. Sets `ends` and `widths`.
+pub fn taper(roads: &mut [Road]) {
+    // Per mapped node: the road ends there, and whether a road passes through it.
+    let mut at: HashMap<i64, (Vec<(usize, usize)>, bool)> = HashMap::new();
+    for (r, road) in roads.iter().enumerate() {
+        if !road.drivable() {
+            continue;
+        }
+        let last = road.points.len() - 1;
+        for (i, node) in road.nodes.iter().enumerate() {
+            let Some(node) = node else { continue };
+            let entry = at.entry(*node).or_default();
+            match i {
+                0 => entry.0.push((r, 0)),
+                i if i == last => entry.0.push((r, 1)),
+                _ => entry.1 = true,
+            }
+        }
+    }
+    let mut ends = Vec::new();
+    for (meeting, through) in at.values() {
+        if *through || meeting.len() != 2 {
+            continue;
+        }
+        let [(a, ea), (b, eb)] = [meeting[0], meeting[1]];
+        if a == b || roads[a].bridge || roads[b].bridge {
+            continue;
+        }
+        let (wa, wb) = (roads[a].width, roads[b].width);
+        if (wa - wb).abs() < TAPER_LEAST {
+            continue;
+        }
+        let ((narrow, end), wide) = if wa < wb {
+            ((a, ea), wb)
+        } else {
+            ((b, eb), wa)
+        };
+        ends.push((narrow, end, wide));
+    }
+    for road in roads.iter_mut() {
+        road.ends = [(road.width, 0.0); 2];
+    }
+    for (r, end, wide) in ends {
+        let road = &mut roads[r];
+        let total: f64 = road.points.windows(2).map(|w| distance(w[0], w[1])).sum();
+        let length = ((wide - road.width) * TAPER_PER_METRE)
+            .clamp(TAPER_SHORTEST, TAPER_LONGEST)
+            .min(total / 2.0);
+        road.ends[end] = (wide, length);
+    }
+    for road in roads.iter_mut() {
+        let total: f64 = road.points.windows(2).map(|w| distance(w[0], w[1])).sum();
+        let mut along = 0.0;
+        let mut widths = Vec::with_capacity(road.points.len());
+        for (i, &p) in road.points.iter().enumerate() {
+            if i > 0 {
+                along += distance(road.points[i - 1], p);
+            }
+            widths.push(road.width_at(along, total));
+        }
+        road.widths = widths;
     }
 }
 
@@ -487,21 +590,23 @@ pub fn conform(roads: &[Road], heights: &mut [f64], grid: &Grid) {
     // Per vertex: (distance beyond the nearest road's edge, that road's surface there).
     let mut nearest = vec![(f64::INFINITY, 0.0); heights.len()];
     for road in roads.iter().filter(|r| r.drivable() && !r.bridge) {
-        let reach = road.width / 2.0 + SHOULDER + EMBANKMENT_REACH;
         for (i, pair) in road.points.windows(2).enumerate() {
             let ((x0, z0), (x1, z1)) = (pair[0], pair[1]);
             let (dx, dz) = (x1 - x0, z1 - z0);
             let len2 = (dx * dx + dz * dz).max(1e-9);
+            let (w0, w1) = (road.widths[i], road.widths[i + 1]);
+            let reach = w0.max(w1) / 2.0 + SHOULDER + EMBANKMENT_REACH;
             for iz in grid.span(z0.min(z1) - reach, z0.max(z1) + reach, true) {
                 for ix in grid.span(x0.min(x1) - reach, x0.max(x1) + reach, false) {
                     let (px, pz) = grid.vertex(ix, iz);
                     let t = (((px - x0) * dx + (pz - z0) * dz) / len2).clamp(0.0, 1.0);
                     let off = (px - x0 - dx * t).hypot(pz - z0 - dz * t);
-                    let edge = off - road.width / 2.0;
+                    let half = (w0 + (w1 - w0) * t) / 2.0;
+                    let edge = off - half;
                     let slot = &mut nearest[iz * n + ix];
                     if edge < slot.0 {
                         let centre = road.heights[i] * (1.0 - t) + road.heights[i + 1] * t;
-                        let surface = centre - road.crown() * off.min(road.width / 2.0);
+                        let surface = centre - road.crown() * off.min(half);
                         *slot = (edge, surface);
                     }
                 }
@@ -544,5 +649,36 @@ pub fn carve_under_bridges(roads: &[Road], heights: &mut [f64], grid: &Grid) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn road(width: f64, from: (i64, Point), to: (i64, Point)) -> Road {
+        Road::new(RoadKind::Asphalt, width, false, &[from, to])
+    }
+
+    #[test]
+    fn a_narrow_road_widens_into_a_wide_one() {
+        let mut roads = vec![
+            road(4.0, (1, (0.0, 0.0)), (2, (100.0, 0.0))),
+            road(6.0, (2, (100.0, 0.0)), (3, (200.0, 0.0))),
+            // Three ends at one node.
+            road(3.0, (3, (200.0, 0.0)), (4, (200.0, 50.0))),
+            road(6.0, (3, (200.0, 0.0)), (5, (300.0, 0.0))),
+        ];
+        taper(&mut roads);
+        let narrow = &roads[0];
+        // 2 m wider over 16 m before the shared node, smoothly.
+        assert_eq!(narrow.ends, [(4.0, 0.0), (6.0, 16.0)]);
+        assert_eq!(narrow.widths[0], 4.0);
+        assert_eq!(narrow.widths[84], 4.0);
+        assert!((narrow.widths[92] - 5.0).abs() < 1e-9);
+        assert_eq!(*narrow.widths.last().unwrap(), 6.0);
+        // The wide road stays as it is; three ends at a node taper nothing.
+        assert!(roads[1..].iter().all(|r| r.ends.iter().all(|e| e.1 == 0.0)));
+        assert!(roads.iter().all(|r| r.widths.len() == r.points.len()));
     }
 }

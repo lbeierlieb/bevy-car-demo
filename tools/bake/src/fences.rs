@@ -157,6 +157,8 @@ struct Beside {
     foot: Point,
     direction: Point,
     right: f64,
+    /// Half the road's width there.
+    half: f64,
 }
 
 const CELL: f64 = 8.0;
@@ -173,7 +175,7 @@ impl<'a> RoadIndex<'a> {
             if !road.drivable() || skip[r] {
                 continue;
             }
-            let reach = road.width / 2.0 + margin;
+            let reach = road.widest() / 2.0 + margin;
             for (i, w) in road.points.windows(2).enumerate() {
                 for cz in cell(w[0].1.min(w[1].1) - reach)..=cell(w[0].1.max(w[1].1) + reach) {
                     for cx in cell(w[0].0.min(w[1].0) - reach)..=cell(w[0].0.max(w[1].0) + reach) {
@@ -198,8 +200,10 @@ impl<'a> RoadIndex<'a> {
             let off = (p.0 - foot.0).hypot(p.1 - foot.1);
             let direction = (dx / length, dz / length);
             let right = (p.0 - x0) * -direction.1 + (p.1 - z0) * direction.0;
-            (off < road.width / 2.0 + margin).then_some(Beside {
+            let half = (road.widths[i] + (road.widths[i + 1] - road.widths[i]) * t) / 2.0;
+            (off < half + margin).then_some(Beside {
                 road: r,
+                half,
                 foot,
                 direction,
                 right: if right.abs() < off * 0.5 {
@@ -252,14 +256,11 @@ pub fn clear_roads(fences: &mut [Fence], roads: &[Road], skip: &[bool]) -> usize
                     .filter(|s| {
                         (s.direction.0 * heading.0 + s.direction.1 * heading.1).abs() > ALONG
                     })
-                    .map(|s| {
-                        let half = index.roads[s.road].width / 2.0;
-                        (half + CLEARANCE - s.right.abs(), s)
-                    })
+                    .map(|s| (s.half + CLEARANCE - s.right.abs(), s))
                     .filter(|(push, s)| *push <= MAX_MOVE && s.right != 0.0)
                     .max_by(|a, b| a.0.total_cmp(&b.0));
                 let Some((_, s)) = deepest else { break };
-                let out_dist = index.roads[s.road].width / 2.0 + CLEARANCE;
+                let out_dist = s.half + CLEARANCE;
                 let side = s.right.signum() * out_dist;
                 *p = (
                     s.foot.0 - s.direction.1 * side,

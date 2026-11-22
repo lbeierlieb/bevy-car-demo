@@ -192,7 +192,7 @@ impl RoadMask {
             blocked: vec![false; (size.x * size.y) as usize],
         };
         for road in &terrain.roads {
-            let reach = road.width / 2.0 + CLEARANCE;
+            let reach = road.widest() / 2.0 + CLEARANCE;
             for pair in road.points.windows(2) {
                 let (a, b) = (pair[0], pair[1]);
                 let (lo, hi) = (mask.cell(a.min(b) - reach), mask.cell(a.max(b) + reach));
@@ -308,7 +308,7 @@ mod tests {
         let square = |p: Vec2| (p / 32.0).floor().as_ivec2();
         let mut near: std::collections::HashMap<IVec2, Vec<(Vec2, Vec2, f32)>> = Default::default();
         for road in &terrain.roads {
-            let reach = Vec2::splat(road.width / 2.0 + CLEARANCE);
+            let reach = Vec2::splat(road.widest() / 2.0 + CLEARANCE);
             for pair in road.points.windows(2) {
                 let (lo, hi) = (
                     square(pair[0].min(pair[1]) - reach),
@@ -316,9 +316,11 @@ mod tests {
                 );
                 for x in lo.x..=hi.x {
                     for z in lo.y..=hi.y {
-                        near.entry(IVec2::new(x, z))
-                            .or_default()
-                            .push((pair[0], pair[1], road.width));
+                        near.entry(IVec2::new(x, z)).or_default().push((
+                            pair[0],
+                            pair[1],
+                            road.widest(),
+                        ));
                     }
                 }
             }

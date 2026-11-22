@@ -168,8 +168,16 @@ impl RoadKind {
 
 pub struct Road {
     pub kind: RoadKind,
+    /// The width but at tapered ends (see `ends`, `width_at`).
     pub width: f32,
     pub bridge: bool,
+    /// Per end (first point, last point): the width there and the length it tapers to
+    /// `width` over (0: no taper), where the road runs on into a wider one.
+    pub ends: [(f32, f32); 2],
+    /// Per end: the direction (first point to last) its ribbon ends square to, where it
+    /// meets another road's end at an angle (halfway between the two), so no wedge opens
+    /// between them on the outside of the bend.
+    joins: [Option<Vec2>; 2],
     /// The surface falls this much per metre from the middle to the edges.
     pub crown: f32,
     /// Centreline in the xz plane (x east, z south), about a metre apart.
@@ -187,6 +195,25 @@ pub struct Road {
 }
 
 impl Road {
+    /// The width `along` metres from the first point: `width`, widened towards each
+    /// tapered end's width with a smoothstep (as the bake's `Road::width_at`).
+    pub fn width_at(&self, along: f32) -> f32 {
+        let total = self.along[self.along.len() - 1];
+        let mut width = self.width;
+        for (&(end, length), from_end) in self.ends.iter().zip([along, total - along]) {
+            if length > 0.0 {
+                let t = (1.0 - from_end / length).clamp(0.0, 1.0);
+                width += (end - self.width) * t * t * (3.0 - 2.0 * t);
+            }
+        }
+        width
+    }
+
+    /// The widest the road gets.
+    pub fn widest(&self) -> f32 {
+        self.ends.iter().fold(self.width, |w, e| w.max(e.0))
+    }
+
     /// The unevenness and the features at `along` metres along and `right` of the
     /// centreline, `margin` inside the edge: height, and slope along and rightward.
     fn relief(&self, along: f32, right: f32, margin: f32) -> (f32, Vec2) {
@@ -315,7 +342,7 @@ impl Terrain {
         let mut r = Bytes(&inflated);
         r.take(4);
         let version = r.u32();
-        if version != 14 {
+        if version != 15 {
             return Err(format!("unsupported terrain version {version}"));
         }
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
@@ -344,6 +371,7 @@ impl Terrain {
             .map(|_| {
                 let (kind, bridge) = (RoadKind::from_byte(r.take(1)[0]), r.take(1)[0] != 0);
                 let (width, crown, roughness) = (r.f32(), r.f32(), r.f32());
+                let ends = [(r.f32(), r.f32()), (r.f32(), r.f32())];
                 // Centimetres along, millimetres up: the first point, then steps.
                 let count = r.u32() as usize;
                 let mut at = [r.u32() as i32, r.u32() as i32, r.u32() as i32];
@@ -369,6 +397,8 @@ impl Terrain {
                     kind,
                     width,
                     bridge,
+                    ends,
+                    joins: [None; 2],
                     crown,
                     points,
                     heights,
@@ -379,6 +409,7 @@ impl Terrain {
                 }
             })
             .collect();
+        join_ends(&mut roads);
         for _ in 0..r.u32() {
             let road = r.u32() as usize;
             let kind = Feature::kind_from_byte(r.take(1)[0]);
@@ -470,6 +501,8 @@ impl Terrain {
             kind: RoadKind::Asphalt,
             width: 6.0,
             bridge: false,
+            ends: [(6.0, 0.0); 2],
+            joins: [None; 2],
             crown: 0.025,
             heights: vec![0.1; points.len()],
             points,
@@ -575,7 +608,8 @@ impl Terrain {
             let along = (b - a) / length;
             let t = ((p - a).dot(along) / length).clamp(0.0, 1.0);
             let off = a.lerp(b, t).distance(p);
-            let margin = road.width / 2.0 - off;
+            let s = road.along[i] + t * length;
+            let margin = road.width_at(s) / 2.0 - off;
             if margin < 0.0 {
                 continue;
             }
@@ -583,7 +617,6 @@ impl Terrain {
                 water = true;
                 continue;
             }
-            let s = road.along[i] + t * length;
             let to_end = s.min(road.along[road.along.len() - 1] - s);
             let weight = margin.max(1e-3) * (to_end / ROAD_FADE).clamp(0.02, 1.0);
             let side = along.perp();
@@ -847,7 +880,7 @@ impl RoadGrid {
         let mut cells: Vec<Vec<(u32, u32)>> = vec![Vec::new(); cells_x * cells_z];
         for (r, road) in roads.iter().enumerate() {
             for (i, pair) in road.points.windows(2).enumerate() {
-                let reach = Vec2::splat(road.width / 2.0);
+                let reach = Vec2::splat(road.widest() / 2.0);
                 let (lo, hi) = (pair[0].min(pair[1]) - reach, pair[0].max(pair[1]) + reach);
                 let ((x0, z0), (x1, z1)) = (grid.cell(lo), grid.cell(hi));
                 for cz in z0..=z1 {
@@ -923,17 +956,31 @@ impl RoadRibbons {
                 1
             };
             let step = DRAPE_STEP / fine as f32;
-            let across = 2 * (road.width / 2.0 / step).ceil().max(1.0) as usize;
-            // Half the road across at point `i`.
+            let width = |i: usize| road.width_at(road.along[i]);
+            let across = 2 * (width(i).max(width(i + 1)) / 2.0 / step).ceil().max(1.0) as usize;
+            // Half the road across at point `i`: where it meets another road's end at an
+            // angle, along the mitre between them, stretched to keep the width.
             let side = |i: usize| {
                 let tangent =
                     (points[(i + 1).min(n - 1)] - points[i.saturating_sub(1)]).normalize_or_zero();
-                Vec2::new(-tangent.y, tangent.x) * road.width / 2.0
+                let join = match i {
+                    0 => road.joins[0],
+                    i if i == n - 1 => road.joins[1],
+                    _ => None,
+                };
+                let (across, stretch) = match join {
+                    Some(mitre) => (mitre, 1.0 / mitre.dot(tangent).max(0.7)),
+                    None => (tangent, 1.0),
+                };
+                Vec2::new(-across.y, across.x) * stretch * width(i) / 2.0
             };
             // The vertices across the road `f` of the way from point `i` to the next.
             let row = |f: f32| -> Vec<Vec3> {
                 let centre = points[i].lerp(points[i + 1], f);
-                let side = side(i).lerp(side(i + 1), f).normalize_or_zero() * road.width / 2.0;
+                let here = road.width_at(road.along[i] + f * (road.along[i + 1] - road.along[i]));
+                let (near, far) = (side(i), side(i + 1));
+                let stretch = (near.length() / width(i)).lerp(far.length() / width(i + 1), f);
+                let side = near.lerp(far, f).normalize_or_zero() * stretch * here;
                 let level = road.heights[i] + (road.heights[i + 1] - road.heights[i]) * f;
                 (0..=across)
                     .map(|j| {
@@ -973,6 +1020,50 @@ impl RoadRibbons {
                 );
             }
         }
+    }
+}
+
+/// Where exactly two roads on the same level (not waterways) end at one point, sets each
+/// one's `joins` there to the direction halfway between theirs.
+fn join_ends(roads: &mut [Road]) {
+    let mut at: std::collections::HashMap<IVec2, Vec<(usize, usize)>> = Default::default();
+    for (r, road) in roads.iter().enumerate() {
+        if road.kind == RoadKind::Water {
+            continue;
+        }
+        let n = road.points.len();
+        for (end, i) in [(0, 0), (1, n - 1)] {
+            let key = (road.points[i] * 100.0).round().as_ivec2();
+            at.entry(key).or_default().push((r, end));
+        }
+    }
+    // A road's direction at an end, pointing along it from first to last.
+    let direction = |road: &Road, end: usize| {
+        let p = &road.points;
+        let n = p.len();
+        match end {
+            0 => (p[1] - p[0]).normalize_or_zero(),
+            _ => (p[n - 1] - p[n - 2]).normalize_or_zero(),
+        }
+    };
+    for meeting in at.values().filter(|m| m.len() == 2) {
+        let [(a, ea), (b, eb)] = [meeting[0], meeting[1]];
+        if a == b || roads[a].bridge != roads[b].bridge {
+            continue;
+        }
+        // Both directions as running from `a` into `b`.
+        let into = |road: usize, end: usize| {
+            let d = direction(&roads[road], end);
+            if (road == a) == (end == 1) { d } else { -d }
+        };
+        let (da, db) = (into(a, ea), into(b, eb));
+        let mean = (da + db).normalize_or_zero();
+        // Only bends gentler than a right angle.
+        if mean == Vec2::ZERO || da.dot(db) < 0.0 {
+            continue;
+        }
+        roads[a].joins[ea] = Some(if ea == 1 { mean } else { -mean });
+        roads[b].joins[eb] = Some(if eb == 0 { mean } else { -mean });
     }
 }
 

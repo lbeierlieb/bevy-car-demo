@@ -943,7 +943,13 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    `Terrain::ground(x, z, y)` blends overlapping roads (weights fade at road ends) and
    has levels (a deck carries what's within a metre below its surface); `sample` is the
    level beneath any bridge, `land` the bare terrain. Bridges are drawn as slab and
-   parapets; parapets are obstacles. Not done: tunnels, junction shapes, piers.
+   parapets; parapets are obstacles. Width changes (asked for by the user, 2026-11-22;
+   format 15): where exactly two roads on the ground meet end to end (no road passing
+   through the node) and differ by 0.25 m or more, the narrower one widens to the wider
+   over 8 m per metre of difference (6–30 m, at most half the road) with a smoothstep
+   (`roads::taper`, `Road::ends`, the game's `Road::width_at`; 123 ends). Where two road
+   ends meet at an angle, both ribbons end on the mitre (`join_ends`), so no wedge opens
+   on the outside of the bend. Not done: tunnels, junction shapes, piers.
 4. Road condition (done): `relief.rs`, OSM `smoothness` to ISO 8608 roughness (waves
    0.5–20 m), features from `traffic_calming=bump|hump|table` and `hazard=pothole`
    nodes. The baked file is zlib-compressed, heights predicted from neighbours.
