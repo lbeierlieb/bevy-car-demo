@@ -25,6 +25,9 @@ const STALL_RPM: f32 = 400.0;
 /// An H-shifter's gear goes in without the clutch when the engine turns within this of
 /// the gear's speed (the synchros manage it): engine off and standing, or rev-matched.
 const SYNC_RPM: f32 = 150.0;
+/// The automatic clutch blips the throttle on a downshift: fully open this far below the
+/// lower gear's speed, closing towards it.
+const BLIP_RPM: f32 = 400.0;
 /// The clutch's engagement, pedal travel (0 released, 1 floored) to the share of its
 /// torque capacity it passes (linear in between). Like a real one, the pedal has free
 /// play at the top (fully engaged) and the bottom (fully apart), and the plates meet at
@@ -409,16 +412,24 @@ impl Drivetrain {
                 self.in_gear = 0.0;
             }
         }
-        // While shifting, the clutch is open and the throttle and ignition are cut (like a
-        // sequential gearbox), so the engine doesn't flare up and slam the wheels.
+        // While shifting, the clutch is open and the driver's throttle is cut (like a
+        // sequential gearbox), so the engine doesn't flare up and slam the wheels. Going
+        // down a gear, it blips the throttle up to the lower gear's speed instead.
+        let blip = match self.shift {
+            Some((gear, _)) if gear >= 1 && gear < self.gear => {
+                let target = engine.rpm_in(gear, wheel_omega);
+                ((target - self.rpm) / BLIP_RPM).clamp(0.0, 1.0)
+            }
+            _ => 0.0,
+        };
         let (ratio, throttle) = if self.shift.is_some() {
-            (0.0, 0.0)
+            (0.0, blip)
         } else {
             self.engaged = (self.engaged + dt / engine.engage_time).min(1.0);
             (engine.ratio(self.gear), throttle)
         };
         let build = &engine.build;
-        let firing = self.running && self.shift.is_none();
+        let firing = self.running && (self.shift.is_none() || blip > 0.0);
         self.engine
             .step(build, throttle_plate(throttle), self.rpm, firing, dt);
         let cycle = self.engine.cycle(build, self.rpm);
@@ -481,7 +492,7 @@ impl Drivetrain {
         wheel_rpm: f32,
         dt: f32,
     ) -> WheelDrive {
-        if ratio == 0.0 || engine_torque(self.rpm).abs() > capacity {
+        if ratio == 0.0 || capacity <= 0.0 || engine_torque(self.rpm).abs() > capacity {
             self.locked = false;
         }
         let drive = if self.locked {
@@ -493,18 +504,19 @@ impl Drivetrain {
             }
         } else {
             let slip = self.rpm - wheel_rpm;
-            // The wheels can overshoot the engine within a step, too.
+            // The wheels can overshoot the engine within a step, too. With the plates apart
+            // (or in neutral) the two sides turn freely: nothing to catch up with.
             let crossed = slip * self.slip < 0.0;
-            self.slip = slip;
-            let clutch = if ratio == 0.0 {
+            let clutch = if ratio == 0.0 || capacity <= 0.0 {
                 0.0
             } else {
                 capacity * slip.signum()
             };
+            self.slip = if clutch == 0.0 { 0.0 } else { slip };
             let net = engine_torque(self.rpm) - clutch;
             self.rpm = (self.rpm + net / engine.build.hardware.inertia * dt * RPM).max(0.0);
             // Caught up (or overshot) within the step: lock, if the clutch can hold.
-            if ratio != 0.0 && (crossed || (self.rpm - wheel_rpm) * slip <= 0.0) {
+            if clutch != 0.0 && (crossed || (self.rpm - wheel_rpm) * slip <= 0.0) {
                 self.rpm = wheel_rpm.max(0.0);
                 self.locked = engine_torque(self.rpm).abs() <= capacity;
             }
@@ -825,6 +837,75 @@ mod tests {
         let omega = drivetrain.rpm / engine.rpm_in(3, 1.0);
         drivetrain.select_gate(&engine, 3, 10.0, omega);
         assert_eq!(drivetrain.gear, 3);
+    }
+
+    #[test]
+    fn a_floored_clutch_lets_the_engine_turn_freely() {
+        let engine = EngineSetup::default();
+        let dt = 1.0 / 120.0;
+        let omega = 3000.0 / engine.rpm_in(3, 1.0);
+        let mut drivetrain = Drivetrain::new(&engine);
+        drivetrain.neutral();
+        drivetrain.shift_to(&engine, 3);
+        drivetrain.step(&engine, 0.0, Some(1.0), omega, true, dt);
+        drivetrain.shift_to(&engine, 3);
+        for _ in 0..120 {
+            drivetrain.step(&engine, 0.0, Some(0.0), omega, true, dt);
+        }
+        assert!((drivetrain.rpm - 3000.0).abs() < 10.0);
+        // Clutch floored, out of gear, then into second: the engine falls towards idle
+        // and isn't held at second's speed (4200 rpm here).
+        for i in 0..240 {
+            if i == 30 {
+                drivetrain.select_gate(&engine, 0, 15.0, omega);
+            }
+            if i == 60 {
+                drivetrain.select_gate(&engine, 2, 15.0, omega);
+                assert_eq!(drivetrain.gear, 2);
+            }
+            drivetrain.step(&engine, 0.0, Some(1.0), omega, true, dt);
+        }
+        assert!(drivetrain.rpm < 1500.0, "rpm {}", drivetrain.rpm);
+        // A blip gets it there; the clutch let out at matched speeds locks.
+        for _ in 0..240 {
+            let throttle = if drivetrain.rpm < 4100.0 { 0.6 } else { 0.0 };
+            drivetrain.step(&engine, throttle, Some(1.0), omega, true, dt);
+            if drivetrain.rpm > 4100.0 {
+                break;
+            }
+        }
+        for _ in 0..60 {
+            drivetrain.step(&engine, 0.0, Some(0.0), omega, true, dt);
+        }
+        assert!(drivetrain.locked);
+    }
+
+    #[test]
+    fn the_automatic_clutch_blips_on_a_downshift() {
+        let engine = EngineSetup::default();
+        let dt = 1.0 / 120.0;
+        let omega = 2500.0 / engine.rpm_in(3, 1.0);
+        let mut drivetrain = Drivetrain::new(&engine);
+        drivetrain.neutral();
+        drivetrain.shift_to(&engine, 3);
+        for _ in 0..240 {
+            drivetrain.step(&engine, 0.0, None, omega, true, dt);
+        }
+        assert!(drivetrain.locked && drivetrain.gear == 3);
+        drivetrain.shift_by(&engine, -1, omega, 15.0);
+        let target = engine.rpm_in(2, omega);
+        let mut top = 0.0f32;
+        while drivetrain.shift.is_some() {
+            drivetrain.step(&engine, 0.0, None, omega, true, dt);
+            top = top.max(drivetrain.rpm);
+        }
+        // Up to second's speed by the end of the shift, without flaring far past it.
+        assert!(
+            (drivetrain.rpm - target).abs() < 300.0,
+            "rpm {} for {target}",
+            drivetrain.rpm
+        );
+        assert!(top < target + 400.0, "flared to {top} for {target}");
     }
 
     #[test]
