@@ -29,7 +29,7 @@ use crate::physics::collision::Obb;
 use crate::physics::collision::{self, OBSTACLE};
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
-use crate::terrain::Terrain;
+use crate::terrain::{Spawn, Terrain};
 use crate::traffic::{self, TrafficCar};
 
 /// How long a car is carried on past its latest state; then it's held there (s). More
@@ -127,6 +127,8 @@ pub struct Connection {
     pub chat: VecDeque<ChatLine>,
     /// The shops on the map, as the server told.
     pub shops: Vec<Shop>,
+    /// Where players start, as the server told.
+    pub spawn: Spawn,
     /// The events on the map, likewise.
     pub events: Vec<Event>,
     /// The event round we're in (its lobby or under way), as the server last told.
@@ -172,6 +174,7 @@ impl Connection {
             name: name.to_string(),
             chat_on: false,
             shops: Vec::new(),
+            spawn: Spawn::DEFAULT,
             events: Vec::new(),
             round: None,
             busy: HashMap::new(),
@@ -287,10 +290,11 @@ fn receive(
             continue;
         };
         match message {
-            ToClient::Welcome { you, chat } => {
+            ToClient::Welcome { you, chat, spawn } => {
                 info!("Joined the server as player {you}");
                 connection.status = Status::Joined { you };
                 connection.chat_on = chat;
+                connection.spawn = spawn;
             }
             ToClient::Refused(why) => {
                 warn!("The server refused: {why}");

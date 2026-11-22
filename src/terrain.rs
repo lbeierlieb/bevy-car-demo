@@ -57,6 +57,31 @@ impl Spawn {
     }
 }
 
+impl Spawn {
+    /// Reads "x z [heading]" (map metres, compass degrees; spaces or commas between).
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let numbers: Vec<f32> = text
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse().map_err(|_| format!("not a number: {s}")))
+            .collect::<Result<_, _>>()?;
+        if numbers.iter().any(|n| !n.is_finite()) {
+            return Err(format!("not a point: {text}"));
+        }
+        match numbers[..] {
+            [x, z] => Ok(Spawn {
+                at: Vec2::new(x, z),
+                heading: None,
+            }),
+            [x, z, heading] => Ok(Spawn {
+                at: Vec2::new(x, z),
+                heading: Some(heading),
+            }),
+            _ => Err(format!("x z [heading], not {text}")),
+        }
+    }
+}
+
 impl Default for Spawn {
     fn default() -> Self {
         Self::DEFAULT
@@ -1177,6 +1202,22 @@ mod tests {
                 .unwrap();
             assert!((hit.distance - 1.0).abs() < 1e-3);
         }
+    }
+
+    #[test]
+    fn spawns_are_read_from_text() {
+        assert_eq!(
+            Spawn::parse("-2984.5 -2007.2 180"),
+            Ok(Spawn {
+                at: Vec2::new(-2984.5, -2007.2),
+                heading: Some(180.0)
+            })
+        );
+        assert_eq!(Spawn::parse("10,-20").map(|s| s.heading), Ok(None));
+        assert!(Spawn::parse("10").is_err());
+        assert!(Spawn::parse("10 x").is_err());
+        assert!(Spawn::parse("1 2 3 4").is_err());
+        assert!(Spawn::parse("NaN 2").is_err());
     }
 
     #[test]

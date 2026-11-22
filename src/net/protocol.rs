@@ -27,10 +27,11 @@ use crate::physics::engine::families::Layout;
 use crate::physics::suspension::ArmGeometry;
 use crate::physics::tire::COMPOUNDS;
 use crate::shops::Shop;
+use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 8;
+pub const PROTOCOL: u32 = 9;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -78,6 +79,8 @@ pub enum ToClient {
         you: PlayerId,
         /// Whether the server has chat on.
         chat: bool,
+        /// Where players start.
+        spawn: Spawn,
     },
     Refused(String),
     Joined {
@@ -250,10 +253,11 @@ impl Wire for ToServer {
 impl Wire for ToClient {
     fn put(&self, out: &mut Vec<u8>) {
         match self {
-            ToClient::Welcome { you, chat } => {
+            ToClient::Welcome { you, chat, spawn } => {
                 0u8.put(out);
                 you.put(out);
                 chat.put(out);
+                spawn.put(out);
             }
             ToClient::Refused(why) => {
                 1u8.put(out);
@@ -323,6 +327,7 @@ impl Wire for ToClient {
             0 => ToClient::Welcome {
                 you: r.get()?,
                 chat: r.get()?,
+                spawn: r.get()?,
             },
             1 => ToClient::Refused(r.get()?),
             2 => ToClient::Joined {

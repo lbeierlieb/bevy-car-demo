@@ -218,6 +218,12 @@
                         # Tried along with the web version.
                         shops = lib.mkIf web ./assets/shops.cfg;
                         # Tried along with the web version.
+                        spawn = lib.mkIf web {
+                          x = -1476;
+                          z = -1213.5;
+                          heading = 90;
+                        };
+                        # Tried along with the web version.
                         telegram = lib.mkIf web {
                           tokenFile = "/run/secrets/car-sim-telegram";
                           chatIdFile = "/run/secrets/car-sim-telegram-chat";

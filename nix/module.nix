@@ -136,6 +136,41 @@ in
       '';
     };
 
+    spawn = mkOption {
+      type = types.nullOr (
+        types.submodule {
+          options = {
+            x = mkOption {
+              type = types.number;
+              description = "East (m on the map, as the gizmos (1) and the map (M) show it).";
+            };
+            z = mkOption {
+              type = types.number;
+              description = "South (m on the map).";
+            };
+            heading = mkOption {
+              type = types.nullOr types.number;
+              default = null;
+              description = ''
+                Compass degrees (0 north, 90 east) to face along the road there. Null: the
+                way with more road behind.
+              '';
+            };
+          };
+        }
+      );
+      default = null;
+      example = {
+        x = -2984.5;
+        z = -2007.2;
+        heading = 180;
+      };
+      description = ''
+        Where players start: they're placed on the paved road nearest that map point. Null:
+        the game's default, in Gerach.
+      '';
+    };
+
     telegram = {
       tokenFile = mkOption {
         type = types.nullOr types.str;
@@ -233,6 +268,16 @@ in
             ++ lib.optionals (cfg.events != null) [
               "--events"
               "${cfg.events}"
+            ]
+            ++ lib.optionals (cfg.spawn != null) [
+              "--spawn"
+              (lib.concatMapStringsSep " " toString (
+                [
+                  cfg.spawn.x
+                  cfg.spawn.z
+                ]
+                ++ lib.optional (cfg.spawn.heading != null) cfg.spawn.heading
+              ))
             ]
             # The credentials' copies (%d: the service's credentials directory).
             ++ lib.optionals (cfg.telegram.tokenFile != null) [

@@ -31,7 +31,7 @@ use crate::events::rounds::{EventAction, Rounds, run_rounds};
 use crate::looks::{Looks, Motion};
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
-use crate::terrain::Terrain;
+use crate::terrain::{Spawn, Terrain};
 use crate::traffic::{Anchor, CarNumbers, Realm, Traffic, TrafficCar, Visitor};
 
 /// A player not heard from for this long is frozen for the others, and for this long
@@ -108,6 +108,8 @@ pub struct Server {
     shops: Vec<Shop>,
     /// The events on the map, likewise.
     events: Vec<Event>,
+    /// Where players start.
+    spawn: Spawn,
     /// When states, and the map's players, were last sent (s).
     sent: f64,
     map_sent: f64,
@@ -125,6 +127,7 @@ impl Server {
             name_tags: true,
             shops: Vec::new(),
             events: Vec::new(),
+            spawn: Spawn::DEFAULT,
             sent: 0.0,
             map_sent: f64::NEG_INFINITY,
             pings_sent: f64::NEG_INFINITY,
@@ -145,6 +148,10 @@ impl Server {
 
     pub fn with_events(self, events: Vec<Event>) -> Self {
         Self { events, ..self }
+    }
+
+    pub fn with_spawn(self, spawn: Spawn) -> Self {
+        Self { spawn, ..self }
     }
 
     /// Puts other events on the map (for players joining from now on).
@@ -316,6 +323,7 @@ fn receive(
                     peer.tell(&ToClient::Welcome {
                         you: id,
                         chat: server.chat,
+                        spawn: server.spawn,
                     });
                     peer.tell(&ToClient::Shops(server.shops.clone()));
                     peer.tell(&ToClient::Events(server.events.clone()));

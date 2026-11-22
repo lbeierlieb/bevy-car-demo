@@ -5,7 +5,7 @@
 //! server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]
 //!        [--map-players self|near|all] [--map-near 200] [--chat on|off]
 //!        [--name-tags on|off] [--shops shops.cfg] [--events events.cfg]
-//!        [--telegram-token-file token --telegram-chat-file chat]
+//!        [--spawn "x z [heading]"] [--telegram-token-file token --telegram-chat-file chat]
 //! ```
 //!
 //! `--map-players` says who a player sees of the others on their map: nobody (`self`),
@@ -13,7 +13,10 @@
 //! `--chat off` keeps the players from chatting (it's on by default), `--name-tags off`
 //! the players' names off their cars (also on by default). `--shops` reads where the
 //! shops are from a file (e.g. `assets/shops.cfg`; without one there are none), `--events`
-//! where the events are (e.g. `assets/events.cfg`; likewise).
+//! where the events are (e.g. `assets/events.cfg`; likewise). `--spawn` is where players
+//! start: a map point (x east, z south, m, as the gizmos (1) and the map show them) and a
+//! compass heading to face along the road there (without one, the way with more road
+//! behind); without it, the game's default in Gerach.
 //!
 //! Without a certificate it makes a throwaway one: only the native game joins that, with
 //! `CAR_SIM_INSECURE=1` (for development).
@@ -37,7 +40,7 @@ fn main() {
         Ok(options) => options,
         Err(e) => {
             eprintln!(
-                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--map-players self|near|all] [--map-near 200] [--chat on|off]\n       [--name-tags on|off] [--shops shops.cfg] [--events events.cfg]\n       [--telegram-token-file token --telegram-chat-file chat]"
+                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--map-players self|near|all] [--map-near 200] [--chat on|off]\n       [--name-tags on|off] [--shops shops.cfg] [--events events.cfg]\n       [--spawn \"x z [heading]\"] [--telegram-token-file token --telegram-chat-file chat]"
             );
             std::process::exit(2);
         }
@@ -80,6 +83,7 @@ fn main() {
             .with_chat(options.chat)
             .with_name_tags(options.name_tags)
             .with_shops(options.shops)
+            .with_spawn(options.spawn)
             .with_events(options.events),
     )
     .insert_resource(traffic::Traffic {
@@ -124,6 +128,7 @@ struct Options {
     name_tags: bool,
     shops: Vec<car_sim::shops::Shop>,
     events: Vec<car_sim::events::Event>,
+    spawn: car_sim::terrain::Spawn,
     telegram_token_file: Option<std::path::PathBuf>,
     telegram_chat_file: Option<std::path::PathBuf>,
 }
@@ -142,6 +147,7 @@ impl Options {
             name_tags: true,
             shops: Vec::new(),
             events: Vec::new(),
+            spawn: car_sim::terrain::Spawn::DEFAULT,
             telegram_token_file: None,
             telegram_chat_file: None,
         };
@@ -172,6 +178,11 @@ impl Options {
                 "--map-near" => map_near = number(&arg, args.next())?,
                 "--shops" => shops = Some(args.next().ok_or("--shops needs a file")?.into()),
                 "--events" => events = Some(args.next().ok_or("--events needs a file")?.into()),
+                "--spawn" => {
+                    let text = args.next().ok_or("--spawn needs \"x z [heading]\"")?;
+                    options.spawn = car_sim::terrain::Spawn::parse(&text)
+                        .map_err(|e| format!("--spawn: {e}"))?;
+                }
                 "--chat" | "--name-tags" => {
                     let on = match args.next().as_deref() {
                         Some("on") => true,

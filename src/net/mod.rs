@@ -462,20 +462,24 @@ mod tests {
     }
 
     #[test]
-    fn a_joining_player_is_told_the_shops_and_events() {
+    fn a_joining_player_is_told_the_shops_events_and_spawn() {
         let listener = LoopbackListener::default();
+        let spawn = Spawn::parse("100 -200 90").unwrap();
         let shops = crate::shops::parse("gas 10 20 Pumps\ndyno -5 7 Rollers").unwrap();
         let events = crate::events::parse("hunt 30 40 Hunt").unwrap();
         let mut server = app();
         server.add_plugins(ServerPlugin).insert_resource(
             Server::new(listener.clone())
                 .with_shops(shops.clone())
-                .with_events(events.clone()),
+                .with_events(events.clone())
+                .with_spawn(spawn),
         );
         let mut anna = player(&listener, "Anna", 3, 0.0);
+        assert_eq!(connection(&anna).spawn, Spawn::DEFAULT);
         run(&mut [&mut server, &mut anna], 10);
         assert_eq!(connection(&anna).shops, shops);
         assert_eq!(connection(&anna).events, events);
+        assert_eq!(connection(&anna).spawn, spawn);
     }
 
     #[test]

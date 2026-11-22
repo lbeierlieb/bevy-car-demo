@@ -165,6 +165,19 @@ impl Wire for Vec2 {
     }
 }
 
+impl Wire for crate::terrain::Spawn {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.at.put(out);
+        self.heading.put(out);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        Some(Self {
+            at: r.get()?,
+            heading: r.get()?,
+        })
+    }
+}
+
 impl Wire for Vec3 {
     fn put(&self, out: &mut Vec<u8>) {
         self.to_array().put(out);
