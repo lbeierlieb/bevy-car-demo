@@ -13,12 +13,12 @@
 //! leaves the factory (`show`), so it's drawn (and sent to players) like any other car.
 
 pub mod network;
+mod powertrain;
 
 use std::collections::{HashMap, VecDeque};
 
 use bevy::prelude::*;
 
-use crate::audio::EngineRun;
 use crate::body::Wheels;
 use crate::car::{Car, CarSetup, body_box};
 use crate::chassis::{CHASSIS, PAINTS};
@@ -27,6 +27,7 @@ use crate::physics::collision::{self, Contact, GROUND, OBSTACLE, Obb};
 use crate::physics::rigid_body::RigidBody;
 use crate::terrain::Terrain;
 use network::{Leg, Network};
+use powertrain::{Powertrain, Shifter};
 
 const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
 
@@ -82,12 +83,6 @@ const DRIVETRAIN_MASS: f32 = 230.0;
 /// rad/s, s).
 const STILL: f32 = 0.05;
 const SETTLE_TIME: f32 = 2.0;
-/// What a traffic car's engine sounds like: idling standing, cruising at a steady rpm
-/// and load once moving (no gears), blended in over the first few m/s.
-const IDLE_RPM: f32 = 850.0;
-const CRUISE_RPM: f32 = 2000.0;
-const CRUISE_LOAD: f32 = 0.2;
-const CRUISING_FROM: f32 = 3.0;
 
 /// How many traffic cars drive around each player (the panel's traffic density), and in
 /// the realms that want another number (e.g. none in an event's round without traffic).
@@ -272,6 +267,8 @@ struct Driver {
     rng: Rng,
     /// The way ahead along `route` from `start`, built again only when they change.
     path: Path,
+    /// The gear it's in and what the engine does.
+    shifter: Shifter,
 }
 
 /// The way ahead of a driver, along the lanes of its route with the corners at the
@@ -686,6 +683,10 @@ impl TrafficCar {
             keen,
             rng: Rng(seed | 1),
             path: Path::default(),
+            shifter: Shifter::new(
+                Powertrain::factory(chassis),
+                (keen - KEEN.0) / (KEEN.1 - KEEN.0),
+            ),
         };
         driver.plan(network);
         let path = &mut driver.path;
@@ -696,6 +697,7 @@ impl TrafficCar {
             .map(|(_, &limit)| limit)
             .fold(f32::INFINITY, f32::min);
         driver.speed = 0.8 * keen * lowest;
+        driver.shifter.cruise(driver.speed);
         let (front, direction) = path.point(0.0);
         driver.rear = front - direction * wheels.wheelbase;
         // On a bridge's deck, or under any.
@@ -748,9 +750,9 @@ impl TrafficCar {
     }
 
     /// What moves on it, for a car that `looks` so: the wheels roll and the front ones
-    /// steer, on a suspension at rest; the engine idles standing and cruises moving.
+    /// steer, on a suspension at rest; the engine as the driver drives it (idling once
+    /// crashed).
     pub fn motion(&self, looks: &Looks) -> Motion {
-        let moving = (self.body.velocity.length() / CRUISING_FROM).min(1.0);
         Motion {
             wheels: std::array::from_fn(|corner| {
                 let axle = &looks.axles[corner / 2];
@@ -760,12 +762,8 @@ impl TrafficCar {
                     spin: self.rolled / axle.radius,
                 }
             }),
-            engine: EngineRun {
-                running: true,
-                rpm: IDLE_RPM + (CRUISE_RPM - IDLE_RPM) * moving,
-                load: CRUISE_LOAD * moving,
-                turbo_speed: 0.0,
-            },
+            engine: (self.driver.as_ref())
+                .map_or_else(|| powertrain::idling(self.chassis), |d| d.shifter.run()),
         }
     }
 
@@ -939,6 +937,9 @@ fn drive(
     dt: f32,
 ) {
     let wheelbase = car.wheels.wheelbase;
+    let mass = car.body.mass;
+    // The sine of the slope it's on.
+    let grade = (car.body.rotation * Vec3::NEG_Z).y;
     let Some(driver) = car.driver.as_mut() else {
         return;
     };
@@ -1025,6 +1026,8 @@ fn drive(
         acceleration -= ACCELERATION * (wanted / gap.max(0.1)).powi(2);
     }
     driver.speed = (v + acceleration.max(-HARDEST_BRAKING) * dt).max(0.0);
+    let acceleration = (driver.speed - v) / dt.max(1e-6);
+    (driver.shifter).step(mass, driver.speed, acceleration, grade, dt);
     let (front, direction) = path.point(driver.along);
     let old = (front - driver.rear).normalize_or(direction);
     driver.along += driver.speed * dt;
