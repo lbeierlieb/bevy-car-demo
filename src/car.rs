@@ -712,15 +712,15 @@ pub fn drive(
         let shift = keys.just_pressed(KeyCode::KeyE) as i8 - keys.just_pressed(KeyCode::KeyQ) as i8
             + wheel.shift_up as i8
             - wheel.shift_down as i8;
+        let shares = setup.engine.drive.shares();
+        let wheel_omega = (0..4).map(|i| shares[i] * corners[i].omega).sum();
         if let Some(gate) = wheel.shifter {
-            drivetrain.select_gate(&setup.engine, gate, speed);
+            drivetrain.select_gate(&setup.engine, gate, speed, wheel_omega);
         } else {
             drivetrain.grinding = None;
         }
         if wheel.shifter.is_none() && shift != 0 {
             // Q/E or the paddles shift down/up.
-            let shares = setup.engine.drive.shares();
-            let wheel_omega = (0..4).map(|i| shares[i] * corners[i].omega).sum();
             drivetrain.shift_by(&setup.engine, shift, wheel_omega, speed);
         }
         let wants_reverse = match wheel.shifter {

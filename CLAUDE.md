@@ -647,7 +647,9 @@ and plays force feedback, both through hid-fanatecff on Linux.
   automatic gearboxes are to come later). `Drivetrain::automatic` (rpm-based shifting)
   is only kept for the test drivers (consumption, flat-out runs).
 - H-shifter: with a clutch pedal bound, a gear only goes in with the clutch pressed
-  (otherwise neutral). Without a pedal, the automatic clutch shifts. Paddles shift
+  (otherwise neutral, grinding), or when the engine already turns within `SYNC_RPM`
+  (150) of the gear's speed (engine off and standing, or rev-matched; asked for by the
+  user, 2026-11-22). Without a pedal, the automatic clutch shifts. Paddles shift
   with the automatic clutch even when a pedal is bound.
 - Each H gate is a button held while the lever is in it; neutral is "no gate held".
 - No hill hold (removed at the user's wish): the handbrake is a parking brake toggled
