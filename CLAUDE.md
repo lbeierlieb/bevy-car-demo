@@ -369,7 +369,8 @@ out on the road to the north-east). Agreed with the user:
   (`Action::Restart`) instead). Player cars only, for now.
 - Running (`race.rs`: `Course` = a route one way with laps): a grid at the route's start
   (pairs on roads 5 m+, rows 6 m, else single file 9 m), held (`car::Held`) for
-  `COUNTDOWN` (5 s), the parking brake off; the clock runs from the green light. Gates
+  `COUNTDOWN` (5 s), the parking brake off, in neutral (put in gear during the countdown;
+  agreed with the user, 2026-11-22); the clock runs from the green light. Gates
   every ≤ 150 m from 187 m on (past the longest grid), the last at the lap's end (a
   loop's start); the server judges them from the cars' states (`Gate::crossed`: forwards,
   within road half-width + 6 m, not a jump over 60 m), in order. Standing (`Racer`:
