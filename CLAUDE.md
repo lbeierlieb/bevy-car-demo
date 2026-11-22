@@ -134,6 +134,9 @@ certificate, in the background with `nohup`), then two shots with `CAR_SIM_INSEC
 and their own config dirs, the second started a few seconds after the first, more
 frames for the first (they take turns building). Don't `pkill -f` anything matching
 your own command line (it kills the shell); `pgrep -x server`, then `kill`.
+Likewise, never wait for a shot with `until … ! pgrep -f shot.sh` in a background
+shell: the pattern matches the loop's own command line, so it never ends (three such
+loops ran for hours, 2026-11-22). Wait for the output file, or `pgrep -x`/a PID.
 `CLICK="x,y,frame;x,y,frame…"` clicks into the
 1280×720 window, e.g. on the map. `CAM`/`CAMAT` env vars place the camera (see
 `shot.rs`). `shot.sh` fetches Mesa and Xvfb from the pinned nixpkgs on first use.
