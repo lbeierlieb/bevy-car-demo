@@ -10,8 +10,6 @@ use bevy::prelude::*;
 use super::hunt::{Action, CAUGHT_SPEED, CAUGHT_TIME, Ending, Outcome, Phase, Round};
 use crate::net::protocol::{PlayerId, ToClient};
 use crate::net::server::{Peer, Server};
-use crate::shops::kerb;
-use crate::terrain::Terrain;
 use crate::traffic::{Realm, Traffic};
 
 /// A player asks to enter only this near the event's marker (m): stopped on it, as their
@@ -31,8 +29,6 @@ pub struct Rounds {
     list: Vec<Hunt>,
     /// The last realm given to a round.
     realm: u32,
-    /// Where the events' markers are (once worked out).
-    markers: Option<Vec<Vec2>>,
     /// Who's in which event, as everyone was last told, and who was told.
     busy: Vec<(PlayerId, u16)>,
     told_busy: HashSet<PlayerId>,
@@ -72,7 +68,6 @@ pub fn run_rounds(
     mut rounds: ResMut<Rounds>,
     server: Res<Server>,
     mut traffic: ResMut<Traffic>,
-    terrain: Res<Terrain>,
     time: Res<Time<Real>>,
     mut actions: MessageReader<EventAction>,
     mut peers: Query<(Entity, &mut Peer, Option<&Realm>)>,
@@ -80,11 +75,6 @@ pub fn run_rounds(
     let now = time.elapsed_secs_f64();
     let rounds = &mut *rounds;
     let events = server.events();
-    let markers = rounds.markers.get_or_insert_with(|| {
-        (events.iter())
-            .map(|event| kerb(&terrain, event.at).0)
-            .collect()
-    });
     let present: HashMap<PlayerId, (String, Option<Vec3>, Option<f32>)> = (peers.iter())
         .filter_map(|(_, peer, _)| {
             let state = peer.state;
@@ -119,9 +109,9 @@ pub fn run_rounds(
         let mine = rounds.list.iter().position(|hunt| hunt.has(player));
         match action {
             Action::Enter(event) => {
-                let near = (markers.get(usize::from(event)))
+                let near = (events.get(usize::from(event)))
                     .zip(present.get(&player).and_then(|p| p.1))
-                    .is_some_and(|(marker, at)| marker.distance(at.xz()) < ENTER_RANGE);
+                    .is_some_and(|(event, at)| event.at.distance(at.xz()) < ENTER_RANGE);
                 if mine.is_some() || !near {
                     continue;
                 }
