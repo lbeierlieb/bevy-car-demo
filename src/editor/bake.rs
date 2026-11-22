@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use super::conflicts::Conflicts;
 use super::doc::Doc;
 use super::tools::Tools;
-use super::{CENTER, MAP_FILE, SIZE, SPAWN, repo_file};
+use super::{CENTER, MAP_FILE, SIZE, repo_file};
 use crate::map::MapView;
 use crate::scenery::Reload;
 use crate::terrain::{TERRAIN_FILE, Terrain};
@@ -60,17 +60,15 @@ impl Bake {
     }
 }
 
-/// The bake's arguments: map file, centre, size, output, spawn.
+/// The bake's arguments: map file, centre, size, output.
 fn arguments(out: &Path) -> Vec<String> {
-    let mut args = vec![
+    vec![
         repo_file(MAP_FILE).display().to_string(),
         CENTER.0.to_string(),
         CENTER.1.to_string(),
         SIZE.to_string(),
         out.display().to_string(),
-    ];
-    args.extend(SPAWN.iter().map(|s| s.to_string()));
-    args
+    ]
 }
 
 fn start(

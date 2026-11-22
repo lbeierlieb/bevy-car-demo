@@ -128,7 +128,7 @@ A server is a program of its own, run headless:
 ```sh
 cargo run --bin server -- --cert fullchain.pem --key key.pem   # options: --port, --traffic, --max-players,
                                                                # --map-players, --map-near, --chat, --name-tags, --shops, --events,
-                                                               # --telegram-token-file with --telegram-chat-file
+                                                               # --spawn, --telegram-token-file with --telegram-chat-file
 ```
 
 Who a player sees of the others on their map (M) is the server's choice:
@@ -137,7 +137,10 @@ default) or `all` (everyone, wherever they are). `--chat off` switches the chat 
 `--name-tags off` the names over the players' cars. `--shops shops.cfg` says where the
 shops are (lines of kind, x, z and name; `assets/shops.cfg`, the repo's list, explains
 them); without it there are none. `--events events.cfg` likewise says where the events
-are (`assets/events.cfg`).
+are (`assets/events.cfg`). `--spawn "x z [heading]"` says where players start: the
+paved road nearest that map point (x east, z south, in metres, as the gizmos (1) and the
+map (M) show them), facing as close to the compass heading as the road allows; without
+it, in Gerach.
 
 It needs a real certificate for browsers to join (WebTransport). Without `--cert` and
 `--key` it makes a throwaway one, which only the native game joins, with
@@ -173,6 +176,8 @@ joins this server):
             # shops = "${car-sim}/assets/shops.cfg";
             # Where the events are (null: none), e.g. the repo's list:
             # events = "${car-sim}/assets/events.cfg";
+            # Where players start (null: in Gerach):
+            # spawn = { x = -2984.5; z = -2007.2; heading = 180; };
             # A Telegram bot says who joins and leaves (the token file e.g. from sops-nix):
             # telegram = {
             #   tokenFile = config.sops.secrets.car-sim-telegram-token.path;
@@ -422,14 +427,14 @@ cd tools/bake
 cargo build --release
 ./target/release/bake import <lat> <lon> <width_m>[x<height_m>] ../../map/<name>.osm
 ./target/release/bake ../../map/<name>.osm <lat> <lon> <width_m>[x<height_m>] \
-    ../../assets/<name>.terrain [<spawn_lat> <spawn_lon> [<spawn_heading>]]
+    ../../assets/<name>.terrain
 ```
 
 The map was imported with `import 50.0118569 10.8455963 9600x8448 ../../map/gerach.osm`
 and is baked with `../../map/gerach.osm 50.0118569 10.8455963 9600x8448
-../../assets/gerach.terrain 50.0305556 10.8046389 180` (about 20 seconds; the map
-editor runs the same with F5), which starts the cars on the road nearest that point in
-Gerach, facing as close to south (180°) as the road allows, one behind the other. To use a different file,
+../../assets/gerach.terrain` (about 20 seconds; the map editor runs the same with F5).
+Where the cars start isn't part of the map: the server says it (`--spawn`), and playing
+alone starts in Gerach (`Spawn::DEFAULT` in `src/terrain.rs`). To use a different file,
 change `BAKED` and `TERRAIN_FILE` in `src/terrain.rs` (and the map file and bake
 arguments at the top of `src/editor/mod.rs`). To make the map bigger, import the bigger
 rectangle into the same file and bake with the new size. The public Overpass server sometimes answers

@@ -315,14 +315,12 @@ impl Terrain {
         let mut r = Bytes(&inflated);
         r.take(4);
         let version = r.u32();
-        if version != 13 {
+        if version != 14 {
             return Err(format!("unsupported terrain version {version}"));
         }
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
         let cell = r.f32();
         let chunk_cells = r.u32() as usize;
-        // The spawn point and heading the bake used to write (unused).
-        r.take(16);
         let base = r.f32();
         let n = cells_x + 1;
         let mut heights = vec![0.0; n * (cells_z + 1)];

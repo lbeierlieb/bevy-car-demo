@@ -35,8 +35,6 @@ pub const CONFLICTS_FILE: &str = "map/gerach.conflicts.gpx";
 /// takes them (README, "The map and baking it").
 pub const CENTER: (f64, f64) = (50.0118569, 10.8455963);
 pub const SIZE: &str = "9600x8448";
-/// Where the cars start: latitude, longitude, compass heading.
-pub const SPAWN: [&str; 3] = ["50.0305556", "10.8046389", "180"];
 
 /// A file of the repo: from the working directory if it's there (`cargo run` from the
 /// repo), else in the source tree the editor was built from.

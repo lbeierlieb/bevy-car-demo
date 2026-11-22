@@ -413,6 +413,13 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   a second with whoever the setting shows; the client keeps each for 3 s, carries it on
   at its speed (`Connection::on_map`), and `online.rs` hands them to the map as
   `map::MapCars` (the map itself knows nothing of networking). Protocol 3.
+- **Spawn** (agreed with the user, 2026-11-22: not part of the map any more; format 14
+  dropped it from the bake): `terrain::Spawn` (map point, optional compass heading),
+  `Spawn::DEFAULT` in Gerach for playing alone, tests and the editor's camera (also a
+  resource). The server's `--spawn "x z [heading]"` / `services.car-sim.spawn = { x; z;
+  heading; }` (default: the same) goes out in `Welcome` (protocol 9); `online`'s
+  `place_on_joining` picks lane spots around `Connection::spawn` (any direction: the
+  heading only picks the first road spot). One point for now.
 - **Ping** (asked for by the user, 2026-11-21): the server reads each connection's QUIC
   round-trip time (`Link::rtt`, `quic.rs` stores `Connection::rtt` every 0.5 s; loopback
   0) and sends everyone `ToClient::Pings` every 2 s; the players window lists them, ours
@@ -964,7 +971,7 @@ in `tools/bake` without `CARGO_TARGET_DIR` (the dev shell's `cargo run` adds
 `MapView::rebuild`), `conflicts.rs`. Decisions made alone: tags `carsim:terrain`
 (flatten|raise|smooth|slope), `carsim:height` (m above sea level), `carsim:offset`,
 `carsim:radius`, `carsim:fade` (default 5 m, inside the outline); slope corners and
-pins are `ele` (above sea level; baked format 13 stores `Terrain::base`, the lowest
+pins are `ele` (above sea level; baked format 13 on stores `Terrain::base`, the lowest
 point's height, to convert). egui input is **not** absorbed in the editor (bevy_egui
 then resets the mouse buttons whenever egui is over the pointer, dropping drags):
 systems check `EguiWantsInput` themselves. The bake is shared code-wise: `src/osm.rs`

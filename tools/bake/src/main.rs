@@ -3,7 +3,7 @@
 //!
 //! Usage (see `USAGE`): `bake import …` adds what OpenStreetMap has around a map rectangle
 //! to the map file (`osm.rs`), which is then ours and edited in JOSM; `bake <map.osm> …`
-//! bakes from the map file, with the spawn heading in compass degrees (0 north, 90 east).
+//! bakes from the map file.
 //!
 //! Elevation is the 1 m lidar terrain model (DGM1) of the Bavarian surveying
 //! administration, so this only works inside Bavaria. OpenStreetMap is read via the
@@ -396,15 +396,13 @@ fn fetch_osm(center: Point, (half_x, half_z): Point) -> Result<Osm, Error> {
 
 const USAGE: &str = "usage:
   bake import <lat> <lon> <width_m>[x<height_m>] <map.osm>
-  bake <map.osm> <lat> <lon> <width_m>[x<height_m>] <out_file> [<spawn_lat> <spawn_lon> [<spawn_heading>]]";
+  bake <map.osm> <lat> <lon> <width_m>[x<height_m>] <out_file>";
 
 fn main() -> Result<(), Error> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
         [command, lat, lon, size, map] if command == "import" => import(lat, lon, size, map),
-        [map, lat, lon, size, out, spawn @ ..] if spawn.len() <= 3 && spawn.len() != 1 => {
-            bake(map, lat, lon, size, out, spawn)
-        }
+        [map, lat, lon, size, out] => bake(map, lat, lon, size, out),
         _ => Err(USAGE.into()),
     }
 }
@@ -446,15 +444,7 @@ fn import(lat: &str, lon: &str, size: &str, map: &str) -> Result<(), Error> {
 }
 
 /// Bakes the map of that size around (lat, lon) from the map file and the lidar terrain.
-fn bake(
-    map: &str,
-    lat: &str,
-    lon: &str,
-    size: &str,
-    out: &str,
-    spawn: &[String],
-) -> Result<(), Error> {
-    let spawn: Vec<f64> = spawn.iter().map(|v| v.parse()).collect::<Result<_, _>>()?;
+fn bake(map: &str, lat: &str, lon: &str, size: &str, out: &str) -> Result<(), Error> {
     let (center, chunks_x, chunks_z) = extent(lat, lon, size)?;
     let frame = Frame::around(center.0, center.1);
     let (cells_x, cells_z) = (chunks_x * CHUNK_CELLS, chunks_z * CHUNK_CELLS);
@@ -873,9 +863,7 @@ fn bake(
     }
 
     // Write (all little-endian, and the whole file compressed with zlib): b"CSTR", version u32, cells along x and z u32, cell size f32,
-    // chunk cells u32, spawn point (x, z) f32, spawn heading as a direction (x, z) f32
-    // ((0, 0) if not given), the lowest point's height above sea level f32 (heights are
-    // above it),
+    // chunk cells u32, the lowest point's height above sea level f32 (heights are above it),
     // then per chunk (row-major, rows along z): step u8 (in cells), the chunk's
     // (chunk cells / step + 1)² vertex heights u16 in centimetres above the lowest point
     // (row-major, each as the wrapping difference from left + above - above-left, or the
@@ -903,28 +891,14 @@ fn bake(
         )
         .into());
     }
-    let (spawn, heading) = match spawn[..] {
-        [lat, lon, ref heading @ ..] => (
-            frame.to_local(lat, lon),
-            // Compass degrees to the map frame (x east, z south).
-            heading.first().map_or((0.0, 0.0), |h| {
-                (h.to_radians().sin(), -h.to_radians().cos())
-            }),
-        ),
-        _ => ((0.0, 0.0), (0.0, 0.0)),
-    };
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&13u32.to_le_bytes());
+    put(&14u32.to_le_bytes());
     put(&(cells_x as u32).to_le_bytes());
     put(&(cells_z as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
     put(&(CHUNK_CELLS as u32).to_le_bytes());
-    put(&(spawn.0 as f32).to_le_bytes());
-    put(&(spawn.1 as f32).to_le_bytes());
-    put(&(heading.0 as f32).to_le_bytes());
-    put(&(heading.1 as f32).to_le_bytes());
     put(&(base as f32).to_le_bytes());
     for cz in 0..chunks_z {
         for cx in 0..chunks_x {
