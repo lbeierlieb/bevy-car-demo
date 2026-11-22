@@ -23,7 +23,7 @@ const SAMPLE_RPM: f32 = 100.0;
 /// Air the dyno cell's fan blows through the radiator (m/s).
 const FAN_AIRSPEED: f32 = 20.0;
 /// Watts per mechanical horsepower.
-const HORSEPOWER: f32 = 745.7;
+pub const HORSEPOWER: f32 = 745.7;
 /// Runs kept on the plot, newest first, and their colours.
 const KEPT: usize = 4;
 const COLORS: [Color32; KEPT] = [
@@ -33,9 +33,9 @@ const COLORS: [Color32; KEPT] = [
     Color32::from_rgb(230, 110, 200),
 ];
 
-pub struct DynoPlugin;
+pub struct EngineDynoPlugin;
 
-impl Plugin for DynoPlugin {
+impl Plugin for EngineDynoPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Dyno>()
             .add_systems(Update, run)
@@ -272,7 +272,7 @@ fn plot(ui: &mut egui::Ui, dyno: &Dyno) {
 
 /// Which scale a line on a chart is read against: torque on the left, power on the right.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Axis {
+pub enum Axis {
     Torque,
     Power,
 }
@@ -288,7 +288,7 @@ impl Axis {
 
 /// A line on a chart: values (N·m or hp, by `axis`) by rpm. Lines with a `name` show their
 /// value under the pointer, named so.
-struct Line<'a> {
+pub struct Line<'a> {
     pub points: Vec<(f32, f32)>,
     pub axis: Axis,
     pub color: Color32,
@@ -308,7 +308,7 @@ fn ceil_to(value: f32, step: f32) -> f32 {
 
 /// Torque and power against rpm, `height` high: the first line on top, with the named
 /// lines' readings under the pointer.
-fn chart(ui: &mut egui::Ui, lines: &[Line], height: f32) {
+pub fn chart(ui: &mut egui::Ui, lines: &[Line], height: f32) {
     let width = ui.available_width().max(400.0);
     let (response, painter) = ui.allocate_painter(egui::vec2(width, height), Sense::hover());
     let frame = response.rect;

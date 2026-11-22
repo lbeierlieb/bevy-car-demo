@@ -750,11 +750,13 @@ impl Source for EngineVoice {
     }
 }
 
-/// The engine sound: what the audio thread plays, and whether it's muted (0).
+/// The engine sound: what the audio thread plays, whether it's muted (0), and whether the
+/// driven car is out of earshot (`hushed`: its driver is in the dyno's room).
 #[derive(Resource)]
 pub struct EngineAudio {
     targets: Arc<Targets>,
     muted: bool,
+    pub hushed: bool,
 }
 
 impl Targets {
@@ -794,6 +796,7 @@ fn start_engine(mut commands: Commands, mut synths: ResMut<Assets<EngineSynth>>)
     commands.insert_resource(EngineAudio {
         targets,
         muted: false,
+        hushed: false,
     });
 }
 
@@ -812,7 +815,11 @@ fn update_engine(
         engine.targets.set(rpm, load, 0.0);
         return;
     };
-    let volume = if engine.muted { 0.0 } else { 1.0 };
+    let volume = if engine.muted || engine.hushed {
+        0.0
+    } else {
+        1.0
+    };
     engine.targets.hear(&looks.engine, &motion.engine, volume);
 }
 

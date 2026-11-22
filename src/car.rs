@@ -312,7 +312,7 @@ pub struct Controls {
     pub handbrake: f32,
 }
 
-#[derive(Component)]
+#[derive(Component, Clone)]
 pub struct Car {
     /// Which car it is (see `ActiveCar`).
     pub index: usize,
@@ -577,6 +577,7 @@ impl Plugin for CarPlugin {
         app.init_resource::<ActiveCar>()
             .insert_resource(DriverAids::load())
             .add_message::<ReverseRefused>()
+            .init_resource::<Away>()
             .add_systems(Update, (drive, sync_transforms).chain());
     }
 }
@@ -615,6 +616,10 @@ const KEY_STEER_RETURN_RATE: f32 = 2.5;
 /// The driver asked for reverse while the car was rolling (`drive` refused it).
 #[derive(Message)]
 pub struct ReverseRefused;
+/// The driver is away from the wheel (in the dyno's room): the active car holds still,
+/// as any other car does, and R does nothing.
+#[derive(Resource, Default)]
+pub struct Away(pub bool);
 
 /// Keyboard and wheel to controls for the active car; any other car holds all brakes. Q/E
 /// (or the paddles, or an H-shifter) change gear, I starts a stalled engine.
@@ -622,14 +627,14 @@ pub fn drive(
     keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<WheelInput>,
     time: Res<Time>,
-    active: Res<ActiveCar>,
+    (active, away): (Res<ActiveCar>, Res<Away>),
     aids: Res<DriverAids>,
     mut cars: Query<&mut Car>,
     mut refused: MessageWriter<ReverseRefused>,
 ) {
     let pressed = |a, b| keys.pressed(a) || keys.pressed(b);
     for mut car in &mut cars {
-        if car.index != active.0 {
+        if car.index != active.0 || away.0 {
             car.controls = Controls {
                 brake: 1.0,
                 handbrake: 1.0,
@@ -712,8 +717,9 @@ fn reset_car(
     active: Res<ActiveCar>,
     terrain: Res<Terrain>,
     mut cars: Query<&mut Car>,
+    away: Res<Away>,
 ) {
-    if keys.just_pressed(KeyCode::KeyR) || wheel.reset {
+    if (keys.just_pressed(KeyCode::KeyR) || wheel.reset) && !away.0 {
         for mut car in cars.iter_mut().filter(|car| car.index == active.0) {
             car.reset(&terrain);
         }

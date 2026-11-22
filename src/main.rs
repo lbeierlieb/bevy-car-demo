@@ -22,10 +22,12 @@ fn main() {
             // at first).
             debug::DebugPlugin,
             ui::PanelPlugin,
-            // The tool windows: ECU tune (3), garage (4), dyno (5), showroom (6).
+            // The ECU tune (3) and the engine dyno (5); the garage and the showroom are at
+            // shops, as is the chassis dyno.
             ecu_ui::EcuUiPlugin,
             garage::GaragePlugin,
             dyno::DynoPlugin,
+            dyno::engine::EngineDynoPlugin,
         ))
         .run();
 }

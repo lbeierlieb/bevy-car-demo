@@ -209,7 +209,10 @@ order (✓ done):
    (`shops::shop_window` draws a shop's window for other modules, saying when the car came in).
 9. ✓ **Parts shop**: the garage window without alignment, cam timing and wastegate (those
    still there until the dyno is);
-   repairs; new tires. 10. **Dyno**: the career's chassis dyno scene back (`career/dyno.rs`,
+   repairs; new tires. 10. **Dyno** (✓ the scene: `dyno/mod.rs`, `dyno/rollers.rs`; a copy of the car runs in
+   the room 200 m under the marker, the driven car stays parked there (`car::Away` holds
+   its input, `EngineAudio::hushed`), engine wear, fuel and tune go back on leaving; runs
+   kept for the session only): the career's chassis dyno scene back (`career/dyno.rs`,
    `rollers.rs` at c34bfbf), with the ECU window, cam timing and wastegate, and a hold
    mode (rollers held at an rpm, throttle set) for tuning cells; others see the car
    parked on the marker; the engine dyno window (5) goes. 11. Clean-up: the panel loses

@@ -125,7 +125,7 @@ fn orbit(
     }
 }
 
-fn follow(
+pub fn follow(
     time: Res<Time>,
     active: Res<ActiveCar>,
     terrain: Res<Terrain>,

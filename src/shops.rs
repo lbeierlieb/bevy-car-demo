@@ -12,7 +12,7 @@ use bevy_egui::egui::{self, Align2, Color32, FontId};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::camera::ChaseCamera;
-use crate::car::{ActiveCar, Car, CarSetup};
+use crate::car::{ActiveCar, Away, Car, CarSetup};
 use crate::chassis::{CarBuild, PAINTS};
 use crate::garage;
 use crate::map::{MapLegend, MapMark, MapMarks};
@@ -213,7 +213,13 @@ fn arrive(
     active: Res<ActiveCar>,
     mut cars: Query<&mut Car>,
     keys: Res<ButtonInput<KeyCode>>,
+    away: Res<Away>,
 ) {
+    if away.0 && at.shop.is_some() {
+        // In the dyno's room: the car stays in the shop (a ghost) until it comes out.
+        ghost.0 = true;
+        return;
+    }
     ghost.0 = false;
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
         *at = AtShop::default();
