@@ -236,7 +236,12 @@ as built, in order:
    green or red. The window on the right is `garage::alignment`, applied live to the
    parked car (`car::Away` set, as in the dyno); drag swings, the wheel zooms. Shots: the
    shop's button at (547, 123), "Back to the car" (655, 204).
-7. ✓ **Paint shop**: the existing paints only (swatches; gone from the garage). Since
+7. ✓ **Paint shop**: the shop paints (swatches; gone from the garage). Every chassis
+   leaves the factory in one dull paint, no choice (asked for by the user, 2026-11-22, so
+   there's a reason to paint): `PAINTS` is the 10 shop paints (`SHOP_PAINTS`), then 11
+   factory ones (beige, putty, primer grey…; the paint shop never offers those); traffic
+   is in its factory paint, a `PAINTED` fifth in a shop paint (so a painted car can still
+   hide in it). Protocol 15. Since
    2026-11-22 (asked for by the user) a scene like the alignment bay's (`paint.rs`): "Into
    the paint booth" puts the car (drawn from `Looks`, engine off) in a spray booth 240 m
    under the marker, sized to the car (white walls with seams, glowing filter ceiling and

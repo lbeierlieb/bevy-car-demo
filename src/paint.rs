@@ -20,7 +20,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use crate::audio::{EngineAudio, EngineRun};
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car};
-use crate::chassis::PAINTS;
+use crate::chassis::{PAINTS, SHOP_PAINTS};
 use crate::looks::{Looks, Motion};
 use crate::shops::{self, AtShop, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
@@ -214,7 +214,12 @@ fn shop(
         room,
         target: Vec3::new(0.0, LOOK_UP, hull.center.z),
         zoom: 1.0,
-        picked: car.setup.build.paint,
+        // The paint now, if it's one of the shop's (not a dull factory one).
+        picked: if car.setup.build.paint < SHOP_PAINTS {
+            car.setup.build.paint
+        } else {
+            0
+        },
         ..default()
     };
     for mut projection in &mut cameras {
@@ -341,7 +346,7 @@ fn build_booth(
     let red = material(Color::srgb(0.8, 0.08, 0.06), 0.4, 0.0);
     let green = material(Color::srgb(0.1, 0.6, 0.2), 0.4, 0.0);
     let tin = material(Color::srgb(0.80, 0.81, 0.83), 0.35, 0.8);
-    let lids: Vec<_> = PAINTS
+    let lids: Vec<_> = PAINTS[..SHOP_PAINTS]
         .iter()
         .map(|(_, color)| material(rgb(*color), 0.3, 0.3))
         .collect();
@@ -586,7 +591,7 @@ fn build_booth(
     // its hook with the hose coiled under it.
     let right = w - 0.01;
     let shelf_z = l - 2.4;
-    let shelf_len = 0.2 * PAINTS.len().div_ceil(2) as f32 + 0.2;
+    let shelf_len = 0.2 * SHOP_PAINTS.div_ceil(2) as f32 + 0.2;
     for y in [0.9, 1.4] {
         b.block(
             Vec3::new(right - 0.2, y, shelf_z),
@@ -909,7 +914,7 @@ fn window(
             let spraying = booth.spray;
             ui.add_enabled_ui(spraying.is_none(), |ui| {
                 egui::Grid::new("paints").num_columns(5).show(ui, |ui| {
-                    for (i, (name, [r, g, b])) in PAINTS.iter().enumerate() {
+                    for (i, (name, [r, g, b])) in PAINTS[..SHOP_PAINTS].iter().enumerate() {
                         let color = Color32::from_rgb(
                             (r * 255.0) as u8,
                             (g * 255.0) as u8,
@@ -986,7 +991,7 @@ mod tests {
     fn a_coat_goes_on_when_the_mist_is_thickest() {
         let terrain = Terrain::flat();
         let mut car = Car::spawn_at(0, CarSetup::default(), &terrain, 0.0, 0.0, 0.0);
-        let paint = (car.setup.build.paint + 1) % PAINTS.len();
+        let paint = (car.setup.build.paint + 1) % SHOP_PAINTS;
         let mut spray = Some(Spray { paint, time: 0.0 });
         let dt = 0.1;
         let mut steps = 0;

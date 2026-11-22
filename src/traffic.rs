@@ -22,7 +22,7 @@ use bevy::prelude::*;
 
 use crate::body::Wheels;
 use crate::car::{Car, CarSetup, body_box};
-use crate::chassis::{CHASSIS, PAINTS};
+use crate::chassis::{CHASSIS, SHOP_PAINTS};
 use crate::looks::{Looks, Motion, WheelMotion};
 use crate::physics::collision::{self, Contact, GROUND, OBSTACLE, Obb};
 use crate::physics::rigid_body::RigidBody;
@@ -74,6 +74,8 @@ const IN_LANE: f32 = 0.2;
 const ONCOMING: f32 = 1.0;
 /// Some drivers keep below the limit, some go a little over.
 const KEEN: (f32, f32) = (0.88, 1.1);
+/// The share of traffic cars painted at a paint shop (the rest in their factory paint).
+const PAINTED: f32 = 0.2;
 /// How often each chassis turns up in traffic (in `CHASSIS` order).
 const COMMON: [f32; 13] = [
     4.0, 3.0, 0.7, 3.0, 4.0, 0.8, 1.0, 0.4, 0.8, 0.2, 0.15, 2.0, 3.0,
@@ -645,7 +647,13 @@ impl Around<'_> {
         let (leg, s, _) =
             spawner.spots[free[(rng.next() * free.len() as f32) as usize % free.len()]];
         let chassis = rng.pick(COMMON.iter().copied());
-        let paint = (rng.next() * PAINTS.len() as f32) as usize % PAINTS.len();
+        // Mostly the dull factory paint, now and then one from a paint shop, as players'
+        // cars might be.
+        let paint = if rng.next() < PAINTED {
+            (rng.next() * SHOP_PAINTS as f32) as usize % SHOP_PAINTS
+        } else {
+            CHASSIS[chassis].paint
+        };
         let keen = rng.range(KEEN);
         let seed = rng.0;
         let mut car = TrafficCar::new(network, terrain, chassis, paint, leg, s, keen, seed);

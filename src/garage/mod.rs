@@ -47,7 +47,7 @@ impl Plugin for GaragePlugin {
 
 #[derive(Resource)]
 struct Garage {
-    /// The showroom: the chassis looked at, and the engine option and paint picked for it.
+    /// The showroom: the chassis looked at, and the engine option picked for it.
     showroom: Showroom,
     /// The car the draft was taken from, and what's picked so far: the car's build and
     /// its engine's parts.
@@ -65,7 +65,6 @@ struct Garage {
 struct Showroom {
     chassis: usize,
     engine: usize,
-    paint: usize,
 }
 
 impl Default for Garage {
@@ -75,7 +74,6 @@ impl Default for Garage {
             showroom: Showroom {
                 chassis: stock.build.chassis,
                 engine: 0,
-                paint: stock.build.paint,
             },
             car: None,
             same_wheels: stock.build.wheels[0] == stock.build.wheels[1],
@@ -841,7 +839,6 @@ fn showroom(
             shown = Showroom {
                 chassis: car.setup.build.chassis,
                 engine: 0,
-                paint: car.setup.build.paint,
             };
         }
         ui.horizontal_top(|ui| {
@@ -852,7 +849,6 @@ fn showroom(
                         shown = Showroom {
                             chassis: i,
                             engine: 0,
-                            paint: chassis.paint,
                         };
                     }
                 }
@@ -868,8 +864,7 @@ fn showroom(
         }
     });
     if drive {
-        let mut build = CarBuild::factory(shown.chassis);
-        build.paint = shown.paint;
+        let build = CarBuild::factory(shown.chassis);
         let parts = build.factory_engine(shown.engine);
         garage.draft = (build, parts);
         garage.car = Some(car.index);
@@ -880,7 +875,7 @@ fn showroom(
     Ok(())
 }
 
-/// A chassis' page in the showroom: what it is, its engines and paints, and the button
+/// A chassis' page in the showroom: what it is, its engines and paint, and the button
 /// to drive it (true when clicked).
 fn brochure(ui: &mut egui::Ui, shown: &mut Showroom) -> bool {
     let chassis = &CHASSIS[shown.chassis];
@@ -927,19 +922,10 @@ fn brochure(ui: &mut egui::Ui, shown: &mut Showroom) -> bool {
     });
     ui.label("(A parts shop fits any engine there's room for)");
     ui.add_space(4.0);
-    ui.strong("Paint");
-    ui.horizontal_wrapped(|ui| {
-        for (i, (name, [r, g, b])) in PAINTS.iter().enumerate() {
-            let color =
-                egui::Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
-            let swatch = egui::Button::new("    ")
-                .fill(color)
-                .selected(shown.paint == i);
-            if ui.add(swatch).on_hover_text(*name).clicked() {
-                shown.paint = i;
-            }
-        }
-    });
+    ui.label(format!(
+        "Comes in {}. Any paint shop will change that.",
+        PAINTS[chassis.paint].0
+    ));
     ui.add_space(8.0);
     ui.button("Drive it").clicked()
 }

@@ -178,8 +178,9 @@ pub const FACTORY_TOE: [f32; 2] = [0.0, 0.25];
 pub const BRAKE_FORCES: std::ops::RangeInclusive<f32> = 0.7..=1.3;
 pub const BRAKE_BALANCES: std::ops::RangeInclusive<f32> = -0.1..=0.1;
 
-/// Paints every car comes in.
-pub const PAINTS: [(&str, [f32; 3]); 10] = [
+/// Paints: the paint shops' (the first `SHOP_PAINTS`), then the dull ones cars leave the
+/// factory in (one per chassis, so there's a reason to go to a paint shop).
+pub const PAINTS: [(&str, [f32; 3]); 21] = [
     ("Signal red", [0.80, 0.10, 0.08]),
     ("Racing blue", [0.10, 0.28, 0.75]),
     ("Sunflower", [0.95, 0.72, 0.08]),
@@ -190,7 +191,21 @@ pub const PAINTS: [(&str, [f32; 3]); 10] = [
     ("Tangerine", [0.92, 0.42, 0.08]),
     ("Black", [0.04, 0.04, 0.05]),
     ("Sky blue", [0.40, 0.66, 0.86]),
+    ("Pale beige", [0.76, 0.71, 0.60]),
+    ("Putty", [0.62, 0.60, 0.54]),
+    ("Faded olive", [0.42, 0.43, 0.32]),
+    ("Primer grey", [0.47, 0.48, 0.47]),
+    ("Mushroom", [0.55, 0.50, 0.45]),
+    ("Off-white", [0.80, 0.79, 0.74]),
+    ("Mud brown", [0.36, 0.29, 0.22]),
+    ("Slate", [0.33, 0.36, 0.39]),
+    ("Dull navy", [0.18, 0.21, 0.30]),
+    ("Dove grey", [0.66, 0.66, 0.64]),
+    ("Khaki", [0.58, 0.53, 0.40]),
 ];
+
+/// How many of `PAINTS` the paint shops have (the rest are the factories').
+pub const SHOP_PAINTS: usize = 10;
 
 pub struct Chassis {
     pub name: &'static str,
@@ -237,7 +252,7 @@ pub struct Chassis {
     pub final_drive: f32,
     /// Codes of the engines the factory offers, the base one first.
     pub engines: &'static [&'static str],
-    /// The paint (in `PAINTS`) it's shown in.
+    /// The one paint (in `PAINTS`, a dull factory one) it leaves the factory in.
     pub paint: usize,
     pub body: Body,
     /// The driver's eyes: behind the nose, above the ground, and left of the centreline.
@@ -591,7 +606,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 0,
         final_drive: 4.1,
         engines: &["A10", "A10T", "B12"],
-        paint: 9,
+        paint: 10,
         body: Body {
             length: 3.55,
             width: 1.63,
@@ -680,7 +695,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 1,
         final_drive: 4.4,
         engines: &["B16", "R20", "W20T"],
-        paint: 0,
+        paint: 11,
         body: Body {
             length: 4.15,
             width: 1.78,
@@ -772,7 +787,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 2,
         final_drive: 4.1,
         engines: &["B16", "B16S"],
-        paint: 6,
+        paint: 12,
         body: Body {
             length: 3.95,
             width: 1.7,
@@ -860,7 +875,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 3,
         final_drive: 3.7,
         engines: &["W20", "W20T", "S30"],
-        paint: 0,
+        paint: 13,
         body: Body {
             length: 4.3,
             width: 1.8,
@@ -950,7 +965,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 3,
         final_drive: 3.4,
         engines: &["W20T", "S30", "S30T", "M50"],
-        paint: 5,
+        paint: 14,
         body: Body {
             length: 4.8,
             width: 1.87,
@@ -1040,7 +1055,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 4,
         final_drive: 4.1,
         engines: &["X20T", "X25T", "W20T"],
-        paint: 1,
+        paint: 15,
         body: Body {
             length: 4.4,
             width: 1.8,
@@ -1139,7 +1154,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 5,
         final_drive: 3.5,
         engines: &["M50", "M62", "V35"],
-        paint: 7,
+        paint: 16,
         body: Body {
             length: 4.8,
             width: 1.93,
@@ -1230,7 +1245,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 6,
         final_drive: 3.9,
         engines: &["V35", "F40"],
-        paint: 2,
+        paint: 17,
         body: Body {
             length: 4.1,
             width: 1.85,
@@ -1325,7 +1340,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 6,
         final_drive: 3.6,
         engines: &["H30", "H36T"],
-        paint: 5,
+        paint: 18,
         body: Body {
             length: 4.35,
             width: 1.84,
@@ -1419,7 +1434,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 7,
         final_drive: 4.0,
         engines: &["D52", "L65"],
-        paint: 7,
+        paint: 19,
         body: Body {
             length: 4.55,
             width: 2.0,
@@ -1516,7 +1531,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 2,
         final_drive: 3.9,
         engines: &["B16", "B16S", "R20"],
-        paint: 2,
+        paint: 13,
         body: Body {
             length: 3.2,
             width: 0.98,
@@ -1605,7 +1620,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 5,
         final_drive: 3.9,
         engines: &["V40", "M50", "W20T"],
-        paint: 4,
+        paint: 20,
         body: Body {
             length: 5.25,
             width: 1.92,
@@ -1699,7 +1714,7 @@ pub static CHASSIS: [Chassis; 13] = [
         gearbox: 1,
         final_drive: 4.4,
         engines: &["W20", "W20T"],
-        paint: 3,
+        paint: 15,
         body: Body {
             length: 4.9,
             width: 1.9,
@@ -1753,7 +1768,7 @@ mod tests {
         for (index, made) in CHASSIS.iter().enumerate() {
             let build = CarBuild::factory(index);
             assert!(made.gearboxes().any(|gearbox| gearbox == made.gearbox));
-            assert!(made.paint < PAINTS.len());
+            assert!((SHOP_PAINTS..PAINTS.len()).contains(&made.paint));
             // The factory's wheels fit, on the sizes on offer.
             for (room, wheel) in made.room.iter().zip(&made.wheels) {
                 assert_eq!(room.misfit(wheel), None, "{}", made.name);
