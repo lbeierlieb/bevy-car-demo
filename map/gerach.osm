@@ -52611,15 +52611,15 @@
   <node id='2804103990' version='1' visible='true' lat='50.0164111' lon='10.889367' />
   <node id='2804103991' version='1' visible='true' lat='50.0164631' lon='10.8897965' />
   <node id='2804103993' version='1' visible='true' lat='50.0165038' lon='10.8897965' />
-  <node id='2804103994' version='1' visible='true' lat='50.0165474' lon='10.8898328' />
-  <node id='2804103995' version='1' visible='true' lat='50.0165794' lon='10.8895928' />
-  <node id='2804103996' version='1' visible='true' lat='50.0166187' lon='10.8899731' />
-  <node id='2804103997' version='1' visible='true' lat='50.0166187' lon='10.8901497' />
-  <node id='2804103998' version='1' visible='true' lat='50.0166362' lon='10.8897399' />
-  <node id='2804103999' version='1' visible='true' lat='50.0166405' lon='10.8901044' />
-  <node id='2804104000' version='1' visible='true' lat='50.016642' lon='10.8900569' />
-  <node id='2804105301' version='1' visible='true' lat='50.0167031' lon='10.8899007' />
-  <node id='2804105302' version='1' visible='true' lat='50.0167453' lon='10.8900116' />
+  <node id='2804103994' action='delete' version='1' visible='true' lat='50.0165474' lon='10.8898328' />
+  <node id='2804103995' action='delete' version='1' visible='true' lat='50.0165794' lon='10.8895928' />
+  <node id='2804103996' action='delete' version='1' visible='true' lat='50.0166187' lon='10.8899731' />
+  <node id='2804103997' action='delete' version='1' visible='true' lat='50.0166187' lon='10.8901497' />
+  <node id='2804103998' action='delete' version='1' visible='true' lat='50.0166362' lon='10.8897399' />
+  <node id='2804103999' action='delete' version='1' visible='true' lat='50.0166405' lon='10.8901044' />
+  <node id='2804104000' action='delete' version='1' visible='true' lat='50.016642' lon='10.8900569' />
+  <node id='2804105301' action='delete' version='1' visible='true' lat='50.0167031' lon='10.8899007' />
+  <node id='2804105302' action='delete' version='1' visible='true' lat='50.0167453' lon='10.8900116' />
   <node id='2804105303' version='1' visible='true' lat='50.0167987' lon='10.8902865' />
   <node id='2804105304' version='1' visible='true' lat='50.0169253' lon='10.8899628' />
   <node id='2804105305' version='1' visible='true' lat='50.0172139' lon='10.8897653' />
@@ -430164,7 +430164,7 @@
     <nd ref='2804103979' />
     <tag k='barrier' v='guard_rail' />
   </way>
-  <way id='275737201' version='1' visible='true'>
+  <way id='275737201' action='delete' version='1' visible='true'>
     <nd ref='2804103995' />
     <nd ref='2804103998' />
     <nd ref='2804105301' />
@@ -430172,12 +430172,7 @@
     <tag k='barrier' v='fence' />
     <tag k='fence_type' v='railing' />
   </way>
-  <way id='275737202' version='1' visible='true'>
-    <nd ref='2804103997' />
-    <nd ref='2804103999' />
-    <nd ref='2804104000' />
-    <nd ref='2804103996' />
-    <nd ref='2804103994' />
+  <way id='275737202' action='modify' version='1' visible='true'>
     <nd ref='2804103993' />
     <nd ref='2804103991' />
     <nd ref='2804103989' />
