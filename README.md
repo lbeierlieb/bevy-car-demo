@@ -108,7 +108,7 @@ parts, repair the engine and fit new tires; and dyno shops put the car on a chas
 in a room under the shop, for power runs, holding it at an rpm and throttle, ECU tuning,
 cam timing and the wastegate. A car at a shop is a ghost: other cars drive through it.
 
-It can also put **events** on the map (red markers). The first is the **car hunt**: stop
+It can also put **events** on the map. The first is the **car hunt** (red markers): stop
 on its marker to join the lobby there. The first player in is hunted, everyone after
 that hunts. The hunted can hand that part to another player, sets the head start
 (10 s), the time to get away (10 min), traffic (on), whether the hunters can reset
@@ -125,6 +125,21 @@ the hunted 50 m up, and can't be shaken off: everyone in the hunt sees it from a
 the marker, in its lobby, with their own car. Other groups can start their own hunts at
 the same marker meanwhile.
 
+**Races** (blue markers) have routes of their own, loops or sprints, which needn't start
+at the marker. Stopped on its marker, choose a **time trial** (alone, against the clock)
+or a **race**: the first one in opens the lobby there and sets the route, the direction,
+the laps (on a loop), traffic, whether the cars collide (if not, the other racers are
+see-through and pass through each other; traffic still counts) and whether racers can
+reset (R: the rescue helicopter carries the car back to the last gate passed, which
+takes a while), and starts the race once someone else has joined. Everyone is put on a
+grid at the route's start, held for a countdown, and drives through the gates along the
+route in order: a gate missed has to be gone back for. A bar at the top shows the lap,
+the place, the time, lap times, the gap to the car ahead and where the next gate is; the
+map (M) shows the route. Once the first racer is through, the others have a minute.
+The results show in the lobby afterwards, with the best laps (a sprint's whole way) of
+the time trials since the server started. A time trial can't reset but can be started
+again.
+
 A server is a program of its own, run headless:
 
 ```sh
@@ -139,7 +154,11 @@ default) or `all` (everyone, wherever they are). `--chat off` switches the chat 
 `--name-tags off` the names over the players' cars. `--shops shops.cfg` says where the
 shops are (lines of kind, x, z and name; `assets/shops.cfg`, the repo's list, explains
 them); without it there are none. `--events events.cfg` likewise says where the events
-are (`assets/events.cfg`). `--spawn "x z [heading]"` says where players start: the
+are (`assets/events.cfg`), and a race's routes: under the race, `route loop NAME` or
+`route sprint NAME`, then the points it passes through, a line each. The server finds
+the way along the roads between them when it starts and refuses a point more than 30 m
+from a road or a route turning back at a point, saying which (so put a point where the
+route turns off, to keep it on the road meant). `--spawn "x z [heading]"` says where players start: the
 paved road nearest that map point (x east, z south, in metres, as the gizmos (1) and the
 map (M) show them), facing as close to the compass heading as the road allows; without
 it, in Gerach.
@@ -306,7 +325,7 @@ tire grip force, cyan for roll centres.
 | `src/editor/`, `src/bin/editor.rs` | The map editor |
 | `src/osm.rs` | The map file's reader and writer (shared with the bake) |
 | `src/shops.rs` | Shops on the map (from the server): going in, gas station, alignment, paint |
-| `src/events/` | Events on the map (from the server): the car hunt's lobby, rounds and rules |
+| `src/events/` | Events on the map (from the server): lobbies, rounds and rules of the car hunt, races and time trials; routes along the roads |
 | `src/garage.rs` | The car dealers' showroom and the parts shops |
 | `src/dyno/`, `src/ecu_ui.rs` | The dyno shops' room: rollers, runs, holds, ECU tuning, cam timing |
 | `src/workshop.rs` | Baking engine maps in the background, and their cache |

@@ -131,8 +131,9 @@ in
       example = lib.literalExpression ''"''${car-sim}/assets/events.cfg"'';
       description = ''
         A file saying where the events on the map are (lines of kind, x, z and name, as in
-        the repo's assets/events.cfg, e.g. a car hunt; their markers go on the nearest paved
-        road). Null: no events.
+        the repo's assets/events.cfg: a car hunt, races with their routes under them; their
+        markers go exactly there). Null: no events. The server checks the races' routes
+        against the map when it starts, and won't start if one is wrong.
       '';
     };
 

@@ -115,7 +115,9 @@ Shops need a server (`JOIN=127.0.0.1`, see below) and `PLACE` at the building's 
 `-1476,-1213`, alignment `-1480,-1305`, paint `3500,-63`, parts `-1950,-3160`, dyno
 `-2601,-3784` (then `CLICK="527,138,180"` is "Onto the rollers";
 the car hunt's marker `-95,2341` with `--events assets/events.cfg`, its lobby window opens
-at once; in the room the
+at once; the race marker exactly: `PLACE_EXACT=1 PLACE="-62,2280,150"`, then
+`CLICK="508,141,200"` is "Time trial" (its "Start" at (495, 183)), `537,162` "Race";
+in the room the
 window's tabs are at y 62: Runs 659, ECU tune 715, Cams and boost 810; "Hold" (659, 179)
 on the Runs tab; a hold needs ~200 frames more to settle).
 The editor (`BIN=editor`, hooked by `EditorShotPlugin`): `EDITCAM="x,z,height,yaw,pitch"`
@@ -243,8 +245,10 @@ made up). Unlike a shop's, an event's marker is exactly at its point, not moved 
 its players see no cars, traffic or shops of the normal world and the normal world sees
 none of theirs; traffic, if on, is simulated for that world alone; the chat is per world.
 Another group can start an independent round at the same marker while one runs. The
-players list says who's in which event. Races are to follow on the same frame (rounds:
-lobby → running → result; the hunt's rules separate).
+players list says who's in which event. Every game runs on the same frame
+(`round.rs`: `Round { event, players, host, game, phase, best }`, lobby → running →
+result; `Game`, `Play`, `Outcome` are enums per game; the host is the hunt's hunted or
+whoever opened a race's lobby).
 
 **Car Hunt** (first event, "Car Hunt Baunach" in the middle of the Rewe's parking lot in
 Baunach, (−87, 2286), the `amenity=parking` area's centroid):
@@ -281,7 +285,7 @@ As built: `traffic::Realm` (component; none = `Realm::NORMAL`) on peers and traf
 the server's send loop, map and chat only within a realm, and in any realm but the normal
 one tags are on and the map shows everyone. `src/events/`: `mod.rs` (list, `parse`,
 markers, map marks: `MapMarks`/`MapLegend` are keyed by owner now), `hunt.rs` (rules,
-`Settings`, `Round`, `Phase`, `Outcome`, `Action`, their wire), `rounds.rs` (server:
+`Settings`, `Outcome`, their wire), `round.rs` (`Round`, `Phase`, `Action`), `rounds.rs` (server:
 `Rounds`, `run_rounds` in `ServerPlugin` between `receive` and `send`; gives and takes
 only the realms it manages; one lobby per event, a round over merges into the waiting
 one), `lobby.rs` (client: `arrive` asks to enter when stopped on a marker, drive 8 m or
@@ -295,7 +299,50 @@ in a running round (`Connection::in_running_round`). Tests: `realms_see_only_the
 `a_car_hunt_runs_in_a_realm_of_its_own`, `a_hunt_lends_cars_and_gives_them_back`,
 `a_hunter_tags_the_hunted` (test apps have no shops plugin, so `WantsGhost` stays set
 from the lobby unless a test clears it).
-Not done: races; a round's own chat lines (who caught whom) for the server's chat.
+Not done: a round's own chat lines (who caught whom) for the server's chat.
+
+**Races and time trials** (asked for by the user, 2026-11-22; built the same day): a
+`race` event (blue marker; "Races Baunach" at (−62, 2280), the same parking lot's east
+side) has routes listed under it in the events file: `route loop|sprint NAME`, then
+`x z` lines, the points it passes through (several per event; needn't start at the
+marker). `events::resolve` (the server at startup, `Terrain::load`) finds the way along
+**every** road but streams (`routes.rs`: a graph of stretches between junctions like
+`traffic::network`, Dijkstra between consecutive points, unpaved ×3 and under 3.5 m
+×1.5 per metre), refusing a point over 30 m from a road, a route turning back at a point
+(way out against way in, cosine < −0.7 over 15 m) or shorter than 500 m; the line
+(simplified to 0.3 m) and widths go out with `ToClient::Events` (protocol 13). Repo
+routes: "Baunacher Ring" (loop, 2.4 km through the town) and "Nordost-Sprint" (1.9 km
+out on the road to the north-east). Agreed with the user:
+- On the marker a window asks: time trial (`Action::Trial`, a private round of one,
+  `Game::Trial`, never merged or joined) or race (`Action::Enter`: the lobby there, the
+  first in hosts and sets things; at most 16; starts with 2+).
+- Settings (`race::Settings`): route, normal or reverse, laps (loops, 1–20, default 3),
+  traffic (off), cars collide (on; off: `net::GhostPlayers`, the client treats remote
+  cars with a name tag (in a realm, players' cars) as ghosts, traffic still collides),
+  racers can reset (on; R: `ResetRule::Spot`, the rescue helicopter to the last gate
+  passed, right half of the road; time trials never reset, "Start again"
+  (`Action::Restart`) instead). Player cars only, for now.
+- Running (`race.rs`: `Course` = a route one way with laps): a grid at the route's start
+  (pairs on roads 5 m+, rows 6 m, else single file 9 m), held (`car::Held`) for
+  `COUNTDOWN` (5 s), the parking brake off; the clock runs from the green light. Gates
+  every ≤ 150 m from 187 m on (past the longest grid), the last at the lap's end (a
+  loop's start); the server judges them from the cars' states (`Gate::crossed`: forwards,
+  within road half-width + 6 m, not a jump over 60 m), in order. Standing (`Racer`:
+  gates, last gate's time, laps, finished, left) goes out with the round on every gate.
+  First one through: the rest have `FINISH_GRACE` (60 s); over when all are through or
+  gone; results (`race::Results`) in the lobby. Leaving mid-race lists you as "Left".
+- Best times: per (event, route, direction, traffic), time trials only, a loop's laps or
+  a sprint's whole way, top 10, one per name, for the session (`Rounds::best`, sent as
+  `Round::best`).
+- Client (`racing.rs`): the chooser, the race lobby window, the bar (countdown, lap,
+  place, clock, lap times, gap to the one ahead from `EventState::gate_times`, a painted
+  arrow and distance to the next gate (the font has no arrow glyphs), "Wrong way!"),
+  gates on the road (two posts and a banner: next green, the two after white, the finish
+  yellow), the route on the map (`map::MapLines`) and the next gate as a mark.
+Tests: `a_race_runs_from_the_grid_to_the_results`, `a_time_trial_puts_its_lap_on_the_best_times`,
+`the_races_routes_are_found_along_the_roads`, `race::tests`.
+Not done: race-specific cars ("everyone the same car"), saving best times, rolling
+starts, a minimap.
 
 ## Helicopters (asked for by the user, 2026-11-22)
 
