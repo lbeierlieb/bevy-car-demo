@@ -671,6 +671,7 @@ pub fn drive(
                 handbrake: 1.0,
                 ..default()
             };
+            car.drivetrain.grinding = None;
             continue;
         }
         car.traction_control = aids.traction_control;
@@ -699,7 +700,10 @@ pub fn drive(
             - wheel.shift_down as i8;
         if let Some(gate) = wheel.shifter {
             drivetrain.select_gate(&setup.engine, gate, speed);
-        } else if shift != 0 {
+        } else {
+            drivetrain.grinding = None;
+        }
+        if wheel.shifter.is_none() && shift != 0 {
             // Q/E or the paddles shift down/up.
             let shares = setup.engine.drive.shares();
             let wheel_omega = (0..4).map(|i| shares[i] * corners[i].omega).sum();

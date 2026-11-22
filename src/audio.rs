@@ -37,6 +37,8 @@ use crate::physics::drivetrain::{Drivetrain, EngineSetup};
 use crate::physics::engine::families::{Layout, relative_size};
 use crate::physics::engine::hardware::EngineHardware;
 
+pub mod effects;
+
 const SAMPLE_RATE: u32 = 44_100;
 /// A cross-plane V8's firing order 1-8-4-3-6-5-7-2, 90° of crank apart, with the odd
 /// cylinders on the left bank (0): each bank fires at 90°, 180°, 270° and 180° intervals.
@@ -280,6 +282,7 @@ impl Plugin for AudioPlugin {
                 PostUpdate,
                 hear_others.after(bevy::transform::TransformSystems::Propagate),
             );
+        effects::build(app);
     }
 }
 

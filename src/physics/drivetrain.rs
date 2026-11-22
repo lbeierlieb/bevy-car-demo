@@ -252,6 +252,9 @@ pub struct Drivetrain {
     clutch_pedal: Option<f32>,
     /// Engine minus wheel rpm through the pedal clutch in the last step, while slipping.
     slip: f32,
+    /// The H-shifter's gate the lever is held in while its gear can't go in (the clutch
+    /// pedal not pressed, or reverse while rolling forward): the gears grind.
+    pub grinding: Option<i8>,
 }
 
 /// What the drivetrain does to the driven wheels this step (shared by both).
@@ -276,6 +279,7 @@ impl Drivetrain {
             load: 0.0,
             clutch_pedal: None,
             slip: 0.0,
+            grinding: None,
         }
     }
 
@@ -309,21 +313,22 @@ impl Drivetrain {
     /// clutch pedal, a gear only goes in while the pedal is pressed; otherwise the box stays
     /// in neutral until it is. Reverse only goes in when (nearly) stopped (`speed` in m/s).
     pub fn select_gate(&mut self, engine: &EngineSetup, gate: i8, speed: f32) {
+        let lever = gate;
         // Reverse is refused while rolling forward (backing up quickly must keep it).
         let gate = if gate < 0 && speed > REVERSE_SPEED {
             0
         } else {
             gate
         };
-        if gate == self.selected_gear() {
-            return;
+        if gate != self.selected_gear() {
+            let clutch_in = self.clutch_pedal.is_some_and(|travel| travel > CLUTCH_IN);
+            if gate == 0 || self.clutch_pedal.is_none() || clutch_in {
+                self.shift_to(engine, gate);
+            } else {
+                self.shift_to(engine, 0);
+            }
         }
-        let clutch_in = self.clutch_pedal.is_some_and(|travel| travel > CLUTCH_IN);
-        if gate == 0 || self.clutch_pedal.is_none() || clutch_in {
-            self.shift_to(engine, gate);
-        } else {
-            self.shift_to(engine, 0);
-        }
+        self.grinding = (lever != 0 && self.selected_gear() != lever).then_some(lever);
     }
 
     /// Starts a gear change; the clutch opens for `shift_time`. With the clutch pedal
@@ -745,16 +750,19 @@ mod tests {
             drivetrain.step(&engine, 0.0, Some(0.0), 30.0, true, dt);
         }
         assert_eq!(drivetrain.gear, 0);
+        assert_eq!(drivetrain.grinding, Some(3));
         // Pressing the clutch with the lever still in third puts it in, at once.
         drivetrain.step(&engine, 0.0, Some(1.0), 30.0, true, dt);
         drivetrain.select_gate(&engine, 3, 10.0);
         assert_eq!(drivetrain.gear, 3);
+        assert_eq!(drivetrain.grinding, None);
         // Out of gear needs no clutch; reverse is refused while rolling.
         drivetrain.step(&engine, 0.0, Some(0.0), 30.0, true, dt);
         drivetrain.select_gate(&engine, 0, 10.0);
         drivetrain.step(&engine, 0.0, Some(1.0), 30.0, true, dt);
         drivetrain.select_gate(&engine, -1, 10.0);
         assert_eq!(drivetrain.selected_gear(), 0);
+        assert_eq!(drivetrain.grinding, Some(-1));
         // Stopped, it goes in, and stays in while backing up quickly.
         drivetrain.select_gate(&engine, -1, 0.0);
         assert_eq!(drivetrain.gear, -1);

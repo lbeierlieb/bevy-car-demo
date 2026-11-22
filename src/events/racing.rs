@@ -13,6 +13,7 @@ use super::lobby::{EventState, elapsed, leave, you};
 use super::race::{self, COUNTDOWN, Course, LAPS, Results, clock};
 use super::round::{Action, Game, Outcome, Phase, Round};
 use super::{EventKind, Events};
+use crate::audio::effects::{Call, Effects};
 use crate::car::{ActiveCar, Car};
 use crate::map::{MapLine, MapLines, MapMark, MapMarks};
 use crate::net::Connection;
@@ -45,7 +46,7 @@ impl Plugin for RacingPlugin {
         app.init_resource::<GateLooks>()
             .add_systems(
                 Update,
-                (gates, map_route, wrong_way)
+                (gates, map_route, wrong_way, countdown)
                     .after(super::lobby::follow)
                     .run_if(resource_exists::<Connection>),
             )
@@ -245,6 +246,52 @@ fn map_route(
         }
         None => {
             marks.0.remove("race");
+        }
+    }
+}
+
+/// The countdown's beats the trumpet plays: 3, 2, 1, then the chord at the green light.
+const BEATS: [f64; 4] = [COUNTDOWN - 3.0, COUNTDOWN - 2.0, COUNTDOWN - 1.0, COUNTDOWN];
+/// A beat is only played this soon after it's due (s): joining a countdown late, or the
+/// clock catching up, plays nothing.
+const BEAT_LATE: f64 = 0.3;
+
+/// The trumpet calling a race's (or time trial's) countdown.
+fn countdown(
+    connection: Res<Connection>,
+    state: Res<EventState>,
+    effects: Option<Res<Effects>>,
+    time: Res<Time<Real>>,
+    // The round's start and the beats played of it.
+    mut played: Local<(f64, usize)>,
+) {
+    let Some(effects) = effects else {
+        return;
+    };
+    let Some(round) = connection
+        .round
+        .as_ref()
+        .filter(|r| r.game.race().is_some())
+    else {
+        return;
+    };
+    let Phase::Running { start, .. } = round.phase else {
+        return;
+    };
+    if played.0 != start {
+        *played = (start, 0);
+    }
+    let elapsed = elapsed(&connection, &state, start, time.elapsed_secs_f64());
+    while let Some(&beat) = BEATS.get(played.1)
+        && elapsed >= beat
+    {
+        played.1 += 1;
+        if elapsed < beat + BEAT_LATE {
+            effects.call(if played.1 == BEATS.len() {
+                Call::Go
+            } else {
+                Call::Count
+            });
         }
     }
 }

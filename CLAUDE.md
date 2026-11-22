@@ -1168,6 +1168,18 @@ car's latest state, network delay and all, never predicted (agreed with the user
 sound is late too). Not done: propagation delay, occlusion, the cost of 6 voices on wasm
 untried (a slow page could lower `VOICES`).
 
+Sound effects (asked for by the user, 2026-11-22; `audio/effects.rs`, a second synth
+next to the engine's, muted by 0 too): **tire squeal** of the driven car per wheel (band
+of noise at ~780 Hz with two overtones, wobble and flutter, pitch rising past the peak),
+from the combined slip relative to the peak (from 0.55, full at 1.4), the tread's sliding
+speed, the load, asphalt (cobbles half, unpaved none); **gear grinding** while an
+H-shifter's lever is in a gate whose gear can't go in (`Drivetrain::grinding`: clutch
+not pressed, reverse while rolling) and 0.3 s on a refused reverse by key (clicks at the
+dog teeth's clash rate from the speed difference ringing metallic resonances); the
+**trumpet** of a race's countdown (`racing::countdown`: G4 at 3, 2, 1, a C major chord
+at the green; `Effects::call`). `write_effects_wav` (ignored, `EFFECTS_WAV=path`) renders
+all three to listen to. Not done: other cars' squeal (`Motion` has no slip), tuned by ear.
+
 The engine sound goes through bevy_audio, which can't set the output buffer size. An
 attempt to open the output with rodio/cpal directly (fixed 4096-frame buffer against
 underruns) gave no sound at all in the wasm build and was dropped. If it's tried
