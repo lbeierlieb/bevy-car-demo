@@ -186,8 +186,10 @@ fetching you; 3 own bays, one save slot.
 
 The tool windows (3–6) became places on the map to drive to; the keys 3–6 are gone.
 `src/shops.rs`. **The server says where they are**: its own list, separate from the map
-(`server --shops FILE`, `services.car-sim.shops`; default `assets/shops.cfg`, embedded:
-lines `kind x z name`, the building's map point; `assets/shops-villages.cfg`: one of each in Gerach, Reckendorf, Baunach and Rattelsdorf), sent as `ToClient::Shops` after the
+(`server --shops FILE`, `services.car-sim.shops = FILE`; none without one, at the
+user's wish, 2026-11-22; the repo's list is `assets/shops.cfg` (tests read it): lines
+`kind x z name`, the building's map point; one of each in Baunach and Rattelsdorf, and
+shared by Gerach and Reckendorf, 1.6 km apart), sent as `ToClient::Shops` after the
 welcome (protocol 6). Alone there are none (the plugin is there, idle). The client puts
 each marker (glowing disc, 3.5 m, and a beam) on the nearest paved road at the edge on
 the building's side (`kerb`); names float above within 500 m. Free (no money). The plan

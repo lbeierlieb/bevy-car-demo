@@ -12,7 +12,7 @@
 //! the ones within `--map-near` metres (`near`, the default) or everyone (`all`).
 //! `--chat off` keeps the players from chatting (it's on by default), `--name-tags off`
 //! the players' names off their cars (also on by default). `--shops` reads where the
-//! shops are from a file (see `assets/shops.cfg`, the list it has otherwise).
+//! shops are from a file (e.g. `assets/shops.cfg`; without one there are none).
 //!
 //! Without a certificate it makes a throwaway one: only the native game joins that, with
 //! `CAR_SIM_INSECURE=1` (for development).
@@ -203,12 +203,11 @@ impl Options {
         if !(map_near.is_finite() && map_near >= 0.0) {
             return Err(format!("--map-near: not a distance: {map_near}"));
         }
-        let text = match &shops {
-            Some(file) => std::fs::read_to_string(file)
-                .map_err(|e| format!("--shops: {}: {e}", file.display()))?,
-            None => car_sim::shops::DEFAULT.to_string(),
-        };
-        options.shops = car_sim::shops::parse(&text).map_err(|e| format!("--shops: {e}"))?;
+        if let Some(file) = &shops {
+            let text = std::fs::read_to_string(file)
+                .map_err(|e| format!("--shops: {}: {e}", file.display()))?;
+            options.shops = car_sim::shops::parse(&text).map_err(|e| format!("--shops: {e}"))?;
+        }
         if options.cert.is_some() != options.key.is_some() {
             return Err("--cert and --key go together".into());
         }

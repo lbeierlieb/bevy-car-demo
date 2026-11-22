@@ -215,15 +215,8 @@
                         domain = "cars.example.org";
                         openFirewall = true;
                         web.enable = web;
-                        # A list of its own, tried along with the web version.
-                        shops = lib.mkIf web [
-                          {
-                            kind = "dyno";
-                            x = -2601.5;
-                            z = -3784;
-                            name = "Rollwerk Dyno";
-                          }
-                        ];
+                        # Tried along with the web version.
+                        shops = lib.mkIf web ./assets/shops.cfg;
                         # Tried along with the web version.
                         telegram = lib.mkIf web {
                           tokenFile = "/run/secrets/car-sim-telegram";

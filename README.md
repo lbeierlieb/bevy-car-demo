@@ -120,8 +120,8 @@ Who a player sees of the others on their map (M) is the server's choice:
 `--map-players self` (nobody), `near` (within `--map-near` metres, 200 by default; the
 default) or `all` (everyone, wherever they are). `--chat off` switches the chat off,
 `--name-tags off` the names over the players' cars. `--shops shops.cfg` says where the
-shops are (lines of kind, x, z and name; `assets/shops.cfg`, the list it has otherwise,
-explains them).
+shops are (lines of kind, x, z and name; `assets/shops.cfg`, the repo's list, explains
+them); without it there are none.
 
 It needs a real certificate for browsers to join (WebTransport). Without `--cert` and
 `--key` it makes a throwaway one, which only the native game joins, with
@@ -153,8 +153,8 @@ joins this server):
             # port = 4433; traffic = 20; maxPlayers = 32;
             # mapPlayers = "near"; mapNear = 200;  # others on the map: "self", "near" or "all"
             # chat = true; nameTags = true;
-            # Shops of its own (null: the built-in list, assets/shops.cfg):
-            # shops = [ { kind = "dyno"; x = -2601; z = -3784; name = "Rollwerk Dyno"; } ];
+            # Where the shops are (null: none), e.g. the repo's list:
+            # shops = "${car-sim}/assets/shops.cfg";
             # A Telegram bot says who joins and leaves (the token file e.g. from sops-nix):
             # telegram = {
             #   tokenFile = config.sops.secrets.car-sim-telegram-token.path;

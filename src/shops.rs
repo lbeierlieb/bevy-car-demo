@@ -1,7 +1,7 @@
 //! Shops on the map: places to drive to for what changes a car (a showroom, parts, the
 //! alignment, paint, fuel, a dyno). The server says where they are (its own list, `--shops`,
-//! separate from the map; `assets/shops.cfg` by default) when a player joins; playing alone
-//! there are none.
+//! separate from the map, e.g. `assets/shops.cfg`; none without one) when a player joins;
+//! playing alone there are none.
 //!
 //! Each has a glowing marker on the road in front of it, at the edge on its side, and its
 //! name floats above it when near.
@@ -20,8 +20,9 @@ use crate::net::wire::{Reader, Wire};
 use crate::net::{Connection, Status, WantsGhost};
 use crate::terrain::Terrain;
 
-/// The list the server has unless told otherwise (`--shops`).
-pub const DEFAULT: &str = include_str!("../assets/shops.cfg");
+/// The repo's list (`assets/shops.cfg`), for tests: the server has none of its own.
+#[cfg(test)]
+pub const LIST: &str = include_str!("../assets/shops.cfg");
 
 /// A car within this distance of a marker's middle is on it (m).
 pub const MARKER_RADIUS: f32 = 3.5;
@@ -580,8 +581,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_list_reads() {
-        let shops = parse(DEFAULT).unwrap();
+    fn the_list_reads() {
+        let shops = parse(LIST).unwrap();
         for kind in ShopKind::ALL {
             assert!(shops.iter().any(|shop| shop.kind == kind), "no {kind:?}");
         }
@@ -608,9 +609,9 @@ mod tests {
     }
 
     #[test]
-    fn every_default_shop_is_by_a_road() {
+    fn every_shop_is_by_a_road() {
         let terrain = Terrain::baked();
-        for shop in parse(DEFAULT).unwrap() {
+        for shop in parse(LIST).unwrap() {
             let (marker, _) = kerb(&terrain, shop.at);
             assert!(
                 marker.distance(shop.at) < 60.0,

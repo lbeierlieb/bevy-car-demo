@@ -115,45 +115,13 @@ in
     };
 
     shops = mkOption {
-      type = types.nullOr (
-        types.listOf (
-          types.submodule {
-            options = {
-              kind = mkOption {
-                type = types.enum [
-                  "showroom"
-                  "parts"
-                  "alignment"
-                  "paint"
-                  "gas"
-                  "dyno"
-                ];
-              };
-              x = mkOption {
-                type = types.number;
-                description = "The building's map x (m, east), as the map editor shows it.";
-              };
-              z = mkOption {
-                type = types.number;
-                description = "The building's map z (m, south).";
-              };
-              name = mkOption { type = types.str; };
-            };
-          }
-        )
-      );
+      type = types.nullOr types.path;
       default = null;
-      example = [
-        {
-          kind = "dyno";
-          x = -2601;
-          z = -3784;
-          name = "Rollwerk Dyno";
-        }
-      ];
+      example = lib.literalExpression ''"''${car-sim}/assets/shops.cfg"'';
       description = ''
-        The shops on the map (their markers go on the nearest paved road). Null: the
-        list the server comes with (assets/shops.cfg).
+        A file saying where the shops on the map are (lines of kind, x, z and name, as in
+        the repo's assets/shops.cfg; their markers go on the nearest paved road). Null:
+        no shops.
       '';
     };
 
@@ -249,11 +217,7 @@ in
             ]
             ++ lib.optionals (cfg.shops != null) [
               "--shops"
-              (pkgs.writeText "car-sim-shops.cfg" (
-                lib.concatMapStrings (
-                  shop: "${shop.kind} ${toString shop.x} ${toString shop.z} ${shop.name}\n"
-                ) cfg.shops
-              ))
+              "${cfg.shops}"
             ]
             # The credentials' copies (%d: the service's credentials directory).
             ++ lib.optionals (cfg.telegram.tokenFile != null) [

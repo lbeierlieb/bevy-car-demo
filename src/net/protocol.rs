@@ -652,7 +652,7 @@ mod tests {
 
     #[test]
     fn the_shops_come_through() {
-        let shops = crate::shops::parse(crate::shops::DEFAULT).unwrap();
+        let shops = crate::shops::parse(crate::shops::LIST).unwrap();
         let message = ToClient::Shops(shops);
         assert_eq!(decode::<ToClient>(&encode(&message)), Some(message));
     }
