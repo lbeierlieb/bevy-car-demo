@@ -136,7 +136,8 @@ fn bake(
 /// parts is new (no wear, at rest), with a factory tune or the tune it had (moved over to
 /// a different ECU, which takes the factory's cam control if the old one had none). A
 /// car that only changed under the skin carries on as it moves; one with another chassis,
-/// paint or wheels is put down afresh where the old one was.
+/// paint or wheels is put down afresh where the old one was, in neutral with the parking
+/// brake on.
 fn fit(
     commands: &mut Commands,
     terrain: &Terrain,
@@ -183,6 +184,9 @@ fn fit(
         heading(car.body.rotation),
     );
     new.keep_settings(car);
+    // At rest, in neutral with the parking brake on, as `Car::place` leaves a car.
+    new.drivetrain.neutral();
+    new.parking_brake = true;
     commands.entity(entity).despawn();
     commands.spawn((Transform::from_translation(new.body.position), new));
 }

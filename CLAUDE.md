@@ -263,7 +263,8 @@ as built, in order:
    floor place hidden), a sign beside it egui-painted with name, class and engine. "Start
    it" idles the picked engine (the model's `Motion::engine`, heard by `hear_others`) and
    blips it every 3.5 s. The window on the right: the list and `brochure`; "Drive it"
-   builds the car (it then waits outside). The camera stays within `REACH` (7.4 m) of the
+   builds the car and goes straight out to it (once built), in neutral with the parking
+   brake on (`fit` leaves every car put down afresh so). The camera stays within `REACH` (7.4 m) of the
    turntable, clear of the floor cars. Shots: the shop's button at (535, 123), then the
    list at x 905 (Minim y 62, 21 px a row), "Start it" (909, 406) or so.
    (`shops::shop_window` draws a shop's window for other modules, saying when the car came in).

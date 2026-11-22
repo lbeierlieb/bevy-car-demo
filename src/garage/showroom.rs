@@ -3,8 +3,8 @@
 //! paint, each in a place of its own; the one picked in the window turns slowly on a
 //! turntable at the front under spotlights (its place on the floor stays empty), and "Start
 //! it" idles its engine and blips it now and then. The driven car waits outside the glass.
-//! The window on the right is the brochure (`brochure`); "Drive it" builds the car picked,
-//! which then waits outside.
+//! The window on the right is the brochure (`brochure`); "Drive it" builds the car picked
+//! and goes straight out to it.
 //!
 //! The driven car stays parked on the shop's marker meanwhile (a ghost, its input held like
 //! in the dyno's room); the one outside is drawn from its looks, the engine off.
@@ -104,6 +104,8 @@ struct Hall {
     running: bool,
     rpm: f32,
     clock: f32,
+    /// A car bought, its engine's maps still baking: out of the showroom once it's built.
+    buying: bool,
 }
 
 fn in_hall(hall: Res<Hall>) -> bool {
@@ -974,7 +976,9 @@ fn window(
                     drive = brochure(ui, &mut shown);
                 });
             });
-            if !garage.status.is_empty() {
+            if hall.buying {
+                ui.label("Getting it ready…");
+            } else if !garage.status.is_empty() {
                 ui.label(&garage.status);
             }
             let words = if hall.running {
@@ -986,11 +990,9 @@ fn window(
                 hall.running = !hall.running;
             }
             ui.label(
-                RichText::new(
-                    "Your car waits outside. Drag to look round, the mouse wheel to go nearer.",
-                )
-                .small()
-                .weak(),
+                RichText::new("Drag to look round, the mouse wheel to go nearer.")
+                    .small()
+                    .weak(),
             );
             ui.separator();
             out = ui
@@ -1004,8 +1006,13 @@ fn window(
         garage.car = Some(car.index);
         garage.retune = true;
         start(&mut commands, &terrain, &mut garage, entity, &mut car);
+        hall.buying = true;
     }
     garage.showroom = shown;
+    // Bought: straight into the new car, once it's built (at once, unless its maps bake).
+    if hall.buying && garage.job.is_none() {
+        out = true;
+    }
     if out {
         leave(
             &mut commands,
