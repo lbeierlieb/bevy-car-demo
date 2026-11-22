@@ -187,13 +187,21 @@ fn players(
         .show(contexts.ctx_mut()?, |ui| {
             let ping =
                 |id| (connection.pings.get(&id)).map_or(String::new(), |ms| format!("{ms} ms"));
-            egui::Grid::new("players").num_columns(2).show(ui, |ui| {
+            egui::Grid::new("players").num_columns(3).show(ui, |ui| {
+                // And the event each is in, if any.
+                let event = |id| {
+                    (connection.busy.get(&id))
+                        .and_then(|&e| connection.events.get(usize::from(e)))
+                        .map_or(String::new(), |event| event.name.clone())
+                };
                 ui.label(format!("You: {}", menu.settings.name));
                 ui.label(ping(you));
+                ui.label(event(you));
                 ui.end_row();
                 for (&id, name) in &connection.players {
                     ui.label(name);
                     ui.label(ping(id));
+                    ui.label(event(id));
                     ui.end_row();
                 }
             });
@@ -227,7 +235,8 @@ fn place_on_joining(
         return;
     }
     *placed = Some(you);
-    let spots = joining_spots(&terrain, &network);
+    let (start, _) = terrain.road_spawns(1, 0.0)[0];
+    let spots = lane_spots(&network, start, SPOT_RANGE, SPOTS);
     let Some(&(p, yaw)) = spots.get(you as usize % spots.len().max(1)) else {
         return;
     };
@@ -263,10 +272,10 @@ fn show_on_map(
         .collect();
 }
 
-/// Up to `SPOTS` places in the lanes (not on bridges), nearest the spawn point first, at
-/// least `SPACING` apart, as (position in xz, yaw facing along the lane).
-fn joining_spots(terrain: &Terrain, network: &Network) -> Vec<(Vec2, f32)> {
-    let (start, _) = terrain.road_spawns(1, 0.0)[0];
+/// Up to `count` places in the lanes (not on bridges) within `range` of `start`, nearest
+/// first, at least `SPACING` apart, as (position in xz, yaw facing along the lane): for
+/// joining cars by the spawn point, and for an event's players by its marker.
+pub fn lane_spots(network: &Network, start: Vec2, range: f32, count: usize) -> Vec<(Vec2, f32)> {
     let mut candidates = Vec::new();
     for (e, edge) in network.edges.iter().enumerate() {
         for forward in [true, false] {
@@ -277,7 +286,7 @@ fn joining_spots(terrain: &Terrain, network: &Network) -> Vec<(Vec2, f32)> {
             let mut s = SPACING / 2.0;
             while s < lane.length() && !edge.bridge {
                 let p = lane.point(s);
-                if p.distance(start) < SPOT_RANGE {
+                if p.distance(start) < range {
                     let d = lane.direction(s);
                     candidates.push((p, (-d.x).atan2(-d.y)));
                 }
@@ -288,7 +297,7 @@ fn joining_spots(terrain: &Terrain, network: &Network) -> Vec<(Vec2, f32)> {
     candidates.sort_by(|a, b| a.0.distance(start).total_cmp(&b.0.distance(start)));
     let mut spots: Vec<(Vec2, f32)> = Vec::new();
     for spot in candidates {
-        if spots.len() < SPOTS && spots.iter().all(|s| s.0.distance(spot.0) >= SPACING) {
+        if spots.len() < count && spots.iter().all(|s| s.0.distance(spot.0) >= SPACING) {
             spots.push(spot);
         }
     }
@@ -302,7 +311,8 @@ mod tests {
     #[test]
     fn joining_cars_get_spots_of_their_own() {
         let terrain = Terrain::baked();
-        let spots = joining_spots(&terrain, &Network::new(&terrain));
+        let (start, _) = terrain.road_spawns(1, 0.0)[0];
+        let spots = lane_spots(&Network::new(&terrain), start, SPOT_RANGE, SPOTS);
         assert_eq!(spots.len(), SPOTS);
     }
 }

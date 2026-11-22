@@ -27,11 +27,12 @@ use super::protocol::{
 use super::wire::{decode, encode};
 use super::{ClockOffset, NEAR, RATES, SEND_RATE};
 use crate::events::Event;
+use crate::events::rounds::{EventAction, Rounds, run_rounds};
 use crate::looks::{Looks, Motion};
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
 use crate::terrain::Terrain;
-use crate::traffic::{Anchor, CarNumbers, Realm, TrafficCar, Visitor};
+use crate::traffic::{Anchor, CarNumbers, Realm, Traffic, TrafficCar, Visitor};
 
 /// A player not heard from for this long is frozen for the others, and for this long
 /// dropped (s).
@@ -66,10 +67,13 @@ pub struct ServerPlugin;
 impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Presence>()
+            .add_message::<EventAction>()
             .init_resource::<CarNumbers>()
+            .init_resource::<Rounds>()
+            .init_resource::<Traffic>()
             .add_systems(
                 Update,
-                (accept, receive, send)
+                (accept, receive, run_rounds, send)
                     .chain()
                     .run_if(resource_exists::<Server>),
             );
@@ -143,6 +147,16 @@ impl Server {
         Self { events, ..self }
     }
 
+    /// Puts other events on the map (for players joining from now on).
+    pub fn set_events(&mut self, events: Vec<Event>) {
+        self.events = events;
+    }
+
+    /// The events on the map.
+    pub fn events(&self) -> &[Event] {
+        &self.events
+    }
+
     pub fn with_name_tags(self, name_tags: bool) -> Self {
         Self { name_tags, ..self }
     }
@@ -188,7 +202,7 @@ struct Told {
 }
 
 impl Peer {
-    fn tell(&mut self, message: &ToClient) {
+    pub(crate) fn tell(&mut self, message: &ToClient) {
         self.link.send(message.reliable(), encode(message));
     }
 }
@@ -230,6 +244,7 @@ fn receive(
     time: Res<Time<Real>>,
     mut peers: Query<(Entity, &mut Peer, Option<&mut Transform>, Option<&Realm>)>,
     mut presence: MessageWriter<Presence>,
+    mut actions: MessageWriter<EventAction>,
 ) {
     let now = now(&time);
     let mut present = peers.iter().filter(|(_, p, ..)| p.name.is_some()).count();
@@ -311,6 +326,12 @@ fn receive(
                 // Nothing else before hello.
                 _ if peer.name.is_none() => {}
                 ToServer::Hello { .. } => {}
+                ToServer::Event(action) => {
+                    actions.write(EventAction {
+                        player: peer.id,
+                        action,
+                    });
+                }
                 ToServer::Chat(text) => {
                     let Some(text) = clean_chat(&text).filter(|_| server.chat) else {
                         continue;
@@ -536,7 +557,9 @@ fn send(
                 },
                 looks: peer.looks.clone()?,
                 revision: peer.revision,
-                tag: peer.name.clone().filter(|_| server.name_tags),
+                // In an event's round, everyone shows their name.
+                tag: (peer.name.clone())
+                    .filter(|_| server.name_tags || realm.is_some_and(|r| *r != Realm::NORMAL)),
                 player: Some(peer.id),
                 realm: Realm::of(realm),
             })
@@ -583,6 +606,12 @@ fn send(
             continue;
         };
         let realm = Realm::of(realm);
+        // In an event's round, everyone in it is on the map.
+        let map = if realm == Realm::NORMAL {
+            map
+        } else {
+            MapPlayers::Everyone
+        };
         let peer = &mut *peer;
         let (cx, cz) = cell(own.position);
         let mut states = Vec::new();

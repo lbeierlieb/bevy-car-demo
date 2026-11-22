@@ -730,6 +730,207 @@ mod tests {
         assert_eq!(said(&anna), ["Anna: Anyone?"]);
     }
 
+    /// The round a player is in, as they were told.
+    fn round(app: &App) -> Option<crate::events::hunt::Round> {
+        connection(app).round.clone()
+    }
+
+    fn act(app: &mut App, action: crate::events::hunt::Action) {
+        app.world_mut().resource_mut::<Connection>().act(action);
+    }
+
+    /// A car hunt: into the lobby on the marker, the hunted's part handed over, the
+    /// settings, the start; the round in a realm of its own; the hunted caught standing
+    /// still; everyone back in the lobby, told how it ended.
+    #[test]
+    fn a_car_hunt_runs_in_a_realm_of_its_own() {
+        use crate::events::hunt::{Action, Ending, Phase, Settings};
+        let listener = LoopbackListener::default();
+        let events = crate::events::parse("hunt 0 0 Hunt").unwrap();
+        let mut server = server(&listener);
+        (server.world_mut().resource_mut::<Server>()).set_events(events);
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut ben = player(&listener, "Ben", 3, 6.0);
+        let mut cleo = player(&listener, "Cleo", 3, 40.0);
+        let mut all = [&mut server, &mut anna, &mut ben, &mut cleo];
+        run(&mut all, 20);
+        let id = |app: &App| match connection(app).status {
+            Status::Joined { you } => you,
+            _ => panic!("not joined"),
+        };
+        let (anna_id, ben_id) = (id(all[1]), id(all[2]));
+        // Too far from the marker: nothing.
+        act(all[3], Action::Enter(0));
+        act(all[1], Action::Enter(0));
+        run(&mut all, 5);
+        act(all[2], Action::Enter(0));
+        run(&mut all, 5);
+        assert_eq!(round(all[3]), None, "Cleo is too far away");
+        let lobby = round(all[2]).expect("Ben is in the lobby");
+        assert_eq!(lobby.players, [anna_id, ben_id]);
+        assert_eq!(lobby.hunted, anna_id, "the first in is hunted");
+        assert_eq!(connection(all[3]).busy.len(), 2, "Cleo sees who's in it");
+        // Only the hunted sets things and starts.
+        act(all[2], Action::Start);
+        act(all[1], Action::Hunted(ben_id));
+        let settings = Settings {
+            head_start: 2,
+            traffic: false,
+            ..Settings::default()
+        };
+        run(&mut all, 5);
+        act(all[1], Action::Settings(settings));
+        run(&mut all, 5);
+        let lobby = round(all[1]).unwrap();
+        assert_eq!(lobby.hunted, ben_id);
+        assert!(!lobby.running());
+        assert_eq!(
+            lobby.settings,
+            Settings::default(),
+            "Anna isn't hunted any more"
+        );
+        act(all[2], Action::Settings(settings));
+        act(all[2], Action::Start);
+        run(&mut all, 30);
+        let running = round(all[1]).unwrap();
+        assert!(running.running());
+        assert_eq!(running.settings, settings);
+        // In a realm of their own: Cleo, 40 m away, sees neither; they see each other
+        // (named, and on each other's map).
+        let tags = |app: &mut App| -> Vec<Option<String>> {
+            remote(app).into_iter().map(|(.., tag)| tag).collect()
+        };
+        assert_eq!(tags(all[3]), []);
+        assert_eq!(tags(all[1]), [Some("Ben".to_string())]);
+        // (Cleo, from before, fades from the map after 3 s.)
+        run(&mut all, 60 * 4);
+        let now = all[1].world().resource::<Time<Real>>().elapsed_secs_f64();
+        assert_eq!(connection(all[1]).on_map(now).count(), 1);
+        // Ben stands still: caught 10 s after the head start.
+        run(&mut all, 60 * 5);
+        assert!(round(all[2]).unwrap().running(), "not yet");
+        run(&mut all, 60 * 4);
+        let after = round(all[2]).unwrap();
+        let Phase::Lobby {
+            last: Some(outcome),
+        } = &after.phase
+        else {
+            panic!("still {:?}", after.phase);
+        };
+        assert_eq!(outcome.hunted, "Ben");
+        let Ending::Caught(time) = outcome.ending else {
+            panic!("{outcome:?}");
+        };
+        assert!((9.5..11.0).contains(&time), "{time}");
+        assert_eq!(after.players, [anna_id, ben_id], "both in the lobby");
+        run(&mut all, 60);
+        assert_eq!(tags(all[3]).len(), 2, "back in Cleo's world");
+        // The hunted leaving ends a round under way.
+        act(all[2], Action::Start);
+        run(&mut all, 10);
+        assert!(round(all[1]).unwrap().running());
+        act(all[2], Action::Leave);
+        run(&mut all, 10);
+        assert_eq!(round(all[2]), None);
+        let after = round(all[1]).unwrap();
+        assert_eq!(after.players, [anna_id]);
+        assert_eq!(after.hunted, anna_id);
+        let Phase::Lobby {
+            last: Some(outcome),
+        } = &after.phase
+        else {
+            panic!("still {:?}", after.phase);
+        };
+        assert_eq!(outcome.ending, Ending::HuntedLeft);
+        assert_eq!(connection(all[3]).busy.len(), 1);
+    }
+
+    /// A player's game in a car hunt: stopping on the marker goes in, the round lends
+    /// the cars it says, holds the hunters for the head start and sets what R does; at
+    /// the end everyone has their own car back, as it was.
+    #[test]
+    fn a_hunt_lends_cars_and_gives_them_back() {
+        use crate::car::{Held, ResetRule};
+        use crate::chassis::CHASSIS;
+        use crate::events::hunt::{Action, Cars, Reset, Settings};
+        use crate::events::{Events, Placed, lobby::LobbyPlugin};
+        let listener = LoopbackListener::default();
+        let events = crate::events::parse("hunt 0 0 Hunt").unwrap();
+        let mut server = server(&listener);
+        (server.world_mut().resource_mut::<Server>()).set_events(events.clone());
+        let in_game = |name: &str, x: f32| {
+            let mut app = player(&listener, name, 3, x);
+            app.add_plugins(LobbyPlugin)
+                .init_resource::<Held>()
+                .init_resource::<ResetRule>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .insert_resource(Events {
+                    list: vec![Placed {
+                        event: events[0].clone(),
+                        marker: Vec2::ZERO,
+                        yaw: 0.0,
+                    }],
+                });
+            app
+        };
+        let mut anna = in_game("Anna", 0.0);
+        let mut ben = in_game("Ben", 3.0);
+        car(&mut anna).refuel(0.5);
+        let annas_fuel = car(&mut anna).fuel.litres();
+        let mut all = [&mut server, &mut anna, &mut ben];
+        run(&mut all, 30);
+        let lobby = round(all[1]).expect("in the lobby by stopping on the marker");
+        assert_eq!(lobby.players.len(), 2);
+        // Whoever came in first is hunted.
+        let you = |app: &App| match connection(app).status {
+            Status::Joined { you } => you,
+            _ => panic!("not joined"),
+        };
+        let (h, k) = if you(all[1]) == lobby.hunted {
+            (1, 2)
+        } else {
+            (2, 1)
+        };
+        let settings = Settings {
+            head_start: 2,
+            reset: Reset::Start,
+            cars: Cars::MuscleVsRally,
+            traffic: false,
+            ..Settings::default()
+        };
+        act(all[h], Action::Settings(settings));
+        act(all[h], Action::Start);
+        run(&mut all, 10);
+        let chassis = |app: &mut App| CHASSIS[car(app).setup.build.chassis].name;
+        assert_eq!(chassis(all[h]), "Skarn", "the hunted's rally car");
+        assert_eq!(chassis(all[k]), "Harrow", "the hunter's muscle car");
+        let parts = car(all[k]).setup.engine.parts.clone();
+        let family = &crate::physics::engine::families::FAMILIES[parts.family];
+        assert_eq!(family.versions[parts.version].code, "M50", "the smaller V8");
+        assert!(
+            all[k].world().resource::<Held>().0,
+            "held for the head start"
+        );
+        assert!(!all[h].world().resource::<Held>().0);
+        assert_eq!(*all[h].world().resource::<ResetRule>(), ResetRule::Never);
+        assert!(matches!(
+            *all[k].world().resource::<ResetRule>(),
+            ResetRule::To(..)
+        ));
+        run(&mut all, 150);
+        assert!(!all[k].world().resource::<Held>().0, "off they go");
+        // The hunted stands still and is caught; both have their own cars back.
+        run(&mut all, 60 * 11);
+        assert!(!round(all[h]).unwrap().running());
+        assert_eq!(chassis(all[h]), "Tarn");
+        assert_eq!(chassis(all[k]), "Tarn");
+        assert!(
+            (car(all[1]).fuel.litres() - annas_fuel).abs() < 0.01,
+            "Anna's own"
+        );
+        assert_eq!(*all[h].world().resource::<ResetRule>(), ResetRule::Road);
+    }
+
     /// A car the server's catalogues don't have (a newer game's) gets a clear refusal.
     #[test]
     fn a_car_the_server_doesnt_know_is_refused_with_a_reason() {

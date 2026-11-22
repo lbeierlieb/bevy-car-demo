@@ -3,6 +3,10 @@
 //! e.g. `assets/events.cfg`; none without one) when a player joins; playing alone there
 //! are none. Each has a marker on the road like a shop's, its name floating above it.
 
+pub mod hunt;
+pub mod lobby;
+pub mod rounds;
+
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
@@ -137,6 +141,7 @@ pub struct EventsPlugin;
 impl Plugin for EventsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Events>()
+            .add_plugins(lobby::LobbyPlugin)
             .add_systems(Update, place)
             .add_systems(EguiPrimaryContextPass, labels);
     }
@@ -153,8 +158,9 @@ fn place(
     (mut meshes, mut materials): (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
     (mut marks, mut legend): (ResMut<MapMarks>, ResMut<MapLegend>),
 ) {
+    // None in a round under way: it's in a world of its own.
     let wanted: &[Event] = match connection.as_deref() {
-        Some(c) if matches!(c.status, Status::Joined { .. }) => &c.events,
+        Some(c) if matches!(c.status, Status::Joined { .. }) && !c.in_running_round() => &c.events,
         _ => &[],
     };
     let current = events.list.iter().map(|placed| &placed.event);

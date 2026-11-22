@@ -1,0 +1,448 @@
+//! A player's side of the events: stopping on a marker goes into its lobby (a window: who's
+//! in, the hunted's settings, start); driving off or Esc leaves it. When the round starts,
+//! the car goes to its spot by the marker (a lent one, if the round says so), the hunters
+//! held for the head start, R as the round allows; a bar at the top says what's what.
+//! Once it's over (or left), the car is back by the marker (our own, as it was).
+
+use bevy::prelude::*;
+use bevy_egui::egui::{self, Align2, Color32, RichText};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
+
+use super::Events;
+use super::hunt::{Action, CAUGHT_TIME, Cars, Phase, Reset, Round};
+use crate::car::{ActiveCar, Car, CarSetup, Held, ResetRule};
+use crate::chassis::CHASSIS;
+use crate::net::{Connection, Status, WantsGhost};
+use crate::online::lane_spots;
+use crate::shops::{MARKER_RADIUS, kerb};
+use crate::terrain::Terrain;
+use crate::traffic::network::Network;
+
+/// A car slower than this on a marker goes in (m/s); in a lobby, driving this far from
+/// where the car stood leaves it (m).
+const STOPPED: f32 = 1.5;
+const LEAVE: f32 = 8.0;
+/// Asking to go in again after this long without an answer (s).
+const ASK_AGAIN: f64 = 1.0;
+/// The players' spots by the marker: within this far of it (m), at most this many.
+const SPOT_RANGE: f32 = 300.0;
+const SPOTS: usize = 32;
+/// The cars lent for "muscle vs rally": the hunters', the hunted's (their base engines:
+/// the muscle car's smaller V8).
+const MUSCLE: &str = "Harrow";
+const RALLY: &str = "Skarn";
+
+pub struct LobbyPlugin;
+
+impl Plugin for LobbyPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<EventState>()
+            .add_systems(
+                Update,
+                (follow, arrive)
+                    .chain()
+                    .after(crate::shops::arrive)
+                    .run_if(resource_exists::<Connection>),
+            )
+            .add_systems(EguiPrimaryContextPass, window);
+    }
+}
+
+/// Where we stand with the events.
+#[derive(Resource)]
+pub struct EventState {
+    /// The round as last seen, to notice it starting and ending.
+    seen: Option<Round>,
+    /// Our own car while a lent one is driven.
+    lent: Option<Car>,
+    /// An event left while on its marker: not gone into again until the car is off it.
+    left: Option<usize>,
+    /// When we last asked to go in (s, `Time<Real>`).
+    asked: f64,
+    /// Where the car stood when the lobby began: driving off from there leaves it.
+    stood: Option<Vec2>,
+    /// When the round under way started on our clock (s, `Time<Real>`), should the
+    /// server's clock not be known yet.
+    started: f64,
+}
+
+impl Default for EventState {
+    fn default() -> Self {
+        Self {
+            seen: None,
+            lent: None,
+            left: None,
+            asked: f64::NEG_INFINITY,
+            stood: None,
+            started: 0.0,
+        }
+    }
+}
+
+/// The player we are, once joined.
+fn you(connection: &Connection) -> Option<u32> {
+    match connection.status {
+        Status::Joined { you } => Some(you),
+        _ => None,
+    }
+}
+
+/// How long the round has been under way (s).
+fn elapsed(connection: &Connection, state: &EventState, start: f64, now: f64) -> f64 {
+    (connection.server_time(now)).map_or(now - state.started, |server| server - start)
+}
+
+/// Out of the round we're in (told the server; we don't wait for its answer).
+fn leave(connection: &mut Connection, state: &mut EventState) {
+    if let Some(round) = connection.round.take() {
+        connection.act(Action::Leave);
+        state.left = Some(usize::from(round.event));
+    }
+}
+
+/// Stopping on a marker asks to go into its lobby; in the lobby, driving off or Esc leaves.
+/// Stopped on a marker or in a lobby, the car is a ghost (several wait there at once).
+#[allow(clippy::too_many_arguments)]
+fn arrive(
+    mut connection: ResMut<Connection>,
+    events: Res<Events>,
+    mut state: ResMut<EventState>,
+    mut ghost: ResMut<WantsGhost>,
+    active: Res<ActiveCar>,
+    mut cars: Query<&mut Car>,
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time<Real>>,
+) {
+    if you(&connection).is_none() {
+        return;
+    }
+    let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
+        return;
+    };
+    let now = time.elapsed_secs_f64();
+    let p = car.body.position.xz();
+    let marker = |i: usize| events.list.get(i).map(|placed| placed.marker);
+    if (state.left).is_some_and(|i| marker(i).is_none_or(|m| m.distance(p) > LEAVE)) {
+        state.left = None;
+    }
+    let stopped = car.body.velocity.length() < STOPPED;
+    match connection.round.as_ref().map(Round::running) {
+        None => {
+            state.stood = None;
+            let on = (events.list.iter())
+                .position(|placed| placed.marker.distance(p) < MARKER_RADIUS)
+                .filter(|&i| stopped && state.left != Some(i));
+            if let Some(i) = on {
+                ghost.0 = true;
+                if now - state.asked > ASK_AGAIN {
+                    state.asked = now;
+                    car.parking_brake = true;
+                    connection.act(Action::Enter(i as u16));
+                }
+            }
+        }
+        Some(false) => {
+            ghost.0 = true;
+            let stood = *state.stood.get_or_insert(p);
+            if p.distance(stood) > LEAVE || keys.just_pressed(KeyCode::Escape) {
+                leave(&mut connection, &mut state);
+            }
+        }
+        Some(true) => state.stood = None,
+    }
+}
+
+/// Follows the round: when it starts, the car goes to its spot (lent, if so), R follows
+/// the round's rules and hunters are held for the head start; when it ends (or we left),
+/// our own car is back by the marker.
+#[allow(clippy::too_many_arguments)]
+fn follow(
+    mut commands: Commands,
+    connection: Res<Connection>,
+    mut state: ResMut<EventState>,
+    terrain: Res<Terrain>,
+    network: Option<Res<Network>>,
+    active: Res<ActiveCar>,
+    mut cars: Query<(Entity, &mut Car)>,
+    (mut held, mut rule): (ResMut<Held>, ResMut<ResetRule>),
+    time: Res<Time<Real>>,
+) {
+    let now = time.elapsed_secs_f64();
+    let you = you(&connection);
+    let round = connection.round.clone().filter(|_| you.is_some());
+    let you = you.unwrap_or_default();
+    let was_running = state.seen.as_ref().is_some_and(Round::running);
+    let running = round.as_ref().is_some_and(Round::running);
+    // Our spot by the round's marker: (where, yaw).
+    let spot = |round: &Round| {
+        let event = connection.events.get(usize::from(round.event))?;
+        let (marker, yaw) = kerb(&terrain, event.at);
+        let spots = network
+            .as_deref()
+            .map(|network| lane_spots(network, marker, SPOT_RANGE, SPOTS))
+            .unwrap_or_default();
+        let slot = round.slot(you);
+        Some(
+            spots
+                .get(slot % spots.len().max(1))
+                .copied()
+                .unwrap_or((marker, yaw)),
+        )
+    };
+    if running && !was_running {
+        let round = round.as_ref().unwrap();
+        state.started = now;
+        let hunted = round.hunted == you;
+        if let (Some((p, yaw)), Some((entity, mut car))) = (
+            spot(round),
+            cars.iter_mut().find(|(_, car)| car.index == active.0),
+        ) {
+            if round.settings.cars == Cars::MuscleVsRally {
+                // A factory car for the round; ours waits.
+                let name = if hunted { RALLY } else { MUSCLE };
+                let chassis = CHASSIS.iter().position(|c| c.name == name).unwrap_or(0);
+                let setup = CarSetup::factory(chassis, 0);
+                let mut lent = Car::spawn_at(car.index, setup, &terrain, p.x, p.y, yaw);
+                lent.keep_settings(&car);
+                state.lent = Some(car.clone());
+                commands.entity(entity).despawn();
+                commands.spawn((Transform::from_translation(lent.body.position), lent));
+            } else {
+                car.place(&terrain, p, yaw);
+            }
+            *rule = match round.settings.reset {
+                _ if hunted => ResetRule::Never,
+                Reset::Never => ResetRule::Never,
+                Reset::Road => ResetRule::Road,
+                Reset::Start => ResetRule::To(p, yaw),
+            };
+        }
+    }
+    if was_running && !running {
+        *rule = ResetRule::Road;
+        // Back by the marker of the round we were in.
+        let back = round.as_ref().or(state.seen.as_ref()).and_then(spot);
+        let active_car = cars.iter_mut().find(|(_, car)| car.index == active.0);
+        if let Some((entity, mut car)) = active_car {
+            let (p, yaw) = back.unwrap_or((car.body.position.xz(), 0.0));
+            if let Some(mut own) = state.lent.take() {
+                own.place(&terrain, p, yaw);
+                commands.entity(entity).despawn();
+                commands.spawn((Transform::from_translation(own.body.position), own));
+            } else {
+                car.place(&terrain, p, yaw);
+            }
+        }
+    }
+    if running != was_running {
+        state.stood = None;
+    }
+    // Hunters wait for the head start to end.
+    held.0 = match &round {
+        Some(
+            round @ Round {
+                phase: Phase::Running { start, .. },
+                ..
+            },
+        ) => {
+            round.hunted != you
+                && elapsed(&connection, &state, *start, now) < f64::from(round.settings.head_start)
+        }
+        _ => false,
+    };
+    state.seen = round;
+}
+
+/// The lobby's window, or the bar at the top while the round runs.
+fn window(
+    mut contexts: EguiContexts,
+    connection: Option<ResMut<Connection>>,
+    mut state: ResMut<EventState>,
+    time: Res<Time<Real>>,
+) -> Result {
+    let Some(mut connection) = connection else {
+        return Ok(());
+    };
+    let (Some(you), Some(round)) = (you(&connection), connection.round.clone()) else {
+        return Ok(());
+    };
+    let Some(event) = connection.events.get(usize::from(round.event)).cloned() else {
+        return Ok(());
+    };
+    let ctx = contexts.ctx_mut()?;
+    let now = time.elapsed_secs_f64();
+    let name = |id: u32| {
+        if id == you {
+            format!("{} (you)", connection.name)
+        } else {
+            connection.players.get(&id).cloned().unwrap_or_default()
+        }
+    };
+    let hunted_name = name(round.hunted);
+    let we_are_hunted = round.hunted == you;
+    match &round.phase {
+        Phase::Lobby { last } => {
+            let mut settings = round.settings;
+            let mut wanted = None;
+            let mut leaving = false;
+            egui::Window::new(format!("{} ({})", event.name, event.kind.title()))
+                .id(egui::Id::new("event"))
+                .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 40.0))
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    if let Some(last) = last {
+                        ui.label(RichText::new(last.text()).strong().size(16.0));
+                        ui.separator();
+                    }
+                    ui.label(
+                        "The hunted has to get away. The hunters catch them by keeping them \
+                         slower than 10 km/h for 10 s.",
+                    );
+                    ui.add_space(4.0);
+                    egui::Grid::new("event players")
+                        .num_columns(3)
+                        .show(ui, |ui| {
+                            for &id in &round.players {
+                                ui.label(name(id));
+                                ui.label(if id == round.hunted {
+                                    "Hunted"
+                                } else {
+                                    "Hunter"
+                                });
+                                if we_are_hunted && id != you {
+                                    if ui.button("Make hunted").clicked() {
+                                        wanted = Some(Action::Hunted(id));
+                                    }
+                                } else {
+                                    ui.label("");
+                                }
+                                ui.end_row();
+                            }
+                        });
+                    ui.separator();
+                    ui.add_enabled_ui(we_are_hunted, |ui| {
+                        egui::Grid::new("event settings")
+                            .num_columns(2)
+                            .show(ui, |ui| settings_grid(ui, &mut settings));
+                    });
+                    if !we_are_hunted {
+                        ui.small(format!("{hunted_name} sets these."));
+                    }
+                    ui.separator();
+                    if !we_are_hunted {
+                        ui.label(format!("Waiting for {hunted_name} to start the hunt."));
+                    } else if round.players.len() < 2 {
+                        ui.label("Waiting for a hunter: anyone stopping on the marker joins.");
+                    } else if ui.button("Start the hunt").clicked() {
+                        wanted = Some(Action::Start);
+                    }
+                    leaving = ui
+                        .button("Leave (Esc)")
+                        .on_hover_text("Or drive off (Space releases the parking brake)")
+                        .clicked();
+                });
+            if settings != round.settings {
+                // Shown at once, not only once the server has it.
+                if let Some(round) = connection.round.as_mut() {
+                    round.settings = settings;
+                }
+                connection.act(Action::Settings(settings));
+            }
+            if let Some(action) = wanted {
+                connection.act(action);
+            }
+            if leaving {
+                leave(&mut connection, &mut state);
+            }
+        }
+        Phase::Running { start, slow } => {
+            let elapsed = elapsed(&connection, &state, *start, now);
+            let head_start = f64::from(round.settings.head_start);
+            let left = head_start + f64::from(round.settings.duration) - elapsed;
+            let mut lines: Vec<(String, Color32)> = Vec::new();
+            let white = Color32::WHITE;
+            lines.push(if we_are_hunted {
+                ("You're hunted: get away!".into(), white)
+            } else {
+                (format!("Hunt {hunted_name}!"), white)
+            });
+            if elapsed < head_start {
+                let wait = (head_start - elapsed).ceil();
+                lines.push(if we_are_hunted {
+                    (format!("The hunters go in {wait} s"), white)
+                } else {
+                    (format!("You go in {wait} s"), Color32::YELLOW)
+                });
+            } else {
+                let left = left.max(0.0) as u32;
+                lines.push((format!("{}:{:02} left", left / 60, left % 60), white));
+            }
+            if let Some(since) = slow {
+                let server = connection.server_time(now).unwrap_or(*since);
+                let caught_in = (CAUGHT_TIME - (server - since)).ceil().max(0.0);
+                lines.push(if we_are_hunted {
+                    (format!("Too slow! Caught in {caught_in} s"), Color32::RED)
+                } else {
+                    (
+                        format!("{hunted_name} is slow: caught in {caught_in} s"),
+                        Color32::LIGHT_GREEN,
+                    )
+                });
+            }
+            let mut leaving = false;
+            egui::Area::new(egui::Id::new("hunt bar"))
+                .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 8.0))
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style())
+                        .fill(Color32::from_black_alpha(180))
+                        .show(ui, |ui| {
+                            ui.vertical_centered(|ui| {
+                                for (text, color) in &lines {
+                                    ui.label(RichText::new(text).size(18.0).color(*color));
+                                }
+                                leaving = ui.small_button("Leave the hunt").clicked();
+                            });
+                        });
+                });
+            if leaving {
+                leave(&mut connection, &mut state);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The hunted's settings, a row each.
+fn settings_grid(ui: &mut egui::Ui, settings: &mut super::hunt::Settings) {
+    use super::hunt::{DURATION, HEAD_START};
+    ui.label("Head start");
+    ui.add(egui::Slider::new(&mut settings.head_start, HEAD_START.0..=HEAD_START.1).suffix(" s"));
+    ui.end_row();
+    ui.label("Time to get away");
+    let mut minutes = settings.duration / 60;
+    ui.add(egui::Slider::new(&mut minutes, DURATION.0 / 60..=DURATION.1 / 60).suffix(" min"));
+    settings.duration = minutes * 60;
+    ui.end_row();
+    ui.label("Traffic");
+    ui.checkbox(&mut settings.traffic, "");
+    ui.end_row();
+    ui.label("Hunters' reset (R)");
+    egui::ComboBox::from_id_salt("hunt reset")
+        .selected_text(settings.reset.title())
+        .show_ui(ui, |ui| {
+            for reset in Reset::ALL {
+                ui.selectable_value(&mut settings.reset, reset, reset.title());
+            }
+        });
+    ui.end_row();
+    ui.label("Cars");
+    egui::ComboBox::from_id_salt("hunt cars")
+        .selected_text(settings.cars.title())
+        .show_ui(ui, |ui| {
+            for cars in Cars::ALL {
+                ui.selectable_value(&mut settings.cars, cars, cars.title());
+            }
+        });
+    ui.end_row();
+}

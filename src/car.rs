@@ -580,6 +580,8 @@ impl Plugin for CarPlugin {
             .insert_resource(DriverAids::load())
             .add_message::<ReverseRefused>()
             .init_resource::<Away>()
+            .init_resource::<Held>()
+            .init_resource::<ResetRule>()
             .add_systems(Update, (drive, sync_transforms).chain());
     }
 }
@@ -623,13 +625,30 @@ pub struct ReverseRefused;
 #[derive(Resource, Default)]
 pub struct Away(pub bool);
 
+/// The active car is held at the start (a hunter during a car hunt's head start): its
+/// brakes are on whatever the driver does (the engine still revs).
+#[derive(Resource, Default)]
+pub struct Held(pub bool);
+
+/// What R does with the active car (in an event's round, its rules).
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub enum ResetRule {
+    /// Puts it on the nearest road.
+    #[default]
+    Road,
+    /// Nothing.
+    Never,
+    /// Puts it here (xz), facing along this yaw.
+    To(Vec2, f32),
+}
+
 /// Keyboard and wheel to controls for the active car; any other car holds all brakes. Q/E
 /// (or the paddles, or an H-shifter) change gear, I starts a stalled engine.
 pub fn drive(
     keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<WheelInput>,
     time: Res<Time>,
-    (active, away): (Res<ActiveCar>, Res<Away>),
+    (active, away, held): (Res<ActiveCar>, Res<Away>, Res<Held>),
     aids: Res<DriverAids>,
     mut cars: Query<&mut Car>,
     mut refused: MessageWriter<ReverseRefused>,
@@ -693,6 +712,10 @@ pub fn drive(
             *parking_brake ^= true;
         }
         c.handbrake = (*parking_brake as u8 as f32).max(wheel.handbrake.unwrap_or(0.0));
+        if held.0 {
+            c.brake = 1.0;
+            c.handbrake = 1.0;
+        }
         if let Some(steer) = wheel.steer {
             // A steering wheel turns the front wheels directly, at a fixed ratio.
             c.steer = steer;
@@ -719,11 +742,15 @@ fn reset_car(
     active: Res<ActiveCar>,
     terrain: Res<Terrain>,
     mut cars: Query<&mut Car>,
-    away: Res<Away>,
+    (away, rule): (Res<Away>, Res<ResetRule>),
 ) {
     if (keys.just_pressed(KeyCode::KeyR) || wheel.reset) && !away.0 {
         for mut car in cars.iter_mut().filter(|car| car.index == active.0) {
-            car.reset(&terrain);
+            match *rule {
+                ResetRule::Road => car.reset(&terrain),
+                ResetRule::Never => {}
+                ResetRule::To(p, yaw) => car.place(&terrain, p, yaw),
+            }
         }
     }
 }

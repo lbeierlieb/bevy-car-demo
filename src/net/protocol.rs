@@ -20,6 +20,7 @@ use super::wire::{Reader, Wire};
 use crate::audio::{EngineCharacter, EngineRun, ExhaustSound};
 use crate::chassis::{CHASSIS, CLUTCHES, CarBuild, FACTORY_TOE, GEARBOXES, PAINTS, SUSPENSIONS};
 use crate::events::Event;
+use crate::events::hunt::{Action, Round};
 use crate::looks::{AxleLooks, Looks, Motion, WheelMotion};
 use crate::physics::collision::Obb;
 use crate::physics::engine::families::Layout;
@@ -66,6 +67,8 @@ pub enum ToServer {
     State(CarState),
     /// A chat message for everyone.
     Chat(String),
+    /// About the events: into a lobby, out, the hunted's settings and choices.
+    Event(Action),
 }
 
 /// Server to client.
@@ -113,6 +116,10 @@ pub enum ToClient {
     Shops(Vec<Shop>),
     /// The events on the map, told after the shops.
     Events(Vec<Event>),
+    /// The round we're in (its lobby or under way), whenever it changes; none once out.
+    Round(Option<Round>),
+    /// Who's in which event's round (its place in the list), everyone; whenever it changes.
+    Busy(Vec<(PlayerId, u16)>),
 }
 
 impl ToServer {
@@ -217,6 +224,10 @@ impl Wire for ToServer {
                 3u8.put(out);
                 text.put(out);
             }
+            ToServer::Event(action) => {
+                4u8.put(out);
+                action.put(out);
+            }
         }
     }
 
@@ -230,6 +241,7 @@ impl Wire for ToServer {
             Self::LOOKS => ToServer::Looks(Box::new(r.get()?)),
             2 => ToServer::State(r.get()?),
             3 => ToServer::Chat(r.get()?),
+            4 => ToServer::Event(r.get()?),
             _ => return None,
         })
     }
@@ -295,6 +307,14 @@ impl Wire for ToClient {
                 12u8.put(out);
                 events.put(out);
             }
+            ToClient::Round(round) => {
+                13u8.put(out);
+                round.put(out);
+            }
+            ToClient::Busy(busy) => {
+                14u8.put(out);
+                busy.put(out);
+            }
         }
     }
 
@@ -328,6 +348,8 @@ impl Wire for ToClient {
             10 => ToClient::Gone { car: r.get()? },
             11 => ToClient::Shops(r.get()?),
             12 => ToClient::Events(r.get()?),
+            13 => ToClient::Round(r.get()?),
+            14 => ToClient::Busy(r.get()?),
             _ => return None,
         })
     }
@@ -663,6 +685,45 @@ mod tests {
         let shops = crate::shops::parse(crate::shops::LIST).unwrap();
         let message = ToClient::Shops(shops);
         assert_eq!(decode::<ToClient>(&encode(&message)), Some(message));
+    }
+
+    #[test]
+    fn rounds_come_through() {
+        use crate::events::hunt::*;
+        let mut round = Round {
+            event: 0,
+            players: vec![3, 1, 2],
+            hunted: 1,
+            settings: Settings {
+                cars: Cars::MuscleVsRally,
+                reset: Reset::Start,
+                ..Settings::default()
+            },
+            phase: Phase::Lobby {
+                last: Some(Outcome {
+                    hunted: "Anna".into(),
+                    ending: Ending::Caught(253.0),
+                }),
+            },
+        };
+        let message = ToClient::Round(Some(round.clone()));
+        assert_eq!(decode::<ToClient>(&encode(&message)), Some(message));
+        round.phase = Phase::Running {
+            start: 12.5,
+            slow: None,
+        };
+        let message = ToClient::Round(Some(round));
+        assert_eq!(decode::<ToClient>(&encode(&message)), Some(message));
+        for action in [
+            Action::Enter(2),
+            Action::Leave,
+            Action::Settings(Settings::default()),
+            Action::Hunted(4),
+            Action::Start,
+        ] {
+            let message = ToServer::Event(action);
+            assert_eq!(decode::<ToServer>(&encode(&message)), Some(message));
+        }
     }
 
     #[test]

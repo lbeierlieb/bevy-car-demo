@@ -23,6 +23,7 @@ use super::wire::{decode, encode};
 use super::{ClockOffset, SEND_RATE};
 use crate::car::{ActiveCar, Car};
 use crate::events::Event;
+use crate::events::hunt::{Action, Round};
 use crate::looks::{Ghost, Looks, Motion};
 use crate::physics::collision::Obb;
 use crate::physics::collision::{self, OBSTACLE};
@@ -127,6 +128,10 @@ pub struct Connection {
     pub shops: Vec<Shop>,
     /// The events on the map, likewise.
     pub events: Vec<Event>,
+    /// The event round we're in (its lobby or under way), as the server last told.
+    pub round: Option<Round>,
+    /// Who's in which event's round (its place in `events`).
+    pub busy: HashMap<PlayerId, u16>,
     /// The server's clock against ours (every state comes on it).
     clock: ClockOffset,
     /// What we've been told of each car (a state may overtake it, or come later).
@@ -167,6 +172,8 @@ impl Connection {
             chat_on: false,
             shops: Vec::new(),
             events: Vec::new(),
+            round: None,
+            busy: HashMap::new(),
             chat: VecDeque::new(),
             clock: ClockOffset::default(),
             known: HashMap::new(),
@@ -205,6 +212,22 @@ impl Connection {
         if let Some(text) = clean_chat(text).filter(|_| self.chat_on) {
             self.say(&ToServer::Chat(text));
         }
+    }
+
+    /// Whether we're in an event's round that's under way (in a world of its own).
+    pub fn in_running_round(&self) -> bool {
+        self.round.as_ref().is_some_and(Round::running)
+    }
+
+    /// Asks something of the events (into a lobby, out, the hunted's choices).
+    pub fn act(&mut self, action: Action) {
+        self.say(&ToServer::Event(action));
+    }
+
+    /// The time on the server's clock that it is `now` (on `Time<Real>`), as near as the
+    /// states that came tell (none before the first).
+    pub fn server_time(&self, now: f64) -> Option<f64> {
+        self.clock.their(now)
     }
 
     /// Leaves the server.
@@ -374,6 +397,8 @@ fn receive(
             }
             ToClient::Shops(shops) => connection.shops = shops,
             ToClient::Events(events) => connection.events = events,
+            ToClient::Round(round) => connection.round = round,
+            ToClient::Busy(busy) => connection.busy = busy.into_iter().collect(),
             ToClient::Pings(pings) => {
                 connection.pings = pings.into_iter().collect();
             }

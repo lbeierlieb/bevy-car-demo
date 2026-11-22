@@ -210,7 +210,7 @@ impl AtShop {
 /// Stopping on a marker is going into its shop (with the parking brake pulled); moving
 /// off it, leaving. A car stopped on a marker, or in a shop, is a ghost (see
 /// `WantsGhost`), so several can use a shop at once.
-fn arrive(
+pub fn arrive(
     shops: Res<Shops>,
     mut at: ResMut<AtShop>,
     mut ghost: ResMut<WantsGhost>,
@@ -447,8 +447,9 @@ fn place(
     (mut meshes, mut materials): (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
     (mut marks, mut legend): (ResMut<MapMarks>, ResMut<MapLegend>),
 ) {
+    // None in an event's round under way: it's in a world of its own.
     let wanted: &[Shop] = match connection.as_deref() {
-        Some(c) if matches!(c.status, Status::Joined { .. }) => &c.shops,
+        Some(c) if matches!(c.status, Status::Joined { .. }) && !c.in_running_round() => &c.shops,
         _ => &[],
     };
     let current = shops.list.iter().map(|placed| &placed.shop);
