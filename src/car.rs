@@ -625,7 +625,9 @@ impl Plugin for ResetPlugin {
 fn spawn_default_car(mut commands: Commands, terrain: Res<Terrain>, spawn: Res<Spawn>) {
     // On the road at the spawn point.
     let (p, yaw) = terrain.road_spawns(&spawn, 1, 0.0)[0];
-    let car = Car::spawn_at(0, CarSetup::default(), &terrain, p.x, p.y, yaw);
+    let mut car = Car::spawn_at(0, CarSetup::default(), &terrain, p.x, p.y, yaw);
+    // In neutral with the parking brake on, as joining a server or R leaves it.
+    car.drivetrain.neutral();
     commands.spawn((Transform::from_translation(car.body.position), car));
 }
 
