@@ -147,7 +147,7 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     let hull = setup.hull.placed(body.position, body.rotation);
     let mut contacts = Vec::new();
     collision::ground_contacts(&hull, |p| terrain.ground_under(p), &mut contacts);
-    collision::resolve(body, None, &contacts, GROUND, dt);
+    *knocks += collision::resolve(body, None, &contacts, GROUND, dt) / body.mass;
     contacts.clear();
     terrain.obstacles.contacts(&hull, &mut contacts);
     *knocks += collision::resolve(body, None, &contacts, OBSTACLE, dt) / body.mass;

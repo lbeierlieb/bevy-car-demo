@@ -406,6 +406,8 @@ fn a_car_stops_at_a_wall_and_a_tree() {
     // The car's nose is about 2 m ahead of its centre: a wall 10 m ahead, across.
     let wall = upright(Vec2::new(10.0, 0.3));
     let car = drive_into(wall, 20.0, 2.0);
+    // A crash (that's how hard it hit, for its sound).
+    assert!(car.knocks > 15.0, "{}", car.knocks);
     let nose = car.setup.hull.placed(car.body.position, car.body.rotation);
     let front = nose.corners().iter().map(|c| c.z).fold(f32::MAX, f32::min);
     assert!(front > -9.75, "went into the wall: front at {front}");
@@ -453,6 +455,8 @@ fn a_car_on_its_roof_rests_on_it() {
     let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
     let lowest = hull.corners().iter().map(|c| c.y).fold(f32::MAX, f32::min);
     assert!(lowest > -0.03 && lowest < 0.02, "lowest corner at {lowest}");
+    // It landed on the roof, and lies on it (gravity, every step).
+    assert!(car.knocks > 3.0, "{}", car.knocks);
     assert!(car.body.velocity.length() < 0.1, "{}", car.body.velocity);
 }
 

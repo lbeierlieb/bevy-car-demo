@@ -335,8 +335,9 @@ pub struct Car {
     pub abs_pressure: [f32; 4],
     /// The fuel in the tank.
     pub fuel: Fuel,
-    /// How hard the body has hit houses, trees and other cars since this was last taken:
-    /// the speed the knocks changed (m/s), added up.
+    /// How hard the body (not the tires) has hit houses, trees, other cars and the ground
+    /// since this was last taken (the crash sounds take it every frame): the speed the
+    /// knocks changed (m/s), added up.
     pub knocks: f32,
     /// The handbrake as a parking brake: Space (or a handbrake button) pulls it on or
     /// releases it. Cars start with it on.

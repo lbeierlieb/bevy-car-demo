@@ -1177,8 +1177,12 @@ H-shifter's lever is in a gate whose gear can't go in (`Drivetrain::grinding`: c
 not pressed, reverse while rolling) and 0.3 s on a refused reverse by key (clicks at the
 dog teeth's clash rate from the speed difference ringing metallic resonances); the
 **trumpet** of a race's countdown (`racing::countdown`: G4 at 3, 2, 1, a C major chord
-at the green; `Effects::call`). `write_effects_wav` (ignored, `EFFECTS_WAV=path`) renders
-all three to listen to. Not done: other cars' squeal (`Motion` has no slip), tuned by ear.
+at the green; `Effects::call`); **crashes** from `Car::knocks` (the body's speed change
+from houses, trees, fences, cars and, since this, the ground; taken every frame by
+`effects::cue`): 1 m/s in a frame is a crash, 15 the hardest (a gliding thud, a crunch of
+crackles ringing panel resonances, glass pings from 0.45), knocks kept up while moving
+scrape. `write_effects_wav` (ignored, `EFFECTS_WAV=path`) renders
+them all to listen to. Not done: other cars' squeal and crashes (`Motion` has no slip), tuned by ear.
 
 The engine sound goes through bevy_audio, which can't set the output buffer size. An
 attempt to open the output with rodio/cpal directly (fixed 4096-frame buffer against

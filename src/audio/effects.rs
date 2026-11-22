@@ -11,6 +11,11 @@
 //! - **Grinding**: the dog teeth of a gear that isn't turning with the shaft clash against
 //!   each other. Clicks at the rate the teeth meet (the speed difference times the
 //!   teeth), each a little different, ring a few metallic resonances.
+//! - **Crashes**: the body hitting houses, trees, fences, other cars or the ground. A
+//!   knock thuds (a low boom gliding down), crunches (a burst of noise and crackles of
+//!   crumpling metal ringing the panels' resonances, longer the harder) and, hard enough,
+//!   shatters glass (bright pings scattered over most of a second). Pushed or sliding
+//!   along something, the body scrapes (a rough band of noise).
 //! - **Trumpet**: a band-limited sawtooth through a low-pass that opens as the note
 //!   swells (brass gets brighter the louder it plays), a lip that scoops up into the
 //!   pitch and a vibrato that sets in late. Two players a few cents apart per note.
@@ -80,6 +85,51 @@ const GRIND_GLIDE: f32 = 0.008;
 /// How long a refused reverse grinds when asked for with a key or paddle (s).
 const GRIND_BURST: f32 = 0.3;
 
+/// A knock (the body's speed change in a frame, m/s) this hard is a crash, and this hard
+/// is the hardest; a crash right after another (s) only counts if it's harder.
+const CRASH_FROM: f32 = 1.0;
+const CRASH_FULL: f32 = 15.0;
+const CRASH_GAP: f32 = 0.15;
+/// The thud: level, its pitch at the start and the end (Hz), how fast it dies (s).
+const THUD: f32 = 0.9;
+const THUD_PITCH: (f32, f32) = (120.0, 50.0);
+const THUD_DECAY: f32 = 0.12;
+/// The panels' resonances: frequency (Hz), Q, gain.
+const PANELS: [(f32, f32, f32); 6] = [
+    (310.0, 9.0, 1.0),
+    (520.0, 10.0, 0.9),
+    (870.0, 12.0, 0.8),
+    (1380.0, 12.0, 0.6),
+    (2250.0, 14.0, 0.45),
+    (3600.0, 14.0, 0.3),
+];
+/// The crunch: level, the first burst of noise (s), and the crackles: how many a second
+/// at the start of the hardest crash and how long they go on (s, at the least and the
+/// hardest).
+const CRUNCH: f32 = 0.05;
+const BURST: f32 = 0.02;
+const CRACKLES: f32 = 900.0;
+const CRACKLING: (f32, f32) = (0.05, 0.4);
+/// Glass breaks from this strength on: pings a second at the start, for how long (s),
+/// their pitch range (Hz) and how fast they die (s), and their level.
+const GLASS_FROM: f32 = 0.45;
+const PINGS: f32 = 400.0;
+const PINGING: f32 = 0.3;
+const PING_PITCH: (f32, f32) = (2500.0, 9000.0);
+const PING_DECAY: (f32, f32) = (0.015, 0.08);
+const PING: f32 = 0.12;
+/// At most this many crashes and pings at once.
+const IMPACTS: usize = 4;
+const RINGING: usize = 32;
+/// Scraping: the knocks a second (m/s²) and the speed (m/s) for a full scrape, how
+/// quickly it follows (s), its bands (Hz, Q), roughness (depth and rate, Hz) and level.
+const SCRAPE_KNOCKS: f32 = 8.0;
+const SCRAPE_SPEED: f32 = 5.0;
+const SCRAPE_GLIDE: f32 = 0.05;
+const SCRAPE_BANDS: [(f32, f32); 3] = [(650.0, 4.0), (1500.0, 5.0), (3300.0, 6.0)];
+const SCRAPE_ROUGH: (f32, f32) = (0.7, 35.0);
+const SCRAPE: f32 = 0.3;
+
 /// The trumpet's notes: the countdown's (Hz) and "Go!"'s chord.
 const COUNT_NOTE: f32 = 392.0;
 const GO_CHORD: [f32; 4] = [523.25, 659.26, 783.99, 1046.5];
@@ -120,6 +170,10 @@ struct Cues {
     grind: [AtomicU32; 2],
     /// Calls asked for: a counter (above the lowest 4 bits) and the latest's `Call`.
     call: AtomicU32,
+    /// Crashes: a counter (above the lowest 8 bits) and the latest's strength (0..255).
+    crash: AtomicU32,
+    /// Scraping: level (0..1) and pan.
+    scrape: [AtomicU32; 2],
     /// Master volume (0 muted).
     volume: AtomicU32,
 }
@@ -138,6 +192,17 @@ impl Cues {
         for (atomic, value) in self.squeal[wheel].iter().zip([level, pitch, pan]) {
             store(atomic, value);
         }
+    }
+
+    fn crash(&self, strength: f32) {
+        let strength = (strength.clamp(0.0, 1.0) * 255.0).round() as u32;
+        let count = (self.crash.load(Ordering::Relaxed) >> 8).wrapping_add(1);
+        self.crash.store(count << 8 | strength, Ordering::Relaxed);
+    }
+
+    fn set_scrape(&self, level: f32, pan: f32) {
+        store(&self.scrape[0], level);
+        store(&self.scrape[1], pan);
     }
 
     fn set_grind(&self, level: f32, rate: f32) {
@@ -220,7 +285,26 @@ fn grind(difference: f32) -> (f32, f32) {
     (level, rate)
 }
 
-/// What the driven car's tires and gearbox do, heard from the camera.
+/// The strength of a crash (0..1) for a knock (m/s), if it's one.
+fn crash(knock: f32) -> Option<f32> {
+    (knock >= CRASH_FROM).then(|| ((knock - CRASH_FROM) / (CRASH_FULL - CRASH_FROM)).min(1.0))
+}
+
+/// How loud the body scrapes (0..1), knocked at `knocks` a second (m/s²) at `speed`.
+fn scrape(knocks: f32, speed: f32) -> f32 {
+    (knocks / SCRAPE_KNOCKS).min(1.0) * (speed / SCRAPE_SPEED).min(1.0)
+}
+
+/// What's going on with crashes: how long since the last one and how hard it was, the
+/// knocks a second, smoothed.
+#[derive(Default)]
+struct Crashes {
+    since: f32,
+    last: f32,
+    knocks: f32,
+}
+
+/// What the driven car's tires, gearbox and body do, heard from the camera.
 #[allow(clippy::too_many_arguments)]
 fn cue(
     time: Res<Time>,
@@ -228,17 +312,26 @@ fn cue(
     engine: Res<EngineAudio>,
     active: Res<ActiveCar>,
     rescued: Res<Rescued>,
-    cars: Query<(&Car, &GlobalTransform)>,
+    mut cars: Query<(&mut Car, &GlobalTransform)>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     mut refused: MessageReader<ReverseRefused>,
-    mut burst: Local<f32>,
+    (mut burst, mut crashes): (Local<f32>, Local<Crashes>),
 ) {
     let cues = &effects.cues;
+    let dt = time.delta_secs();
     let quiet = engine.muted || engine.hushed;
     store(&cues.volume, if engine.muted { 0.0 } else { 1.0 });
-    *burst = (*burst - time.delta_secs()).max(0.0);
+    *burst = (*burst - dt).max(0.0);
     if refused.read().count() > 0 {
         *burst = GRIND_BURST;
+    }
+    // Every car's knocks are taken, heard or not.
+    let mut knock = 0.0;
+    for (mut car, _) in &mut cars {
+        if car.index == active.0 {
+            knock = car.knocks;
+        }
+        car.knocks = 0.0;
     }
     let car = cars.iter().find(|(car, _)| car.index == active.0);
     let (Some((car, transform)), false, false) = (car, quiet, rescued.0) else {
@@ -246,6 +339,8 @@ fn cue(
             cues.set_squeal(wheel, 0.0, 1.0, 0.0);
         }
         cues.set_grind(0.0, CLASH_RATE.0);
+        cues.set_scrape(0.0, 0.0);
+        *crashes = Crashes::default();
         return;
     };
     let (ear, right) = match cameras.single() {
@@ -293,6 +388,24 @@ fn cue(
         None => (0.0, CLASH_RATE.0),
     };
     cues.set_grind(level, rate);
+
+    // A crash when the body is knocked hard (not again within a moment unless harder),
+    // scraping while it keeps being knocked on the move.
+    let body = pan(transform.translation() - ear, right) * 0.6;
+    crashes.since += dt;
+    if let Some(strength) = crash(knock)
+        && (crashes.since > CRASH_GAP || strength > crashes.last)
+    {
+        cues.crash(strength);
+        crashes.since = 0.0;
+        crashes.last = strength;
+    }
+    if dt > 0.0 {
+        let share = (dt / SCRAPE_GLIDE).min(1.0);
+        crashes.knocks += (knock / dt - crashes.knocks) * share;
+    }
+    let speed = car.body.velocity.length();
+    cues.set_scrape(scrape(crashes.knocks, speed), body);
 }
 
 /// One wheel's squeal.
@@ -308,6 +421,38 @@ struct Squeal {
     wobble: f32,
     flutter: f32,
     scrub: f32,
+}
+
+/// One crash sounding.
+#[derive(Clone, Default)]
+struct Impact {
+    strength: f32,
+    age: f32,
+    /// The thud's phase (radians).
+    thud: f32,
+    /// The panels, each ringing a little differently per crash, and their gains.
+    panels: [Resonator; 6],
+    gains: [f32; 6],
+    /// How long its crackles go on (s).
+    crackling: f32,
+    playing: bool,
+}
+
+/// A decaying sine (a piece of glass ringing): its state and its step, both as complex
+/// numbers.
+#[derive(Clone, Copy, Default)]
+struct Ping {
+    z: [f32; 2],
+    step: [f32; 2],
+}
+
+impl Ping {
+    fn next(&mut self) -> f32 {
+        let [a, b] = self.z;
+        let [c, d] = self.step;
+        self.z = [a * c - b * d, a * d + b * c];
+        self.z[1]
+    }
 }
 
 /// One trumpet playing a note.
@@ -400,6 +545,16 @@ struct EffectsVoice {
     players: [Player; PLAYERS],
     /// The last call counter seen.
     call: u32,
+    /// Crashes sounding, glass ringing, and the last crash counter seen.
+    impacts: [Impact; IMPACTS],
+    pings: [Ping; RINGING],
+    crash: u32,
+    /// Scraping: its level and pan (gliding), bands, the bands' gains and roughness.
+    scrape: f32,
+    scrape_pan: f32,
+    scrape_bands: [Resonator; 3],
+    scrape_gains: [f32; 3],
+    rough: f32,
     seed: u32,
     right: Option<f32>,
 }
@@ -414,6 +569,15 @@ impl EffectsVoice {
             grind_gains[i] = gain / grind_rings[i].b0;
         }
         let call = cues.call.load(Ordering::Relaxed);
+        let crash = cues.crash.load(Ordering::Relaxed);
+        let mut scrape_bands = [Resonator::default(); 3];
+        let mut scrape_gains = [0.0; 3];
+        for (i, &(frequency, q)) in SCRAPE_BANDS.iter().enumerate() {
+            scrape_bands[i].tune(frequency, q);
+            // Back to an RMS of 1, as the turbo's whistle.
+            let band = (PI * frequency / (q * SAMPLE_RATE as f32)).sqrt() / 3f32.sqrt();
+            scrape_gains[i] = 1.0 / band / SCRAPE_BANDS.len() as f32;
+        }
         Self {
             cues,
             volume: 0.0,
@@ -425,6 +589,14 @@ impl EffectsVoice {
             rattle: 0.0,
             players: [Player::default(); PLAYERS],
             call,
+            impacts: default(),
+            pings: [Ping::default(); RINGING],
+            crash,
+            scrape: 0.0,
+            scrape_pan: 0.0,
+            scrape_bands,
+            scrape_gains,
+            rough: 0.0,
             seed: 0x9e37_79b9,
             right: None,
         }
@@ -436,6 +608,135 @@ impl EffectsVoice {
         self.seed ^= self.seed >> 17;
         self.seed ^= self.seed << 5;
         self.seed as f32 / u32::MAX as f32 * 2.0 - 1.0
+    }
+
+    /// Uniform noise from 0 to 1.
+    fn uniform(&mut self) -> f32 {
+        0.5 * (self.noise() + 1.0)
+    }
+
+    /// Starts a crash of `strength` (0..1).
+    fn smash(&mut self, strength: f32) {
+        // A free slot, or the one that has sounded longest.
+        let slot = (0..IMPACTS)
+            .find(|&i| !self.impacts[i].playing)
+            .or_else(|| {
+                (0..IMPACTS).max_by(|&a, &b| self.impacts[a].age.total_cmp(&self.impacts[b].age))
+            })
+            .unwrap_or(0);
+        let mut panels = [Resonator::default(); 6];
+        let mut gains = [0.0; 6];
+        for (i, &(frequency, q, gain)) in PANELS.iter().enumerate() {
+            let frequency = frequency * (0.85 + 0.3 * self.uniform());
+            panels[i].tune(frequency, q);
+            // A band-pass rings at about its `b0` from a click.
+            gains[i] = gain / panels[i].b0;
+        }
+        self.impacts[slot] = Impact {
+            strength,
+            age: 0.0,
+            thud: 0.0,
+            panels,
+            gains,
+            crackling: CRACKLING.0 + (CRACKLING.1 - CRACKLING.0) * strength,
+            playing: true,
+        };
+    }
+
+    /// Starts a piece of glass ringing.
+    fn ping(&mut self, level: f32) {
+        let frequency = PING_PITCH.0 * (PING_PITCH.1 / PING_PITCH.0).powf(self.uniform());
+        let decay = PING_DECAY.0 + (PING_DECAY.1 - PING_DECAY.0) * self.uniform();
+        let rate = SAMPLE_RATE as f32;
+        let r = (-1.0 / (decay * rate)).exp();
+        let w = TAU * frequency / rate;
+        let amplitude = level * (0.3 + 0.7 * self.uniform());
+        // The quietest (or a silent) one makes way.
+        let slot = (0..RINGING)
+            .min_by(|&a, &b| {
+                let size = |p: &Ping| p.z[0].hypot(p.z[1]);
+                size(&self.pings[a]).total_cmp(&size(&self.pings[b]))
+            })
+            .unwrap_or(0);
+        self.pings[slot] = Ping {
+            z: [amplitude, 0.0],
+            step: [r * w.cos(), r * w.sin()],
+        };
+    }
+
+    /// The crashes, the glass and the scraping in this sample: centred, and the scrape
+    /// with its pan.
+    fn crashes(&mut self) -> (f32, f32, f32) {
+        let rate = SAMPLE_RATE as f32;
+        let dt = 1.0 / rate;
+        let crash = self.cues.crash.load(Ordering::Relaxed);
+        if crash != self.crash {
+            self.crash = crash;
+            self.smash((crash & 0xff) as f32 / 255.0);
+        }
+        let mut out = 0.0;
+        let mut glass = 0.0;
+        for i in 0..IMPACTS {
+            if !self.impacts[i].playing {
+                continue;
+            }
+            let (noise, chance, size, ping_chance) =
+                (self.noise(), self.uniform(), self.noise(), self.uniform());
+            let impact = &mut self.impacts[i];
+            let age = impact.age;
+            impact.age += dt;
+            let strength = impact.strength;
+            // The thud: a boom gliding down.
+            let pitch =
+                THUD_PITCH.1 + (THUD_PITCH.0 - THUD_PITCH.1) * (-age / (2.0 * THUD_DECAY)).exp();
+            impact.thud += TAU * pitch * dt;
+            let level = 0.3 + 0.7 * strength;
+            out += THUD * level.powf(0.8) * impact.thud.sin() * (-age / THUD_DECAY).exp();
+            // The crunch: a burst of noise, then crackles thinning out.
+            let mut excitation = 0.0;
+            if age < BURST {
+                excitation += 0.15 * noise * (1.0 - age / BURST);
+            }
+            let crackles = CRACKLES * (0.2 + 0.8 * strength) * (-age / impact.crackling).exp();
+            if chance < crackles * dt {
+                excitation += size;
+            }
+            let mut ring = 0.0;
+            for (panel, gain) in impact.panels.iter_mut().zip(impact.gains) {
+                ring += gain * panel.process(excitation);
+            }
+            out += CRUNCH * level * ring;
+            let glassy =
+                strength >= GLASS_FROM && ping_chance < PINGS * (-age / PINGING).exp() * dt;
+            if age > 3.0 * impact.crackling + 6.0 * THUD_DECAY + 0.2 {
+                impact.playing = false;
+            }
+            if glassy {
+                glass += strength;
+            }
+        }
+        if glass > 0.0 {
+            self.ping(PING * glass.min(1.0));
+        }
+        for ping in &mut self.pings {
+            out += ping.next();
+        }
+
+        // Scraping: rough noise in a few bands.
+        let [level, pan] = self.cues.scrape.each_ref().map(read);
+        self.scrape += (level.clamp(0.0, 1.0) - self.scrape) / (0.02 * rate);
+        self.scrape_pan += (pan.clamp(-1.0, 1.0) - self.scrape_pan) / (0.05 * rate);
+        let (noise, walk) = (self.noise(), self.noise());
+        let mut scrape = 0.0;
+        if self.scrape > 1e-4 {
+            self.rough += (walk * 3.0 - self.rough) * TAU * SCRAPE_ROUGH.1 / rate;
+            for (band, gain) in self.scrape_bands.iter_mut().zip(self.scrape_gains) {
+                scrape += gain * band.process(noise);
+            }
+            let rough = (1.0 + SCRAPE_ROUGH.0 * self.rough.clamp(-1.0, 1.0)).max(0.0);
+            scrape *= SCRAPE * self.scrape * rough;
+        }
+        (out, scrape, self.scrape_pan)
     }
 
     /// Starts the notes of a call.
@@ -551,6 +852,11 @@ impl EffectsVoice {
         }
         let rattle = (1.0 + GRIND_RATTLE.0 * self.rattle.clamp(-1.0, 1.0)).max(0.0);
         let grind = GRIND * self.grind * rattle * ring;
+
+        let (crashes, scrape, scrape_pan) = self.crashes();
+        let angle = (scrape_pan + 1.0) * PI / 4.0;
+        left += crashes + scrape * angle.cos() * 2f32.sqrt();
+        right += crashes + scrape * angle.sin() * 2f32.sqrt();
 
         let mut brass = 0.0;
         for player in &mut self.players {
@@ -686,6 +992,52 @@ mod tests {
     }
 
     #[test]
+    fn crashes_thud_crunch_and_shatter() {
+        // Bumps and resting against something are no crash; a hard one is the hardest.
+        assert_eq!(crash(0.5), None);
+        assert!(crash(3.0).unwrap() < GLASS_FROM);
+        assert_eq!(crash(30.0), Some(1.0));
+        // Scraping needs both pushing and moving.
+        assert_eq!(scrape(20.0, 0.0), 0.0);
+        assert_eq!(scrape(0.0, 20.0), 0.0);
+        assert_eq!(scrape(20.0, 20.0), 1.0);
+
+        let (cues, mut voice) = voice();
+        cues.crash(0.2);
+        let (light, _) = run(&mut voice, 0.5);
+        assert!(voice.pings.iter().all(|p| p.z == [0.0; 2]), "no glass");
+        run(&mut voice, 2.0);
+        assert!(voice.impacts.iter().all(|i| !i.playing));
+        assert!(run(&mut voice, 0.2).1 < 1e-3);
+        cues.crash(1.0);
+        let (hard, _) = run(&mut voice, 0.5);
+        assert!(hard > 1.5 * light && light > 0.02, "{light} {hard}");
+        assert!(voice.pings.iter().any(|p| p.z != [0.0; 2]), "glass");
+        run(&mut voice, 2.0);
+        assert!(run(&mut voice, 0.2).1 < 1e-3);
+        // Several at once (more than it plays) are fine.
+        for i in 0..10 {
+            cues.crash(i as f32 / 10.0);
+            run(&mut voice, 0.01);
+        }
+        run(&mut voice, 0.5);
+        // Scraping: heard while it goes on.
+        cues.set_scrape(1.0, -1.0);
+        let samples = SAMPLE_RATE as usize;
+        run(&mut voice, 3.0);
+        let (mut left, mut right) = (0.0f32, 0.0f32);
+        for _ in 0..samples {
+            let (l, r) = voice.frame();
+            left = left.max(l.abs());
+            right = right.max(r.abs());
+        }
+        assert!(left > 0.1 && right < 0.01 * left, "{left} {right}");
+        cues.set_scrape(0.0, -1.0);
+        run(&mut voice, 0.5);
+        assert!(run(&mut voice, 0.2).1 < 1e-3);
+    }
+
+    #[test]
     fn the_trumpet_plays_its_calls_and_stops() {
         let (cues, mut voice) = voice();
         let effects = Effects { cues: cues.clone() };
@@ -711,7 +1063,8 @@ mod tests {
     }
 
     /// Writes a few seconds of each effect to `EFFECTS_WAV` (a 16-bit stereo WAV), for
-    /// listening: a countdown, a slide that builds up and lets go, and a grind.
+    /// listening: a countdown, a slide that builds up and lets go, a grind, crashes and a
+    /// scrape.
     #[test]
     #[ignore]
     fn write_effects_wav() {
@@ -753,6 +1106,15 @@ mod tests {
             cues.set_grind(0.0, rate);
             play(&mut voice, 0.5);
         }
+        // Crashes: a bump, a solid knock, a big one with glass; then scraping along.
+        for strength in [0.1, 0.4, 1.0] {
+            cues.crash(strength);
+            play(&mut voice, 1.5);
+        }
+        cues.set_scrape(0.8, 0.3);
+        play(&mut voice, 1.5);
+        cues.set_scrape(0.0, 0.3);
+        play(&mut voice, 0.5);
         let mut wav = Vec::new();
         let data = (samples.len() * 2) as u32;
         wav.extend_from_slice(b"RIFF");
