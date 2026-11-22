@@ -1,5 +1,5 @@
 //! Shops on the map: places to drive to for what changes a car (a showroom, parts, the
-//! alignment (`alignment`), paint, fuel (`gas`), a dyno (`dyno`)). The server says where they are (its own list, `--shops`,
+//! alignment (`alignment`), paint (`paint`), fuel (`gas`), a dyno (`dyno`)). The server says where they are (its own list, `--shops`,
 //! separate from the map, e.g. `assets/shops.cfg`; none without one) when a player joins;
 //! playing alone there are none.
 //!
@@ -13,7 +13,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car, CarSetup};
-use crate::chassis::{CarBuild, PAINTS};
+use crate::chassis::CarBuild;
 use crate::map::{MapLegend, MapMark, MapMarks};
 use crate::net::wire::{Reader, Wire};
 use crate::net::{Connection, Status, WantsGhost};
@@ -185,7 +185,7 @@ impl Plugin for ShopsPlugin {
         app.init_resource::<Shops>()
             .init_resource::<AtShop>()
             .add_systems(Update, (place, arrive).chain())
-            .add_systems(EguiPrimaryContextPass, (labels, window));
+            .add_systems(EguiPrimaryContextPass, labels);
     }
 }
 
@@ -251,24 +251,6 @@ pub fn arrive(
     ghost.0 = at.shop.is_some() || (stopped && on.is_some());
 }
 
-/// The window of the shop the car is in.
-fn window(
-    mut contexts: EguiContexts,
-    shops: Res<Shops>,
-    mut at: ResMut<AtShop>,
-    active: Res<ActiveCar>,
-    mut cars: Query<&mut Car>,
-) -> Result {
-    let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
-        return Ok(());
-    };
-    let ctx = contexts.ctx_mut()?;
-    shop_window(ctx, &shops, &mut at, ShopKind::Paint, |ui, _| {
-        paint_shop(ui, &mut car)
-    });
-    Ok(())
-}
-
 /// The window of the shop the car is in, if it's of `kind`: `contents` (told whether the
 /// car just came in), then a button to leave. Shops whose contents are elsewhere (the
 /// showroom, the parts shop, the dyno) show theirs with it too. Returns whether it's shown.
@@ -304,28 +286,6 @@ pub fn shop_window(
         at.leave();
     }
     true
-}
-
-/// The paints, as swatches: a click repaints the car.
-fn paint_shop(ui: &mut egui::Ui, car: &mut Car) {
-    let mut build = car.setup.build.clone();
-    ui.label(format!("Now: {}", PAINTS[build.paint].0));
-    egui::Grid::new("paints").num_columns(5).show(ui, |ui| {
-        for (i, (name, [r, g, b])) in PAINTS.iter().enumerate() {
-            let color = Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
-            let swatch = egui::Button::new("")
-                .fill(color)
-                .min_size(egui::vec2(56.0, 36.0))
-                .selected(i == build.paint);
-            if ui.add(swatch).on_hover_text(*name).clicked() {
-                build.paint = i;
-            }
-            if i % 5 == 4 {
-                ui.end_row();
-            }
-        }
-    });
-    rebuild(car, build);
 }
 
 /// `car` rebuilt as `build`, where it is (if that changed anything).

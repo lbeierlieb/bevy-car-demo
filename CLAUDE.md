@@ -236,7 +236,20 @@ as built, in order:
    green or red. The window on the right is `garage::alignment`, applied live to the
    parked car (`car::Away` set, as in the dyno); drag swings, the wheel zooms. Shots: the
    shop's button at (547, 123), "Back to the car" (655, 204).
-7. ✓ **Paint shop**: the existing paints only (swatches; gone from the garage). 8. ✓ **Showroom**: the showroom window
+7. ✓ **Paint shop**: the existing paints only (swatches; gone from the garage). Since
+   2026-11-22 (asked for by the user) a scene like the alignment bay's (`paint.rs`): "Into
+   the paint booth" puts the car (drawn from `Looks`, engine off) in a spray booth 240 m
+   under the marker, sized to the car (white walls with seams, glowing filter ceiling and
+   angled light rows, grates over pits along both sides, folding glass doors ahead, a
+   yellow filter bank at the back, control panel and door on the left, a shelf of tins
+   (lids in each paint, the picked one pulled out) and the gun on its hook on the right, a
+   test card on a stand by the right front wheel in the picked paint). The window on the
+   right: swatches pick, "Spray it X" sprays a coat (`SPRAY` 6 s): a mist of the paint (12
+   nested unlit ellipsoid shells round the body, `cull_mode` none, plus 600 droplets going
+   round and sinking) thickens, the paint goes onto the parked car at `THICKEST` (3 s,
+   `shops::rebuild`), then it clears. Shots: the shop's button at (538, 108); swatches at
+   y 87 and 122 (x 958, 1014, 1071, 1127, 1183), "Spray it" (990, 168); use `STEP=0.05`
+   (60 frames to the thickest). 8. ✓ **Showroom**: the showroom window
    (`shops::shop_window` draws a shop's window for other modules, saying when the car came in).
 9. ✓ **Parts shop**: the garage window without alignment, cam timing and wastegate;
    repairs; new tires. 10. ✓ **Dyno** (`dyno/`): the career's chassis dyno room back

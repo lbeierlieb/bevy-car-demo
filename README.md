@@ -105,7 +105,7 @@ stations take the car up to a pump under their canopy, with 95, 98 and 102 octan
 (pumped at 2 L/s; grades mix by volume in the tank, and the engine's knock limit follows); alignment shops put the car on an alignment lift with laser
 heads on its wheels, to set camber, toe, tire pressures and the brakes against the
 aligner's screen;
-paint shops repaint the car; car dealers sell every car; parts shops fit engines and
+paint shops put the car in a spray booth and spray it in a new paint; car dealers sell every car; parts shops fit engines and
 parts, repair the engine and fit new tires; and dyno shops put the car on a chassis dyno
 in a room under the shop, for power runs, holding it at an rpm and throttle, ECU tuning,
 cam timing and the wastegate. A car at a shop is a ghost: other cars drive through it.
@@ -326,7 +326,8 @@ tire grip force, cyan for roll centres.
 | `src/net/`, `src/online.rs`, `src/bin/server.rs` | Multiplayer: protocol, server, client, WebTransport; the start menu; the server app |
 | `src/editor/`, `src/bin/editor.rs` | The map editor |
 | `src/osm.rs` | The map file's reader and writer (shared with the bake) |
-| `src/shops.rs` | Shops on the map (from the server): going in, paint |
+| `src/shops.rs` | Shops on the map (from the server): going in |
+| `src/paint.rs` | The paint shops' spray booth: tins, a test card, the mist of a coat |
 | `src/gas.rs` | The gas stations' forecourt: the car at a pump, its display, pumping |
 | `src/alignment.rs` | The alignment shops' bay: the lift, laser heads, the aligner's screen |
 | `src/events/` | Events on the map (from the server): lobbies, rounds and rules of the car hunt, races and time trials; routes along the roads |
