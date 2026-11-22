@@ -26,6 +26,9 @@ const LEAVE: f32 = 8.0;
 const ASK_AGAIN: f64 = 1.0;
 /// The cars ours touched go to the server at most this often (s).
 const TOUCHES_EVERY: f64 = 0.2;
+/// The nearest hunter's distance is shown red and yellow within these (m).
+const HUNTER_CLOSE: f32 = 50.0;
+const HUNTER_NEAR: f32 = 200.0;
 /// The players' spots by the marker: within this far of it (m), at most this many.
 const SPOT_RANGE: f32 = 300.0;
 const SPOTS: usize = 32;
@@ -286,6 +289,8 @@ fn window(
     connection: Option<ResMut<Connection>>,
     mut state: ResMut<EventState>,
     time: Res<Time<Real>>,
+    active: Res<ActiveCar>,
+    cars: Query<&Car>,
 ) -> Result {
     let Some(mut connection) = connection else {
         return Ok(());
@@ -402,6 +407,19 @@ fn window(
                 let left = left.max(0.0) as u32;
                 lines.push((format!("{}:{:02} left", left / 60, left % 60), white));
             }
+            if we_are_hunted
+                && let Some(distance) = nearest_hunter(&connection, &round, &active, &cars, now)
+            {
+                // Rounded: the map's positions are a second old, carried on.
+                let step = if distance < 100.0 { 5.0 } else { 10.0 };
+                let shown = (distance / step).round() * step;
+                let color = match distance {
+                    d if d < HUNTER_CLOSE => Color32::RED,
+                    d if d < HUNTER_NEAR => Color32::YELLOW,
+                    _ => white,
+                };
+                lines.push((format!("Nearest hunter: {shown:.0} m"), color));
+            }
             if let Some(since) = slow {
                 let server = connection.server_time(now).unwrap_or(*since);
                 let caught_in = (CAUGHT_TIME - (server - since)).ceil().max(0.0);
@@ -435,6 +453,27 @@ fn window(
         }
     }
     Ok(())
+}
+
+/// How far the nearest hunter is from our car (m), as the map has them (it shows everyone
+/// in a round).
+fn nearest_hunter(
+    connection: &Connection,
+    round: &Round,
+    active: &ActiveCar,
+    cars: &Query<&Car>,
+    now: f64,
+) -> Option<f32> {
+    let ours = cars
+        .iter()
+        .find(|car| car.index == active.0)?
+        .body
+        .position
+        .xz();
+    (connection.on_map(now))
+        .filter(|player| player.id != round.hunted && round.players.contains(&player.id))
+        .map(|player| player.position.distance(ours))
+        .min_by(f32::total_cmp)
 }
 
 /// The hunted's settings, a row each.
