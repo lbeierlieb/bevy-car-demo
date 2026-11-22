@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::Point;
+use crate::corners::Corner;
 use crate::profile::{self, Problem};
 
 /// Spacing of the smoothed centreline (m).
@@ -572,6 +573,16 @@ impl Grid {
         index(lo)..=index(hi)
     }
 
+    /// Calls `f` with the index and position of every vertex between `lo` and `hi`.
+    pub fn each_vertex(&self, lo: Point, hi: Point, mut f: impl FnMut(usize, Point)) {
+        let n = self.cells_x + 1;
+        for iz in self.span(lo.1, hi.1, true) {
+            for ix in self.span(lo.0, hi.0, false) {
+                f(iz * n + ix, self.vertex(ix, iz));
+            }
+        }
+    }
+
     fn vertex(&self, ix: usize, iz: usize) -> Point {
         let half = self.half();
         (
@@ -582,10 +593,12 @@ impl Grid {
 }
 
 /// Cuts and fills the terrain `heights` (one per grid vertex) to the drivable roads that
-/// aren't bridges: under a road and its shoulders it lies `SINK` below the road's surface,
-/// beyond them it slopes at `EMBANKMENT` up or down to the natural ground. Each vertex
-/// follows the road whose edge is nearest.
-pub fn conform(roads: &[Road], heights: &mut [f64], grid: &Grid) {
+/// aren't bridges and the corners between them: under a road and its shoulders it lies
+/// `SINK` below the road's surface, beyond them it slopes at `EMBANKMENT` up or down to
+/// the natural ground. Each vertex follows the road or corner whose edge is nearest, or,
+/// on or beside several (where roads overlap at junctions), the lowest of them: the game
+/// blends overlapping roads' surfaces, and the terrain must stay under the blend.
+pub fn conform(roads: &[Road], corners: &[Corner], heights: &mut [f64], grid: &Grid) {
     let n = grid.cells_x + 1;
     // Per vertex: (distance beyond the nearest road's edge, that road's surface there).
     let mut nearest = vec![(f64::INFINITY, 0.0); heights.len()];
@@ -603,14 +616,16 @@ pub fn conform(roads: &[Road], heights: &mut [f64], grid: &Grid) {
                     let off = (px - x0 - dx * t).hypot(pz - z0 - dz * t);
                     let half = (w0 + (w1 - w0) * t) / 2.0;
                     let edge = off - half;
-                    let slot = &mut nearest[iz * n + ix];
-                    if edge < slot.0 {
-                        let centre = road.heights[i] * (1.0 - t) + road.heights[i + 1] * t;
-                        let surface = centre - road.crown() * off.min(half);
-                        *slot = (edge, surface);
-                    }
+                    let centre = road.heights[i] * (1.0 - t) + road.heights[i + 1] * t;
+                    let surface = centre - road.crown() * off.min(half);
+                    follow(&mut nearest[iz * n + ix], (edge, surface));
                 }
             }
+        }
+    }
+    for corner in corners {
+        for (i, edge, surface) in corner.near_vertices(grid, SHOULDER + EMBANKMENT_REACH) {
+            follow(&mut nearest[i], (edge, surface));
         }
     }
     for (h, &(edge, surface)) in heights.iter_mut().zip(&nearest) {
@@ -620,6 +635,15 @@ pub fn conform(roads: &[Road], heights: &mut [f64], grid: &Grid) {
         let level = surface - SINK;
         let run = (edge - SHOULDER).max(0.0);
         *h = level + (*h - level).clamp(-run * EMBANKMENT, run * EMBANKMENT);
+    }
+}
+
+/// What a vertex follows (see `conform`), given another road or corner it's `edge` from.
+fn follow(slot: &mut (f64, f64), (edge, surface): (f64, f64)) {
+    if edge < SHOULDER && slot.0 < SHOULDER {
+        *slot = (edge.min(slot.0), surface.min(slot.1));
+    } else if edge < slot.0 {
+        *slot = (edge, surface);
     }
 }
 

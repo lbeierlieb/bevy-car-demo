@@ -256,7 +256,9 @@ pub struct Terrain {
     /// Height above sea level of the map's y = 0 (its lowest point).
     pub base: f32,
     pub roads: Vec<Road>,
-    /// The road segments near each cell, for `surface`.
+    /// The insides of turns between roads leaving a junction, curbed.
+    pub corners: Vec<Corner>,
+    /// The road segments and corners near each cell, for `surface`.
     road_grid: RoadGrid,
     pub buildings: Vec<Building>,
     /// Fences, walls, hedges and guard rails.
@@ -274,6 +276,36 @@ struct Chunk {
     step: usize,
     /// Land use class per cell at that resolution, row-major in z (classes as in `tools/bake`).
     classes: Vec<u8>,
+}
+
+/// The inside of a turn between two roads leaving a junction, filled out to an arc: a fan
+/// of triangles around its first point (x, height, z).
+pub struct Corner {
+    pub kind: RoadKind,
+    pub points: Vec<Vec3>,
+}
+
+impl Corner {
+    /// Height and upward normal of its surface at `p`, if it's inside.
+    fn at(&self, p: Vec2) -> Option<(f32, Vec3)> {
+        let e = self.points[0];
+        for w in self.points[1..].windows(2) {
+            let (b, c) = (w[0], w[1]);
+            let (eb, ec) = (b.xz() - e.xz(), c.xz() - e.xz());
+            let det = eb.perp_dot(ec);
+            if det.abs() < 1e-9 {
+                continue;
+            }
+            let ep = p - e.xz();
+            let (u, v) = (ep.perp_dot(ec) / det, eb.perp_dot(ep) / det);
+            if u >= -1e-4 && v >= -1e-4 && u + v <= 1.0 + 1e-4 {
+                let normal = (b - e).cross(c - e).normalize();
+                let normal = if normal.y < 0.0 { -normal } else { normal };
+                return Some((e.y + u * (b.y - e.y) + v * (c.y - e.y), normal));
+            }
+        }
+        None
+    }
 }
 
 pub struct Building {
@@ -342,7 +374,7 @@ impl Terrain {
         let mut r = Bytes(&inflated);
         r.take(4);
         let version = r.u32();
-        if version != 15 {
+        if version != 16 {
             return Err(format!("unsupported terrain version {version}"));
         }
         let (cells_x, cells_z) = (r.u32() as usize, r.u32() as usize);
@@ -440,6 +472,18 @@ impl Terrain {
                 }
             })
             .collect();
+        let corners: Vec<Corner> = (0..r.u32())
+            .map(|_| {
+                let kind = RoadKind::from_byte(r.take(1)[0]);
+                let points = (0..r.u32())
+                    .map(|_| {
+                        let (x, z, y) = (r.f32(), r.f32(), r.f32());
+                        Vec3::new(x, y, z)
+                    })
+                    .collect();
+                Corner { kind, points }
+            })
+            .collect();
         let half = Vec2::new(cells_x as f32, cells_z as f32) * cell / 2.0;
         Ok(Self {
             cells_x,
@@ -449,8 +493,9 @@ impl Terrain {
             chunk_cells,
             chunks,
             base,
-            road_grid: RoadGrid::new(&roads, half),
+            road_grid: RoadGrid::new(&roads, &corners, half),
             roads,
+            corners,
             buildings,
             fences,
             obstacles: Obstacles::default(),
@@ -480,7 +525,8 @@ impl Terrain {
                 .collect(),
             base: 0.0,
             roads: Vec::new(),
-            road_grid: RoadGrid::new(&[], Vec2::splat(cells as f32 * 2.0)),
+            corners: Vec::new(),
+            road_grid: RoadGrid::new(&[], &[], Vec2::splat(cells as f32 * 2.0)),
             buildings: Vec::new(),
             fences: Vec::new(),
             obstacles: Obstacles::default(),
@@ -511,7 +557,7 @@ impl Terrain {
             waves: Waves::new(roughness, 1),
             features: Vec::new(),
         });
-        terrain.road_grid = RoadGrid::new(&terrain.roads, terrain.half_size());
+        terrain.road_grid = RoadGrid::new(&terrain.roads, &[], terrain.half_size());
         terrain
     }
 
@@ -600,9 +646,20 @@ impl Terrain {
         let mut covering: [(usize, f32, f32, Vec2); 8] = [(usize::MAX, 0.0, 0.0, Vec2::ZERO); 8];
         let mut count = 0;
         let mut water = false;
+        let mut corner = None;
         for &(r, i) in self.road_grid.near(p) {
             let (r, i) = (r as usize, i as usize);
-            let road = &self.roads[r];
+            let Some(road) = self.roads.get(r) else {
+                let c = &self.corners[r - self.roads.len()];
+                if corner.is_none() {
+                    corner = c.at(p).map(|(height, normal)| Ground {
+                        height,
+                        normal,
+                        surface: c.kind.surface(),
+                    });
+                }
+                continue;
+            };
             let (a, b) = (road.points[i], road.points[i + 1]);
             let length = a.distance(b).max(1e-6);
             let along = (b - a) / length;
@@ -654,7 +711,7 @@ impl Terrain {
                 surface: self.roads[main.0].kind.surface(),
             })
         };
-        let below = blend(Some(false)).unwrap_or_else(|| {
+        let below = blend(Some(false)).or(corner).unwrap_or_else(|| {
             let (height, normal) = self.land(x, z);
             let surface = if water {
                 Surface::Water
@@ -854,7 +911,7 @@ impl Terrain {
 }
 
 /// The road segments (road, segment start) whose ribbons reach into each cell of a grid
-/// over the map, in compressed rows.
+/// over the map, and the corners ((road count + corner, 0)), in compressed rows.
 struct RoadGrid {
     half: Vec2,
     cells_x: usize,
@@ -865,7 +922,7 @@ struct RoadGrid {
 }
 
 impl RoadGrid {
-    fn new(roads: &[Road], half: Vec2) -> Self {
+    fn new(roads: &[Road], corners: &[Corner], half: Vec2) -> Self {
         let (cells_x, cells_z) = (
             (2.0 * half.x / ROAD_CELL).ceil() as usize,
             (2.0 * half.y / ROAD_CELL).ceil() as usize,
@@ -887,6 +944,20 @@ impl RoadGrid {
                     for cx in x0..=x1 {
                         cells[cz * cells_x + cx].push((r as u32, i as u32));
                     }
+                }
+            }
+        }
+        for (c, corner) in corners.iter().enumerate() {
+            let (lo, hi) = corner
+                .points
+                .iter()
+                .fold((Vec2::MAX, Vec2::MIN), |(lo, hi), p| {
+                    (lo.min(p.xz()), hi.max(p.xz()))
+                });
+            let ((x0, z0), (x1, z1)) = (grid.cell(lo), grid.cell(hi));
+            for cz in z0..=z1 {
+                for cx in x0..=x1 {
+                    cells[cz * cells_x + cx].push(((roads.len() + c) as u32, 0));
                 }
             }
         }
@@ -918,6 +989,8 @@ impl RoadGrid {
 pub struct RoadRibbons {
     /// Per chunk, the (road, point) pairs whose quads start there.
     by_chunk: Vec<Vec<(usize, usize)>>,
+    /// Per chunk, the corners whose first point is in it.
+    corners: Vec<Vec<usize>>,
 }
 
 impl RoadRibbons {
@@ -928,7 +1001,11 @@ impl RoadRibbons {
                 by_chunk[terrain.chunk_at(*p)].push((r, i));
             }
         }
-        Self { by_chunk }
+        let mut corners = vec![Vec::new(); terrain.chunk_count()];
+        for (c, corner) in terrain.corners.iter().enumerate() {
+            corners[terrain.chunk_at(corner.points[0].xz())].push(c);
+        }
+        Self { by_chunk, corners }
     }
 
     /// The ribbon quads starting in one chunk, into `mesh`, and the bridges' slabs and
@@ -1018,6 +1095,15 @@ impl RoadRibbons {
                     (i == 0, i + 2 == n),
                     structure,
                 );
+            }
+        }
+        // Corners a little under the ribbons, which they reach in under.
+        for &c in &self.corners[index] {
+            let corner = &terrain.corners[c];
+            let lift = Vec3::Y * (corner.kind.lift() - 0.004).max(0.001);
+            let e = corner.points[0] + lift;
+            for w in corner.points[1..].windows(2) {
+                mesh.triangle([e, w[0] + lift, w[1] + lift], corner.kind.color());
             }
         }
     }

@@ -949,7 +949,20 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    over 8 m per metre of difference (6–30 m, at most half the road) with a smoothstep
    (`roads::taper`, `Road::ends`, the game's `Road::width_at`; 123 ends). Where two road
    ends meet at an angle, both ribbons end on the mitre (`join_ends`), so no wedge opens
-   on the outside of the bend. Not done: tunnels, junction shapes, piers.
+   on the outside of the bend. Curbed corners (asked for by the user, 2026-11-22; format
+   16; `tools/bake/src/corners.rs`): at nodes where 3+ roads on the ground leave (none
+   with a bridge), between each two neighbouring ones 25–160° apart, the inside of the
+   turn is filled to an arc tangent to both edges, radius by the narrower road (2.5 m
+   under 3.5 m wide, 5 m under 6 m, else 8 m), shrunk to fit the arms (0.8 of their
+   length) and to stay out of houses; a fan from the edges' corner pulled 0.3 m in under
+   the roads, heights from the roads' edges. 4528 on the map. The game's `Corner`s are
+   in the road grid (entries past the roads), count as ground where no road covers, and
+   are drawn 4 mm under the ribbons. The bake's `conform` keeps the terrain under the
+   lowest road or corner a vertex is on or within the shoulder of (`follow`): following
+   only the nearest edge let terrain poke through the game's blend of overlapping roads.
+   A 2 m shoulder was tried and dropped (terrain rose under bridge ends).
+   Not done: junction middles as one mesh (the overlapping ribbons show seams), tunnels,
+   piers.
 4. Road condition (done): `relief.rs`, OSM `smoothness` to ISO 8608 roughness (waves
    0.5–20 m), features from `traffic_calming=bump|hump|table` and `hazard=pothole`
    nodes. The baked file is zlib-compressed, heights predicted from neighbours.

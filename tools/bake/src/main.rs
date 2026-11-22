@@ -12,6 +12,7 @@
 //! tiles use.
 
 mod clearance;
+mod corners;
 mod fences;
 #[path = "../../../src/osm.rs"]
 mod osm;
@@ -726,7 +727,9 @@ fn bake(map: &str, lat: &str, lon: &str, size: &str, out: &str) -> Result<(), Er
         cells_z,
         cell: CELL,
     };
-    roads::conform(&roads, &mut heights, &grid);
+    let corners = corners::corners(&roads, &outlines);
+    eprintln!("{} curbed corners at junctions", corners.len());
+    roads::conform(&roads, &corners, &mut heights, &grid);
     roads::carve_under_bridges(&roads, &mut heights, &grid);
     // Bumps and potholes, on the roads their nodes are on (or next to).
     let features: Vec<Feature> = osm
@@ -891,7 +894,10 @@ fn bake(map: &str, lat: &str, lon: &str, size: &str, out: &str) -> Result<(), Er
     // outline points (x, z) f32,
     // fence count u32, then per fence (barriers: walls, hedges, guard rails too): kind u8
     // (0 rails, 1 metal, 2 panel, 3 wall, 4 hedge, 5 guard rail), height f32, point count
-    // u32, points (x, z) f32.
+    // u32, points (x, z) f32,
+    // corner count u32, then per corner (the inside of a turn between two roads leaving a
+    // junction, a fan around its first point): kind u8 (as roads'), point count u32,
+    // points (x, z, height above the lowest point) f32.
     let base = heights.iter().copied().fold(f64::INFINITY, f64::min);
     let top = heights.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if top - base > u16::MAX as f64 / 100.0 {
@@ -904,7 +910,7 @@ fn bake(map: &str, lat: &str, lon: &str, size: &str, out: &str) -> Result<(), Er
     let mut bytes = Vec::new();
     let mut put = |v: &[u8]| bytes.extend_from_slice(v);
     put(b"CSTR");
-    put(&15u32.to_le_bytes());
+    put(&16u32.to_le_bytes());
     put(&(cells_x as u32).to_le_bytes());
     put(&(cells_z as u32).to_le_bytes());
     put(&(CELL as f32).to_le_bytes());
@@ -1001,6 +1007,16 @@ fn bake(map: &str, lat: &str, lon: &str, size: &str, out: &str) -> Result<(), Er
         put(&[fence.kind as u8]);
         put(&(fence.height as f32).to_le_bytes());
         polyline(&mut put, &fence.points);
+    }
+    put(&(corners.len() as u32).to_le_bytes());
+    for corner in &corners {
+        put(&[corner.kind as u8]);
+        put(&(corner.points.len() as u32).to_le_bytes());
+        for &(x, z, h) in &corner.points {
+            for v in [x, z, h - base] {
+                put(&(v as f32).to_le_bytes());
+            }
+        }
     }
     let raw = bytes.len();
     let bytes = miniz_oxide::deflate::compress_to_vec_zlib(&bytes, 8);
