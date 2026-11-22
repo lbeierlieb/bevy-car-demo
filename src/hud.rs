@@ -87,8 +87,8 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
                 );
             }
 
-            // Speed above gear in the middle.
-            let speed = (car.forward_speed().abs() * 3.6).round();
+            // Speed above gear in the middle, from the gearbox output like a real one.
+            let speed = (car.shaft_speed().abs() * 3.6).round();
             painter.text(
                 center + vec2(0.0, -14.0),
                 Align2::CENTER_CENTER,

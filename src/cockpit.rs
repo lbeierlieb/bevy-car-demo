@@ -248,7 +248,7 @@ fn move_dials(
                 Quat::from_rotation_z(needle_angle(car.drivetrain.rpm / top))
             }
             Dial::Speedo => {
-                let kmh = car.forward_speed().abs() * 3.6;
+                let kmh = car.shaft_speed().abs() * 3.6;
                 Quat::from_rotation_z(needle_angle(kmh / SPEEDO_TOP))
             }
             // Like a real wheel set to the configured rotation range.

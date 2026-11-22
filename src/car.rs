@@ -484,6 +484,16 @@ impl Car {
     pub fn forward_speed(&self) -> f32 {
         self.body.velocity.dot(self.body.rotation * Vec3::NEG_Z)
     }
+
+    /// What the speedometer reads: the gearbox output's speed (m/s), the driven wheels'
+    /// rims averaged the way the differentials do. Reads high with wheelspin, zero with
+    /// the wheels locked or the car carried.
+    pub fn shaft_speed(&self) -> f32 {
+        let shares = self.setup.engine.drive.shares();
+        (self.corners.iter().zip(shares))
+            .map(|(corner, share)| share * corner.omega * self.setup.axle(corner.front).tire.radius)
+            .sum()
+    }
 }
 
 /// Yaw angle of an orientation's forward (-z) direction.
