@@ -3,6 +3,7 @@
 
 use bevy::color::palettes::css;
 use bevy::prelude::*;
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Car};
@@ -23,6 +24,10 @@ impl Plugin for DebugPlugin {
             .add_systems(
                 Update,
                 (toggle, draw.run_if(|view: Res<DebugView>| view.gizmos)),
+            )
+            .add_systems(
+                EguiPrimaryContextPass,
+                position.run_if(|view: Res<DebugView>| view.gizmos),
             );
     }
 }
@@ -122,6 +127,39 @@ fn draw(
             }
         }
     }
+}
+
+/// With the gizmos, top right: where the driven car is on the map (x east, z south, m, as
+/// the server's lists of shops and events have it) and which way it points.
+fn position(mut contexts: EguiContexts, cars: Query<&Car>, active: Res<ActiveCar>) -> Result {
+    let Some(car) = cars.iter().find(|car| car.index == active.0) else {
+        return Ok(());
+    };
+    let p = car.body.position;
+    let forward = (car.body.rotation * Vec3::NEG_Z).xz();
+    // Degrees from north (map -z), clockwise.
+    let heading = forward.x.atan2(-forward.y).to_degrees().rem_euclid(360.0);
+    let text = format!(
+        "x {:.1}   z {:.1}   height {:.1} m   heading {heading:.0}°",
+        p.x, p.z, p.y
+    );
+    egui::Area::new(egui::Id::new("position"))
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
+        .interactable(false)
+        .show(contexts.ctx_mut()?, |ui| {
+            egui::Frame::new()
+                .fill(egui::Color32::from_black_alpha(150))
+                .corner_radius(3.0)
+                .inner_margin(egui::Margin::symmetric(6, 2))
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(text)
+                            .color(egui::Color32::WHITE)
+                            .monospace(),
+                    )
+                });
+        });
+    Ok(())
 }
 
 /// Front-view roll centre of an axle (in the chassis frame): each side's line from its

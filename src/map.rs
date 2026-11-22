@@ -436,7 +436,13 @@ fn draw(
                 .map_or(String::new(), |c| format!("Click: {c}    "));
             let key = format!("{:?}", view.key);
             let key = key.trim_start_matches("Key");
-            let help = format!("Drag: move    Scroll: zoom    {click}{key} / Esc: close");
+            // Where the pointer is, in map metres (as the server's lists have places).
+            let pointer = response.hover_pos().map_or(String::new(), |p| {
+                let at =
+                    center + Vec2::new(p.x - screen.center().x, p.y - screen.center().y) * scale;
+                format!("    x {:.0}  z {:.0}", at.x, at.y)
+            });
+            let help = format!("Drag: move    Scroll: zoom    {click}{key} / Esc: close{pointer}");
             label(
                 &painter,
                 screen.left_bottom() + vec2(12.0, -12.0),
