@@ -20,7 +20,7 @@ use super::wire::{Reader, Wire};
 use crate::audio::{EngineCharacter, EngineRun, ExhaustSound};
 use crate::chassis::{CHASSIS, CLUTCHES, CarBuild, FACTORY_TOE, GEARBOXES, PAINTS, SUSPENSIONS};
 use crate::events::Event;
-use crate::events::hunt::{Action, Round};
+use crate::events::round::{Action, Round};
 use crate::heli::HeliPose;
 use crate::looks::{AxleLooks, Looks, Motion, WheelMotion};
 use crate::physics::collision::Obb;
@@ -32,7 +32,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 11;
+pub const PROTOCOL: u32 = 12;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -749,48 +749,53 @@ mod tests {
 
     #[test]
     fn rounds_come_through() {
-        use crate::events::hunt::*;
+        use crate::events::hunt::{Cars, Catch, Ending, Outcome as HuntOutcome, Settings};
+        use crate::events::round::*;
+        let settings = Settings {
+            cars: Cars::MuscleVsRally,
+            hunters_reset: false,
+            ..Settings::default()
+        };
         let mut round = Round {
             event: 0,
             players: vec![3, 1, 2],
-            hunted: 1,
-            settings: Settings {
-                cars: Cars::MuscleVsRally,
-                hunters_reset: false,
-                ..Settings::default()
-            },
+            host: 1,
+            game: Game::Hunt(settings),
             phase: Phase::Lobby {
-                last: Some(Outcome {
+                last: Some(Outcome::Hunt(HuntOutcome {
                     hunted: "Anna".into(),
                     ending: Ending::Caught(253.0),
-                }),
+                })),
             },
         };
         let message = ToClient::Round(Some(round.clone()));
         assert_eq!(decode::<ToClient>(&encode(&message)), Some(message));
-        round.settings.catch = Catch::Stop;
+        round.game = Game::Hunt(Settings {
+            catch: Catch::Stop,
+            ..settings
+        });
         round.phase = Phase::Lobby {
-            last: Some(Outcome {
+            last: Some(Outcome::Hunt(HuntOutcome {
                 hunted: "Anna".into(),
                 ending: Ending::Tagged {
                     by: "Ben".into(),
                     after: 61.0,
                 },
-            }),
+            })),
         };
         let message = ToClient::Round(Some(round.clone()));
         assert_eq!(decode::<ToClient>(&encode(&message)), Some(message));
         round.phase = Phase::Running {
             start: 12.5,
-            slow: None,
+            play: Play::Hunt { slow: None },
         };
         let message = ToClient::Round(Some(round));
         assert_eq!(decode::<ToClient>(&encode(&message)), Some(message));
         for action in [
             Action::Enter(2),
             Action::Leave,
-            Action::Settings(Settings::default()),
-            Action::Hunted(4),
+            Action::Game(Game::Hunt(Settings::default())),
+            Action::Host(4),
             Action::Start,
             Action::Touched(17),
         ] {

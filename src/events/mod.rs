@@ -5,6 +5,7 @@
 
 pub mod hunt;
 pub mod lobby;
+pub mod round;
 pub mod rounds;
 
 use bevy::prelude::*;

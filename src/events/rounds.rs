@@ -7,9 +7,8 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use super::hunt::{
-    Action, CAUGHT_SPEED, CAUGHT_TIME, Catch, Ending, Outcome, Phase, Round, TAG_RANGE,
-};
+use super::hunt::{self, CAUGHT_SPEED, CAUGHT_TIME, Catch, Ending, TAG_RANGE};
+use super::round::{Action, Game, Outcome, Phase, Play, Round};
 use crate::heli::{Chase, HeliPose};
 use crate::net::protocol::CarId;
 use crate::net::protocol::{CarState, PlayerId, ToClient};
@@ -34,7 +33,7 @@ pub struct EventAction {
 /// Every round there is, lobbies and running ones.
 #[derive(Resource, Default)]
 pub struct Rounds {
-    list: Vec<Hunt>,
+    list: Vec<Live>,
     /// The last realm given to a round.
     realm: u32,
     /// Who's in which event, as everyone was last told, and who was told.
@@ -47,17 +46,17 @@ pub struct Rounds {
 impl Rounds {
     /// The rounds there are.
     pub fn iter(&self) -> impl Iterator<Item = &Round> {
-        self.list.iter().map(|hunt| &hunt.round)
+        self.list.iter().map(|live| &live.round)
     }
 }
 
 /// A round on the server.
-struct Hunt {
+struct Live {
     round: Round,
     /// Its realm while it runs.
     realm: Realm,
-    /// What the hunted is called (kept for the outcome should they leave).
-    hunted_name: String,
+    /// What the host (the hunted) is called (kept for the outcome should they leave).
+    host_name: String,
     /// Its players need telling how it stands.
     changed: bool,
     /// The helicopter over the hunted while it runs, and when it was last sent (s).
@@ -65,7 +64,7 @@ struct Hunt {
     heli_sent: f64,
 }
 
-impl Hunt {
+impl Live {
     fn has(&self, player: PlayerId) -> bool {
         self.round.players.contains(&player)
     }
@@ -137,16 +136,16 @@ pub fn run_rounds(
                         hunt.round.players.push(player);
                         hunt.changed = true;
                     }
-                    None => rounds.list.push(Hunt {
+                    None => rounds.list.push(Live {
                         round: Round {
                             event,
                             players: vec![player],
-                            hunted: player,
-                            settings: default(),
+                            host: player,
+                            game: Game::Hunt(default()),
                             phase: Phase::Lobby { last: None },
                         },
                         realm: Realm::NORMAL,
-                        hunted_name: name(player),
+                        host_name: name(player),
                         changed: true,
                         heli: None,
                         heli_sent: f64::NEG_INFINITY,
@@ -159,23 +158,23 @@ pub fn run_rounds(
                     out.push(player);
                 }
             }
-            Action::Settings(settings) => {
+            Action::Game(Game::Hunt(settings)) => {
                 if let Some(hunt) = mine.map(|i| &mut rounds.list[i])
-                    && hunt.round.hunted == player
+                    && hunt.round.host == player
                     && !hunt.round.running()
                 {
-                    hunt.round.settings = settings.clamped();
+                    hunt.round.game = Game::Hunt(settings.clamped());
                     hunt.changed = true;
                 }
             }
-            Action::Hunted(other) => {
+            Action::Host(other) => {
                 if let Some(hunt) = mine.map(|i| &mut rounds.list[i])
-                    && hunt.round.hunted == player
+                    && hunt.round.host == player
                     && !hunt.round.running()
                     && hunt.has(other)
                 {
-                    hunt.round.hunted = other;
-                    hunt.hunted_name = name(other);
+                    hunt.round.host = other;
+                    hunt.host_name = name(other);
                     hunt.changed = true;
                 }
             }
@@ -185,24 +184,23 @@ pub fn run_rounds(
                 else {
                     continue;
                 };
-                let Phase::Running { start, .. } = hunt.round.phase else {
+                let (Phase::Running { start, .. }, Some(&settings)) =
+                    (&hunt.round.phase, hunt.round.hunt())
+                else {
                     continue;
                 };
-                let hunted = hunt.round.hunted;
+                let start = *start;
+                let hunted = hunt.round.host;
                 let hunter = match () {
                     _ if player == hunted => other,
                     _ if other == hunted => player,
                     _ => continue,
                 };
-                let hunting = start + f64::from(hunt.round.settings.head_start);
+                let hunting = start + f64::from(settings.head_start);
                 let at = |p: PlayerId| present.get(&p).and_then(|p| p.1);
                 let near =
                     (at(player).zip(at(other))).is_some_and(|(a, b)| a.distance(b) < TAG_RANGE);
-                if hunt.round.settings.catch == Catch::Tag
-                    && hunt.has(hunter)
-                    && now >= hunting
-                    && near
-                {
+                if settings.catch == Catch::Tag && hunt.has(hunter) && now >= hunting && near {
                     let by = name(hunter);
                     end(
                         hunt,
@@ -215,21 +213,20 @@ pub fn run_rounds(
             }
             Action::Start => {
                 if let Some(hunt) = mine.map(|i| &mut rounds.list[i])
-                    && hunt.round.hunted == player
+                    && hunt.round.host == player
                     && !hunt.round.running()
                     && hunt.round.players.len() >= 2
                 {
                     rounds.realm += 1;
                     hunt.realm = Realm(rounds.realm);
-                    let cars = if hunt.round.settings.traffic {
-                        traffic.cars
-                    } else {
-                        0
+                    let traffic_on = match hunt.round.game {
+                        Game::Hunt(settings) => settings.traffic,
                     };
+                    let cars = if traffic_on { traffic.cars } else { 0 };
                     traffic.realms.insert(hunt.realm, cars);
                     hunt.round.phase = Phase::Running {
                         start: now,
-                        slow: None,
+                        play: Play::Hunt { slow: None },
                     };
                     hunt.changed = true;
                     info!(
@@ -244,8 +241,12 @@ pub fn run_rounds(
 
     // The rounds under way: is the hunted caught, or is the time up?
     for hunt in &mut rounds.list {
-        let settings = hunt.round.settings;
-        let Phase::Running { start, slow } = &mut hunt.round.phase else {
+        let Game::Hunt(settings) = hunt.round.game;
+        let Phase::Running {
+            start,
+            play: Play::Hunt { slow },
+        } = &mut hunt.round.phase
+        else {
             continue;
         };
         let hunting = *start + f64::from(settings.head_start);
@@ -253,7 +254,7 @@ pub fn run_rounds(
             end(hunt, Ending::Escaped);
             continue;
         }
-        let speed = present.get(&hunt.round.hunted).and_then(|p| p.2);
+        let speed = present.get(&hunt.round.host).and_then(|p| p.2);
         let Some(speed) = speed.filter(|_| now >= hunting) else {
             continue;
         };
@@ -281,7 +282,7 @@ pub fn run_rounds(
             hunt.heli = None;
             continue;
         }
-        let Some(state) = hunted_states.get(&hunt.round.hunted) else {
+        let Some(state) = hunted_states.get(&hunt.round.host) else {
             continue;
         };
         let heli = hunt
@@ -385,10 +386,10 @@ pub fn run_rounds(
 
 /// `player` leaves the round: in the lobby someone else is hunted if they were; under way
 /// it ends if they were hunted, or if they were the last hunter.
-fn leave(hunt: &mut Hunt, player: PlayerId, name: &impl Fn(PlayerId) -> String) {
+fn leave(hunt: &mut Live, player: PlayerId, name: &impl Fn(PlayerId) -> String) {
     hunt.round.players.retain(|&p| p != player);
     hunt.changed = true;
-    let was_hunted = hunt.round.hunted == player;
+    let was_hunted = hunt.round.host == player;
     if hunt.round.running() {
         if was_hunted {
             end(hunt, Ending::HuntedLeft);
@@ -397,17 +398,17 @@ fn leave(hunt: &mut Hunt, player: PlayerId, name: &impl Fn(PlayerId) -> String) 
         }
     }
     if was_hunted && let Some(&next) = hunt.round.players.first() {
-        hunt.round.hunted = next;
-        hunt.hunted_name = name(next);
+        hunt.round.host = next;
+        hunt.host_name = name(next);
     }
 }
 
 /// The round is over: back to its lobby with how it ended (its realm goes afterwards).
-fn end(hunt: &mut Hunt, ending: Ending) {
-    let outcome = Outcome {
-        hunted: hunt.hunted_name.clone(),
+fn end(hunt: &mut Live, ending: Ending) {
+    let outcome = Outcome::Hunt(hunt::Outcome {
+        hunted: hunt.host_name.clone(),
         ending,
-    };
+    });
     info!("A car hunt ended: {}", outcome.text());
     hunt.round.phase = Phase::Lobby {
         last: Some(outcome),

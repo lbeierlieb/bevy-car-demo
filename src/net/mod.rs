@@ -770,11 +770,11 @@ mod tests {
     }
 
     /// The round a player is in, as they were told.
-    fn round(app: &App) -> Option<crate::events::hunt::Round> {
+    fn round(app: &App) -> Option<crate::events::round::Round> {
         connection(app).round.clone()
     }
 
-    fn act(app: &mut App, action: crate::events::hunt::Action) {
+    fn act(app: &mut App, action: crate::events::round::Action) {
         app.world_mut().resource_mut::<Connection>().act(action);
     }
 
@@ -783,7 +783,8 @@ mod tests {
     /// still; everyone back in the lobby, told how it ended.
     #[test]
     fn a_car_hunt_runs_in_a_realm_of_its_own() {
-        use crate::events::hunt::{Action, Ending, Phase, Settings};
+        use crate::events::hunt::{Ending, Settings};
+        use crate::events::round::{Action, Game, Outcome, Phase};
         let listener = LoopbackListener::default();
         let events = crate::events::parse("hunt 0 0 Hunt").unwrap();
         let mut server = server(&listener);
@@ -807,33 +808,33 @@ mod tests {
         assert_eq!(round(all[3]), None, "Cleo is too far away");
         let lobby = round(all[2]).expect("Ben is in the lobby");
         assert_eq!(lobby.players, [anna_id, ben_id]);
-        assert_eq!(lobby.hunted, anna_id, "the first in is hunted");
+        assert_eq!(lobby.host, anna_id, "the first in is hunted");
         assert_eq!(connection(all[3]).busy.len(), 2, "Cleo sees who's in it");
         // Only the hunted sets things and starts.
         act(all[2], Action::Start);
-        act(all[1], Action::Hunted(ben_id));
+        act(all[1], Action::Host(ben_id));
         let settings = Settings {
             head_start: 2,
             traffic: false,
             ..Settings::default()
         };
         run(&mut all, 5);
-        act(all[1], Action::Settings(settings));
+        act(all[1], Action::Game(Game::Hunt(settings)));
         run(&mut all, 5);
         let lobby = round(all[1]).unwrap();
-        assert_eq!(lobby.hunted, ben_id);
+        assert_eq!(lobby.host, ben_id);
         assert!(!lobby.running());
         assert_eq!(
-            lobby.settings,
-            Settings::default(),
+            lobby.game,
+            Game::Hunt(Settings::default()),
             "Anna isn't hunted any more"
         );
-        act(all[2], Action::Settings(settings));
+        act(all[2], Action::Game(Game::Hunt(settings)));
         act(all[2], Action::Start);
         run(&mut all, 30);
         let running = round(all[1]).unwrap();
         assert!(running.running());
-        assert_eq!(running.settings, settings);
+        assert_eq!(running.game, Game::Hunt(settings));
         // In a realm of their own: Cleo, 40 m away, sees neither; they see each other
         // (named, and on each other's map).
         let tags = |app: &mut App| -> Vec<Option<String>> {
@@ -866,7 +867,7 @@ mod tests {
         run(&mut all, 60 * 4);
         let after = round(all[2]).unwrap();
         let Phase::Lobby {
-            last: Some(outcome),
+            last: Some(Outcome::Hunt(outcome)),
         } = &after.phase
         else {
             panic!("still {:?}", after.phase);
@@ -888,9 +889,9 @@ mod tests {
         assert_eq!(round(all[2]), None);
         let after = round(all[1]).unwrap();
         assert_eq!(after.players, [anna_id]);
-        assert_eq!(after.hunted, anna_id);
+        assert_eq!(after.host, anna_id);
         let Phase::Lobby {
-            last: Some(outcome),
+            last: Some(Outcome::Hunt(outcome)),
         } = &after.phase
         else {
             panic!("still {:?}", after.phase);
@@ -929,7 +930,8 @@ mod tests {
     /// Tagging: a hunter's car touching the hunted's ends the round at once.
     #[test]
     fn a_hunter_tags_the_hunted() {
-        use crate::events::hunt::{Action, Catch, Ending, Phase, Settings};
+        use crate::events::hunt::{Catch, Ending, Settings};
+        use crate::events::round::{Action, Game, Outcome, Phase};
         let listener = LoopbackListener::default();
         let mut server = hunt_server(&listener);
         let mut anna = hunter(&listener, "Anna", 0.0);
@@ -941,7 +943,7 @@ mod tests {
             Status::Joined { you } => you,
             _ => panic!("not joined"),
         };
-        let (h, k) = if you(all[1]) == lobby.hunted {
+        let (h, k) = if you(all[1]) == lobby.host {
             (1, 2)
         } else {
             (2, 1)
@@ -952,7 +954,7 @@ mod tests {
             catch: Catch::Tag,
             ..Settings::default()
         };
-        act(all[h], Action::Settings(settings));
+        act(all[h], Action::Game(Game::Hunt(settings)));
         act(all[h], Action::Start);
         run(&mut all, 10);
         assert!(round(all[k]).unwrap().running());
@@ -969,7 +971,7 @@ mod tests {
         run(&mut all, 20);
         let after = round(all[h]).unwrap();
         let Phase::Lobby {
-            last: Some(outcome),
+            last: Some(Outcome::Hunt(outcome)),
         } = &after.phase
         else {
             panic!("still {:?}", after.phase);
@@ -989,7 +991,8 @@ mod tests {
     fn a_hunt_lends_cars_and_gives_them_back() {
         use crate::car::{Held, ResetRule};
         use crate::chassis::CHASSIS;
-        use crate::events::hunt::{Action, Cars, Settings};
+        use crate::events::hunt::{Cars, Settings};
+        use crate::events::round::{Action, Game};
         let listener = LoopbackListener::default();
         let mut server = hunt_server(&listener);
         let mut anna = hunter(&listener, "Anna", 0.0);
@@ -1005,7 +1008,7 @@ mod tests {
             Status::Joined { you } => you,
             _ => panic!("not joined"),
         };
-        let (h, k) = if you(all[1]) == lobby.hunted {
+        let (h, k) = if you(all[1]) == lobby.host {
             (1, 2)
         } else {
             (2, 1)
@@ -1017,7 +1020,7 @@ mod tests {
             traffic: false,
             ..Settings::default()
         };
-        act(all[h], Action::Settings(settings));
+        act(all[h], Action::Game(Game::Hunt(settings)));
         act(all[h], Action::Start);
         run(&mut all, 10);
         let chassis = |app: &mut App| CHASSIS[car(app).setup.build.chassis].name;

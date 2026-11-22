@@ -9,7 +9,8 @@ use bevy_egui::egui::{self, Align2, Color32, RichText};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::Events;
-use super::hunt::{Action, CAUGHT_TIME, Cars, Catch, Phase, Round};
+use super::hunt::{CAUGHT_TIME, Cars, Catch};
+use super::round::{Action, Game, Phase, Play, Round};
 use crate::car::{ActiveCar, Car, CarSetup, Held, ResetRule};
 use crate::chassis::CHASSIS;
 use crate::net::{Connection, Status, Touching, WantsGhost};
@@ -168,8 +169,9 @@ fn report_touches(
     mut state: ResMut<EventState>,
     time: Res<Time<Real>>,
 ) {
-    let tagging = (connection.round.as_ref())
-        .is_some_and(|round| round.running() && round.settings.catch == Catch::Tag);
+    let tagging = (connection.round.as_ref()).is_some_and(|round| {
+        round.running() && round.hunt().is_some_and(|hunt| hunt.catch == Catch::Tag)
+    });
     let now = time.elapsed_secs_f64();
     if !tagging {
         touching.0.clear();
@@ -222,12 +224,13 @@ fn follow(
     if running && !was_running {
         let round = round.as_ref().unwrap();
         state.started = now;
-        let hunted = round.hunted == you;
+        let hunted = round.host == you;
+        let Game::Hunt(settings) = round.game;
         if let (Some((p, yaw)), Some((entity, mut car))) = (
             spot(round),
             cars.iter_mut().find(|(_, car)| car.index == active.0),
         ) {
-            if round.settings.cars == Cars::MuscleVsRally {
+            if settings.cars == Cars::MuscleVsRally {
                 // A factory car for the round; ours waits.
                 let name = if hunted { RALLY } else { MUSCLE };
                 let chassis = CHASSIS.iter().position(|c| c.name == name).unwrap_or(0);
@@ -240,7 +243,7 @@ fn follow(
             } else {
                 car.place(&terrain, p, yaw);
             }
-            *rule = if round.settings.hunters_reset && !hunted {
+            *rule = if settings.hunters_reset && !hunted {
                 ResetRule::Road
             } else {
                 ResetRule::Never
@@ -274,8 +277,10 @@ fn follow(
                 ..
             },
         ) => {
-            round.hunted != you
-                && elapsed(&connection, &state, *start, now) < f64::from(round.settings.head_start)
+            round.host != you
+                && round.hunt().is_some_and(|hunt| {
+                    elapsed(&connection, &state, *start, now) < f64::from(hunt.head_start)
+                })
         }
         _ => false,
     };
@@ -309,11 +314,12 @@ fn window(
             connection.players.get(&id).cloned().unwrap_or_default()
         }
     };
-    let hunted_name = name(round.hunted);
-    let we_are_hunted = round.hunted == you;
+    let hunted_name = name(round.host);
+    let we_are_hunted = round.host == you;
+    let Game::Hunt(hunt) = round.game;
     match &round.phase {
         Phase::Lobby { last } => {
-            let mut settings = round.settings;
+            let mut settings = hunt;
             let mut wanted = None;
             let mut leaving = false;
             egui::Window::new(format!("{} ({})", event.name, event.kind.title()))
@@ -326,21 +332,17 @@ fn window(
                         ui.label(RichText::new(last.text()).strong().size(16.0));
                         ui.separator();
                     }
-                    ui.label(round.settings.catch.rule());
+                    ui.label(hunt.catch.rule());
                     ui.add_space(4.0);
                     egui::Grid::new("event players")
                         .num_columns(3)
                         .show(ui, |ui| {
                             for &id in &round.players {
                                 ui.label(name(id));
-                                ui.label(if id == round.hunted {
-                                    "Hunted"
-                                } else {
-                                    "Hunter"
-                                });
+                                ui.label(if id == round.host { "Hunted" } else { "Hunter" });
                                 if we_are_hunted && id != you {
                                     if ui.button("Make hunted").clicked() {
-                                        wanted = Some(Action::Hunted(id));
+                                        wanted = Some(Action::Host(id));
                                     }
                                 } else {
                                     ui.label("");
@@ -370,12 +372,12 @@ fn window(
                         .on_hover_text("Or drive off (Space releases the parking brake)")
                         .clicked();
                 });
-            if settings != round.settings {
+            if settings != hunt {
                 // Shown at once, not only once the server has it.
                 if let Some(round) = connection.round.as_mut() {
-                    round.settings = settings;
+                    round.game = Game::Hunt(settings);
                 }
-                connection.act(Action::Settings(settings));
+                connection.act(Action::Game(Game::Hunt(settings)));
             }
             if let Some(action) = wanted {
                 connection.act(action);
@@ -384,10 +386,13 @@ fn window(
                 leave(&mut connection, &mut state);
             }
         }
-        Phase::Running { start, slow } => {
+        Phase::Running {
+            start,
+            play: Play::Hunt { slow },
+        } => {
             let elapsed = elapsed(&connection, &state, *start, now);
-            let head_start = f64::from(round.settings.head_start);
-            let left = head_start + f64::from(round.settings.duration) - elapsed;
+            let head_start = f64::from(hunt.head_start);
+            let left = head_start + f64::from(hunt.duration) - elapsed;
             let mut lines: Vec<(String, Color32)> = Vec::new();
             let white = Color32::WHITE;
             lines.push(if we_are_hunted {
@@ -470,7 +475,7 @@ fn nearest_hunter(
         .position
         .xz();
     (connection.on_map(now))
-        .filter(|player| player.id != round.hunted && round.players.contains(&player.id))
+        .filter(|player| player.id != round.host && round.players.contains(&player.id))
         .map(|player| player.position.distance(ours))
         .min_by(f32::total_cmp)
 }

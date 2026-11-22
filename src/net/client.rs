@@ -23,7 +23,7 @@ use super::wire::{decode, encode};
 use super::{ClockOffset, SEND_RATE};
 use crate::car::{ActiveCar, Car, Rescued};
 use crate::events::Event;
-use crate::events::hunt::{Action, Round};
+use crate::events::round::{Action, Round};
 use crate::heli::HeliPose;
 use crate::heli::rescue::Rescue;
 use crate::looks::{Ghost, Looks, Motion};
