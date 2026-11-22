@@ -1,5 +1,6 @@
 //! Driving HUD in the bottom right corner: speed and gear in the middle, with a rev counter
-//! arc around them, and the tires' temperatures and wear and the fuel left of it.
+//! arc around them, and the tires' temperatures and wear, the coolant
+//! temperature and the fuel left of it.
 
 use std::f32::consts::PI;
 
@@ -8,6 +9,7 @@ use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Shape, Stroke, pos2, 
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car};
+use crate::physics::engine::damage::COOLANT_LIMIT;
 use crate::physics::tire::{AMBIENT, Compound, RIBS};
 
 /// Gauge radius (to the middle of the rev arc) and the arc's sweep: 270°, open at the
@@ -159,19 +161,30 @@ const TIRE: egui::Vec2 = vec2(30.0, 34.0);
 const TIRE_GAP: egui::Vec2 = vec2(14.0, 22.0);
 /// Room under each tire for its pressure.
 const PRESSURE_ROW: f32 = 14.0;
-/// Width of the fuel gauge right of the tires, and its gap to them.
-const FUEL_WIDTH: f32 = 8.0;
-const FUEL_GAP: f32 = 12.0;
+/// The gauges right of the tires (coolant, then fuel): the gap to the tires, each one's
+/// column (labels left of the bar), the bar's width, the room for the symbol on top, and
+/// the gap between a bar's segments.
+const GAUGES_GAP: f32 = 10.0;
+const COLUMN: f32 = 22.0;
+const BAR_WIDTH: f32 = 8.0;
+const SYMBOL: f32 = 22.0;
+const SEGMENT_GAP: f32 = 2.0;
 /// Below this share of the tank the fuel gauge turns orange.
 const FUEL_LOW: f32 = 0.15;
+/// The coolant gauge's scale (K, 40 to 130 °C): blue below `COOLANT_COLD`, orange from
+/// `COOLANT_HOT`, red from where the engine takes damage.
+const COOLANT_SCALE: (f32, f32) = (313.15, 403.15);
+const COOLANT_COLD: f32 = 333.15;
+const COOLANT_HOT: f32 = 385.15;
+const BLUE: Color32 = Color32::from_rgb(90, 150, 240);
 
 /// The four tires left of the gauge, seen from above: each rib (inside towards the car's
 /// middle) coloured by how warm its surface is against the compound's window (blue cold,
 /// green right, red overheated) with its worn share darkened from the top, the core
-/// temperature in the middle, and the pressure below. Right of them, the fuel gauge:
-/// orange when low, red while the engine starves.
+/// temperature in the middle, and the pressure below. Right of them, the coolant and fuel
+/// gauges (see `coolant_gauge`, `fuel_gauge`).
 fn tires(ctx: &egui::Context, car: &Car) {
-    let size = 2.0 * TIRE + TIRE_GAP + vec2(16.0 + FUEL_GAP + FUEL_WIDTH, 16.0 + PRESSURE_ROW);
+    let size = 2.0 * TIRE + TIRE_GAP + vec2(16.0 + GAUGES_GAP + 2.0 * COLUMN, 16.0 + PRESSURE_ROW);
     egui::Area::new(egui::Id::new("tires"))
         .anchor(
             Align2::RIGHT_BOTTOM,
@@ -226,31 +239,189 @@ fn tires(ctx: &egui::Context, car: &Car) {
                 );
             }
 
-            let gauge = egui::Rect::from_min_max(
-                rect.right_top() + vec2(-8.0 - FUEL_WIDTH, 8.0),
-                rect.right_bottom() + vec2(-8.0, -8.0),
-            );
-            painter.rect_filled(gauge, 3.0, TRACK);
-            let share = (car.fuel.litres() / car.setup.tank.litres).clamp(0.0, 1.0);
-            let level = egui::Rect::from_min_max(
-                pos2(gauge.min.x, gauge.max.y - gauge.height() * share),
-                gauge.max,
-            );
-            let color = if car.fuel.supply < 0.95 {
-                RED
-            } else if share < FUEL_LOW {
-                ORANGE
-            } else {
-                BAR
+            let column = |n: f32| {
+                let right = rect.right() - 8.0 - n * COLUMN;
+                egui::Rect::from_min_max(
+                    pos2(right - COLUMN, rect.top() + 8.0),
+                    pos2(right, rect.bottom() - 8.0),
+                )
             };
-            painter.rect_filled(level, 3.0, color);
+            coolant_gauge(painter, column(1.0), car);
+            fuel_gauge(painter, column(0.0), car);
         });
+}
+
+/// A gauge's column split into the symbol's place on top and the bar below it, with
+/// the labels at the bar's ends left of it.
+fn gauge_layout(
+    painter: &egui::Painter,
+    column: egui::Rect,
+    labels: (&str, &str),
+) -> (Pos2, egui::Rect) {
+    let symbol = pos2(column.center().x, column.top() + SYMBOL / 2.0 - 2.0);
+    let bar = egui::Rect::from_min_max(
+        pos2(column.right() - 3.0 - BAR_WIDTH, column.top() + SYMBOL),
+        pos2(column.right() - 3.0, column.bottom()),
+    );
+    let x = bar.left() - 6.0;
+    let font = FontId::proportional(9.0);
+    let (top, bottom) = labels;
+    painter.text(
+        pos2(x, bar.top()),
+        Align2::CENTER_TOP,
+        top,
+        font.clone(),
+        DIM,
+    );
+    painter.text(
+        pos2(x, bar.bottom()),
+        Align2::CENTER_BOTTOM,
+        bottom,
+        font,
+        DIM,
+    );
+    (symbol, bar)
+}
+
+/// The fuel left as four segments from E to F under a fuel pump, the pump lit orange
+/// when low and red while the engine starves (so is the bar).
+fn fuel_gauge(painter: &egui::Painter, column: egui::Rect, car: &Car) {
+    let (symbol, bar) = gauge_layout(painter, column, ("F", "E"));
+    let share = (car.fuel.litres() / car.setup.tank.litres).clamp(0.0, 1.0);
+    let (color, light) = if car.fuel.supply < 0.95 {
+        (RED, RED)
+    } else if share < FUEL_LOW {
+        (ORANGE, ORANGE)
+    } else {
+        (BAR, DIM)
+    };
+    let height = (bar.height() - 3.0 * SEGMENT_GAP) / 4.0;
+    for k in 0..4 {
+        let bottom = bar.bottom() - k as f32 * (height + SEGMENT_GAP);
+        let segment =
+            egui::Rect::from_min_max(pos2(bar.left(), bottom - height), pos2(bar.right(), bottom));
+        painter.rect_filled(segment, 1.5, TRACK);
+        let full = (share * 4.0 - k as f32).clamp(0.0, 1.0);
+        if full > 0.0 {
+            let level = egui::Rect::from_min_max(
+                pos2(bar.left(), bottom - height * full),
+                pos2(bar.right(), bottom),
+            );
+            let round = if full < 1.0 {
+                egui::CornerRadius {
+                    nw: 0,
+                    ne: 0,
+                    sw: 2,
+                    se: 2,
+                }
+            } else {
+                egui::CornerRadius::same(2)
+            };
+            painter.rect_filled(level, round, color);
+        }
+    }
+    fuel_pump(painter, symbol, light);
+}
+
+/// The coolant's temperature from C to H under a thermometer in waves: the scale's top
+/// marked red from where the engine takes damage, the pointer (and the symbol) blue while
+/// cold, orange when hot and red past the limit.
+fn coolant_gauge(painter: &egui::Painter, column: egui::Rect, car: &Car) {
+    let (symbol, bar) = gauge_layout(painter, column, ("H", "C"));
+    let kelvin = car.drivetrain.engine.thermal.coolant;
+    let (cold, hot) = COOLANT_SCALE;
+    let y = |kelvin: f32| {
+        let share = ((kelvin - cold) / (hot - cold)).clamp(0.0, 1.0);
+        bar.bottom() - share * bar.height()
+    };
+    painter.rect_filled(bar, 1.5, TRACK);
+    let danger = egui::Rect::from_min_max(bar.min, pos2(bar.right(), y(COOLANT_LIMIT)));
+    let top = egui::CornerRadius {
+        nw: 2,
+        ne: 2,
+        sw: 0,
+        se: 0,
+    };
+    painter.rect_filled(danger, top, RED.gamma_multiply(0.6));
+    for quarter in 1..4 {
+        let at = bar.bottom() - quarter as f32 * bar.height() / 4.0;
+        let length = if quarter == 2 { 4.0 } else { 2.5 };
+        painter.line_segment(
+            [
+                pos2(bar.right() + 1.0, at),
+                pos2(bar.right() + 1.0 + length, at),
+            ],
+            Stroke::new(1.0, DIM),
+        );
+    }
+    let (color, light) = if kelvin >= COOLANT_LIMIT {
+        (RED, RED)
+    } else if kelvin >= COOLANT_HOT {
+        (ORANGE, ORANGE)
+    } else if kelvin < COOLANT_COLD {
+        (BLUE, BLUE)
+    } else {
+        (BAR, DIM)
+    };
+    let at = y(kelvin);
+    let pointer = egui::Rect::from_min_max(
+        pos2(bar.left() - 2.0, at - 1.5),
+        pos2(bar.right() + 2.0, at + 1.5),
+    );
+    painter.rect_filled(pointer, 1.0, color);
+    thermometer(painter, symbol, light);
+}
+
+/// The fuel pump symbol, about 14 points square around `at`: the pump with its window,
+/// standing on a base, the hose from its side up to the nozzle.
+fn fuel_pump(painter: &egui::Painter, at: Pos2, color: Color32) {
+    let body = egui::Rect::from_min_max(at + vec2(-6.0, -7.0), at + vec2(1.5, 6.0));
+    painter.rect_filled(body, 1.0, color);
+    let window = egui::Rect::from_min_max(at + vec2(-4.5, -5.5), at + vec2(0.0, -2.0));
+    painter.rect_filled(window, 0.5, BACKGROUND);
+    let base = egui::Rect::from_min_max(at + vec2(-7.5, 5.5), at + vec2(3.0, 7.5));
+    painter.rect_filled(base, 0.5, color);
+    let hose = [
+        at + vec2(1.5, 2.5),
+        at + vec2(5.0, 2.5),
+        at + vec2(5.0, -4.0),
+        at + vec2(2.5, -6.5),
+    ];
+    painter.add(Shape::line(hose.to_vec(), Stroke::new(1.5, color)));
+}
+
+/// The coolant temperature symbol, about 14 points square around `at`: a thermometer
+/// with two marks dipped in two waves.
+fn thermometer(painter: &egui::Painter, at: Pos2, color: Color32) {
+    painter.line_segment(
+        [at + vec2(0.0, -7.0), at + vec2(0.0, 1.0)],
+        Stroke::new(2.5, color),
+    );
+    painter.circle_filled(at + vec2(0.0, 2.0), 2.6, color);
+    for y in [-5.0, -2.5] {
+        painter.line_segment(
+            [at + vec2(2.0, y), at + vec2(4.5, y)],
+            Stroke::new(1.2, color),
+        );
+    }
+    let wave = |y: f32, from: f32, to: f32| {
+        let points = (0..=12)
+            .map(|i| {
+                let x = from + (to - from) * i as f32 / 12.0;
+                at + vec2(x, y + (x * 1.4).sin())
+            })
+            .collect();
+        Shape::line(points, Stroke::new(1.2, color))
+    };
+    painter.add(wave(4.5, -7.5, -3.8));
+    painter.add(wave(4.5, 3.8, 7.5));
+    painter.add(wave(7.5, -7.5, 7.5));
 }
 
 /// Blue for a cold tread, green at the compound's best temperature, red once it's well
 /// overheated.
 fn warmth_color(compound: &Compound, temperature: f32) -> Color32 {
-    let blue = Color32::from_rgb(90, 150, 240);
+    let blue = BLUE;
     let green = Color32::from_rgb(90, 210, 110);
     let red = Color32::from_rgb(240, 70, 50);
     if temperature < compound.best {

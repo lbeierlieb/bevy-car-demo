@@ -16,7 +16,7 @@ const SPREAD: [f32; MAX_CYLINDERS] = [0.96, 1.03, 1.08, 0.93, 1.01, 0.97, 1.05, 
 /// the bearings) over its limit.
 const KNOCK_WEAR: f32 = 2e-4;
 const HEAT_WEAR: f32 = 2e-3;
-const COOLANT_LIMIT: f32 = 393.0;
+pub const COOLANT_LIMIT: f32 = 393.0;
 const OIL_LIMIT: f32 = 423.0;
 /// Valve float (spring force short of the valves' inertia, relative to it) where the
 /// valves start to touch the pistons, and the wear per cycle per unit of float beyond.
