@@ -14,7 +14,7 @@ impl Plugin for ShotPlugin {
             );
             // Before the car gets its meshes, which would be added to a despawned car.
             app.add_systems(PreUpdate, (pick_car, line_up, place_car));
-            app.add_systems(PreUpdate, (start_online, say, topple));
+            app.add_systems(PreUpdate, (start_online, say, topple, drain));
             // STEP="seconds": every frame moves the game on by exactly that (lavapipe's few
             // frames a second otherwise make it run on in jumps of up to 0.25 s).
             if let Ok(step) = std::env::var("STEP") {
@@ -497,6 +497,25 @@ fn place_car(
         car.place(&terrain, target, yaw);
     } else if let Some((spot, yaw)) = terrain.drive_spot(target, heading) {
         car.place(&terrain, spot, yaw);
+    }
+}
+
+/// FUEL="litres": the driven car has that much in its tank from frame 160 on (after a
+/// join and `PLACE`; for the gas station's pump).
+fn drain(
+    active: Res<crate::car::ActiveCar>,
+    mut cars: Query<&mut crate::car::Car>,
+    mut frame: Local<u32>,
+) {
+    *frame += 1;
+    let Ok(spec) = std::env::var("FUEL") else {
+        return;
+    };
+    if *frame != 160 {
+        return;
+    }
+    if let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) {
+        car.fuel = crate::physics::fuel::Fuel::new(spec.parse().unwrap());
     }
 }
 

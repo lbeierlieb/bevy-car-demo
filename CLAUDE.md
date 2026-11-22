@@ -212,7 +212,18 @@ as built, in order:
    removes a ghost's `traffic::Visitor`; `visuals` swaps in a second, blended material set.)
 4. ✓ Shops on the map (M), with a legend (`map::MapLegend`); their names only when zoomed in (under 1.6 m per screen point, `MapMark::label_below`; at the user's wish, 2026-11-22). 5. ✓ **Gas station**: 95/98/102; the tank keeps
    its octane, mixing by volume; the engine's knock limit reads the tank's octane (the
-   panel's octane and fuel load sliders go). 6. ✓ **Alignment shop**: camber, pressures
+   panel's octane and fuel load sliders go). Since 2026-11-22 (asked for by the user) a
+   scene like the alignment bay's (`gas.rs`): "Up to the pump" puts the car (drawn from
+   `Looks`, engine off) at a pump on a forecourt 600 m **over** the marker (open air: a
+   2.4 km meadow hides the land below; canopy, three islands, the shop, trees), the
+   filler flap open on the right over the rear wheel (front wheel when the tank is up
+   front), nozzle and a hanging hose from the pump; the pump's display (egui-painted in
+   perspective, point by point) shows grade, litres of this fill and the tank; the grade's
+   button lights and its nozzle leaves the holster. The window on the right: grade,
+   litres, "Pump N L"/"Fill up"/"Stop", pumping at `FLOW` (2 L/s, quicker than real) into
+   the parked car. Shots: "Up to the pump" at (527, 108), then "Fill up" (1055, 122),
+   grades at y 80 (95 at 965, 98 1045, 102 1133); `FUEL=12` empties the tank to 12 L at
+   frame 160. 6. ✓ **Alignment shop**: camber, pressures
    (from the garage), toe and brake torque/balance (from the panel; into `CarBuild`).
    Since 2026-11-22 (asked for by the user) a scene like the dyno's (`alignment.rs`): the
    shop's window has "Onto the alignment lift", a bay 220 m under the marker with a

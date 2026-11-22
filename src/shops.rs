@@ -1,5 +1,5 @@
 //! Shops on the map: places to drive to for what changes a car (a showroom, parts, the
-//! alignment (`alignment`), paint, fuel, a dyno (`dyno`)). The server says where they are (its own list, `--shops`,
+//! alignment (`alignment`), paint, fuel (`gas`), a dyno (`dyno`)). The server says where they are (its own list, `--shops`,
 //! separate from the map, e.g. `assets/shops.cfg`; none without one) when a player joins;
 //! playing alone there are none.
 //!
@@ -258,18 +258,14 @@ fn window(
     mut at: ResMut<AtShop>,
     active: Res<ActiveCar>,
     mut cars: Query<&mut Car>,
-    mut pump: Local<Pump>,
 ) -> Result {
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
         return Ok(());
     };
     let ctx = contexts.ctx_mut()?;
-    for kind in [ShopKind::Gas, ShopKind::Paint] {
-        shop_window(ctx, &shops, &mut at, kind, |ui, _| match kind {
-            ShopKind::Gas => gas_station(ui, &mut car, &mut pump),
-            _ => paint_shop(ui, &mut car),
-        });
-    }
+    shop_window(ctx, &shops, &mut at, ShopKind::Paint, |ui, _| {
+        paint_shop(ui, &mut car)
+    });
     Ok(())
 }
 
@@ -338,81 +334,6 @@ pub fn rebuild(car: &mut Car, build: CarBuild) {
         let engine = &car.setup.engine;
         let setup = CarSetup::new(build, engine.parts.clone(), engine.build.clone());
         *car = car.rebuilt(setup);
-    }
-}
-
-/// The gas station's grades: name and research octane number.
-const GRADES: [(&str, f32); 3] = [
-    ("Super 95", 95.0),
-    ("Super Plus 98", 98.0),
-    ("Racing 102", 102.0),
-];
-
-/// The pump as last set: the grade (in `GRADES`) and how much to fill in (L).
-struct Pump {
-    grade: usize,
-    litres: f32,
-}
-
-impl Default for Pump {
-    fn default() -> Self {
-        Self {
-            grade: 0,
-            litres: 10.0,
-        }
-    }
-}
-
-/// What's in the tank, and the pumps: a grade, and some litres or a full tank.
-fn gas_station(ui: &mut egui::Ui, car: &mut Car, pump: &mut Pump) {
-    let (litres, tank) = (car.fuel.litres(), car.setup.tank);
-    let octane = car.fuel.octane();
-    ui.label(format!(
-        "In the tank: {litres:.1} of {:.0} L, {octane:.1} octane",
-        tank.litres
-    ))
-    .on_hover_text(
-        "Grades mix by volume. Higher octane resists knock: the factory tunes are for 95; \
-         more spark advance or boost may want more, and lower knocks.",
-    );
-    ui.horizontal(|ui| {
-        for (i, (name, _)) in GRADES.iter().enumerate() {
-            ui.selectable_value(&mut pump.grade, i, *name);
-        }
-    });
-    let room = (tank.litres - litres).max(0.0);
-    ui.add(egui::Slider::new(&mut pump.litres, 0.0..=tank.litres).suffix(" L"));
-    let (_, grade) = GRADES[pump.grade];
-    let mixed = |added: f32| {
-        let added = added.min(room);
-        (litres * octane + added * grade) / (litres + added).max(1e-6)
-    };
-    let mut fill = None;
-    ui.horizontal(|ui| {
-        let some = pump.litres.min(room);
-        if ui
-            .add_enabled(
-                some > 0.05,
-                egui::Button::new(format!("Fill in {some:.1} L")),
-            )
-            .on_hover_text(format!("Then {:.1} octane", mixed(some)))
-            .clicked()
-        {
-            fill = Some(some);
-        }
-        if ui
-            .add_enabled(
-                room > 0.05,
-                egui::Button::new(format!("Fill up ({room:.1} L)")),
-            )
-            .on_hover_text(format!("Then {:.1} octane", mixed(room)))
-            .clicked()
-        {
-            fill = Some(room);
-        }
-    });
-    if let Some(added) = fill {
-        car.fuel.fill(&tank, added, grade);
     }
 }
 

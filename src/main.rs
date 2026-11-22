@@ -24,11 +24,12 @@ fn main() {
             // at first).
             debug::DebugPlugin,
             ui::PanelPlugin,
-            // The garage, the showroom, the chassis dyno and the ECU tuning (in it), and the
-            // alignment lift are at shops.
+            // The garage, the showroom, the chassis dyno and the ECU tuning (in it), the
+            // alignment lift and the pumps are at shops.
             garage::GaragePlugin,
             dyno::DynoPlugin,
             alignment::AlignmentPlugin,
+            gas::GasPlugin,
         ))
         .run();
 }
