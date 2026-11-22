@@ -5,15 +5,16 @@
 //! parts; it repairs the engine and fits new tires. The alignment (`alignment`) is set at
 //! alignment shops.
 //!
-//! The parts shop's window is in its workshop (`bay`), with the car up on a lift.
+//! The parts shop's window is in its workshop (`bay`), with the car up on a lift; the
+//! showroom's in its hall (`showroom`), the car picked on a turntable.
 //!
 //! Parts on the cylinder side need the engine's maps baked again (see `workshop`), which
 //! takes a few seconds, while the car keeps its old engine.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::egui;
 
-use crate::car::{ActiveCar, Car, CarSetup, heading};
+use crate::car::{Car, CarSetup, heading};
 use crate::chassis::{
     BRAKE_BALANCES, BRAKE_FORCES, CHASSIS, CLUTCHES, CarBuild, GEARBOXES, PAINTS, PRESSURES,
     SUSPENSIONS, TOES, needs_adapter,
@@ -25,12 +26,12 @@ use crate::physics::engine::hardware::EngineHardware;
 use crate::physics::engine::maps::{self, EngineMaps};
 use crate::physics::engine::parts::{HEADERS, INTERCOOLER, Parts, SLOTS};
 use crate::physics::tire::{COMPOUNDS, Tread};
-use crate::shops::{AtShop, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
 use crate::wheels::{self, TireSize, Wheel};
 use crate::workshop::{self, Work};
 
 mod bay;
+mod showroom;
 
 const WARNING: egui::Color32 = egui::Color32::from_rgb(255, 170, 60);
 
@@ -39,9 +40,8 @@ pub struct GaragePlugin;
 impl Plugin for GaragePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Garage>()
-            .add_plugins(bay::BayPlugin)
-            .add_systems(Update, bake)
-            .add_systems(EguiPrimaryContextPass, showroom);
+            .add_plugins((bay::BayPlugin, showroom::ShowroomPlugin))
+            .add_systems(Update, bake);
     }
 }
 
@@ -814,65 +814,6 @@ fn start(
         hardware,
         retune: garage.retune,
     });
-}
-
-/// The car dealer: every car as it leaves the factory, to pick one and drive it.
-fn showroom(
-    mut commands: Commands,
-    mut contexts: EguiContexts,
-    terrain: Res<Terrain>,
-    active_car: Res<ActiveCar>,
-    mut cars: Query<(Entity, &mut Car)>,
-    mut garage: ResMut<Garage>,
-    (shops, mut at): (Res<Shops>, ResMut<AtShop>),
-) -> Result {
-    let Some((entity, mut car)) = active(&mut cars, active_car.0) else {
-        return Ok(());
-    };
-    let ctx = contexts.ctx_mut()?;
-    let mut shown = garage.showroom;
-    let mut drive = false;
-    shop_window(ctx, &shops, &mut at, ShopKind::Showroom, |ui, came_in| {
-        if came_in {
-            garage.status.clear();
-            // Start at the car being driven.
-            shown = Showroom {
-                chassis: car.setup.build.chassis,
-                engine: 0,
-            };
-        }
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                for (i, chassis) in CHASSIS.iter().enumerate() {
-                    let label = format!("{}  ·  {}", chassis.name, chassis.class);
-                    if ui.selectable_label(shown.chassis == i, label).clicked() {
-                        shown = Showroom {
-                            chassis: i,
-                            engine: 0,
-                        };
-                    }
-                }
-            });
-            ui.add_space(16.0);
-            ui.vertical(|ui| {
-                ui.set_width(330.0);
-                drive = brochure(ui, &mut shown);
-            });
-        });
-        if !garage.status.is_empty() {
-            ui.label(&garage.status);
-        }
-    });
-    if drive {
-        let build = CarBuild::factory(shown.chassis);
-        let parts = build.factory_engine(shown.engine);
-        garage.draft = (build, parts);
-        garage.car = Some(car.index);
-        garage.retune = true;
-        start(&mut commands, &terrain, &mut garage, entity, &mut car);
-    }
-    garage.showroom = shown;
-    Ok(())
 }
 
 /// A chassis' page in the showroom: what it is, its engines and paint, and the button

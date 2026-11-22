@@ -254,7 +254,18 @@ as built, in order:
    round and sinking) thickens, the paint goes onto the parked car at `THICKEST` (3 s,
    `shops::rebuild`), then it clears. Shots: the shop's button at (538, 108); swatches at
    y 87 and 122 (x 958, 1014, 1071, 1127, 1183), "Spray it" (990, 168); use `STEP=0.05`
-   (60 frames to the thickest). 8. ✓ **Showroom**: the showroom window
+   (60 frames to the thickest). 8. ✓ **Showroom**: since 2026-11-22 (asked for by the user) a scene like the gas
+   station's (`garage/showroom.rs`): "Into the showroom" puts you in a hall with glass
+   front and left side, 600 m **over** the marker (meadow, forecourt with flags and a
+   pylon, the driven car drawn from `Looks` waiting outside the glass). Every chassis
+   stands on the floor in its factory paint at its own `place` (3 left, 7 back, 3 right;
+   `traffic::FactoryLooks`); the one picked turns on a turntable under spotlights (its
+   floor place hidden), a sign beside it egui-painted with name, class and engine. "Start
+   it" idles the picked engine (the model's `Motion::engine`, heard by `hear_others`) and
+   blips it every 3.5 s. The window on the right: the list and `brochure`; "Drive it"
+   builds the car (it then waits outside). The camera stays within `REACH` (7.4 m) of the
+   turntable, clear of the floor cars. Shots: the shop's button at (535, 123), then the
+   list at x 905 (Minim y 62, 21 px a row), "Start it" (909, 406) or so.
    (`shops::shop_window` draws a shop's window for other modules, saying when the car came in).
 9. ✓ **Parts shop**: the garage window without alignment, cam timing and wastegate;
    repairs; new tires. Since 2026-11-22 (asked for by the user, "car on a lift") a scene
