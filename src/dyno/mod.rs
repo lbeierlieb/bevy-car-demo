@@ -24,7 +24,7 @@ use crate::looks::{Looks, Motion};
 use crate::shops::{AtShop, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
 use engine::{Axis, HORSEPOWER, Line, chart};
-use rollers::{Rollers, STEP, Sample, Stage};
+use rollers::{Hold, Rollers, STEP, Sample, Stage};
 
 /// A run needs this much fuel in the tank (L).
 const RUN_FUEL: f32 = 1.0;
@@ -143,6 +143,8 @@ struct DynoView {
     runs: Vec<DynoRun>,
     shown: Option<usize>,
     compared: Option<usize>,
+    /// What a hold is set to.
+    hold: Hold,
     /// The window's tab, and the ECU tuning's state.
     tab: Tab,
     ecu: EcuPanel,
@@ -533,6 +535,12 @@ fn run(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mut view: ResMut<DynoVi
     if rollers.stage != Stage::Done || view.filed {
         return;
     }
+    if rollers.hold.is_some() {
+        // A hold measures nothing to file.
+        view.filed = true;
+        view.news = rollers.broke.join(", ");
+        return;
+    }
     view.filed = true;
     view.news = if rollers.broke.is_empty() {
         String::new()
@@ -659,6 +667,7 @@ fn screen(
         Some(Stage::Gears) => "WARM-UP",
         Some(Stage::Settle) => "SHIFT",
         Some(Stage::Pull) => "PULL",
+        Some(Stage::Hold) => "HOLD",
         Some(Stage::Coast) => "COAST DOWN",
         Some(Stage::Done) => "DONE",
     };
@@ -735,7 +744,7 @@ fn screen(
 
 /// While the run is on: skipping it.
 fn skip(mut contexts: EguiContexts, mut view: ResMut<DynoView>) -> Result {
-    if !view.running() {
+    if !view.running() || view.rollers.as_ref().is_some_and(|run| run.hold.is_some()) {
         return Ok(());
     }
     let mut skipped = false;
@@ -769,6 +778,7 @@ fn results(
     mut cameras: Query<(&ChaseCamera, &mut Projection)>,
 ) -> Result {
     let mut again = false;
+    let (mut hold, mut stop) = (false, false);
     let mut out = false;
     let ctx = contexts.ctx_mut()?;
     let height = ctx.content_rect().height() - 110.0;
@@ -804,6 +814,7 @@ fn results(
                 });
             ui.separator();
             let running = view.running();
+            let holding = view.rollers.as_ref().and_then(|run| run.hold).is_some() && running;
             let why_not = view.car.as_ref().and_then(cannot_run);
             ui.horizontal(|ui| {
                 let label = if view.rollers.is_some() {
@@ -811,8 +822,10 @@ fn results(
                 } else {
                     "Run it"
                 };
+                let can = !running && why_not.is_none();
                 again = ui
-                    .add_enabled(!running && why_not.is_none(), egui::Button::new(label))
+                    .add_enabled(can, egui::Button::new(label))
+                    .on_hover_text("Up through the gears, then a pull in fourth to the rev limiter")
                     .clicked();
                 out = ui
                     .button(RichText::new("Back to the car").strong())
@@ -821,21 +834,62 @@ fn results(
                     ui.label(RichText::new(why).weak());
                 }
             });
+            // Holding at an rpm and throttle, to tune the cells there.
+            let limit =
+                (view.car.as_ref()).map_or(7000.0, |car| car.setup.engine.build.ecu.rev_limit);
+            ui.horizontal(|ui| {
+                let can = !running && why_not.is_none();
+                if holding {
+                    stop = ui.button("Stop holding").clicked();
+                } else {
+                    hold = ui
+                        .add_enabled(can, egui::Button::new("Hold"))
+                        .on_hover_text(
+                            "Up through the gears, then the brake holds the engine at this rpm \
+                             in fourth at this throttle: see where it runs on the ECU's maps",
+                        )
+                        .clicked();
+                }
+                ui.add(
+                    egui::Slider::new(&mut view.hold.rpm, 1000.0..=limit)
+                        .step_by(100.0)
+                        .suffix(" rpm"),
+                );
+                let mut percent = view.hold.throttle * 100.0;
+                ui.add(
+                    egui::Slider::new(&mut percent, 0.0..=100.0)
+                        .step_by(1.0)
+                        .suffix(" % throttle"),
+                );
+                view.hold.throttle = percent / 100.0;
+            });
         });
-    if again {
-        let view = &mut *view;
-        if let Some(car) = &mut view.car {
-            view.rollers = Some(Rollers::new(car));
-            view.owed = 0.0;
-            view.filed = false;
-            view.news.clear();
+    let view = &mut *view;
+    if let Some(run) = view.rollers.as_mut().filter(|run| run.hold.is_some()) {
+        run.hold = Some(view.hold);
+    }
+    if let (Some(car), Some(run)) = (&mut view.car, &mut view.rollers)
+        && stop
+    {
+        run.stop(car);
+    }
+    if (again || hold)
+        && let Some(car) = &mut view.car
+    {
+        let mut run = Rollers::new(car);
+        run.hold = hold.then_some(view.hold);
+        view.rollers = Some(run);
+        view.owed = 0.0;
+        view.filed = false;
+        view.news.clear();
+        if again {
             view.tab = Tab::Runs;
         }
     }
     if out {
         leave(
             &mut commands,
-            &mut view,
+            view,
             &things,
             &mut cars,
             &active,

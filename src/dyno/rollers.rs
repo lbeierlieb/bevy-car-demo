@@ -48,6 +48,8 @@ const AWD_GEAR_LOSS: f32 = 0.1;
 const FAN_AIRSPEED: f32 = 20.0;
 /// How quickly the live power reading follows (s).
 const READING_LAG: f32 = 0.25;
+/// How quickly a hold brings the rollers to its speed, at the tires (m/s²).
+const HOLD_RATE: f32 = 6.0;
 const GRAVITY: f32 = 9.81;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -61,6 +63,8 @@ pub enum Stage {
     /// Full throttle to the rev limiter, sampling.
     Pull,
     /// Off the throttle in neutral, the rollers braked to a stop.
+    /// Held at an rpm in the pull gear by the brake, at a set throttle, until stopped.
+    Hold,
     Coast,
     Done,
 }
@@ -95,6 +99,22 @@ impl Sample {
     }
 }
 
+/// What a hold holds: the engine's speed in the pull gear (rpm) and the throttle (0..1).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Hold {
+    pub rpm: f32,
+    pub throttle: f32,
+}
+
+impl Default for Hold {
+    fn default() -> Self {
+        Self {
+            rpm: 3000.0,
+            throttle: 0.5,
+        }
+    }
+}
+
 /// A run on the rollers, step by step.
 pub struct Rollers {
     pub stage: Stage,
@@ -125,6 +145,8 @@ pub struct Rollers {
     pub samples: Vec<Sample>,
     /// What broke during the run.
     pub broke: Vec<String>,
+    /// Hold at this instead of pulling (for tuning).
+    pub hold: Option<Hold>,
 }
 
 impl Rollers {
@@ -173,6 +195,7 @@ impl Rollers {
             clock: 0.0,
             samples: Vec::new(),
             broke: Vec::new(),
+            hold: None,
         }
     }
 
@@ -215,7 +238,11 @@ impl Rollers {
                     car.drivetrain.shift_to(engine, gear);
                 }
             }
+            Stage::Settle if car.drivetrain.gear == self.gear && self.hold.is_some() => {
+                self.next(Stage::Hold)
+            }
             Stage::Settle if car.drivetrain.gear == self.gear => self.next(Stage::Pull),
+            Stage::Hold if broken => self.stop(car),
             Stage::Pull if rpm < self.start => self.last = (self.omega, self.clock),
             Stage::Pull => {
                 let next = self.start + SAMPLE_RPM * self.samples.len() as f32;
@@ -240,13 +267,15 @@ impl Rollers {
         let throttle = match self.stage {
             Stage::Gears => WARM_UP_THROTTLE,
             Stage::Pull => 1.0,
-            _ => 0.0,
-        };
-        let brake = match self.stage {
-            Stage::Coast | Stage::Done => self.inertia * ROLLER_BRAKE / self.radius,
+            Stage::Hold => self.hold.map_or(0.0, |hold| hold.throttle),
             _ => 0.0,
         };
         let engine = &car.setup.engine;
+        // Held: the rollers' speed for the rpm in the pull gear.
+        let held = (self.stage == Stage::Hold)
+            .then_some(self.hold)
+            .flatten()
+            .map(|hold| hold.rpm / engine.rpm_in(self.gear, 1.0));
         let drivetrain = &mut car.drivetrain;
         drivetrain.engine.airspeed = FAN_AIRSPEED;
         drivetrain.engine.fuel_supply = car.fuel.supply;
@@ -254,18 +283,32 @@ impl Rollers {
         let at_wheels = drive.torque - self.gear_loss * drive.torque.abs();
         let rolling = if self.omega > 0.0 { self.rolling } else { 0.0 };
         let inertia = self.inertia + self.wheels + drive.inertia;
+        let brake = match self.stage {
+            Stage::Coast | Stage::Done => self.inertia * ROLLER_BRAKE / self.radius,
+            _ => 0.0,
+        };
         let before = self.omega;
-        let spun = self.omega + (at_wheels - rolling) / inertia * dt;
-        // The brake (and rolling resistance) only slow the rollers down to a stop.
-        self.omega = (spun - brake / inertia * dt).max(0.0);
-        if before == 0.0 && at_wheels <= rolling {
-            self.omega = 0.0;
+        if let Some(target) = held {
+            // Held: the dyno's motor and brake bring the rollers to the held speed (as
+            // quickly as `HOLD_RATE` at the tires) and keep them there, whatever the
+            // wheels push with.
+            let most = HOLD_RATE / self.radius * dt;
+            self.omega += (target - self.omega).clamp(-most, most);
+        } else {
+            let spun = self.omega + (at_wheels - rolling) / inertia * dt;
+            // The brake (and rolling resistance) only slow the rollers down to a stop.
+            self.omega = (spun - brake / inertia * dt).max(0.0);
+            if before == 0.0 && at_wheels <= rolling {
+                self.omega = 0.0;
+            }
         }
         self.turned = (self.turned + self.omega * dt) % TAU;
-        let power = if brake > 0.0 {
-            0.0
-        } else {
-            self.inertia * (self.omega - before) / dt * self.omega
+        // The power at the wheels: what they push the held rollers with, else what spins
+        // up the rollers.
+        let power = match (self.stage, held) {
+            (Stage::Coast | Stage::Done, _) => 0.0,
+            (_, Some(_)) => (at_wheels - rolling) * self.omega,
+            _ => self.inertia * (self.omega - before) / dt * self.omega,
         };
         self.power += (power - self.power) * (dt / READING_LAG).min(1.0);
         let still = bevy::math::Vec3::new(0.0, GRAVITY, 0.0);
@@ -288,8 +331,20 @@ impl Rollers {
         self.last = (self.omega, self.clock);
     }
 
-    /// Runs to the end.
+    /// Ends a hold (or a run on its way to one): off the throttle in neutral, coasting
+    /// down.
+    pub fn stop(&mut self, car: &mut Car) {
+        if self.stage != Stage::Coast && self.stage != Stage::Done {
+            car.drivetrain.shift_to(&car.setup.engine, 0);
+            self.next(Stage::Coast);
+        }
+    }
+
+    /// Runs to the end (a hold only ends when stopped).
     pub fn finish(&mut self, car: &mut Car) {
+        if self.hold.is_some() && self.stage != Stage::Coast {
+            return;
+        }
         // An hour of dyno time is more than any run takes.
         for _ in 0..(3600.0 / STEP) as usize {
             if self.stage == Stage::Done {
@@ -366,6 +421,42 @@ mod tests {
             let share = sample.wheel_torque() / sample.crank;
             assert!((0.7..0.9).contains(&share), "{share} at {} rpm", sample.rpm);
         }
+    }
+    #[test]
+    fn a_hold_holds_the_rpm_at_the_throttle_set() {
+        let (mut car, mut rollers) = on_rollers(3);
+        rollers.hold = Some(Hold {
+            rpm: 4000.0,
+            throttle: 0.3,
+        });
+        let mut time = 0.0;
+        while time < 30.0 {
+            rollers.step(&mut car, STEP);
+            time += STEP;
+        }
+        assert_eq!(rollers.stage, Stage::Hold);
+        assert_eq!(car.drivetrain.gear, rollers.gear);
+        let rpm = car.drivetrain.rpm;
+        assert!((rpm - 4000.0).abs() < 50.0, "{rpm} rpm");
+        let part = car.drivetrain.engine.intake_pressure;
+        let power = rollers.power;
+        assert!(power > 5e3, "{power} W at the wheels");
+        // More throttle: more manifold pressure and power at the same rpm.
+        rollers.hold = Some(Hold {
+            rpm: 4000.0,
+            throttle: 1.0,
+        });
+        for _ in 0..(5.0 / STEP) as usize {
+            rollers.step(&mut car, STEP);
+        }
+        let rpm = car.drivetrain.rpm;
+        assert!((rpm - 4000.0).abs() < 50.0, "{rpm} rpm floored");
+        assert!(car.drivetrain.engine.intake_pressure > part + 20e3);
+        assert!(rollers.power > 2.0 * power, "{} W floored", rollers.power);
+        // Stopping coasts down to the end.
+        rollers.stop(&mut car);
+        rollers.finish(&mut car);
+        assert_eq!(rollers.stage, Stage::Done);
     }
 
     #[test]
