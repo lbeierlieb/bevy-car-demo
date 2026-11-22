@@ -1,16 +1,15 @@
-//! The ECU tuning window (3) for the active car: its fuel, target λ and spark maps as
-//! grids to edit, with the engine's operating point on them, live readings to tune by,
-//! the rev limiter and idle settings, and saving and loading tunes.
+//! The ECU tuning, shown in the dyno's room (`dyno`) for the car on the rollers: its fuel,
+//! target λ and spark maps (and the cam maps of a programmable ECU) as grids to edit, with
+//! the engine's operating point on them, live readings to tune by, the rev limiter and idle
+//! settings, and saving and loading tunes.
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, Rect, Sense, Stroke, pos2, vec2};
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
-use crate::car::{ActiveCar, Car};
+use crate::car::Car;
 use crate::physics::engine::ecu::{Ecu, EcuModel};
 use crate::physics::engine::table::Table;
 use crate::tunes;
-use crate::ui::{ToolInput, tool_window};
 
 /// Grid cell size and the width of the row labels (points).
 const CELL: egui::Vec2 = egui::Vec2::new(40.0, 18.0);
@@ -18,18 +17,11 @@ const LABEL_WIDTH: f32 = 56.0;
 /// Mixture this far from its target shows as off.
 const LAMBDA_OFF: f32 = 0.03;
 
-pub struct EcuUiPlugin;
-
-impl Plugin for EcuUiPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<EcuPanel>()
-            .add_systems(EguiPrimaryContextPass, window);
-    }
-}
-
-#[derive(Resource, Default)]
-struct EcuPanel {
-    expanded: bool,
+/// What the tuning shows and holds between frames.
+#[derive(Default)]
+pub struct EcuPanel {
+    /// Whether the saved tunes were listed (when it's first shown).
+    listed: bool,
     map: MapKind,
     /// Selected cells: the first clicked and the last (shift-)clicked, as (rpm, manifold
     /// pressure) indices.
@@ -124,36 +116,24 @@ impl MapKind {
     }
 }
 
-fn window(
-    mut contexts: EguiContexts,
-    input: ToolInput,
-    active: Res<ActiveCar>,
-    mut cars: Query<&mut Car>,
-    mut panel: ResMut<EcuPanel>,
-) -> Result {
-    let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
-        return Ok(());
-    };
-    let ctx = contexts.ctx_mut()?;
-    let tool = ("ECU tune", KeyCode::Digit3);
-    let Some((window, opened)) = tool_window(ctx, tool, 0, &input, &mut panel.expanded) else {
-        return Ok(());
-    };
-    if opened {
+/// The ECU tuning in the dyno's room, on the car on the rollers: what the engine does
+/// right now against what the ECU aims for, the rev limiter and idle settings, saving and
+/// loading tunes, and the maps as grids to edit with the operating point on them.
+pub fn tuning(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
+    if !panel.listed {
         panel.saved = tunes::list();
+        panel.listed = true;
     }
-    window
-        .default_width(LABEL_WIDTH + 19.0 * CELL.x + 20.0)
-        .show(ctx, |ui| {
-            readings(ui, &car);
-            ui.separator();
-            settings(ui, &mut car);
-            saved_tunes(ui, &mut panel, &mut car);
-            ui.separator();
-            map_editor(ui, &mut panel, &mut car);
-        });
-    Ok(())
+    readings(ui, car);
+    ui.separator();
+    settings(ui, car);
+    saved_tunes(ui, panel, car);
+    ui.separator();
+    map_editor(ui, panel, car);
 }
+
+/// How wide `tuning` is (points).
+pub const WIDTH: f32 = LABEL_WIDTH + 19.0 * CELL.x + 20.0;
 
 /// What the engine does right now, against what the ECU aims for.
 fn readings(ui: &mut egui::Ui, car: &Car) {

@@ -19,6 +19,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use crate::audio::EngineAudio;
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car};
+use crate::ecu_ui::{self, EcuPanel};
 use crate::looks::{Looks, Motion};
 use crate::shops::{AtShop, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
@@ -42,11 +43,11 @@ const ROLLER_TOP: f32 = 0.03;
 const EYE: Vec3 = Vec3::new(-3.6, 1.45, -4.9);
 const VIEW_SWING: f32 = 1.0;
 /// How far right of the car the camera looks while the results are up (m).
-const RESULTS_ASIDE: f32 = 2.0;
+const RESULTS_ASIDE: f32 = 1.0;
 /// The screen: how far in front of the camera, left of the middle, above it, and its size
 /// (m).
 const SCREEN_AHEAD: f32 = 3.4;
-const SCREEN_LEFT: f32 = 1.55;
+const SCREEN_LEFT: f32 = 1.2;
 const SCREEN_UP: f32 = 0.3;
 const SCREEN_SIZE: Vec2 = Vec2::new(1.5, 0.9);
 /// The runs' colours: power, torque, and a run compared with.
@@ -142,8 +143,19 @@ struct DynoView {
     runs: Vec<DynoRun>,
     shown: Option<usize>,
     compared: Option<usize>,
+    /// The window's tab, and the ECU tuning's state.
+    tab: Tab,
+    ecu: EcuPanel,
     /// Something to say about the last run (what broke, or that it measured nothing).
     news: String,
+}
+
+/// What the dyno's window shows.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Tab {
+    #[default]
+    Runs,
+    Ecu,
 }
 
 impl DynoView {
@@ -588,8 +600,8 @@ fn look(
     let ease = 1.0 - (-6.0 * time.delta_secs()).exp();
     let now = view.eye.map_or(eye, |was| was.lerp(eye, ease));
     view.eye = Some(now);
-    // With the results up on the right, the car moves over to the left.
-    let aside = if view.running() { 0.0 } else { 1.0 };
+    // With the window up on the right, the car moves over to the left.
+    let aside = 1.0;
     view.aside += (aside - view.aside) * ease * 0.5;
     let car = view.origin + Vec3::Y * 0.7;
     let right = (car - now).cross(Vec3::Y).normalize();
@@ -742,8 +754,9 @@ fn skip(mut contexts: EguiContexts, mut view: ResMut<DynoView>) -> Result {
     Ok(())
 }
 
-/// Between runs: the shown run's chart and peaks, its name and notes, every run of this
-/// visit, and running (again) or going back to the car.
+/// The dyno's window, on the right: the runs (the shown run's chart and peaks, its name
+/// and notes, every run of this visit) or the ECU's tuning, running (again) and going
+/// back to the car.
 #[allow(clippy::too_many_arguments)]
 fn results(
     mut commands: Commands,
@@ -755,25 +768,42 @@ fn results(
     (mut away, mut audio): (ResMut<Away>, ResMut<EngineAudio>),
     mut cameras: Query<(&ChaseCamera, &mut Projection)>,
 ) -> Result {
-    if view.running() {
-        return Ok(());
-    }
     let mut again = false;
     let mut out = false;
-    egui::Window::new("Dyno runs")
+    let ctx = contexts.ctx_mut()?;
+    let height = ctx.content_rect().height() - 110.0;
+    egui::Window::new("Dyno")
         .anchor(Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
         .collapsible(false)
         .resizable(false)
-        .default_width(620.0)
-        .show(contexts.ctx_mut()?, |ui| {
-            ui.set_width(620.0);
-            if !view.news.is_empty() {
-                ui.colored_label(BROKE, view.news.trim());
-            }
-            shown_run(ui, &mut view);
+        .show(ctx, |ui| {
+            let view = &mut *view;
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut view.tab, Tab::Runs, "Runs");
+                ui.selectable_value(&mut view.tab, Tab::Ecu, "ECU tune");
+            });
             ui.separator();
-            run_list(ui, &mut view);
+            egui::ScrollArea::vertical()
+                .max_height(height)
+                .show(ui, |ui| match view.tab {
+                    Tab::Runs => {
+                        ui.set_width(620.0);
+                        if !view.news.is_empty() {
+                            ui.colored_label(BROKE, view.news.trim());
+                        }
+                        shown_run(ui, view);
+                        ui.separator();
+                        run_list(ui, view);
+                    }
+                    Tab::Ecu => {
+                        ui.set_width(ecu_ui::WIDTH);
+                        if let Some(car) = &mut view.car {
+                            ecu_ui::tuning(ui, &mut view.ecu, car);
+                        }
+                    }
+                });
             ui.separator();
+            let running = view.running();
             let why_not = view.car.as_ref().and_then(cannot_run);
             ui.horizontal(|ui| {
                 let label = if view.rollers.is_some() {
@@ -782,7 +812,7 @@ fn results(
                     "Run it"
                 };
                 again = ui
-                    .add_enabled(why_not.is_none(), egui::Button::new(label))
+                    .add_enabled(!running && why_not.is_none(), egui::Button::new(label))
                     .clicked();
                 out = ui
                     .button(RichText::new("Back to the car").strong())
@@ -799,6 +829,7 @@ fn results(
             view.owed = 0.0;
             view.filed = false;
             view.news.clear();
+            view.tab = Tab::Runs;
         }
     }
     if out {

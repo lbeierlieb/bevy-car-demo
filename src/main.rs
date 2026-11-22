@@ -22,9 +22,8 @@ fn main() {
             // at first).
             debug::DebugPlugin,
             ui::PanelPlugin,
-            // The ECU tune (3) and the engine dyno (5); the garage and the showroom are at
-            // shops, as is the chassis dyno.
-            ecu_ui::EcuUiPlugin,
+            // The engine dyno (5); the garage, the showroom, the chassis dyno and the ECU
+            // tuning (in it) are at shops.
             garage::GaragePlugin,
             dyno::DynoPlugin,
             dyno::engine::EngineDynoPlugin,

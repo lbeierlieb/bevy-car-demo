@@ -212,7 +212,7 @@ order (✓ done):
    repairs; new tires. 10. **Dyno** (✓ the scene: `dyno/mod.rs`, `dyno/rollers.rs`; a copy of the car runs in
    the room 200 m under the marker, the driven car stays parked there (`car::Away` holds
    its input, `EngineAudio::hushed`), engine wear, fuel and tune go back on leaving; runs
-   kept for the session only): the career's chassis dyno scene back (`career/dyno.rs`,
+   kept for the session only; ✓ the ECU tuning as a tab of its window, key 3 gone): the career's chassis dyno scene back (`career/dyno.rs`,
    `rollers.rs` at c34bfbf), with the ECU window, cam timing and wastegate, and a hold
    mode (rollers held at an rpm, throttle set) for tuning cells; others see the car
    parked on the marker; the engine dyno window (5) goes. 11. Clean-up: the panel loses
