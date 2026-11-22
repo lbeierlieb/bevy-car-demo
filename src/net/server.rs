@@ -28,6 +28,7 @@ use super::wire::{decode, encode};
 use super::{ClockOffset, NEAR, RATES, SEND_RATE};
 use crate::events::Event;
 use crate::events::rounds::{EventAction, Rounds, run_rounds};
+use crate::heli::HeliPose;
 use crate::looks::{Looks, Motion};
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
@@ -557,10 +558,17 @@ fn send(
         .filter(|(peer, _)| now - peer.heard <= FROZEN)
         .filter_map(|(peer, realm)| {
             let state = peer.state?;
+            let time = peer.clock.ours(state.time)?;
+            // Their rescue helicopter's pose on our clock too.
+            let heli = (state.heli).map(|heli| HeliPose {
+                time: heli.time + (time - state.time),
+                ..heli
+            });
             Some(Car {
                 id: peer.car,
                 state: CarState {
-                    time: peer.clock.ours(state.time)?,
+                    time,
+                    heli,
                     ..state
                 },
                 looks: peer.looks.clone()?,
@@ -584,6 +592,7 @@ fn send(
                 angular_velocity: car.body.angular_velocity,
                 motion: *motion,
                 ghost: false,
+                heli: None,
             },
             looks: looks.clone(),
             revision: 1,

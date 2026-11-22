@@ -119,7 +119,8 @@ it slow; "Stop them": only keeping it slow), and starts the hunt. It runs in a w
 the hunt's own traffic, all with names and on the map, and nobody outside sees them.
 The hunters wait for the head start, and win once the hunted has been slower than
 10 km/h for 10 s (or, tagging, once a hunter's car touches the hunted's); the hunted
-wins when the time is up, and sees how far the nearest hunter is. Afterwards everyone is back at
+wins when the time is up, and sees how far the nearest hunter is. A helicopter follows
+the hunted 50 m up, and can't be shaken off: everyone in the hunt sees it from anywhere. Afterwards everyone is back at
 the marker, in its lobby, with their own car. Other groups can start their own hunts at
 the same marker meanwhile.
 
@@ -217,7 +218,7 @@ empty tank, or a few seconds of gas without moving (stuck: R).
 | I | Start the engine after a stall (only with a clutch pedal) |
 | A / D | Steer |
 | Space | Parking brake on/off (cars start with it on) |
-| R | Put the car on the nearest road (in its lane), as it is (fuel, tires and wear stay) |
+| R | Call the rescue helicopter: it lifts the car and sets it down on the nearest road (in its lane), as it is (fuel, tires and wear stay); about 10 s near a road |
 | H | The controls screen |
 | 1 / 2 | Toggle gizmos (with the car's map coordinates) / telemetry and settings panel |
 | F11 | Fullscreen (the browser's on the web; all F keys go to the browser there) |

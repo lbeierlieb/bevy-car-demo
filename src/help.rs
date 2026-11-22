@@ -24,7 +24,7 @@ const CONTROLS: [(&str, &str); 18] = [
     ),
     ("Space", "Parking brake on / off (it's on when you start)"),
     ("I", "Start the engine after it stalled"),
-    ("R", "Back on the nearest road"),
+    ("R", "A helicopter carries the car back to the road"),
     ("C", "Chase or driver's view"),
     ("B (hold)", "Look back"),
     ("Left-drag, scroll", "Look around, zoom"),
@@ -340,7 +340,7 @@ fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (S
         Hint::Stuck => (
             "Stuck?".into(),
             format!(
-                "Press {} to put the car back on the nearest road.",
+                "Press {} and a helicopter carries the car back to the road.",
                 key("R", Action::Reset)
             ),
         ),

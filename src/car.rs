@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 
 use crate::chassis::{CLUTCHES, CarBuild, Chassis, DEFAULT_CHASSIS, SUSPENSIONS};
+use crate::heli::rescue::Rescue;
 use crate::input::WheelInput;
 use crate::physics::collision::Obb;
 use crate::physics::drivetrain::{Differential, Drive, Drivetrain, EngineSetup, REVERSE_SPEED};
@@ -405,14 +406,14 @@ impl Car {
         self.load_fuel();
     }
 
-    /// Places the car upright, at rest, on the road nearest to it (in its lane, facing
-    /// the way along it nearest to where the car faced), or where it is if there's none.
-    fn reset(&mut self, terrain: &Terrain) {
+    /// Where on the road nearest to it the car goes back to (xz, and the yaw it faces
+    /// there): in its lane, facing the way along it nearest to where the car faced; where
+    /// it is if there's no road.
+    pub fn road_spot(&self, terrain: &Terrain) -> (Vec2, f32) {
         let p = self.body.position.xz();
         let yaw = heading(self.body.rotation);
         let facing = Vec2::new(-yaw.sin(), -yaw.cos());
-        let (p, yaw) = terrain.drive_spot(p, facing).unwrap_or((p, yaw));
-        self.place(terrain, p, yaw);
+        terrain.drive_spot(p, facing).unwrap_or((p, yaw))
     }
 
     /// Puts the car at rest at (x, z) in the xz plane, facing along `yaw`, as it was: its
@@ -581,6 +582,7 @@ impl Plugin for CarPlugin {
             .add_message::<ReverseRefused>()
             .init_resource::<Away>()
             .init_resource::<Held>()
+            .init_resource::<Rescued>()
             .init_resource::<ResetRule>()
             .add_systems(Update, (drive, sync_transforms).chain());
     }
@@ -595,8 +597,9 @@ impl Plugin for DefaultCarPlugin {
     }
 }
 
-/// R (or the wheel's reset button) puts the active car back on its wheels on the nearest
-/// road, as it was (fuel, tires and engine wear stay).
+/// R (or the wheel's reset button) calls the rescue helicopter, which carries the active
+/// car back to the nearest road and sets it down on its wheels, as it was (fuel, tires and
+/// engine wear stay); what an event's rules say otherwise (`ResetRule`).
 pub struct ResetPlugin;
 
 impl Plugin for ResetPlugin {
@@ -630,10 +633,16 @@ pub struct Away(pub bool);
 #[derive(Resource, Default)]
 pub struct Held(pub bool);
 
+/// The rescue helicopter is on its way to the active car or carrying it
+/// (`heli::rescue`): the driver's input does nothing (the brakes are on), and online the
+/// car is a ghost.
+#[derive(Resource, Default)]
+pub struct Rescued(pub bool);
+
 /// What R does with the active car (in an event's round, its rules).
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
 pub enum ResetRule {
-    /// Puts it on the nearest road.
+    /// Has the rescue helicopter carry it to the nearest road.
     #[default]
     Road,
     /// Nothing.
@@ -648,14 +657,14 @@ pub fn drive(
     keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<WheelInput>,
     time: Res<Time>,
-    (active, away, held): (Res<ActiveCar>, Res<Away>, Res<Held>),
+    (active, away, held, rescued): (Res<ActiveCar>, Res<Away>, Res<Held>, Res<Rescued>),
     aids: Res<DriverAids>,
     mut cars: Query<&mut Car>,
     mut refused: MessageWriter<ReverseRefused>,
 ) {
     let pressed = |a, b| keys.pressed(a) || keys.pressed(b);
     for mut car in &mut cars {
-        if car.index != active.0 || away.0 {
+        if car.index != active.0 || away.0 || rescued.0 {
             car.controls = Controls {
                 brake: 1.0,
                 handbrake: 1.0,
@@ -741,13 +750,17 @@ fn reset_car(
     wheel: Res<WheelInput>,
     active: Res<ActiveCar>,
     terrain: Res<Terrain>,
-    mut cars: Query<&mut Car>,
+    mut cars: Query<(Entity, &mut Car)>,
     (away, rule): (Res<Away>, Res<ResetRule>),
+    mut rescue: ResMut<Rescue>,
 ) {
-    if (keys.just_pressed(KeyCode::KeyR) || wheel.reset) && !away.0 {
-        for mut car in cars.iter_mut().filter(|car| car.index == active.0) {
+    if (keys.just_pressed(KeyCode::KeyR) || wheel.reset) && !away.0 && !rescue.busy() {
+        for (entity, mut car) in cars.iter_mut().filter(|(_, car)| car.index == active.0) {
             match *rule {
-                ResetRule::Road => car.reset(&terrain),
+                ResetRule::Road => {
+                    let (p, yaw) = car.road_spot(&terrain);
+                    rescue.call(entity, &car, &terrain, p, yaw);
+                }
                 ResetRule::Never => {}
                 ResetRule::To(p, yaw) => car.place(&terrain, p, yaw),
             }
@@ -767,7 +780,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_reset_puts_the_car_on_the_nearest_road() {
+    fn the_road_spot_is_on_the_nearest_road() {
         let terrain = Terrain::baked();
         let (spawn, yaw) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
         // 40 m off the road to the side, lying on its roof.
@@ -775,7 +788,8 @@ mod tests {
         let off = spawn + 40.0 * side;
         let mut car = Car::spawn_at(0, CarSetup::default(), &terrain, off.x, off.y, yaw);
         car.body.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(3.0);
-        car.reset(&terrain);
+        let (p, yaw) = car.road_spot(&terrain);
+        car.place(&terrain, p, yaw);
         let p = car.body.position.xz();
         // In the lane for the way it faces.
         let facing = (car.body.rotation * Vec3::NEG_Z).xz();

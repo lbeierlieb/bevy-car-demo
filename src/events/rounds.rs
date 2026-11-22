@@ -10,10 +10,15 @@ use bevy::prelude::*;
 use super::hunt::{
     Action, CAUGHT_SPEED, CAUGHT_TIME, Catch, Ending, Outcome, Phase, Round, TAG_RANGE,
 };
+use crate::heli::{Chase, HeliPose};
 use crate::net::protocol::CarId;
-use crate::net::protocol::{PlayerId, ToClient};
+use crate::net::protocol::{CarState, PlayerId, ToClient};
 use crate::net::server::{Peer, Server};
+use crate::terrain::Terrain;
 use crate::traffic::{Realm, Traffic};
+
+/// How often the hunt's helicopter is sent to the players in the round (per second).
+const HELI_RATE: f64 = 15.0;
 
 /// A player asks to enter only this near the event's marker (m): stopped on it, as their
 /// game sees it, give or take what their state is behind.
@@ -55,6 +60,9 @@ struct Hunt {
     hunted_name: String,
     /// Its players need telling how it stands.
     changed: bool,
+    /// The helicopter over the hunted while it runs, and when it was last sent (s).
+    heli: Option<Chase>,
+    heli_sent: f64,
 }
 
 impl Hunt {
@@ -71,7 +79,7 @@ pub fn run_rounds(
     mut rounds: ResMut<Rounds>,
     server: Res<Server>,
     mut traffic: ResMut<Traffic>,
-    time: Res<Time<Real>>,
+    (time, fixed, terrain): (Res<Time<Real>>, Res<Time<Fixed>>, Res<Terrain>),
     mut actions: MessageReader<EventAction>,
     mut peers: Query<(Entity, &mut Peer, Option<&Realm>)>,
 ) {
@@ -140,6 +148,8 @@ pub fn run_rounds(
                         realm: Realm::NORMAL,
                         hunted_name: name(player),
                         changed: true,
+                        heli: None,
+                        heli_sent: f64::NEG_INFINITY,
                     }),
                 }
             }
@@ -258,6 +268,35 @@ pub fn run_rounds(
             hunt.changed = true;
         }
     }
+    // The helicopter over the hunted in every round under way, sent to its players wherever
+    // they are.
+    let dt = time.delta_secs();
+    let stamp = crate::net::stamp(&time, &fixed);
+    let hunted_states: HashMap<PlayerId, CarState> = (peers.iter())
+        .filter_map(|(_, peer, _)| Some((peer.id, peer.state?)))
+        .collect();
+    let mut helis: HashMap<PlayerId, HeliPose> = HashMap::new();
+    for hunt in &mut rounds.list {
+        if !hunt.round.running() {
+            hunt.heli = None;
+            continue;
+        }
+        let Some(state) = hunted_states.get(&hunt.round.hunted) else {
+            continue;
+        };
+        let heli = hunt
+            .heli
+            .get_or_insert_with(|| Chase::new(state.position, crate::car::heading(state.rotation)));
+        let ground = terrain.sample(heli.position.x, heli.position.z).0;
+        heli.step(state.position, state.velocity, ground, dt);
+        if now - hunt.heli_sent >= 1.0 / HELI_RATE - 0.004 {
+            hunt.heli_sent = now;
+            let pose = heli.pose(stamp);
+            for &player in &hunt.round.players {
+                helis.insert(player, pose);
+            }
+        }
+    }
     // The realms of rounds over go, with their traffic.
     for hunt in &mut rounds.list {
         if !hunt.round.running() && hunt.realm != Realm::NORMAL {
@@ -333,6 +372,9 @@ pub fn run_rounds(
         }
         if busy_changed || rounds.told_busy.insert(peer.id) {
             peer.tell(&ToClient::Busy(rounds.busy.clone()));
+        }
+        if let Some(pose) = helis.get(&peer.id) {
+            peer.tell(&ToClient::Heli(*pose));
         }
     }
     for hunt in &mut rounds.list {

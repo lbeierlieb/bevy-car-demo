@@ -259,6 +259,41 @@ mod tests {
     }
 
     #[test]
+    fn a_rescue_helicopter_is_seen_by_the_others() {
+        use crate::heli::rescue::Rescue;
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut ben = player(&listener, "Ben", 0, 30.0);
+        anna.init_resource::<Rescue>();
+        run(&mut [&mut server, &mut anna, &mut ben], 60);
+        let heli = |app: &mut App| {
+            (app.world_mut().query::<&RemoteCar>())
+                .single(app.world())
+                .unwrap()
+                .latest()
+                .and_then(|state| state.heli)
+        };
+        assert_eq!(heli(&mut ben), None);
+        // Anna calls it (in this test it stays where it was called to).
+        let entity = (anna.world_mut().query_filtered::<Entity, With<Car>>())
+            .single(anna.world())
+            .unwrap();
+        anna.world_mut()
+            .resource_scope(|world, terrain: Mut<Terrain>| {
+                let car = world.get::<Car>(entity).unwrap().clone();
+                let to = Vec2::new(20.0, 0.0);
+                (world.resource_mut::<Rescue>()).call(entity, &car, &terrain, to, 0.0);
+            });
+        run(&mut [&mut server, &mut anna, &mut ben], 10);
+        let sent = anna.world().resource::<Rescue>().pose(0.0).unwrap();
+        let seen = heli(&mut ben).expect("Ben doesn't see it");
+        assert_eq!(seen.position, sent.position);
+        assert_eq!(seen.rotation, sent.rotation);
+        assert!(!seen.hooked);
+    }
+
+    #[test]
     fn everyone_hears_everyones_ping() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
@@ -810,6 +845,21 @@ mod tests {
         run(&mut all, 60 * 4);
         let now = all[1].world().resource::<Time<Real>>().elapsed_secs_f64();
         assert_eq!(connection(all[1]).on_map(now).count(), 1);
+        // A helicopter holds over the hunted, sent to everyone in the round alone.
+        let ben_at = all[2]
+            .world_mut()
+            .query::<&Car>()
+            .single(all[2].world())
+            .unwrap();
+        let ben_at = ben_at.body.position;
+        for i in [1, 2] {
+            let (heli, heard) = connection(all[i]).hunt_heli.expect("no helicopter");
+            assert!(now - heard < 0.2, "not sent lately");
+            let above = heli.position - ben_at;
+            assert!(above.xz().length() < 10.0, "{above}");
+            assert!((above.y - crate::heli::CHASE_HEIGHT).abs() < 5.0, "{above}");
+        }
+        assert!(connection(all[3]).hunt_heli.is_none());
         // Ben stands still: caught 10 s after the head start.
         run(&mut all, 60 * 5);
         assert!(round(all[2]).unwrap().running(), "not yet");

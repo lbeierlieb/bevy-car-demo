@@ -21,9 +21,11 @@ use super::protocol::{
 };
 use super::wire::{decode, encode};
 use super::{ClockOffset, SEND_RATE};
-use crate::car::{ActiveCar, Car};
+use crate::car::{ActiveCar, Car, Rescued};
 use crate::events::Event;
 use crate::events::hunt::{Action, Round};
+use crate::heli::HeliPose;
+use crate::heli::rescue::Rescue;
 use crate::looks::{Ghost, Looks, Motion};
 use crate::physics::collision::Obb;
 use crate::physics::collision::{self, OBSTACLE};
@@ -135,6 +137,9 @@ pub struct Connection {
     pub round: Option<Round>,
     /// Who's in which event's round (its place in `events`).
     pub busy: HashMap<PlayerId, u16>,
+    /// The car hunt's helicopter, as the server last told, and when that came (s, on
+    /// `Time<Real>`).
+    pub hunt_heli: Option<(HeliPose, f64)>,
     /// The server's clock against ours (every state comes on it).
     clock: ClockOffset,
     /// What we've been told of each car (a state may overtake it, or come later).
@@ -178,6 +183,7 @@ impl Connection {
             events: Vec::new(),
             round: None,
             busy: HashMap::new(),
+            hunt_heli: None,
             chat: VecDeque::new(),
             clock: ClockOffset::default(),
             known: HashMap::new(),
@@ -259,6 +265,13 @@ pub struct RemoteCar {
     /// Where it is by now, as a body to run into (moving, but never pushed).
     pub body: Option<RigidBody>,
     drawn: Drawn,
+}
+
+impl RemoteCar {
+    /// Its latest state.
+    pub fn latest(&self) -> Option<&CarState> {
+        self.states.back()
+    }
 }
 
 /// The name a remote car shows over it.
@@ -404,6 +417,7 @@ fn receive(
             ToClient::Events(events) => connection.events = events,
             ToClient::Round(round) => connection.round = round,
             ToClient::Busy(busy) => connection.busy = busy.into_iter().collect(),
+            ToClient::Heli(pose) => connection.hunt_heli = Some((pose, now)),
             ToClient::Pings(pings) => {
                 connection.pings = pings.into_iter().collect();
             }
@@ -483,6 +497,7 @@ fn send(
     time: Res<Time<Real>>,
     fixed: Res<Time<Fixed>>,
     active: Res<ActiveCar>,
+    rescue: Option<Res<Rescue>>,
     cars: Query<(&Car, &Looks, &Motion, Has<Ghost>)>,
 ) {
     let now = now(&time);
@@ -499,14 +514,16 @@ fn send(
     }
     if now - connection.sent >= 1.0 / SEND_RATE {
         connection.sent = now;
+        let stamp = super::stamp(&time, &fixed);
         connection.say(&ToServer::State(CarState {
-            time: super::stamp(&time, &fixed),
+            time: stamp,
             position: car.body.position,
             rotation: car.body.rotation,
             velocity: car.body.velocity,
             angular_velocity: car.body.angular_velocity,
             motion: *motion,
             ghost,
+            heli: rescue.and_then(|rescue| rescue.pose(stamp)),
         }));
     }
 }
@@ -709,7 +726,7 @@ pub struct Touching(pub Vec<CarId>);
 fn haunt(
     mut commands: Commands,
     connection: Option<Res<Connection>>,
-    wants: Res<WantsGhost>,
+    (wants, rescued): (Res<WantsGhost>, Option<Res<Rescued>>),
     active: Res<ActiveCar>,
     cars: Query<(Entity, &Car, Has<Ghost>)>,
     remote: Query<(&RemoteCar, &Looks)>,
@@ -727,7 +744,9 @@ fn haunt(
                 })
             })
         };
-        let wanted = joined && car.index == active.0 && (wants.0 || (ghost && overlapping()));
+        let wanted = joined
+            && car.index == active.0
+            && (wants.0 || rescued.as_ref().is_some_and(|r| r.0) || (ghost && overlapping()));
         if wanted && !ghost {
             commands.entity(entity).insert(Ghost);
         } else if !wanted && ghost {
@@ -792,6 +811,7 @@ mod tests {
             angular_velocity: Vec3::new(0.0, yaw_rate, 0.0),
             motion: Motion::default(),
             ghost: false,
+            heli: None,
         }
     }
 
@@ -828,6 +848,7 @@ mod tests {
             angular_velocity: Vec3::new(0.0, 0.2, 0.0),
             motion: Motion::default(),
             ghost: false,
+            heli: None,
         };
         // 2 m/s, braking at 6 m/s²: stopped after 1/3 s, 0.33 m on.
         let states = VecDeque::from([state(0.0, 3.0), state(1.0 / 6.0, 2.0)]);

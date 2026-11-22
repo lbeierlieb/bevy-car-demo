@@ -19,6 +19,7 @@ pub mod editor;
 pub mod events;
 pub mod fences;
 pub mod garage;
+pub mod heli;
 pub mod help;
 pub mod hud;
 pub mod input;
@@ -123,6 +124,7 @@ impl Plugin for CorePlugin {
             looks::LooksPlugin,
             net::ClientPlugin,
             visuals::VisualsPlugin,
+            heli::HeliPlugin,
             cockpit::CockpitPlugin,
             camera::CameraPlugin,
             ui::UiPlugin,

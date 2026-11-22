@@ -21,6 +21,7 @@ use crate::audio::{EngineCharacter, EngineRun, ExhaustSound};
 use crate::chassis::{CHASSIS, CLUTCHES, CarBuild, FACTORY_TOE, GEARBOXES, PAINTS, SUSPENSIONS};
 use crate::events::Event;
 use crate::events::hunt::{Action, Round};
+use crate::heli::HeliPose;
 use crate::looks::{AxleLooks, Looks, Motion, WheelMotion};
 use crate::physics::collision::Obb;
 use crate::physics::engine::families::Layout;
@@ -31,7 +32,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 10;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -123,6 +124,9 @@ pub enum ToClient {
     Round(Option<Round>),
     /// Who's in which event's round (its place in the list), everyone; whenever it changes.
     Busy(Vec<(PlayerId, u16)>),
+    /// Where the helicopter over the hunted is, to everyone in a car hunt's running
+    /// round, wherever they are, a few times a second.
+    Heli(HeliPose),
 }
 
 impl ToServer {
@@ -142,7 +146,7 @@ impl ToClient {
     pub fn reliable(&self) -> bool {
         !matches!(
             self,
-            ToClient::Cars(_) | ToClient::Map(_) | ToClient::Pings(_)
+            ToClient::Cars(_) | ToClient::Map(_) | ToClient::Pings(_) | ToClient::Heli(_)
         )
     }
 }
@@ -160,6 +164,9 @@ pub struct CarState {
     pub motion: Motion,
     /// A ghost: stopped at a shop (or just left one), nothing collides with it.
     pub ghost: bool,
+    /// The rescue helicopter that's coming for the car, carrying it or flying off (its
+    /// time on the same clock as the state's).
+    pub heli: Option<HeliPose>,
 }
 
 /// Another player's car on the map: where it is and goes (xz, on the ground), which way
@@ -319,6 +326,10 @@ impl Wire for ToClient {
                 14u8.put(out);
                 busy.put(out);
             }
+            ToClient::Heli(pose) => {
+                15u8.put(out);
+                pose.put(out);
+            }
         }
     }
 
@@ -355,6 +366,7 @@ impl Wire for ToClient {
             12 => ToClient::Events(r.get()?),
             13 => ToClient::Round(r.get()?),
             14 => ToClient::Busy(r.get()?),
+            15 => ToClient::Heli(r.get()?),
             _ => return None,
         })
     }
@@ -379,6 +391,7 @@ impl Wire for CarState {
         self.angular_velocity.put(out);
         self.motion.put(out);
         self.ghost.put(out);
+        self.heli.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         Some(Self {
@@ -389,7 +402,30 @@ impl Wire for CarState {
             angular_velocity: r.get()?,
             motion: r.get()?,
             ghost: r.get()?,
+            heli: r.get()?,
         })
+    }
+}
+
+impl Wire for HeliPose {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.time.put(out);
+        self.position.put(out);
+        self.velocity.put(out);
+        self.rotation.put(out);
+        self.cable.put(out);
+        self.hooked.put(out);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        let pose = Self {
+            time: r.get()?,
+            position: r.get()?,
+            velocity: r.get()?,
+            rotation: r.get()?,
+            cable: r.get()?,
+            hooked: r.get()?,
+        };
+        (pose.cable >= 0.0 && pose.cable < 100.0).then_some(pose)
     }
 }
 
@@ -671,10 +707,29 @@ mod tests {
             angular_velocity: Vec3::Y,
             motion: Motion::default(),
             ghost: true,
+            heli: None,
         };
         let bytes = encode(&ToServer::State(state));
         assert!(bytes.len() < 130, "{} bytes", bytes.len());
         assert_eq!(decode::<ToServer>(&bytes), Some(ToServer::State(state)));
+        // With a helicopter coming for it.
+        let heli = HeliPose {
+            time: 12.4,
+            position: Vec3::new(4.0, 60.0, -3.0),
+            velocity: Vec3::X * 20.0,
+            rotation: Quat::from_rotation_y(1.0),
+            cable: 11.5,
+            hooked: true,
+        };
+        let state = CarState {
+            heli: Some(heli),
+            ..state
+        };
+        let bytes = encode(&ToServer::State(state));
+        assert!(bytes.len() < 180, "{} bytes", bytes.len());
+        assert_eq!(decode::<ToServer>(&bytes), Some(ToServer::State(state)));
+        let message = ToClient::Heli(heli);
+        assert_eq!(decode::<ToClient>(&encode(&message)), Some(message));
     }
 
     #[test]
