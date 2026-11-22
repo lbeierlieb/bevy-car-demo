@@ -214,6 +214,17 @@ as built, in order:
    its octane, mixing by volume; the engine's knock limit reads the tank's octane (the
    panel's octane and fuel load sliders go). 6. ✓ **Alignment shop**: camber, pressures
    (from the garage), toe and brake torque/balance (from the panel; into `CarBuild`).
+   Since 2026-11-22 (asked for by the user) a scene like the dyno's (`alignment.rs`): the
+   shop's window has "Onto the alignment lift", a bay 220 m under the marker with a
+   four-post lift (turn plates, slip plates, ramps), the car on it drawn from the driven
+   car's `Looks` (steer and spin zeroed), a head clamped on each wheel (the clamp tilts
+   with the wheel's pose, the head hangs level), red beams along the sides and across
+   under the bumpers, and the console's screen (egui-painted like the dyno's) with each
+   wheel's camber (measured from the pose, so the car's weight shows), toe and pressure
+   against the spec (kit camber ±0.5°, `FACTORY_TOE` ±0.1°, suited pressure ±0.15 bar),
+   green or red. The window on the right is `garage::alignment`, applied live to the
+   parked car (`car::Away` set, as in the dyno); drag swings, the wheel zooms. Shots: the
+   shop's button at (547, 123), "Back to the car" (655, 204).
 7. ✓ **Paint shop**: the existing paints only (swatches; gone from the garage). 8. ✓ **Showroom**: the showroom window
    (`shops::shop_window` draws a shop's window for other modules, saying when the car came in).
 9. ✓ **Parts shop**: the garage window without alignment, cam timing and wastegate;

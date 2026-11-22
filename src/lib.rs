@@ -3,6 +3,7 @@
 //! cars). Each app is the plugins it adds; `CorePlugin` is what a driving app has: the
 //! world, driving a car, and seeing and hearing it.
 
+pub mod alignment;
 pub mod audio;
 pub mod body;
 pub mod buildings;

@@ -1,5 +1,5 @@
 //! Shops on the map: places to drive to for what changes a car (a showroom, parts, the
-//! alignment, paint, fuel, a dyno). The server says where they are (its own list, `--shops`,
+//! alignment (`alignment`), paint, fuel, a dyno (`dyno`)). The server says where they are (its own list, `--shops`,
 //! separate from the map, e.g. `assets/shops.cfg`; none without one) when a player joins;
 //! playing alone there are none.
 //!
@@ -14,7 +14,6 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car, CarSetup};
 use crate::chassis::{CarBuild, PAINTS};
-use crate::garage;
 use crate::map::{MapLegend, MapMark, MapMarks};
 use crate::net::wire::{Reader, Wire};
 use crate::net::{Connection, Status, WantsGhost};
@@ -265,10 +264,9 @@ fn window(
         return Ok(());
     };
     let ctx = contexts.ctx_mut()?;
-    for kind in [ShopKind::Gas, ShopKind::Alignment, ShopKind::Paint] {
+    for kind in [ShopKind::Gas, ShopKind::Paint] {
         shop_window(ctx, &shops, &mut at, kind, |ui, _| match kind {
             ShopKind::Gas => gas_station(ui, &mut car, &mut pump),
-            ShopKind::Alignment => alignment_shop(ui, &mut car),
             _ => paint_shop(ui, &mut car),
         });
     }
@@ -335,19 +333,12 @@ fn paint_shop(ui: &mut egui::Ui, car: &mut Car) {
 }
 
 /// `car` rebuilt as `build`, where it is (if that changed anything).
-fn rebuild(car: &mut Car, build: CarBuild) {
+pub fn rebuild(car: &mut Car, build: CarBuild) {
     if build != car.setup.build {
         let engine = &car.setup.engine;
         let setup = CarSetup::new(build, engine.parts.clone(), engine.build.clone());
         *car = car.rebuilt(setup);
     }
-}
-
-/// Camber, toe, pressures and the brakes, set on the car as they're moved.
-fn alignment_shop(ui: &mut egui::Ui, car: &mut Car) {
-    let mut build = car.setup.build.clone();
-    garage::alignment(ui, &mut build, &car.setup);
-    rebuild(car, build);
 }
 
 /// The gas station's grades: name and research octane number.
