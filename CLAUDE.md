@@ -228,6 +228,34 @@ Not done yet: dyno runs aren't saved; the HUD shows the parked car's gauges whil
 dyno's room; alone, a car can't be changed at all (and an empty tank alone is the end of
 the drive).
 
+## Events (agreed with the user, 2026-11-22; being built)
+
+Like shops, places on the map that the server lists (`server --events FILE`,
+`services.car-sim.events`; repo list `assets/events.cfg`, lines `kind x z name`, names
+made up). Each round of an event runs in a **world of its own** (see "Parallel worlds"):
+its players see no cars, traffic or shops of the normal world and the normal world sees
+none of theirs; traffic, if on, is simulated for that world alone; the chat is per world.
+Another group can start an independent round at the same marker while one runs. The
+players list says who's in which event. Races are to follow on the same frame (rounds:
+lobby → running → result; the hunt's rules separate).
+
+**Car Hunt** (first event, "Car Hunt Baunach" at the Rewe in Baunach, at its entrance
+from the street Reckenneusig, about (−100, 2340)):
+
+- Stopping on the marker joins the lobby forming there (or opens one). The first one in
+  is the hunted, all later ones hunters. The hunted can click another name to make them
+  the hunted, sets the options and starts (at least one hunter). No late joining.
+- Options (the hunted's): head start (10 s), time until the hunted wins (10 min),
+  traffic (on), hunters' reset ("not at all", "to the nearest road" (default), "to the
+  start"), cars ("player cars" (default) or "muscle vs rally": hunters get the Harrow
+  muscle car, the hunted the Skarn rally car; players get their own car back afterwards).
+- Everyone starts near the marker; hunters are held for the head start. Name tags on and
+  everyone in the round on the map, whatever the server's settings.
+- Hunters win when the hunted's car is under 10 km/h for 10 s, anywhere (after the head
+  start); the hunted wins when the time runs out. If the hunted leaves, the round ends.
+- Afterwards everyone is back in the normal world at the marker, in the lobby menu (the
+  next round's lobby there, if any). Fuel, tires and wear of a player's own car carry over.
+
 ## Multiplayer (agreed with the user, 2026-11-19)
 
 A multiplayer sandbox first; the career comes back later, built on it. Native and web
@@ -400,6 +428,7 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   sends only a player's world, `populate` counts density per world, traffic `step`
   collides only within a world; the client needs nothing (maybe a message for the UI).
   Per-world settings like `--map-players self` and no tags for hide and seek.
+  Being built for the events (see "Events").
 - Not done yet: the browser path tried in a real browser (no
   browser here; it builds and links), rate limits on what a player sends (chat has one).
 - Later: sanity checks on snapshots, Safari, career.
