@@ -230,6 +230,10 @@ impl Options {
             let text = std::fs::read_to_string(file)
                 .map_err(|e| format!("--events: {}: {e}", file.display()))?;
             options.events = car_sim::events::parse(&text).map_err(|e| format!("--events: {e}"))?;
+            // The races' routes along the roads of the map the server runs on.
+            let terrain = car_sim::terrain::Terrain::load();
+            car_sim::events::resolve(&mut options.events, &terrain)
+                .map_err(|e| format!("--events: {e}"))?;
         }
         if options.cert.is_some() != options.key.is_some() {
             return Err("--cert and --key go together".into());

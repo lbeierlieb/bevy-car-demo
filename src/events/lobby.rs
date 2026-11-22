@@ -8,9 +8,9 @@ use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, RichText};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
-use super::Events;
 use super::hunt::{CAUGHT_TIME, Cars, Catch};
 use super::round::{Action, Game, Phase, Play, Round};
+use super::{EventKind, Events};
 use crate::car::{ActiveCar, Car, CarSetup, Held, ResetRule};
 use crate::chassis::CHASSIS;
 use crate::net::{Connection, Status, Touching, WantsGhost};
@@ -139,7 +139,10 @@ fn arrive(
         None => {
             state.stood = None;
             let on = (events.list.iter())
-                .position(|placed| placed.marker.distance(p) < MARKER_RADIUS)
+                .position(|placed| {
+                    placed.event.kind == EventKind::Hunt
+                        && placed.marker.distance(p) < MARKER_RADIUS
+                })
                 .filter(|&i| stopped && state.left != Some(i));
             if let Some(i) = on {
                 ghost.0 = true;

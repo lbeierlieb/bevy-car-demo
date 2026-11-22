@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
+use super::EventKind;
 use super::hunt::{self, CAUGHT_SPEED, CAUGHT_TIME, Catch, Ending, TAG_RANGE};
 use super::round::{Action, Game, Outcome, Phase, Play, Round};
 use crate::heli::{Chase, HeliPose};
@@ -125,7 +126,9 @@ pub fn run_rounds(
             Action::Enter(event) => {
                 let near = (events.get(usize::from(event)))
                     .zip(present.get(&player).and_then(|p| p.1))
-                    .is_some_and(|(event, at)| event.at.distance(at.xz()) < ENTER_RANGE);
+                    .is_some_and(|(event, at)| {
+                        event.kind == EventKind::Hunt && event.at.distance(at.xz()) < ENTER_RANGE
+                    });
                 if mine.is_some() || !near {
                     continue;
                 }
