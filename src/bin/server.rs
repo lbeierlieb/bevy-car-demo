@@ -82,6 +82,7 @@ fn main() {
     )
     .insert_resource(traffic::Traffic {
         cars: options.traffic,
+        ..default()
     })
     .add_systems(Update, (report, timing));
     if let Some(telegram) = telegram {

@@ -14,7 +14,7 @@
 
 pub mod network;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use bevy::prelude::*;
 
@@ -89,15 +89,42 @@ const CRUISE_RPM: f32 = 2000.0;
 const CRUISE_LOAD: f32 = 0.2;
 const CRUISING_FROM: f32 = 3.0;
 
-/// How many traffic cars drive around each player (the panel's traffic density).
+/// How many traffic cars drive around each player (the panel's traffic density), and in
+/// the realms that want another number (e.g. none in an event's round without traffic).
 #[derive(Resource)]
 pub struct Traffic {
     pub cars: usize,
+    pub realms: HashMap<Realm, usize>,
 }
 
 impl Default for Traffic {
     fn default() -> Self {
-        Self { cars: DEFAULT_CARS }
+        Self {
+            cars: DEFAULT_CARS,
+            realms: HashMap::new(),
+        }
+    }
+}
+
+impl Traffic {
+    /// How many cars drive around each player in `realm`.
+    pub fn cars_in(&self, realm: Realm) -> usize {
+        self.realms.get(&realm).copied().unwrap_or(self.cars)
+    }
+}
+
+/// The world a player's car or a traffic car is in. Players in an event's round drive in
+/// one of its own (the server's), where they see only each other and the traffic there;
+/// without one, a car is in the normal world (`Realm::NORMAL`).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Realm(pub u32);
+
+impl Realm {
+    pub const NORMAL: Self = Self(0);
+
+    /// The realm of something that may have one.
+    pub fn of(realm: Option<&Realm>) -> Self {
+        realm.copied().unwrap_or_default()
     }
 }
 
@@ -478,7 +505,8 @@ type Player = Or<(With<Car>, With<Anchor>)>;
 /// of everyone's sight on the roads around the player with the fewest, ones left far
 /// behind by everyone go (and when there are too many, the one farthest from anyone,
 /// among those only near players with too many). Players near each other share the cars
-/// around them, so the traffic is as dense where many drive as where one does.
+/// around them, so the traffic is as dense where many drive as where one does. Each realm
+/// has traffic of its own, around its own players.
 #[allow(clippy::too_many_arguments)]
 fn populate(
     mut commands: Commands,
@@ -487,93 +515,150 @@ fn populate(
     terrain: Res<Terrain>,
     mut spawner: ResMut<Spawner>,
     mut numbers: ResMut<CarNumbers>,
-    players: Query<&Transform, Player>,
-    others: Query<(Entity, &TrafficCar)>,
+    players: Query<(&Transform, Option<&Realm>), Player>,
+    others: Query<(Entity, &TrafficCar, Option<&Realm>)>,
 ) {
-    let centres: Vec<Vec2> = players.iter().map(|t| t.translation.xz()).collect();
-    if centres.is_empty() {
-        return;
+    // Each realm's players and cars.
+    type Realms<'a> = HashMap<Realm, (Vec<Vec2>, Vec<(Entity, &'a TrafficCar)>)>;
+    let mut realms: Realms = HashMap::new();
+    for (transform, realm) in &players {
+        let entry = realms.entry(Realm::of(realm)).or_default();
+        entry.0.push(transform.translation.xz());
     }
-    let spawner = &mut *spawner;
-    let nearest = |p: Vec2| (centres.iter().map(|c| c.distance(p))).fold(f32::INFINITY, f32::min);
-    // The cars that stay, and how many are around each player.
-    let mut kept = Vec::new();
-    let mut around = vec![0; centres.len()];
-    for (entity, car) in &others {
-        let p = car.body.position.xz();
-        let reach = if car.driver.is_some() {
-            DESPAWN
-        } else {
-            DESPAWN_CRASHED
-        };
-        if nearest(p) > reach {
-            commands.entity(entity).despawn();
+    for (entity, car, realm) in &others {
+        let entry = realms.entry(Realm::of(realm)).or_default();
+        entry.1.push((entity, car));
+    }
+    let mut started = true;
+    for (realm, (centres, cars)) in realms {
+        if centres.is_empty() {
+            // Nobody's left there.
+            for (entity, _) in cars {
+                commands.entity(entity).despawn();
+            }
             continue;
         }
-        for (count, c) in around.iter_mut().zip(&centres) {
-            *count += usize::from(c.distance(p) <= DESPAWN);
-        }
-        kept.push((entity, p));
+        let around = Around {
+            realm,
+            wanted: traffic.cars_in(realm),
+            centres: &centres,
+            cars: &cars,
+        };
+        started &= around.populate(
+            &mut commands,
+            &network,
+            &terrain,
+            &mut spawner,
+            &mut numbers,
+        );
     }
-    // Too many: the car farthest from anyone, whose players all have too many.
-    let surplus = kept
-        .iter()
-        .filter(|&&(_, p)| {
-            (around.iter().zip(&centres))
-                .all(|(&count, c)| c.distance(p) > DESPAWN || count > traffic.cars)
-        })
-        .max_by(|a, b| nearest(a.1).total_cmp(&nearest(b.1)));
-    if around.iter().any(|&count| count > traffic.cars)
-        && let Some(&(entity, _)) = surplus
-    {
-        commands.entity(entity).despawn();
-        return;
-    }
-    // Too few: one more around the player who has the fewest.
-    let Some((lacking, _)) = (around.iter().enumerate())
-        .filter(|&(_, &count)| count < traffic.cars)
-        .min_by_key(|&(_, &count)| count)
-    else {
-        spawner.started = true;
-        return;
-    };
-    let center = centres[lacking];
+    spawner.started |= started && !players.is_empty();
+}
 
-    // A spot on the roads in the ring around that player, out of everyone's sight and
-    // clear of every other car.
-    let near = if spawner.started {
-        SPAWN_NEAR
-    } else {
-        SPAWN_FIRST
-    };
-    let taken: Vec<Vec2> = (kept.iter().map(|&(_, p)| p))
-        .chain(centres.iter().copied())
-        .collect();
-    let free: Vec<usize> = (0..spawner.spots.len())
-        .filter(|&i| {
-            let p = spawner.spots[i].2;
-            p.distance(center) < SPAWN_FAR
-                && nearest(p) > near
-                && terrain.inside(p.x, p.y)
-                && taken.iter().all(|t| t.distance(p) > SPAWN_GAP)
-        })
-        .collect();
-    if free.is_empty() {
-        spawner.started = true;
-        return;
+/// The players of a realm, and its traffic.
+struct Around<'a> {
+    realm: Realm,
+    /// How many cars each player should have around them.
+    wanted: usize,
+    centres: &'a [Vec2],
+    cars: &'a [(Entity, &'a TrafficCar)],
+}
+
+impl Around<'_> {
+    /// Spawns or despawns a car, if any needs to, and says whether every player had
+    /// what they asked for or no room for more (the start is over).
+    fn populate(
+        &self,
+        commands: &mut Commands,
+        network: &Network,
+        terrain: &Terrain,
+        spawner: &mut Spawner,
+        numbers: &mut CarNumbers,
+    ) -> bool {
+        let centres = self.centres;
+        let wanted = self.wanted;
+        let nearest =
+            |p: Vec2| (centres.iter().map(|c| c.distance(p))).fold(f32::INFINITY, f32::min);
+        // The cars that stay, and how many are around each player.
+        let mut kept = Vec::new();
+        let mut around = vec![0; centres.len()];
+        for &(entity, car) in self.cars {
+            let p = car.body.position.xz();
+            let reach = if car.driver.is_some() {
+                DESPAWN
+            } else {
+                DESPAWN_CRASHED
+            };
+            if nearest(p) > reach {
+                commands.entity(entity).despawn();
+                continue;
+            }
+            for (count, c) in around.iter_mut().zip(centres) {
+                *count += usize::from(c.distance(p) <= DESPAWN);
+            }
+            kept.push((entity, p));
+        }
+        // Too many: the car farthest from anyone, whose players all have too many.
+        let surplus = kept
+            .iter()
+            .filter(|&&(_, p)| {
+                (around.iter().zip(centres))
+                    .all(|(&count, c)| c.distance(p) > DESPAWN || count > wanted)
+            })
+            .max_by(|a, b| nearest(a.1).total_cmp(&nearest(b.1)));
+        if around.iter().any(|&count| count > wanted)
+            && let Some(&(entity, _)) = surplus
+        {
+            commands.entity(entity).despawn();
+            return false;
+        }
+        // Too few: one more around the player who has the fewest.
+        let Some((lacking, _)) = (around.iter().enumerate())
+            .filter(|&(_, &count)| count < wanted)
+            .min_by_key(|&(_, &count)| count)
+        else {
+            return true;
+        };
+        let center = centres[lacking];
+
+        // A spot on the roads in the ring around that player, out of everyone's sight and
+        // clear of every other car.
+        let near = if spawner.started {
+            SPAWN_NEAR
+        } else {
+            SPAWN_FIRST
+        };
+        let taken: Vec<Vec2> = (kept.iter().map(|&(_, p)| p))
+            .chain(centres.iter().copied())
+            .collect();
+        let free: Vec<usize> = (0..spawner.spots.len())
+            .filter(|&i| {
+                let p = spawner.spots[i].2;
+                p.distance(center) < SPAWN_FAR
+                    && nearest(p) > near
+                    && terrain.inside(p.x, p.y)
+                    && taken.iter().all(|t| t.distance(p) > SPAWN_GAP)
+            })
+            .collect();
+        if free.is_empty() {
+            return true;
+        }
+        let rng = &mut spawner.rng;
+        let (leg, s, _) =
+            spawner.spots[free[(rng.next() * free.len() as f32) as usize % free.len()]];
+        let chassis = rng.pick(COMMON.iter().copied());
+        let paint = (rng.next() * PAINTS.len() as f32) as usize % PAINTS.len();
+        let keen = rng.range(KEEN);
+        let seed = rng.0;
+        let mut car = TrafficCar::new(network, terrain, chassis, paint, leg, s, keen, seed);
+        car.id = numbers.take();
+        commands.spawn((
+            Transform::from_translation(car.body.position).with_rotation(car.body.rotation),
+            car,
+            self.realm,
+        ));
+        false
     }
-    let rng = &mut spawner.rng;
-    let (leg, s, _) = spawner.spots[free[(rng.next() * free.len() as f32) as usize % free.len()]];
-    let chassis = rng.pick(COMMON.iter().copied());
-    let paint = (rng.next() * PAINTS.len() as f32) as usize % PAINTS.len();
-    let keen = rng.range(KEEN);
-    let seed = rng.0;
-    let mut car = TrafficCar::new(&network, &terrain, chassis, paint, leg, s, keen, seed);
-    car.id = numbers.take();
-    commands.spawn((
-        Transform::from_translation(car.body.position).with_rotation(car.body.rotation),
-        car,
-    ));
 }
 
 impl TrafficCar {
@@ -736,11 +821,13 @@ struct Vehicle {
     forward: Vec2,
     half_length: f32,
     half_width: f32,
+    realm: Realm,
 }
 
 impl Vehicle {
-    fn of(body: &RigidBody, hull: &Obb) -> Self {
+    fn of(body: &RigidBody, hull: &Obb, realm: Option<&Realm>) -> Self {
         Self {
+            realm: Realm::of(realm),
             at: body.position.xz(),
             velocity: body.velocity.xz(),
             forward: (body.rotation * Vec3::NEG_Z).xz().normalize_or(Vec2::NEG_Y),
@@ -751,25 +838,26 @@ impl Vehicle {
 }
 
 /// Moves every traffic car on: drivers along their routes, crashed cars as loose bodies;
-/// then the cars that touch each other or the player's crash.
+/// then the cars that touch each other or the player's crash (each realm on its own).
 fn step(
     time: Res<Time>,
     terrain: Res<Terrain>,
     network: Res<Network>,
-    mut traffic: Query<&mut TrafficCar>,
-    mut cars: Query<&mut Car>,
-    visitors: Query<&Visitor>,
+    mut traffic: Query<(&mut TrafficCar, Option<&Realm>)>,
+    mut cars: Query<(&mut Car, Option<&Realm>)>,
+    visitors: Query<(&Visitor, Option<&Realm>)>,
 ) {
     let dt = time.delta_secs();
-    let vehicles: Vec<Vehicle> = (traffic.iter().map(|car| Vehicle::of(&car.body, &car.hull)))
+    let vehicles: Vec<Vehicle> = (traffic.iter())
+        .map(|(car, realm)| Vehicle::of(&car.body, &car.hull, realm))
         .chain(
             cars.iter()
-                .map(|car| Vehicle::of(&car.body, &car.setup.hull)),
+                .map(|(car, realm)| Vehicle::of(&car.body, &car.setup.hull, realm)),
         )
-        .chain(visitors.iter().map(|v| Vehicle::of(&v.body, &v.hull)))
+        .chain((visitors.iter()).map(|(v, realm)| Vehicle::of(&v.body, &v.hull, realm)))
         .collect();
     let mut contacts = Vec::new();
-    for (i, mut car) in traffic.iter_mut().enumerate() {
+    for (i, (mut car, _)) in traffic.iter_mut().enumerate() {
         if car.driver.is_some() {
             drive(&mut car, i, &vehicles, &network, &terrain, dt);
         } else {
@@ -779,19 +867,23 @@ fn step(
 
     // Knocks between traffic cars, and with the player's.
     let mut pairs = traffic.iter_combinations_mut();
-    while let Some([mut a, mut b]) = pairs.fetch_next() {
+    while let Some([(mut a, ra), (mut b, rb)]) = pairs.fetch_next() {
+        if Realm::of(ra) != Realm::of(rb) {
+            continue;
+        }
         if let Some(contact) = touch(&a.placed_hull(), &b.placed_hull()) {
             crash(&mut a);
             crash(&mut b);
             collision::resolve(&mut a.body, Some(&mut b.body), &[contact], OBSTACLE, dt);
         }
     }
-    for mut player in &mut cars {
+    for (mut player, realm) in &mut cars {
         let hull = player
             .setup
             .hull
             .placed(player.body.position, player.body.rotation);
-        for mut car in &mut traffic {
+        for (mut car, _) in (traffic.iter_mut()).filter(|(_, r)| Realm::of(*r) == Realm::of(realm))
+        {
             if let Some(contact) = touch(&hull, &car.placed_hull()) {
                 crash(&mut car);
                 let impulse = collision::resolve(
@@ -807,11 +899,12 @@ fn step(
     }
     // Cars driven elsewhere: only the traffic car is moved (the other is pushed off on
     // its own side).
-    for visitor in &visitors {
+    for (visitor, realm) in &visitors {
         let hull = visitor
             .hull
             .placed(visitor.body.position, visitor.body.rotation);
-        for mut car in &mut traffic {
+        for (mut car, _) in (traffic.iter_mut()).filter(|(_, r)| Realm::of(*r) == Realm::of(realm))
+        {
             if let Some(contact) = touch(&car.placed_hull(), &hull) {
                 crash(&mut car);
                 let mut other = visitor.body.clone();
@@ -880,7 +973,10 @@ fn drive(
     let mine = &vehicles[me];
     let mut leader: Option<(f32, f32)> = None;
     for (j, other) in vehicles.iter().enumerate() {
-        if j == me || other.at.distance_squared(mine.at) > (FOLLOW_RANGE + 10.0).powi(2) {
+        if j == me
+            || other.realm != mine.realm
+            || other.at.distance_squared(mine.at) > (FOLLOW_RANGE + 10.0).powi(2)
+        {
             continue;
         }
         for k in first.saturating_sub(1)..path.points.len().saturating_sub(1) {
@@ -1063,7 +1159,7 @@ mod tests {
         for _ in 0..60 * 120 {
             let vehicles: Vec<Vehicle> = cars
                 .iter()
-                .map(|car| Vehicle::of(&car.body, &car.hull))
+                .map(|car| Vehicle::of(&car.body, &car.hull, None))
                 .collect();
             for (i, car) in cars.iter_mut().enumerate() {
                 if car.driver.is_some() {

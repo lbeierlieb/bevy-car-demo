@@ -642,6 +642,90 @@ mod tests {
         assert_eq!(ids.len(), seen.len());
     }
 
+    /// Puts the player called `name` into `realm` on the server.
+    fn move_to_realm(server: &mut App, name: &str, realm: crate::traffic::Realm) {
+        let entity = (server.world_mut().query::<(Entity, &server::Peer)>())
+            .iter(server.world())
+            .find(|(_, peer)| peer.name.as_deref() == Some(name))
+            .map(|(entity, _)| entity)
+            .unwrap();
+        server.world_mut().entity_mut(entity).insert(realm);
+    }
+
+    /// Players in another realm see neither the others nor their traffic, nor their
+    /// chat; a realm without traffic has none.
+    #[test]
+    fn realms_see_only_themselves() {
+        use crate::traffic::{Realm, Traffic, TrafficCar, TrafficPlugin};
+        let listener = LoopbackListener::default();
+        let mut server = app_on(Terrain::baked());
+        server
+            .add_plugins((ServerPlugin, TrafficPlugin))
+            .insert_resource(Server::new(listener.clone()));
+        let terrain = Terrain::baked();
+        let (spawn, _) = terrain.road_spawns(1, 0.0)[0];
+        let mut anna = player_on(&listener, "Anna", 3, spawn, terrain);
+        let mut ben = player_on(
+            &listener,
+            "Ben",
+            0,
+            spawn + Vec2::new(0.0, 20.0),
+            Terrain::baked(),
+        );
+        let mut cleo = player_on(
+            &listener,
+            "Cleo",
+            0,
+            spawn + Vec2::new(0.0, -20.0),
+            Terrain::baked(),
+        );
+        run(&mut [&mut server, &mut anna, &mut ben, &mut cleo], 20);
+        let hunt = Realm(7);
+        (server.world_mut().resource_mut::<Traffic>().realms).insert(hunt, 0);
+        move_to_realm(&mut server, "Ben", hunt);
+        move_to_realm(&mut server, "Cleo", hunt);
+        run(&mut [&mut server, &mut anna, &mut ben, &mut cleo], 120);
+        let tags = |app: &mut App| -> Vec<Option<String>> {
+            remote(app).into_iter().map(|(.., tag)| tag).collect()
+        };
+        let annas = tags(&mut anna);
+        assert!(annas.len() >= 10, "her traffic: {annas:?}");
+        assert!(
+            annas.iter().all(Option::is_none),
+            "no Ben or Cleo: {annas:?}"
+        );
+        assert_eq!(tags(&mut ben), [Some("Cleo".to_string())], "only Cleo");
+        assert_eq!(tags(&mut cleo), [Some("Ben".to_string())], "only Ben");
+        let realms: Vec<Realm> = (server.world_mut())
+            .query::<(&TrafficCar, Option<&Realm>)>()
+            .iter(server.world())
+            .map(|(_, realm)| Realm::of(realm))
+            .collect();
+        assert!(realms.iter().all(|&realm| realm == Realm::NORMAL));
+        // With traffic in the realm, it gets its own.
+        (server.world_mut().resource_mut::<Traffic>().realms).insert(hunt, 5);
+        run(&mut [&mut server, &mut anna, &mut ben, &mut cleo], 60);
+        let in_hunt = (server.world_mut())
+            .query::<(&TrafficCar, Option<&Realm>)>()
+            .iter(server.world())
+            .filter(|(_, realm)| Realm::of(*realm) == hunt)
+            .count();
+        assert_eq!(in_hunt, 5);
+        assert_eq!(tags(&mut ben).len(), 6, "Cleo and the hunt's traffic");
+        assert_eq!(tags(&mut anna).len(), annas.len(), "none of it for Anna");
+        // The chat stays in its realm.
+        (ben.world_mut().resource_mut::<Connection>()).write("Hi Cleo");
+        (anna.world_mut().resource_mut::<Connection>()).write("Anyone?");
+        run(&mut [&mut server, &mut anna, &mut ben, &mut cleo], 5);
+        let said = |app: &App| -> Vec<String> {
+            (chat(app).into_iter())
+                .filter(|line| !line.starts_with('·'))
+                .collect()
+        };
+        assert_eq!(said(&cleo), ["Ben: Hi Cleo"]);
+        assert_eq!(said(&anna), ["Anna: Anyone?"]);
+    }
+
     /// A car the server's catalogues don't have (a newer game's) gets a clear refusal.
     #[test]
     fn a_car_the_server_doesnt_know_is_refused_with_a_reason() {

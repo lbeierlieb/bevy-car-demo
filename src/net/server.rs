@@ -11,8 +11,10 @@
 //! (`MapPlayers`), and every two seconds everyone's ping (the connection's round trip).
 //! Every state goes out stamped on the server's clock (a player's converted from theirs),
 //! so a player has one clock for every car they're sent.
-//! With chat on, what a player writes goes to everyone (cleaned up, a few lines at a time
-//! at most), and everyone is told in the chat who joined and left.
+//! With chat on, what a player writes goes to everyone in their realm (cleaned up, a few
+//! lines at a time at most), and everyone is told in the chat who joined and left.
+//! A player's entity may have a `Realm` (an event's round): they then see only the cars
+//! in it (players' and its traffic's), and only they see theirs.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -28,7 +30,7 @@ use crate::looks::{Looks, Motion};
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
 use crate::terrain::Terrain;
-use crate::traffic::{Anchor, CarNumbers, TrafficCar, Visitor};
+use crate::traffic::{Anchor, CarNumbers, Realm, TrafficCar, Visitor};
 
 /// A player not heard from for this long is frozen for the others, and for this long
 /// dropped (s).
@@ -218,18 +220,19 @@ fn receive(
     server: Res<Server>,
     terrain: Res<Terrain>,
     time: Res<Time<Real>>,
-    mut peers: Query<(Entity, &mut Peer, Option<&mut Transform>)>,
+    mut peers: Query<(Entity, &mut Peer, Option<&mut Transform>, Option<&Realm>)>,
     mut presence: MessageWriter<Presence>,
 ) {
     let now = now(&time);
-    let mut present = peers.iter().filter(|(_, p, _)| p.name.is_some()).count();
+    let mut present = peers.iter().filter(|(_, p, ..)| p.name.is_some()).count();
     // What everyone else has to be told afterwards.
     let mut joined = Vec::new();
     let mut left = Vec::new();
-    let mut chat = Vec::new();
+    // Chat lines, for one realm or (none) everyone.
+    let mut chat: Vec<(Option<Realm>, ToClient)> = Vec::new();
     // Who wrote too much at once.
     let mut too_fast = HashSet::new();
-    for (entity, mut peer, mut transform) in &mut peers {
+    for (entity, mut peer, mut transform, realm) in &mut peers {
         while let Some(bytes) = peer.link.receive() {
             let Some(message) = decode::<ToServer>(&bytes) else {
                 // Looks out of our catalogues come from a newer game (a car or part the
@@ -310,10 +313,13 @@ fn receive(
                         continue;
                     }
                     peer.chatted.push_back(now);
-                    chat.push(ToClient::Chat {
-                        from: peer.id,
-                        text,
-                    });
+                    chat.push((
+                        Some(Realm::of(realm)),
+                        ToClient::Chat {
+                            from: peer.id,
+                            text,
+                        },
+                    ));
                 }
                 ToServer::Looks(looks) => {
                     peer.looks = Some(*looks);
@@ -368,7 +374,7 @@ fn receive(
 
     // Everyone hears of who joined and who left; the new ones of everyone there.
     for (id, name) in &joined {
-        for (_, mut peer, _) in &mut peers {
+        for (_, mut peer, ..) in &mut peers {
             if peer.name.is_none() || peer.id == *id {
                 continue;
             }
@@ -379,10 +385,10 @@ fn receive(
         }
     }
     let present: Vec<(PlayerId, String)> = (peers.iter())
-        .filter_map(|(_, peer, _)| Some((peer.id, peer.name.clone()?)))
+        .filter_map(|(_, peer, ..)| Some((peer.id, peer.name.clone()?)))
         .collect();
     for (id, _) in &joined {
-        for (_, mut peer, _) in &mut peers {
+        for (_, mut peer, ..) in &mut peers {
             if peer.id != *id {
                 continue;
             }
@@ -401,25 +407,29 @@ fn receive(
                 from: SERVER,
                 text: format!("{name} joined"),
             };
-            for (_, mut peer, _) in &mut peers {
+            for (_, mut peer, ..) in &mut peers {
                 if peer.name.is_some() && peer.id != *id {
                     peer.tell(&line);
                 }
             }
         }
         for (_, name) in &left {
-            chat.push(ToClient::Chat {
-                from: SERVER,
-                text: format!("{name} left"),
-            });
+            chat.push((
+                None,
+                ToClient::Chat {
+                    from: SERVER,
+                    text: format!("{name} left"),
+                },
+            ));
         }
     }
-    // Everyone there hears the chat, and then the ones held back why.
-    for (_, mut peer, _) in &mut peers {
+    // Everyone there hears the chat of their realm, and then the ones held back why.
+    for (_, mut peer, _, realm) in &mut peers {
         if peer.name.is_none() || left.iter().any(|(id, _)| *id == peer.id) {
             continue;
         }
-        for line in &chat {
+        let realm = Realm::of(realm);
+        for (_, line) in chat.iter().filter(|(r, _)| r.is_none_or(|r| r == realm)) {
             peer.tell(line);
         }
         if too_fast.contains(&peer.id) {
@@ -444,7 +454,7 @@ fn receive(
             joined: false,
             players,
         });
-        for (_, mut peer, _) in &mut peers {
+        for (_, mut peer, ..) in &mut peers {
             if peer.name.is_some() && peer.id != id {
                 peer.tell(&ToClient::Left { id });
             }
@@ -460,8 +470,8 @@ fn send(
     mut server: ResMut<Server>,
     time: Res<Time<Real>>,
     fixed: Res<Time<Fixed>>,
-    mut peers: Query<&mut Peer>,
-    traffic: Query<(&TrafficCar, &Looks, &Motion)>,
+    mut peers: Query<(&mut Peer, Option<&Realm>)>,
+    traffic: Query<(&TrafficCar, &Looks, &Motion, Option<&Realm>)>,
 ) {
     let now = now(&time);
     if now - server.sent < 1.0 / SEND_RATE {
@@ -476,6 +486,7 @@ fn send(
     if now - server.pings_sent >= 1.0 / PING_RATE {
         server.pings_sent = now;
         let pings: Vec<(PlayerId, u16)> = (peers.iter())
+            .map(|(peer, _)| peer)
             .filter(|peer| peer.name.is_some())
             .filter_map(|peer| {
                 let ms = peer.link.rtt()?.as_secs_f64() * 1000.0;
@@ -483,7 +494,7 @@ fn send(
             })
             .collect();
         let message = ToClient::Pings(pings);
-        for mut peer in &mut peers {
+        for (mut peer, _) in &mut peers {
             if peer.name.is_some() {
                 peer.tell(&message);
             }
@@ -500,12 +511,13 @@ fn send(
         tag: Option<String>,
         /// Whose it is, for the map.
         player: Option<PlayerId>,
+        realm: Realm,
     }
     let stamp = super::stamp(&time, &fixed);
     let players = peers
         .iter()
-        .filter(|peer| now - peer.heard <= FROZEN)
-        .filter_map(|peer| {
+        .filter(|(peer, _)| now - peer.heard <= FROZEN)
+        .filter_map(|(peer, realm)| {
             let state = peer.state?;
             Some(Car {
                 id: peer.car,
@@ -517,9 +529,10 @@ fn send(
                 revision: peer.revision,
                 tag: peer.name.clone().filter(|_| server.name_tags),
                 player: Some(peer.id),
+                realm: Realm::of(realm),
             })
         });
-    let traffic = traffic.iter().map(|(car, looks, motion)| {
+    let traffic = traffic.iter().map(|(car, looks, motion, realm)| {
         let at = car.transform(looks);
         Car {
             id: car.id,
@@ -536,6 +549,7 @@ fn send(
             revision: 1,
             tag: None,
             player: None,
+            realm: Realm::of(realm),
         }
     });
     let cars: Vec<Car> = players.chain(traffic).collect();
@@ -555,10 +569,11 @@ fn send(
         now + 1.0 / rate - 0.5 / SEND_RATE
     };
 
-    for mut peer in &mut peers {
+    for (mut peer, realm) in &mut peers {
         let Some(own) = peer.state.filter(|_| peer.name.is_some()) else {
             continue;
         };
+        let realm = Realm::of(realm);
         let peer = &mut *peer;
         let (cx, cz) = cell(own.position);
         let mut states = Vec::new();
@@ -569,7 +584,7 @@ fn send(
                 for &i in grid.get(&(x, z)).into_iter().flatten() {
                     let car = &cars[i];
                     let distance = car.state.position.distance(own.position);
-                    if car.id == peer.car || distance > NEAR {
+                    if car.id == peer.car || car.realm != realm || distance > NEAR {
                         continue;
                     }
                     near.insert(car.id);
@@ -617,7 +632,7 @@ fn send(
         if map_due {
             let shown: Vec<MapPlayer> = (cars.iter())
                 .filter_map(|car| Some((car, car.player?)))
-                .filter(|&(_, player)| player != peer.id)
+                .filter(|&(car, player)| player != peer.id && car.realm == realm)
                 .filter(|(car, _)| match map {
                     MapPlayers::Nobody => false,
                     MapPlayers::Near(within) => car.state.position.distance(own.position) <= within,
