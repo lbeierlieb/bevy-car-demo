@@ -113,11 +113,13 @@ on its marker to join the lobby there. The first player in is hunted, everyone a
 that hunts. The hunted can hand that part to another player, sets the head start
 (10 s), the time to get away (10 min), traffic (on), where a hunter's R puts the car
 (nowhere, the nearest road or the start; the hunted never resets) and the cars (everyone
-their own, or muscle vs rally: muscle cars for the hunters, a rally car for the hunted),
-and starts the hunt. It runs in a world of its own: its players see only each other and
+their own, or muscle vs rally: muscle cars for the hunters, a rally car for the hunted)
+and how the hunters win ("Tag them", the default: touching the hunted's car, or keeping
+it slow; "Stop them": only keeping it slow), and starts the hunt. It runs in a world of its own: its players see only each other and
 the hunt's own traffic, all with names and on the map, and nobody outside sees them.
 The hunters wait for the head start, and win once the hunted has been slower than
-10 km/h for 10 s; the hunted wins when the time is up. Afterwards everyone is back at
+10 km/h for 10 s (or, tagging, once a hunter's car touches the hunted's); the hunted
+wins when the time is up, and sees how far the nearest hunter is. Afterwards everyone is back at
 the marker, in its lobby, with their own car. Other groups can start their own hunts at
 the same marker meanwhile.
 
@@ -200,7 +202,7 @@ The game starts with a screen listing the controls (a click or Esc closes it, H 
 it back); the panel is hidden until its key opens it. When
 the car won't do what you seem to want, a hint over the road says why and what to
 press: giving gas with the parking brake on or in neutral, asking for reverse while
-rolling, bouncing off the rev limiter below top gear, a stalled or wrecked engine, an
+rolling, bouncing off the rev limiter in first gear, a stalled or wrecked engine, an
 empty tank, or a few seconds of gas without moving (stuck: R).
 
 | Key | Action |
@@ -212,7 +214,7 @@ empty tank, or a few seconds of gas without moving (stuck: R).
 | Space | Parking brake on/off (cars start with it on) |
 | R | Put the car on the nearest road (in its lane), as it is (fuel, tires and wear stay) |
 | H | The controls screen |
-| 1 / 2 | Toggle gizmos / telemetry and settings panel |
+| 1 / 2 | Toggle gizmos (with the car's map coordinates) / telemetry and settings panel |
 | F11 | Fullscreen (the browser's on the web; all F keys go to the browser there) |
 | 0 | Mute engine sound |
 | T | Chat, on a server that has it on (Enter sends, Esc cancels) |

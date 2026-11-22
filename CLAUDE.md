@@ -29,7 +29,8 @@ the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars)
 `editor::EditorPlugin` adds the terrain, scenery, sky and map plugins itself.
 
 - Window keys are on the number row (moved from F1–F6 at the user's wish, 2026-11-19):
-  1 gizmos, 2 panel/settings (3–6 were tool windows until the shops, 2026-11-22). The F
+  1 gizmos (with the car's map x, z, height and heading top right, for placing things in
+  the server's lists; the map (M) shows the pointer's x, z at the bottom), 2 panel/settings (3–6 were tool windows until the shops, 2026-11-22). The F
   keys belong to the browser on the web
   (`web/index.html` keeps them from winit's canvas listeners); natively F11 toggles
   fullscreen (`FullscreenPlugin` in `default_plugins`). The editor keeps F5 (bake).
@@ -50,7 +51,8 @@ controls screen (`egui::Modal`; a click anywhere or Esc closes it, H reopens it;
 start menu waits for it) lists the keyboard controls; the panel (2) and the tool window
 bars are hidden by default. Hints over the road say what's wrong, what to press and what
 that does: gas with the parking brake on, reverse asked for while rolling
-(`car::ReverseRefused`, a message from `drive`), on the rev limiter below top gear, and
+(`car::ReverseRefused`, a message from `drive`), on the rev limiter in first gear (only
+there, at the user's wish, 2026-11-22), and
 gas without moving for 3 s (R). Added alone: in neutral, stalled, wrecked engine, empty
 tank (stating the problem only, since 2026-11-22). R (`ResetPlugin`) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
 right-hand lane on roads with traffic lanes). The map teleport was removed at the user's
@@ -234,15 +236,17 @@ the drive).
 
 Like shops, places on the map that the server lists (`server --events FILE`,
 `services.car-sim.events`; repo list `assets/events.cfg`, lines `kind x z name`, names
-made up). Each round of an event runs in a **world of its own** (see "Parallel worlds"):
+made up). Unlike a shop's, an event's marker is exactly at its point, not moved to a road
+(the user wanted the hunt in the middle of a parking lot, 2026-11-22; the server checks
+"near the marker" against the point too). Each round of an event runs in a **world of its own** (see "Parallel worlds"):
 its players see no cars, traffic or shops of the normal world and the normal world sees
 none of theirs; traffic, if on, is simulated for that world alone; the chat is per world.
 Another group can start an independent round at the same marker while one runs. The
 players list says who's in which event. Races are to follow on the same frame (rounds:
 lobby → running → result; the hunt's rules separate).
 
-**Car Hunt** (first event, "Car Hunt Baunach" at the Rewe in Baunach, at its entrance
-from the street Reckenneusig, about (−100, 2340)):
+**Car Hunt** (first event, "Car Hunt Baunach" in the middle of the Rewe's parking lot in
+Baunach, (−87, 2286), the `amenity=parking` area's centroid):
 
 - Stopping on the marker joins the lobby forming there (or opens one). The first one in
   is the hunted, all later ones hunters. The hunted can click another name to make them
@@ -252,11 +256,21 @@ from the street Reckenneusig, about (−100, 2340)):
   start"; the hunted can never reset), cars ("player cars" (default) or "muscle vs
   rally": hunters get the Harrow muscle car with the 5.0 V8 (M50, its base engine), the
   hunted the Skarn rally car, factory builds, full and on fresh tires; a lent car leaves
-  no trace, players get their own car back afterwards as it was).
+  no trace, players get their own car back afterwards as it was), how the hunters win
+  (`Catch`: "Tag them" (default) or "Stop them"; added 2026-11-22, the user: tagging is
+  the objective, with one or two hunters stopping the hunted is near impossible).
 - Everyone starts near the marker; hunters are held for the head start. Name tags on and
   everyone in the round on the map, whatever the server's settings.
 - Hunters win when the hunted's car is under 10 km/h for 10 s, anywhere (after the head
-  start); the hunted wins when the time runs out. If the hunted leaves, the round ends.
+  start), or, with "Tag them", the moment a hunter's car touches the hunted's (or the
+  other way round); the hunted wins when the time runs out. As built: each game's
+  `push_off_remote_cars` collects the remote cars ours touched (`net::Touching`), the lobby
+  sends them in a running tag round (`Action::Touched(CarId)`, at most every 0.2 s), and
+  the server ends the round (`Ending::Tagged { by }`) if the car's owner and the sender are
+  the hunted and a hunter, past the head start, their states within `TAG_RANGE` (15 m).
+  Ghosts touch nothing, so cars that waited overlapping in the lobby tag only once apart.
+- The hunted sees the nearest hunter's distance in the bar (from `Connection::on_map`,
+  1 Hz, carried on at speed; rounded to 5/10 m, yellow under 200 m, red under 50 m). If the hunted leaves, the round ends.
 - Afterwards everyone is back in the normal world at the marker, in the lobby menu (the
   next round's lobby there, if any). Fuel, tires and wear of a player's own car carry over.
 
@@ -272,10 +286,13 @@ one), `lobby.rs` (client: `arrive` asks to enter when stopped on a marker, drive
 Esc leaves; `follow` places the car at `online::lane_spots` near the marker by slot,
 lends via despawn/spawn and keeps our `Car` in `EventState::lent`, sets `car::Held` and
 `car::ResetRule`; `window`: lobby window and the bar at the top). Protocol 7:
-`ToClient::Events`, `Round(Option<Round>)`, `Busy`, `ToServer::Event(Action)`. Times are
+`ToClient::Events`, `Round(Option<Round>)`, `Busy`, `ToServer::Event(Action)`; protocol 8
+added `Settings::catch`, `Ending::Tagged`, `Action::Touched`. Times are
 on the server's clock (`Connection::server_time`). Shops and event markers are hidden
 in a running round (`Connection::in_running_round`). Tests: `realms_see_only_themselves`,
-`a_car_hunt_runs_in_a_realm_of_its_own`, `a_hunt_lends_cars_and_gives_them_back`.
+`a_car_hunt_runs_in_a_realm_of_its_own`, `a_hunt_lends_cars_and_gives_them_back`,
+`a_hunter_tags_the_hunted` (test apps have no shops plugin, so `WantsGhost` stays set
+from the lobby unless a test clears it).
 Not done: races; a round's own chat lines (who caught whom) for the server's chat.
 
 ## Multiplayer (agreed with the user, 2026-11-19)
