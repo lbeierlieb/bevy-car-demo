@@ -32,7 +32,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 13;
+pub const PROTOCOL: u32 = 14;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -767,6 +767,7 @@ mod tests {
                     ending: Ending::Caught(253.0),
                 })),
             },
+            best: Vec::new(),
         };
         let message = ToClient::Round(Some(round.clone()));
         assert_eq!(decode::<ToClient>(&encode(&message)), Some(message));

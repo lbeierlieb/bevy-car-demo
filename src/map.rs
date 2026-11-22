@@ -43,6 +43,7 @@ impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MapView>()
             .init_resource::<MapMarks>()
+            .init_resource::<MapLines>()
             .init_resource::<MapLegend>()
             .init_resource::<MapCars>()
             .add_message::<MapClicked>()
@@ -78,6 +79,19 @@ pub struct MapMark {
     /// The label shows when zoomed in to fewer metres per screen point than this
     /// (`f32::INFINITY`: always).
     pub label_below: f32,
+}
+
+/// Lines an app wants on the map (a race's route), over the roads and under the marks,
+/// each part's under its own key.
+#[derive(Resource, Default)]
+pub struct MapLines(pub BTreeMap<&'static str, Vec<MapLine>>);
+
+pub struct MapLine {
+    /// Map points (x east, z south).
+    pub points: Vec<Vec2>,
+    pub color: [u8; 3],
+    /// Screen points wide.
+    pub width: f32,
 }
 
 /// What the marks' colours mean, listed in a corner of the map (under keys like
@@ -279,7 +293,7 @@ fn draw(
     terrain: Res<Terrain>,
     active: Option<Res<ActiveCar>>,
     cars: Query<&Car>,
-    (marks, legend, others): (Res<MapMarks>, Res<MapLegend>, Res<MapCars>),
+    (marks, lines, legend, others): (Res<MapMarks>, Res<MapLines>, Res<MapLegend>, Res<MapCars>),
     mut view: ResMut<MapView>,
     mut clicks: MessageWriter<MapClicked>,
 ) -> Result {
@@ -358,6 +372,12 @@ fn draw(
                         painter.add(Shape::convex_polygon(points, HOUSE, Stroke::NONE));
                     }
                 }
+            }
+
+            for line in lines.0.values().flatten() {
+                let [r, g, b] = line.color;
+                let points = line.points.iter().map(|p| to_screen(*p)).collect();
+                painter.line(points, Stroke::new(line.width, Color32::from_rgb(r, g, b)));
             }
 
             for mark in marks.iter() {

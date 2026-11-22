@@ -14,7 +14,7 @@ pub mod server;
 pub mod web;
 pub mod wire;
 
-pub use client::{ChatLine, ClientPlugin, Connection, Status, Touching, WantsGhost};
+pub use client::{ChatLine, ClientPlugin, Connection, GhostPlayers, Status, Touching, WantsGhost};
 pub use server::{MapPlayers, Presence, Server, ServerPlugin};
 
 use bevy::time::{Fixed, Real, Time};
@@ -1052,6 +1052,249 @@ mod tests {
             "Anna's own"
         );
         assert_eq!(*all[h].world().resource::<ResetRule>(), ResetRule::Road);
+    }
+
+    /// A race event at the origin, with a square loop 400 m a side around it.
+    fn race_event() -> crate::events::Event {
+        let corners = [
+            Vec2::new(-200.0, -200.0),
+            Vec2::new(200.0, -200.0),
+            Vec2::new(200.0, 200.0),
+            Vec2::new(-200.0, 200.0),
+            Vec2::new(-200.0, -200.0),
+        ];
+        crate::events::Event {
+            kind: crate::events::EventKind::Race,
+            name: "Races".into(),
+            at: Vec2::ZERO,
+            routes: vec![crate::events::race::Route {
+                name: "Square".into(),
+                looped: true,
+                via: corners[..4].to_vec(),
+                line: corners.to_vec(),
+                widths: vec![6.0; 5],
+            }],
+        }
+    }
+
+    fn race_server(listener: &LoopbackListener) -> App {
+        let mut server = server(listener);
+        (server.world_mut().resource_mut::<Server>()).set_events(vec![race_event()]);
+        server
+    }
+
+    /// A player's game with the events' lobby and the race at the origin.
+    fn racer(listener: &LoopbackListener, name: &str, x: f32) -> App {
+        use crate::car::{Held, ResetRule};
+        use crate::events::{Events, Placed, lobby::LobbyPlugin};
+        let mut app = player(listener, name, 3, x);
+        app.add_plugins(LobbyPlugin)
+            .init_resource::<Held>()
+            .init_resource::<ResetRule>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .insert_resource(Events {
+                list: vec![Placed {
+                    event: race_event(),
+                    marker: Vec2::ZERO,
+                }],
+            });
+        app
+    }
+
+    /// Drives a player's car (by hand) along the course from `from` to `to` metres, a few
+    /// frames every 8 m, everyone's games running.
+    fn drive_along(
+        all: &mut [&mut App],
+        who: usize,
+        course: &crate::events::race::Course,
+        from: f32,
+        to: f32,
+    ) {
+        let mut s = from;
+        while s < to {
+            s = (s + 8.0).min(to);
+            let (p, forward, _) = course.point(s % course.length());
+            let mut car = car(all[who]);
+            car.body.position = Vec3::new(p.x, car.body.position.y, p.y);
+            car.body.velocity = Vec3::new(forward.x, 0.0, forward.y) * 20.0;
+            run(all, 3);
+        }
+    }
+
+    /// A race: into the lobby, the host's settings and start; everyone on the grid, held
+    /// for the countdown, the others ghosts without contact, R to the last gate; the gates
+    /// in order (one cut doesn't count), the finish; the results once the last racer is
+    /// through or gone.
+    #[test]
+    fn a_race_runs_from_the_grid_to_the_results() {
+        use crate::car::{Held, ResetRule};
+        use crate::events::race::{COUNTDOWN, Course, Settings};
+        use crate::events::round::{Action, Game, Outcome, Phase};
+        let listener = LoopbackListener::default();
+        let mut server = race_server(&listener);
+        let mut anna = racer(&listener, "Anna", 0.0);
+        let mut ben = racer(&listener, "Ben", 3.0);
+        let mut all = [&mut server, &mut anna, &mut ben];
+        run(&mut all, 20);
+        // Stopped on the marker, asked what to do: race.
+        assert!(
+            all[1]
+                .world()
+                .resource::<crate::events::lobby::EventState>()
+                .choosing
+                .is_some()
+        );
+        act(all[1], Action::Enter(0));
+        run(&mut all, 5);
+        act(all[2], Action::Enter(0));
+        run(&mut all, 5);
+        let lobby = round(all[2]).expect("Ben is in the lobby");
+        assert_eq!(lobby.players.len(), 2);
+        assert!(matches!(lobby.game, Game::Race(_)));
+        let settings = Settings {
+            laps: 1,
+            collisions: false,
+            ..Settings::default()
+        };
+        act(all[2], Action::Start);
+        act(all[1], Action::Game(Game::Race(settings)));
+        act(all[1], Action::Start);
+        run(&mut all, 10);
+        let running = round(all[2]).unwrap();
+        assert!(running.running(), "Anna, the host, started it");
+        assert_eq!(running.game, Game::Race(settings));
+        // On the grid, held, the others ghosts, R to the grid.
+        let course = Course::new(&race_event().routes[0], false, 1);
+        for (i, slot) in [(1, 0), (2, 1)] {
+            let p = car(all[i]).body.position.xz();
+            let (spot, _) = course.grid(slot, 2);
+            assert!(p.distance(spot) < 0.5, "{p} isn't at {spot}");
+            assert!(
+                all[i].world().resource::<Held>().0,
+                "held for the countdown"
+            );
+            assert!(!car(all[i]).parking_brake, "free to go at the green light");
+            assert!(all[i].world().resource::<GhostPlayers>().0);
+            assert!(matches!(
+                *all[i].world().resource::<ResetRule>(),
+                ResetRule::Spot(..)
+            ));
+        }
+        run(&mut all, (COUNTDOWN / FRAME) as usize + 10);
+        assert!(!all[1].world().resource::<Held>().0, "go");
+        // Anna drives through the first gates, then cuts across past the next one: it
+        // doesn't count until she goes back through it.
+        let gates = &course.gates;
+        drive_along(&mut all, 1, &course, 20.0, gates[1].s + 5.0);
+        let passed = |app: &App| round(app).unwrap().standing().unwrap().racers[0].gates;
+        assert_eq!(passed(all[2]), 2);
+        drive_along(&mut all, 1, &course, gates[2].s + 20.0, gates[3].s + 5.0);
+        assert_eq!(passed(all[2]), 2, "gate 3 was skipped");
+        drive_along(
+            &mut all,
+            1,
+            &course,
+            gates[2].s - 10.0,
+            course.length() + 5.0,
+        );
+        let standing = round(all[2]).unwrap().standing().unwrap().clone();
+        let anna = &standing.racers[0];
+        assert_eq!(usize::from(anna.gates), gates.len());
+        assert!(anna.finished.is_some(), "through");
+        assert_eq!(anna.laps.len(), 1);
+        assert!(standing.closes.is_some(), "the others have a minute");
+        // Ben leaves: the race is over, Anna first.
+        act(all[2], Action::Leave);
+        run(&mut all, 10);
+        assert_eq!(round(all[2]), None);
+        let after = round(all[1]).unwrap();
+        let Phase::Lobby {
+            last: Some(Outcome::Race(results)),
+        } = &after.phase
+        else {
+            panic!("still {:?}", after.phase);
+        };
+        assert_eq!(results.entries[0].name, "Anna");
+        assert!(results.entries[0].time.is_some());
+        assert_eq!(results.entries[1].name, "Ben");
+        assert!(results.entries[1].left);
+        assert!(
+            after.best.is_empty(),
+            "races don't make the time trials' list"
+        );
+        assert_eq!(*all[1].world().resource::<ResetRule>(), ResetRule::Road);
+        assert!(!all[1].world().resource::<GhostPlayers>().0);
+    }
+
+    /// A time trial: a round of one nobody else joins; started again, then a lap that
+    /// goes on the best times.
+    #[test]
+    fn a_time_trial_puts_its_lap_on_the_best_times() {
+        use crate::car::{Held, ResetRule};
+        use crate::events::race::{COUNTDOWN, Course, Settings};
+        use crate::events::round::{Action, Game, Outcome, Phase};
+        let listener = LoopbackListener::default();
+        let mut server = race_server(&listener);
+        let mut anna = racer(&listener, "Anna", 0.0);
+        let mut ben = racer(&listener, "Ben", 3.0);
+        let mut all = [&mut server, &mut anna, &mut ben];
+        run(&mut all, 20);
+        act(all[1], Action::Trial(0));
+        run(&mut all, 5);
+        act(all[2], Action::Enter(0));
+        run(&mut all, 5);
+        assert_eq!(
+            round(all[1]).unwrap().players.len(),
+            1,
+            "a trial is private"
+        );
+        assert_eq!(
+            round(all[2]).unwrap().players.len(),
+            1,
+            "Ben opened a race lobby"
+        );
+        let settings = Settings {
+            laps: 1,
+            ..Settings::default()
+        };
+        act(all[1], Action::Game(Game::Race(settings)));
+        act(all[1], Action::Start);
+        run(&mut all, 10);
+        let trial = round(all[1]).unwrap();
+        assert!(trial.running(), "alone");
+        assert_eq!(trial.game, Game::Trial(settings), "still a trial");
+        assert_eq!(*all[1].world().resource::<ResetRule>(), ResetRule::Never);
+        run(&mut all, (COUNTDOWN / FRAME) as usize + 10);
+        let course = Course::new(&race_event().routes[0], false, 1);
+        drive_along(&mut all, 1, &course, 20.0, course.gates[2].s + 5.0);
+        // Start again: back on the grid, held, nothing passed.
+        act(all[1], Action::Restart);
+        run(&mut all, 10);
+        let p = car(all[1]).body.position.xz();
+        assert!(p.distance(course.grid(0, 1).0) < 0.5);
+        assert!(all[1].world().resource::<Held>().0);
+        assert_eq!(
+            round(all[1]).unwrap().standing().unwrap().racers[0].gates,
+            0
+        );
+        run(&mut all, (COUNTDOWN / FRAME) as usize + 10);
+        // (To just past the finish: moving the car after the trial ends would leave its
+        // lobby.)
+        drive_along(&mut all, 1, &course, 20.0, course.length() + 3.0);
+        run(&mut all, 5);
+        let after = round(all[1]).unwrap();
+        let Phase::Lobby {
+            last: Some(Outcome::Race(results)),
+        } = &after.phase
+        else {
+            panic!("still {:?}", after.phase);
+        };
+        let time = results.entries[0].time.unwrap();
+        assert_eq!(after.best.len(), 1);
+        assert_eq!(after.best[0].name, "Anna");
+        assert!((after.best[0].time - time).abs() < 0.01);
+        // Ben's lobby, on the same route, sees it too.
+        assert_eq!(round(all[2]).unwrap().best, after.best);
     }
 
     /// A car the server's catalogues don't have (a newer game's) gets a clear refusal.

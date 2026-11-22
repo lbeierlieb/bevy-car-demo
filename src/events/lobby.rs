@@ -1,19 +1,25 @@
-//! A player's side of the events: stopping on a marker goes into its lobby (a window: who's
-//! in, the hunted's settings, start); driving off or Esc leaves it. When the round starts,
-//! the car goes to its spot by the marker (a lent one, if the round says so), the hunters
-//! held for the head start, R as the round allows; a bar at the top says what's what.
-//! Once it's over (or left), the car is back by the marker (our own, as it was).
+//! A player's side of the events: stopping on a hunt's marker goes into its lobby (a
+//! window: who's in, the hunted's settings, start); stopping on a race's first asks whether
+//! to drive a time trial or race (`racing`); driving off or Esc leaves. When the round
+//! starts, the car goes to its spot (by a hunt's marker, a lent one if the round says so;
+//! on a race's grid), held for the head start or the countdown, R as the round allows; a
+//! bar at the top says what's what. Once it's over (or left), the car is back by the
+//! marker (our own, as it was).
+
+use std::collections::HashMap;
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, RichText};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::hunt::{CAUGHT_TIME, Cars, Catch};
+use super::race::{COUNTDOWN, Course};
 use super::round::{Action, Game, Phase, Play, Round};
 use super::{EventKind, Events};
 use crate::car::{ActiveCar, Car, CarSetup, Held, ResetRule};
 use crate::chassis::CHASSIS;
-use crate::net::{Connection, Status, Touching, WantsGhost};
+use crate::net::protocol::PlayerId;
+use crate::net::{Connection, GhostPlayers, Status, Touching, WantsGhost};
 use crate::online::lane_spots;
 use crate::shops::{MARKER_RADIUS, kerb};
 use crate::terrain::Terrain;
@@ -43,6 +49,7 @@ pub struct LobbyPlugin;
 impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EventState>()
+            .init_resource::<GhostPlayers>()
             .add_systems(
                 Update,
                 (follow, arrive, report_touches)
@@ -54,6 +61,9 @@ impl Plugin for LobbyPlugin {
     }
 }
 
+/// Which course a race is on: event, route, the other way round, laps.
+type CourseKey = (u16, u8, bool, u8);
+
 /// Where we stand with the events.
 #[derive(Resource)]
 pub struct EventState {
@@ -62,16 +72,27 @@ pub struct EventState {
     /// Our own car while a lent one is driven.
     lent: Option<Car>,
     /// An event left while on its marker: not gone into again until the car is off it.
-    left: Option<usize>,
+    pub(super) left: Option<usize>,
     /// When we last asked to go in (s, `Time<Real>`).
-    asked: f64,
-    /// Where the car stood when the lobby began: driving off from there leaves it.
+    pub(super) asked: f64,
+    /// Where the car stood when the lobby (or the choice at a race's marker) began:
+    /// driving off from there leaves it.
     stood: Option<Vec2>,
     /// When the round under way started on our clock (s, `Time<Real>`), should the
     /// server's clock not be known yet.
     started: f64,
     /// When we last told the server which cars ours touched (s, `Time<Real>`).
     reported: f64,
+    /// The race event whose marker we stopped on, asked whether to race or drive a time
+    /// trial.
+    pub(crate) choosing: Option<usize>,
+    /// The course of the race we're in, made from the event's route.
+    course: Option<(CourseKey, Course)>,
+    /// When each racer passed each of their gates (s, the server's clock), as the round
+    /// told: the gaps between them.
+    pub(super) gate_times: HashMap<(PlayerId, u16), f64>,
+    /// Since when we've been going the wrong way round (s, `Time<Real>`).
+    pub(super) wrong_way: Option<f64>,
 }
 
 impl Default for EventState {
@@ -84,12 +105,30 @@ impl Default for EventState {
             stood: None,
             started: 0.0,
             reported: f64::NEG_INFINITY,
+            choosing: None,
+            course: None,
+            gate_times: HashMap::new(),
+            wrong_way: None,
         }
     }
 }
 
+impl EventState {
+    /// The course of `round`, a race's or time trial's (made once).
+    pub(super) fn course(&mut self, connection: &Connection, round: &Round) -> Option<&Course> {
+        let settings = round.game.race()?;
+        let key = (round.event, settings.route, settings.reverse, settings.laps);
+        if self.course.as_ref().is_none_or(|(k, _)| *k != key) {
+            let event = connection.events.get(usize::from(round.event))?;
+            let route = event.routes.get(usize::from(settings.route))?;
+            self.course = Some((key, Course::new(route, settings.reverse, settings.laps)));
+        }
+        self.course.as_ref().map(|(_, course)| course)
+    }
+}
+
 /// The player we are, once joined.
-fn you(connection: &Connection) -> Option<u32> {
+pub(super) fn you(connection: &Connection) -> Option<u32> {
     match connection.status {
         Status::Joined { you } => Some(you),
         _ => None,
@@ -97,20 +136,29 @@ fn you(connection: &Connection) -> Option<u32> {
 }
 
 /// How long the round has been under way (s).
-fn elapsed(connection: &Connection, state: &EventState, start: f64, now: f64) -> f64 {
+pub(super) fn elapsed(connection: &Connection, state: &EventState, start: f64, now: f64) -> f64 {
     (connection.server_time(now)).map_or(now - state.started, |server| server - start)
 }
 
 /// Out of the round we're in (told the server; we don't wait for its answer).
-fn leave(connection: &mut Connection, state: &mut EventState) {
+pub(super) fn leave(connection: &mut Connection, state: &mut EventState) {
     if let Some(round) = connection.round.take() {
         connection.act(Action::Leave);
         state.left = Some(usize::from(round.event));
     }
 }
 
-/// Stopping on a marker asks to go into its lobby; in the lobby, driving off or Esc leaves.
-/// Stopped on a marker or in a lobby, the car is a ghost (several wait there at once).
+/// When the round under way started (s, the server's clock).
+fn start_of(round: Option<&Round>) -> Option<f64> {
+    match round?.phase {
+        Phase::Running { start, .. } => Some(start),
+        Phase::Lobby { .. } => None,
+    }
+}
+
+/// Stopping on a hunt's marker asks to go into its lobby, on a race's asks what to do
+/// there; in the lobby (or asked), driving off or Esc leaves. Stopped on a marker or in a
+/// lobby, the car is a ghost (several wait there at once).
 #[allow(clippy::too_many_arguments)]
 fn arrive(
     mut connection: ResMut<Connection>,
@@ -137,16 +185,26 @@ fn arrive(
     let stopped = car.body.velocity.length() < STOPPED;
     match connection.round.as_ref().map(Round::running) {
         None => {
+            if let Some(i) = state.choosing {
+                // Asked what to do at a race's marker.
+                ghost.0 = true;
+                let stood = *state.stood.get_or_insert(p);
+                if p.distance(stood) > LEAVE || keys.just_pressed(KeyCode::Escape) {
+                    state.choosing = None;
+                    state.left = Some(i);
+                }
+                return;
+            }
             state.stood = None;
             let on = (events.list.iter())
-                .position(|placed| {
-                    placed.event.kind == EventKind::Hunt
-                        && placed.marker.distance(p) < MARKER_RADIUS
-                })
+                .position(|placed| placed.marker.distance(p) < MARKER_RADIUS)
                 .filter(|&i| stopped && state.left != Some(i));
             if let Some(i) = on {
                 ghost.0 = true;
-                if now - state.asked > ASK_AGAIN {
+                if events.list[i].event.kind == EventKind::Race {
+                    state.choosing = Some(i);
+                    car.parking_brake = true;
+                } else if now - state.asked > ASK_AGAIN {
                     state.asked = now;
                     car.parking_brake = true;
                     connection.act(Action::Enter(i as u16));
@@ -154,13 +212,17 @@ fn arrive(
             }
         }
         Some(false) => {
+            state.choosing = None;
             ghost.0 = true;
             let stood = *state.stood.get_or_insert(p);
             if p.distance(stood) > LEAVE || keys.just_pressed(KeyCode::Escape) {
                 leave(&mut connection, &mut state);
             }
         }
-        Some(true) => state.stood = None,
+        Some(true) => {
+            state.choosing = None;
+            state.stood = None;
+        }
     }
 }
 
@@ -186,11 +248,12 @@ fn report_touches(
     }
 }
 
-/// Follows the round: when it starts, the car goes to its spot (lent, if so), R follows
-/// the round's rules and hunters are held for the head start; when it ends (or we left),
-/// our own car is back by the marker.
+/// Follows the round: when it starts (or a time trial starts again), the car goes to its
+/// spot (lent, if so); hunters are held for the head start, racers for the countdown; R
+/// follows the round's rules; in a race without contact the others are ghosts. When it
+/// ends (or we left), our own car is back by the marker.
 #[allow(clippy::too_many_arguments)]
-fn follow(
+pub(super) fn follow(
     mut commands: Commands,
     connection: Res<Connection>,
     mut state: ResMut<EventState>,
@@ -198,7 +261,11 @@ fn follow(
     network: Option<Res<Network>>,
     active: Res<ActiveCar>,
     mut cars: Query<(Entity, &mut Car)>,
-    (mut held, mut rule): (ResMut<Held>, ResMut<ResetRule>),
+    (mut held, mut rule, mut ghost_players): (
+        ResMut<Held>,
+        ResMut<ResetRule>,
+        ResMut<GhostPlayers>,
+    ),
     time: Res<Time<Real>>,
 ) {
     let now = time.elapsed_secs_f64();
@@ -207,6 +274,7 @@ fn follow(
     let you = you.unwrap_or_default();
     let was_running = state.seen.as_ref().is_some_and(Round::running);
     let running = round.as_ref().is_some_and(Round::running);
+    let start = start_of(round.as_ref());
     // Our spot by the round's marker: (where, yaw).
     let spot = |round: &Round| {
         let event = connection.events.get(usize::from(round.event))?;
@@ -224,18 +292,30 @@ fn follow(
                 .unwrap_or((marker, yaw)),
         )
     };
-    if running && !was_running {
+    if running && start != start_of(state.seen.as_ref()) {
         let round = round.as_ref().unwrap();
         state.started = now;
-        let hunted = round.host == you;
-        let Game::Hunt(settings) = round.game;
+        state.gate_times.clear();
+        state.wrong_way = None;
+        let place = match &round.game {
+            Game::Hunt(_) => spot(round),
+            Game::Race(_) | Game::Trial(_) => {
+                let (slot, count) = (round.slot(you), round.players.len());
+                (state.course(&connection, round)).map(|course| course.grid(slot, count))
+            }
+        };
         if let (Some((p, yaw)), Some((entity, mut car))) = (
-            spot(round),
+            place,
             cars.iter_mut().find(|(_, car)| car.index == active.0),
         ) {
-            if settings.cars == Cars::MuscleVsRally {
+            let lend = match round.game {
+                Game::Hunt(settings) if settings.cars == Cars::MuscleVsRally => {
+                    Some(if round.host == you { RALLY } else { MUSCLE })
+                }
+                _ => None,
+            };
+            if let Some(name) = lend {
                 // A factory car for the round; ours waits.
-                let name = if hunted { RALLY } else { MUSCLE };
                 let chassis = CHASSIS.iter().position(|c| c.name == name).unwrap_or(0);
                 let setup = CarSetup::factory(chassis, 0);
                 let mut lent = Car::spawn_at(car.index, setup, &terrain, p.x, p.y, yaw);
@@ -245,12 +325,11 @@ fn follow(
                 commands.spawn((Transform::from_translation(lent.body.position), lent));
             } else {
                 car.place(&terrain, p, yaw);
+                // On a grid, held for the countdown: off at the green light.
+                if round.game.race().is_some() {
+                    car.parking_brake = false;
+                }
             }
-            *rule = if settings.hunters_reset && !hunted {
-                ResetRule::Road
-            } else {
-                ResetRule::Never
-            };
         }
     }
     if was_running && !running {
@@ -272,25 +351,52 @@ fn follow(
     if running != was_running {
         state.stood = None;
     }
-    // Hunters wait for the head start to end.
-    held.0 = match &round {
-        Some(
-            round @ Round {
-                phase: Phase::Running { start, .. },
-                ..
-            },
-        ) => {
-            round.host != you
-                && round.hunt().is_some_and(|hunt| {
-                    elapsed(&connection, &state, *start, now) < f64::from(hunt.head_start)
-                })
+    // While it runs: who's held, what R does, whether the others are ghosts.
+    held.0 = false;
+    ghost_players.0 = false;
+    if let Some(round) = round.as_ref().filter(|round| round.running()) {
+        let elapsed = elapsed(&connection, &state, start.unwrap_or_default(), now);
+        match &round.game {
+            Game::Hunt(settings) => {
+                let hunted = round.host == you;
+                held.0 = !hunted && elapsed < f64::from(settings.head_start);
+                *rule = if settings.hunters_reset && !hunted {
+                    ResetRule::Road
+                } else {
+                    ResetRule::Never
+                };
+            }
+            Game::Race(settings) | Game::Trial(settings) => {
+                let settings = *settings;
+                let trial = matches!(round.game, Game::Trial(_));
+                held.0 = elapsed < COUNTDOWN;
+                ghost_players.0 = !trial && !settings.collisions;
+                let passed = (round.standing())
+                    .and_then(|standing| standing.racers.iter().find(|r| r.player == you))
+                    .map_or(0, |racer| usize::from(racer.gates));
+                let (slot, count) = (round.slot(you), round.players.len());
+                *rule = match state.course(&connection, round) {
+                    Some(course) if settings.resets && !trial => {
+                        let (p, yaw) = course.reset_spot(passed, slot, count);
+                        ResetRule::Spot(p, yaw)
+                    }
+                    _ => ResetRule::Never,
+                };
+                // When each racer passed their gates, for the gaps.
+                for racer in round.standing().iter().flat_map(|s| &s.racers) {
+                    if racer.gates > 0 {
+                        (state.gate_times)
+                            .entry((racer.player, racer.gates))
+                            .or_insert(racer.at);
+                    }
+                }
+            }
         }
-        _ => false,
-    };
+    }
     state.seen = round;
 }
 
-/// The lobby's window, or the bar at the top while the round runs.
+/// A hunt's lobby window, or the bar at the top while it runs.
 fn window(
     mut contexts: EguiContexts,
     connection: Option<ResMut<Connection>>,
@@ -319,7 +425,10 @@ fn window(
     };
     let hunted_name = name(round.host);
     let we_are_hunted = round.host == you;
-    let Game::Hunt(hunt) = round.game;
+    // Races' windows are `racing`'s.
+    let Game::Hunt(hunt) = round.game else {
+        return Ok(());
+    };
     match &round.phase {
         Phase::Lobby { last } => {
             let mut settings = hunt;
@@ -458,6 +567,7 @@ fn window(
                 leave(&mut connection, &mut state);
             }
         }
+        Phase::Running { .. } => {}
     }
     Ok(())
 }

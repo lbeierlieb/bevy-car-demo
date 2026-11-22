@@ -78,6 +78,7 @@ impl Plugin for ClientPlugin {
         )
         .init_resource::<traffic::Source>()
         .init_resource::<WantsGhost>()
+        .init_resource::<GhostPlayers>()
         .init_resource::<Touching>()
         .add_systems(Update, haunt.before(send))
         .add_systems(PreUpdate, switch_source)
@@ -536,6 +537,7 @@ type RemoteParts = (
     &'static mut Motion,
     Option<&'static Looks>,
     Has<Ghost>,
+    Has<Tag>,
 );
 
 /// Shows each remote car where it's predicted to be by the end of the last simulation
@@ -546,6 +548,7 @@ fn move_cars(
     time: Res<Time<Real>>,
     fixed: Res<Time<Fixed>>,
     connection: Res<Connection>,
+    ghost_players: Res<GhostPlayers>,
     mut drawn_at: Local<Option<f64>>,
     mut commands: Commands,
     mut cars: Query<RemoteParts>,
@@ -556,16 +559,18 @@ fn move_cars(
     };
     let dt = drawn_at.map_or(0.0, |before| (at - before).max(0.0) as f32);
     *drawn_at = Some(at);
-    for (entity, mut car, mut transform, mut motion, looks, ghost) in &mut cars {
+    for (entity, mut car, mut transform, mut motion, looks, ghost, tagged) in &mut cars {
         let car = &mut *car;
         let (by_now, ahead) = predict(&car.states, their);
         (transform.translation, transform.rotation) = car.drawn.follow(&by_now, dt);
         // The wheels roll on as fast as they did between the last two states.
         let (before, latest) = (car.states.front().unwrap(), car.states.back().unwrap());
         *motion = latest.motion;
-        if latest.ghost && !ghost {
+        // In a race without contact, a car with a name (in a round, a player's) is one.
+        let ghostly = latest.ghost || (ghost_players.0 && tagged);
+        if ghostly && !ghost {
             commands.entity(entity).insert(Ghost);
-        } else if !latest.ghost && ghost {
+        } else if !ghostly && ghost {
             commands.entity(entity).remove::<Ghost>();
         }
         if latest.time > before.time {
@@ -715,6 +720,13 @@ fn switch_source(
 /// thrown apart.
 #[derive(Resource, Default)]
 pub struct WantsGhost(pub bool);
+
+/// Whether the other players' cars are ghosts to ours (a race without contact): drawn half
+/// transparent, run into by nothing; traffic still counts. Their games do the same with
+/// ours. (In a round's realm every player's car shows its name and traffic none, which
+/// is how they're told apart.)
+#[derive(Resource, Default)]
+pub struct GhostPlayers(pub bool);
 
 /// The remote cars ours has touched since whoever wants to know last took them (for the
 /// car hunt's tag), each once.

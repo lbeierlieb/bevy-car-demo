@@ -8,6 +8,7 @@
 pub mod hunt;
 pub mod lobby;
 pub mod race;
+pub mod racing;
 pub mod round;
 pub mod rounds;
 pub mod routes;
@@ -233,7 +234,7 @@ pub struct EventsPlugin;
 impl Plugin for EventsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Events>()
-            .add_plugins(lobby::LobbyPlugin)
+            .add_plugins((lobby::LobbyPlugin, racing::RacingPlugin))
             .add_systems(Update, place)
             .add_systems(EguiPrimaryContextPass, labels);
     }

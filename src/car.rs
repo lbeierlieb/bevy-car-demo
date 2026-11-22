@@ -645,6 +645,9 @@ pub enum ResetRule {
     /// Has the rescue helicopter carry it to the nearest road.
     #[default]
     Road,
+    /// Has the rescue helicopter carry it to this spot (map x, z), facing along this yaw
+    /// (a race's last gate passed).
+    Spot(Vec2, f32),
     /// Nothing.
     Never,
 }
@@ -759,6 +762,7 @@ fn reset_car(
                     let (p, yaw) = car.road_spot(&terrain);
                     rescue.call(entity, car, &terrain, p, yaw);
                 }
+                ResetRule::Spot(p, yaw) => rescue.call(entity, car, &terrain, p, yaw),
                 ResetRule::Never => {}
             }
         }

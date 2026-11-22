@@ -2,7 +2,7 @@
 //! how it stands (a lobby at the marker, then under way in a realm of its own, then back
 //! in the lobby with how it ended), and what players ask of it.
 
-use super::hunt;
+use super::{hunt, race};
 use crate::net::protocol::{CarId, PlayerId};
 use crate::net::wire::{Reader, Wire};
 
@@ -10,6 +10,40 @@ use crate::net::wire::{Reader, Wire};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Game {
     Hunt(hunt::Settings),
+    /// A race, racers from the lobby.
+    Race(race::Settings),
+    /// A time trial: a round of one, private.
+    Trial(race::Settings),
+}
+
+impl Game {
+    /// A race's or time trial's settings.
+    pub fn race(&self) -> Option<&race::Settings> {
+        match self {
+            Self::Race(settings) | Self::Trial(settings) => Some(settings),
+            Self::Hunt(_) => None,
+        }
+    }
+
+    /// The same game with other settings of its kind, if they are (a hunt's for a hunt,
+    /// a race's for a race or time trial).
+    pub fn with(&self, other: &Game) -> Option<Game> {
+        match (self, other) {
+            (Self::Hunt(_), Self::Hunt(s)) => Some(Self::Hunt(*s)),
+            (Self::Race(_), Self::Race(s) | Self::Trial(s)) => Some(Self::Race(*s)),
+            (Self::Trial(_), Self::Race(s) | Self::Trial(s)) => Some(Self::Trial(*s)),
+            _ => None,
+        }
+    }
+
+    /// What it is, for people.
+    pub fn title(&self) -> &'static str {
+        match self {
+            Self::Hunt(_) => "Car hunt",
+            Self::Race(_) => "Race",
+            Self::Trial(_) => "Time trial",
+        }
+    }
 }
 
 /// How a round under way stands, per game.
@@ -17,12 +51,15 @@ pub enum Game {
 pub enum Play {
     /// The hunted has been slow since then (s, the server's clock), if they are.
     Hunt { slow: Option<f64> },
+    /// A race's or time trial's.
+    Race(race::Standing),
 }
 
 /// How a round ended, per game.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Outcome {
     Hunt(hunt::Outcome),
+    Race(race::Results),
 }
 
 impl Outcome {
@@ -30,6 +67,7 @@ impl Outcome {
     pub fn text(&self) -> String {
         match self {
             Self::Hunt(outcome) => outcome.text(),
+            Self::Race(results) => results.text(),
         }
     }
 }
@@ -55,6 +93,9 @@ pub struct Round {
     pub host: PlayerId,
     pub game: Game,
     pub phase: Phase,
+    /// A race's or time trial's best times on the server (this session), for its route,
+    /// direction and traffic, best first.
+    pub best: Vec<race::Best>,
 }
 
 impl Round {
@@ -71,6 +112,18 @@ impl Round {
     pub fn hunt(&self) -> Option<&hunt::Settings> {
         match &self.game {
             Game::Hunt(settings) => Some(settings),
+            _ => None,
+        }
+    }
+
+    /// How a race or time trial under way stands.
+    pub fn standing(&self) -> Option<&race::Standing> {
+        match &self.phase {
+            Phase::Running {
+                play: Play::Race(standing),
+                ..
+            } => Some(standing),
+            _ => None,
         }
     }
 }
@@ -90,6 +143,10 @@ pub enum Action {
     Host(PlayerId),
     /// The host starts the round.
     Start,
+    /// A time trial at this event (stopped on its marker): a round of one.
+    Trial(u16),
+    /// The time trial under way starts again, from the grid.
+    Restart,
 }
 
 impl Wire for Game {
@@ -99,11 +156,21 @@ impl Wire for Game {
                 0u8.put(out);
                 settings.put(out);
             }
+            Self::Race(settings) => {
+                1u8.put(out);
+                settings.put(out);
+            }
+            Self::Trial(settings) => {
+                2u8.put(out);
+                settings.put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
         Some(match r.get::<u8>()? {
             0 => Self::Hunt(r.get()?),
+            1 => Self::Race(r.get()?),
+            2 => Self::Trial(r.get()?),
             _ => return None,
         })
     }
@@ -116,11 +183,16 @@ impl Wire for Play {
                 0u8.put(out);
                 slow.put(out);
             }
+            Self::Race(standing) => {
+                1u8.put(out);
+                standing.put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
         Some(match r.get::<u8>()? {
             0 => Self::Hunt { slow: r.get()? },
+            1 => Self::Race(r.get()?),
             _ => return None,
         })
     }
@@ -133,11 +205,16 @@ impl Wire for Outcome {
                 0u8.put(out);
                 outcome.put(out);
             }
+            Self::Race(results) => {
+                1u8.put(out);
+                results.put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
         Some(match r.get::<u8>()? {
             0 => Self::Hunt(r.get()?),
+            1 => Self::Race(r.get()?),
             _ => return None,
         })
     }
@@ -160,6 +237,7 @@ impl Wire for Round {
                 play.put(out);
             }
         }
+        self.best.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         Some(Self {
@@ -175,6 +253,7 @@ impl Wire for Round {
                 },
                 _ => return None,
             },
+            best: r.get()?,
         })
     }
 }
@@ -200,6 +279,11 @@ impl Wire for Action {
                 5u8.put(out);
                 car.put(out);
             }
+            Action::Trial(event) => {
+                6u8.put(out);
+                event.put(out);
+            }
+            Action::Restart => 7u8.put(out),
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -210,6 +294,8 @@ impl Wire for Action {
             3 => Action::Host(r.get()?),
             4 => Action::Start,
             5 => Action::Touched(r.get()?),
+            6 => Action::Trial(r.get()?),
+            7 => Action::Restart,
             _ => return None,
         })
     }

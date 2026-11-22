@@ -1,15 +1,16 @@
-//! The server's side of the events: the rounds of car hunts, from the lobby at a marker
-//! to the end (see `hunt`). Each running round has a realm of its own: its players' entities
-//! get its `Realm` (so they see only each other and its traffic), and the traffic has
-//! the round's density there (none without traffic).
+//! The server's side of the events: the rounds of car hunts, races and time trials, from
+//! the lobby at a marker to the end (see `hunt`, `race`). Each running round has a realm
+//! of its own: its players' entities get its `Realm` (so they see only each other and its
+//! traffic), and the traffic has the round's density there (none without traffic).
 
 use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use super::EventKind;
 use super::hunt::{self, CAUGHT_SPEED, CAUGHT_TIME, Catch, Ending, TAG_RANGE};
+use super::race::{self, BEST_KEPT, Best, COUNTDOWN, Course, FINISH_GRACE, MAX_RACERS, Racer};
 use super::round::{Action, Game, Outcome, Phase, Play, Round};
+use super::{Event, EventKind};
 use crate::heli::{Chase, HeliPose};
 use crate::net::protocol::CarId;
 use crate::net::protocol::{CarState, PlayerId, ToClient};
@@ -31,6 +32,9 @@ pub struct EventAction {
     pub action: Action,
 }
 
+/// The best times' lists: per event, route, direction and traffic.
+type BestKey = (u16, u8, bool, bool);
+
 /// Every round there is, lobbies and running ones.
 #[derive(Resource, Default)]
 pub struct Rounds {
@@ -42,6 +46,8 @@ pub struct Rounds {
     told_busy: HashSet<PlayerId>,
     /// The players given a round's realm (only theirs are taken away again).
     in_realms: HashSet<PlayerId>,
+    /// The time trials' best times, this session.
+    best: HashMap<BestKey, Vec<Best>>,
 }
 
 impl Rounds {
@@ -56,18 +62,58 @@ struct Live {
     round: Round,
     /// Its realm while it runs.
     realm: Realm,
-    /// What the host (the hunted) is called (kept for the outcome should they leave).
+    /// What the host (in a hunt, the hunted) is called (kept for the outcome should they
+    /// leave).
     host_name: String,
     /// Its players need telling how it stands.
     changed: bool,
-    /// The helicopter over the hunted while it runs, and when it was last sent (s).
+    /// The helicopter over the hunted while a hunt runs, and when it was last sent (s).
     heli: Option<Chase>,
     heli_sent: f64,
+    /// A race's course while it runs, and where each racer's car was last seen (map x, z).
+    course: Option<Course>,
+    seen: HashMap<PlayerId, Vec2>,
 }
 
 impl Live {
+    fn new(event: u16, player: PlayerId, game: Game, name: String) -> Self {
+        Self {
+            round: Round {
+                event,
+                players: vec![player],
+                host: player,
+                game,
+                phase: Phase::Lobby { last: None },
+                best: Vec::new(),
+            },
+            realm: Realm::NORMAL,
+            host_name: name,
+            changed: true,
+            heli: None,
+            heli_sent: f64::NEG_INFINITY,
+            course: None,
+            seen: HashMap::new(),
+        }
+    }
+
     fn has(&self, player: PlayerId) -> bool {
         self.round.players.contains(&player)
+    }
+
+    /// Whether others can join it in its lobby (a time trial is private).
+    fn open(&self) -> bool {
+        !matches!(self.round.game, Game::Trial(_))
+    }
+
+    /// The best times' list it shows.
+    fn best_key(&self) -> Option<BestKey> {
+        let settings = self.round.game.race()?;
+        Some((
+            self.round.event,
+            settings.route,
+            settings.reverse,
+            settings.traffic,
+        ))
     }
 }
 
@@ -113,87 +159,105 @@ pub fn run_rounds(
     let mut out = Vec::new();
 
     // The ones gone from the server leave their rounds.
-    for hunt in &mut rounds.list {
-        for player in hunt.round.players.clone() {
+    for live in &mut rounds.list {
+        for player in live.round.players.clone() {
             if !present.contains_key(&player) {
-                leave(hunt, player, &name);
+                leave(live, player, &name, events);
             }
         }
     }
     for EventAction { player, action } in actions.read().cloned() {
-        let mine = rounds.list.iter().position(|hunt| hunt.has(player));
+        let mine = rounds.list.iter().position(|live| live.has(player));
+        // The event at `event`, if the player's car is at its marker.
+        let near = |event: u16| {
+            (events.get(usize::from(event)))
+                .zip(present.get(&player).and_then(|p| p.1))
+                .filter(|(event, at)| event.at.distance(at.xz()) < ENTER_RANGE)
+                .map(|(event, _)| event)
+        };
         match action {
             Action::Enter(event) => {
-                let near = (events.get(usize::from(event)))
-                    .zip(present.get(&player).and_then(|p| p.1))
-                    .is_some_and(|(event, at)| {
-                        event.kind == EventKind::Hunt && event.at.distance(at.xz()) < ENTER_RANGE
-                    });
-                if mine.is_some() || !near {
+                let Some(kind) = near(event).map(|e| e.kind) else {
+                    continue;
+                };
+                if mine.is_some() {
                     continue;
                 }
                 let lobby = (rounds.list.iter_mut())
-                    .find(|hunt| hunt.round.event == event && !hunt.round.running());
+                    .find(|live| live.round.event == event && !live.round.running() && live.open());
                 match lobby {
-                    Some(hunt) => {
-                        hunt.round.players.push(player);
-                        hunt.changed = true;
+                    Some(live)
+                        if live.round.players.len() < MAX_RACERS || kind == EventKind::Hunt =>
+                    {
+                        live.round.players.push(player);
+                        live.changed = true;
                     }
-                    None => rounds.list.push(Live {
-                        round: Round {
-                            event,
-                            players: vec![player],
-                            host: player,
-                            game: Game::Hunt(default()),
-                            phase: Phase::Lobby { last: None },
-                        },
-                        realm: Realm::NORMAL,
-                        host_name: name(player),
-                        changed: true,
-                        heli: None,
-                        heli_sent: f64::NEG_INFINITY,
-                    }),
+                    Some(_) => {}
+                    None => {
+                        let game = match kind {
+                            EventKind::Hunt => Game::Hunt(default()),
+                            EventKind::Race => Game::Race(default()),
+                        };
+                        rounds
+                            .list
+                            .push(Live::new(event, player, game, name(player)));
+                    }
+                }
+            }
+            Action::Trial(event) => {
+                if mine.is_none() && near(event).is_some_and(|e| e.kind == EventKind::Race) {
+                    let game = Game::Trial(default());
+                    rounds
+                        .list
+                        .push(Live::new(event, player, game, name(player)));
                 }
             }
             Action::Leave => {
                 if let Some(i) = mine {
-                    leave(&mut rounds.list[i], player, &name);
+                    leave(&mut rounds.list[i], player, &name, events);
                     out.push(player);
                 }
             }
-            Action::Game(Game::Hunt(settings)) => {
-                if let Some(hunt) = mine.map(|i| &mut rounds.list[i])
-                    && hunt.round.host == player
-                    && !hunt.round.running()
+            Action::Game(game) => {
+                if let Some(live) = mine.map(|i| &mut rounds.list[i])
+                    && live.round.host == player
+                    && !live.round.running()
+                    && let Some(game) = live.round.game.with(&game)
                 {
-                    hunt.round.game = Game::Hunt(settings.clamped());
-                    hunt.changed = true;
+                    let routes = (events.get(usize::from(live.round.event)))
+                        .map_or(0, |event| event.routes.len());
+                    live.round.game = match game {
+                        Game::Hunt(settings) => Game::Hunt(settings.clamped()),
+                        Game::Race(settings) => Game::Race(settings.clamped(routes)),
+                        Game::Trial(settings) => Game::Trial(settings.clamped(routes)),
+                    };
+                    live.changed = true;
                 }
             }
             Action::Host(other) => {
-                if let Some(hunt) = mine.map(|i| &mut rounds.list[i])
-                    && hunt.round.host == player
-                    && !hunt.round.running()
-                    && hunt.has(other)
+                if let Some(live) = mine.map(|i| &mut rounds.list[i])
+                    && live.round.host == player
+                    && !live.round.running()
+                    && live.has(other)
                 {
-                    hunt.round.host = other;
-                    hunt.host_name = name(other);
-                    hunt.changed = true;
+                    live.round.host = other;
+                    live.host_name = name(other);
+                    live.changed = true;
                 }
             }
             Action::Touched(car) => {
-                let (Some(&other), Some(hunt)) =
+                let (Some(&other), Some(live)) =
                     (owners.get(&car), mine.map(|i| &mut rounds.list[i]))
                 else {
                     continue;
                 };
                 let (Phase::Running { start, .. }, Some(&settings)) =
-                    (&hunt.round.phase, hunt.round.hunt())
+                    (&live.round.phase, live.round.hunt())
                 else {
                     continue;
                 };
                 let start = *start;
-                let hunted = hunt.round.host;
+                let hunted = live.round.host;
                 let hunter = match () {
                     _ if player == hunted => other,
                     _ if other == hunted => player,
@@ -203,10 +267,10 @@ pub fn run_rounds(
                 let at = |p: PlayerId| present.get(&p).and_then(|p| p.1);
                 let near =
                     (at(player).zip(at(other))).is_some_and(|(a, b)| a.distance(b) < TAG_RANGE);
-                if settings.catch == Catch::Tag && hunt.has(hunter) && now >= hunting && near {
+                if settings.catch == Catch::Tag && live.has(hunter) && now >= hunting && near {
                     let by = name(hunter);
-                    end(
-                        hunt,
+                    end_hunt(
+                        live,
                         Ending::Tagged {
                             by,
                             after: (now - hunting) as f32,
@@ -215,64 +279,173 @@ pub fn run_rounds(
                 }
             }
             Action::Start => {
-                if let Some(hunt) = mine.map(|i| &mut rounds.list[i])
-                    && hunt.round.host == player
-                    && !hunt.round.running()
-                    && hunt.round.players.len() >= 2
+                let Some(live) = mine.map(|i| &mut rounds.list[i]) else {
+                    continue;
+                };
+                let fewest = if matches!(live.round.game, Game::Trial(_)) {
+                    1
+                } else {
+                    2
+                };
+                if live.round.host != player
+                    || live.round.running()
+                    || live.round.players.len() < fewest
                 {
-                    rounds.realm += 1;
-                    hunt.realm = Realm(rounds.realm);
-                    let traffic_on = match hunt.round.game {
-                        Game::Hunt(settings) => settings.traffic,
-                    };
-                    let cars = if traffic_on { traffic.cars } else { 0 };
-                    traffic.realms.insert(hunt.realm, cars);
-                    hunt.round.phase = Phase::Running {
+                    continue;
+                }
+                let event = events.get(usize::from(live.round.event));
+                let play = match &live.round.game {
+                    Game::Hunt(_) => Play::Hunt { slow: None },
+                    Game::Race(settings) | Game::Trial(settings) => {
+                        let Some(route) =
+                            event.and_then(|event| event.routes.get(usize::from(settings.route)))
+                        else {
+                            continue;
+                        };
+                        live.course = Some(Course::new(route, settings.reverse, settings.laps));
+                        live.seen.clear();
+                        Play::Race(standing(&live.round.players, &name, now))
+                    }
+                };
+                rounds.realm += 1;
+                live.realm = Realm(rounds.realm);
+                let traffic_on = match &live.round.game {
+                    Game::Hunt(settings) => settings.traffic,
+                    Game::Race(settings) | Game::Trial(settings) => settings.traffic,
+                };
+                let cars = if traffic_on { traffic.cars } else { 0 };
+                traffic.realms.insert(live.realm, cars);
+                live.round.phase = Phase::Running { start: now, play };
+                live.changed = true;
+                info!(
+                    "A {} started in realm {} with {} players",
+                    live.round.game.title().to_lowercase(),
+                    live.realm.0,
+                    live.round.players.len()
+                );
+            }
+            Action::Restart => {
+                if let Some(live) = mine.map(|i| &mut rounds.list[i])
+                    && matches!(live.round.game, Game::Trial(_))
+                    && live.round.running()
+                {
+                    live.seen.clear();
+                    live.round.phase = Phase::Running {
                         start: now,
-                        play: Play::Hunt { slow: None },
+                        play: Play::Race(standing(&live.round.players, &name, now)),
                     };
-                    hunt.changed = true;
-                    info!(
-                        "A car hunt started in realm {} with {} players",
-                        hunt.realm.0,
-                        hunt.round.players.len()
-                    );
+                    live.changed = true;
                 }
             }
         }
     }
 
-    // The rounds under way: is the hunted caught, or is the time up?
-    for hunt in &mut rounds.list {
-        let Game::Hunt(settings) = hunt.round.game;
+    // The hunts under way: is the hunted caught, or is the time up?
+    for live in &mut rounds.list {
+        let Game::Hunt(settings) = live.round.game else {
+            continue;
+        };
         let Phase::Running {
             start,
             play: Play::Hunt { slow },
-        } = &mut hunt.round.phase
+        } = &mut live.round.phase
         else {
             continue;
         };
         let hunting = *start + f64::from(settings.head_start);
         if now >= hunting + f64::from(settings.duration) {
-            end(hunt, Ending::Escaped);
+            end_hunt(live, Ending::Escaped);
             continue;
         }
-        let speed = present.get(&hunt.round.host).and_then(|p| p.2);
+        let speed = present.get(&live.round.host).and_then(|p| p.2);
         let Some(speed) = speed.filter(|_| now >= hunting) else {
             continue;
         };
         if speed >= CAUGHT_SPEED {
-            hunt.changed |= slow.take().is_some();
+            live.changed |= slow.take().is_some();
         } else if let Some(since) = *slow {
             if now - since >= CAUGHT_TIME {
-                end(hunt, Ending::Caught((now - hunting) as f32));
+                end_hunt(live, Ending::Caught((now - hunting) as f32));
             }
         } else {
             *slow = Some(now);
-            hunt.changed = true;
+            live.changed = true;
         }
     }
-    // The helicopter over the hunted in every round under way, sent to its players wherever
+    // The races under way: who went through their next gate, who's through, is it over?
+    let mut new_best: Vec<(BestKey, Best)> = Vec::new();
+    for live in &mut rounds.list {
+        let positions: Vec<(PlayerId, Vec2)> = (live.round.players.iter())
+            .filter_map(|&p| Some((p, present.get(&p)?.1?.xz())))
+            .collect();
+        let key = live.best_key();
+        let Phase::Running {
+            start,
+            play: Play::Race(standing),
+        } = &mut live.round.phase
+        else {
+            continue;
+        };
+        let Some(course) = &live.course else {
+            continue;
+        };
+        let go = *start + COUNTDOWN;
+        for (player, at) in positions {
+            let before = live.seen.insert(player, at);
+            let Some(racer) = (standing.racers.iter_mut()).find(|r| r.player == player) else {
+                continue;
+            };
+            let Some(before) = before.filter(|_| now >= go && racer.finished.is_none()) else {
+                continue;
+            };
+            let passed = usize::from(racer.gates);
+            if !course.next(passed).crossed(before, at) {
+                continue;
+            }
+            racer.gates += 1;
+            racer.at = now;
+            live.changed = true;
+            if course.ends_lap(passed + 1) {
+                let lap = (now - go) as f32 - racer.laps.iter().sum::<f32>();
+                racer.laps.push(lap);
+                if let Some(key) = key.filter(|_| matches!(live.round.game, Game::Trial(_))) {
+                    new_best.push((
+                        key,
+                        Best {
+                            name: racer.name.clone(),
+                            time: lap,
+                        },
+                    ));
+                }
+            }
+            if passed + 1 >= course.total() {
+                racer.finished = Some((now - go) as f32);
+                standing.closes.get_or_insert(now + FINISH_GRACE);
+            }
+        }
+        let over = (standing.racers.iter()).all(|r| r.finished.is_some() || r.left)
+            || standing.closes.is_some_and(|closes| now >= closes);
+        if over {
+            end_race(live, events);
+        }
+    }
+    // A loop's laps and a sprint's whole way go on the list of best times.
+    for (key, best) in new_best {
+        let list = rounds.best.entry(key).or_default();
+        match list.iter_mut().find(|b| b.name == best.name) {
+            Some(theirs) if theirs.time <= best.time => continue,
+            Some(theirs) => theirs.time = best.time,
+            None => list.push(best),
+        }
+        list.sort_by(|a, b| a.time.total_cmp(&b.time));
+        list.truncate(BEST_KEPT);
+        for live in &mut rounds.list {
+            if live.best_key() == Some(key) {
+                live.changed = true;
+            }
+        }
+    }
+    // The helicopter over the hunted in every hunt under way, sent to its players wherever
     // they are.
     let dt = time.delta_secs();
     let stamp = crate::net::stamp(&time, &fixed);
@@ -280,50 +453,55 @@ pub fn run_rounds(
         .filter_map(|(_, peer, _)| Some((peer.id, peer.state?)))
         .collect();
     let mut helis: HashMap<PlayerId, HeliPose> = HashMap::new();
-    for hunt in &mut rounds.list {
-        if !hunt.round.running() {
-            hunt.heli = None;
+    for live in &mut rounds.list {
+        if !live.round.running() || live.round.hunt().is_none() {
+            live.heli = None;
             continue;
         }
-        let Some(state) = hunted_states.get(&hunt.round.host) else {
+        let Some(state) = hunted_states.get(&live.round.host) else {
             continue;
         };
-        let heli = hunt
+        let heli = live
             .heli
             .get_or_insert_with(|| Chase::new(state.position, crate::car::heading(state.rotation)));
         let ground = terrain.sample(heli.position.x, heli.position.z).0;
         heli.step(state.position, state.velocity, ground, dt);
-        if now - hunt.heli_sent >= 1.0 / HELI_RATE - 0.004 {
-            hunt.heli_sent = now;
+        if now - live.heli_sent >= 1.0 / HELI_RATE - 0.004 {
+            live.heli_sent = now;
             let pose = heli.pose(stamp);
-            for &player in &hunt.round.players {
+            for &player in &live.round.players {
                 helis.insert(player, pose);
             }
         }
     }
     // The realms of rounds over go, with their traffic.
-    for hunt in &mut rounds.list {
-        if !hunt.round.running() && hunt.realm != Realm::NORMAL {
-            traffic.realms.remove(&hunt.realm);
-            hunt.realm = Realm::NORMAL;
+    for live in &mut rounds.list {
+        if !live.round.running() && live.realm != Realm::NORMAL {
+            traffic.realms.remove(&live.realm);
+            live.realm = Realm::NORMAL;
+            live.course = None;
         }
     }
     // Players of a round just over join the lobby already waiting at its marker, if any
-    // (keeping its hunted): one lobby per event.
+    // (keeping its host): one open lobby per event.
     let mut i = 0;
     while i < rounds.list.len() {
-        let round = &rounds.list[i].round;
+        let live = &rounds.list[i];
+        let round = &live.round;
         let (event, ended) = (
             round.event,
             matches!(round.phase, Phase::Lobby { last: Some(_) }),
         );
         let waiting = (0..rounds.list.len()).find(|&j| {
-            let other = &rounds.list[j].round;
+            let other = &rounds.list[j];
             j != i
-                && other.event == event
-                && !other.running()
+                && live.open()
+                && other.open()
+                && other.round.event == event
+                && !other.round.running()
                 && !round.running()
-                && (ended || (j < i && !matches!(other.phase, Phase::Lobby { last: Some(_) })))
+                && (ended
+                    || (j < i && !matches!(other.round.phase, Phase::Lobby { last: Some(_) })))
         });
         if let Some(j) = waiting {
             let gone = rounds.list.remove(i);
@@ -338,15 +516,23 @@ pub fn run_rounds(
         }
         i += 1;
     }
-    rounds.list.retain(|hunt| !hunt.round.players.is_empty());
+    rounds.list.retain(|live| !live.round.players.is_empty());
+    // Each lobby with its best times.
+    for live in &mut rounds.list {
+        if live.changed {
+            live.round.best = (live.best_key())
+                .and_then(|key| rounds.best.get(&key).cloned())
+                .unwrap_or_default();
+        }
+    }
 
     // Each player in the realm of their round, if it runs.
     let realm_of: HashMap<PlayerId, Realm> = (rounds.list.iter())
-        .filter(|hunt| hunt.round.running())
-        .flat_map(|hunt| hunt.round.players.iter().map(|&p| (p, hunt.realm)))
+        .filter(|live| live.round.running())
+        .flat_map(|live| live.round.players.iter().map(|&p| (p, live.realm)))
         .collect();
     let busy: Vec<(PlayerId, u16)> = (rounds.list.iter())
-        .flat_map(|hunt| hunt.round.players.iter().map(|&p| (p, hunt.round.event)))
+        .flat_map(|live| live.round.players.iter().map(|&p| (p, live.round.event)))
         .collect();
     let busy_changed = busy != rounds.busy;
     if busy_changed {
@@ -370,9 +556,9 @@ pub fn run_rounds(
         if out.contains(&peer.id) {
             peer.tell(&ToClient::Round(None));
         }
-        let round = (rounds.list.iter()).find(|hunt| hunt.changed && hunt.has(peer.id));
-        if let Some(hunt) = round {
-            peer.tell(&ToClient::Round(Some(hunt.round.clone())));
+        let round = (rounds.list.iter()).find(|live| live.changed && live.has(peer.id));
+        if let Some(live) = round {
+            peer.tell(&ToClient::Round(Some(live.round.clone())));
         }
         if busy_changed || rounds.told_busy.insert(peer.id) {
             peer.tell(&ToClient::Busy(rounds.busy.clone()));
@@ -381,40 +567,97 @@ pub fn run_rounds(
             peer.tell(&ToClient::Heli(*pose));
         }
     }
-    for hunt in &mut rounds.list {
-        hunt.changed = false;
+    for live in &mut rounds.list {
+        live.changed = false;
     }
     rounds.in_realms = realm_of.into_keys().collect();
 }
 
-/// `player` leaves the round: in the lobby someone else is hunted if they were; under way
-/// it ends if they were hunted, or if they were the last hunter.
-fn leave(hunt: &mut Live, player: PlayerId, name: &impl Fn(PlayerId) -> String) {
-    hunt.round.players.retain(|&p| p != player);
-    hunt.changed = true;
-    let was_hunted = hunt.round.host == player;
-    if hunt.round.running() {
-        if was_hunted {
-            end(hunt, Ending::HuntedLeft);
-        } else if hunt.round.players.len() < 2 {
-            end(hunt, Ending::NoHunters);
-        }
-    }
-    if was_hunted && let Some(&next) = hunt.round.players.first() {
-        hunt.round.host = next;
-        hunt.host_name = name(next);
+/// A race's standing at its start: everyone on the grid, the clock running from the green
+/// light.
+fn standing(players: &[PlayerId], name: &impl Fn(PlayerId) -> String, now: f64) -> race::Standing {
+    race::Standing {
+        racers: (players.iter())
+            .map(|&player| Racer {
+                player,
+                name: name(player),
+                gates: 0,
+                at: now + COUNTDOWN,
+                laps: Vec::new(),
+                finished: None,
+                left: false,
+            })
+            .collect(),
+        closes: None,
     }
 }
 
-/// The round is over: back to its lobby with how it ended (its realm goes afterwards).
-fn end(hunt: &mut Live, ending: Ending) {
+/// `player` leaves the round: in the lobby someone else hosts it if they did; a hunt under
+/// way ends if they were hunted, or if they were the last hunter; a race goes on without
+/// them (they're listed as having left), unless nobody's left racing.
+fn leave(live: &mut Live, player: PlayerId, name: &impl Fn(PlayerId) -> String, events: &[Event]) {
+    live.round.players.retain(|&p| p != player);
+    live.seen.remove(&player);
+    live.changed = true;
+    let was_host = live.round.host == player;
+    if live.round.running() {
+        match &mut live.round.phase {
+            Phase::Running {
+                play: Play::Race(standing),
+                ..
+            } => {
+                if let Some(racer) = standing.racers.iter_mut().find(|r| r.player == player) {
+                    racer.left = true;
+                }
+                if (standing.racers.iter()).all(|r| r.finished.is_some() || r.left) {
+                    end_race(live, events);
+                }
+            }
+            _ => {
+                if was_host {
+                    end_hunt(live, Ending::HuntedLeft);
+                } else if live.round.players.len() < 2 {
+                    end_hunt(live, Ending::NoHunters);
+                }
+            }
+        }
+    }
+    if was_host && let Some(&next) = live.round.players.first() {
+        live.round.host = next;
+        live.host_name = name(next);
+    }
+}
+
+/// The hunt is over: back to its lobby with how it ended (its realm goes afterwards).
+fn end_hunt(live: &mut Live, ending: Ending) {
     let outcome = Outcome::Hunt(hunt::Outcome {
-        hunted: hunt.host_name.clone(),
+        hunted: live.host_name.clone(),
         ending,
     });
     info!("A car hunt ended: {}", outcome.text());
-    hunt.round.phase = Phase::Lobby {
+    live.round.phase = Phase::Lobby {
         last: Some(outcome),
     };
-    hunt.changed = true;
+    live.changed = true;
+}
+
+/// The race (or time trial) is over: back to its lobby with the results.
+fn end_race(live: &mut Live, events: &[Event]) {
+    let (Some(standing), Some(settings)) = (live.round.standing(), live.round.game.race()) else {
+        return;
+    };
+    let route = (events.get(usize::from(live.round.event)))
+        .and_then(|event| event.routes.get(usize::from(settings.route)))
+        .map(|route| route.name.clone())
+        .unwrap_or_default();
+    let results = Outcome::Race(race::Results::of(standing, route, settings.reverse));
+    info!(
+        "A {} ended: {}",
+        live.round.game.title().to_lowercase(),
+        results.text()
+    );
+    live.round.phase = Phase::Lobby {
+        last: Some(results),
+    };
+    live.changed = true;
 }
