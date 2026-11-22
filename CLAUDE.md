@@ -55,7 +55,8 @@ that does: gas with the parking brake on, reverse asked for while rolling
 there, at the user's wish, 2026-11-22), and
 gas without moving for 3 s (R). Added alone: in neutral, stalled, wrecked engine, empty
 tank (stating the problem only, since 2026-11-22). R (`ResetPlugin`) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
-right-hand lane on roads with traffic lanes). The map teleport was removed at the user's
+right-hand lane on roads with traffic lanes), carried there by the rescue helicopter (see
+"Helicopters"; `ResetRule::To`, a hunt's "to the start", still jumps). The map teleport was removed at the user's
 wish (2026-11-21). Keys: M map, 0 mute, B (held) looks back.
 
 ## Sandbox workflow
@@ -294,6 +295,36 @@ in a running round (`Connection::in_running_round`). Tests: `realms_see_only_the
 `a_hunter_tags_the_hunted` (test apps have no shops plugin, so `WantsGhost` stays set
 from the lobby unless a test clears it).
 Not done: races; a round's own chat lines (who caught whom) for the server's chat.
+
+## Helicopters (asked for by the user, 2026-11-22)
+
+`src/heli/`: `mod.rs` (`HeliPlugin` in `CorePlugin`: the model made of primitives, red
+with a white stripe, rotors turning with a blur disc, flashing beacons; `Heli { cable,
+load }` + `Transform` is one on screen; `Flown` ones (another player's rescue, the hunt's)
+are dead reckoned from their latest `HeliPose`; never fogged, and drawn at 900 m shrunk to
+look as big when farther, beacons at least ~0.004 rad across, so the hunt's is seen from
+anywhere; `Chase`, the hunt's flight) and `rescue.rs`.
+
+- **Rescue** (R with `ResetRule::Road`, also a hunter's in a hunt): `Rescue::call`; flies
+  in from 140 m ahead of the car (where the chase camera looks), holds over its roof on a
+  12 m cable (longer to stay 4 m over trees and houses within 8 m: their `Upright::top`),
+  lets the cable down, lifts the car (upright), carries it at ~10 m/s average over a lift
+  clearing land, trees and houses along the way, sets it down at the drive spot, unhooks
+  (`Car::place`) and flies off 8 s. ~10 s near a road (`the_helicopter_takes_the_car_to_the_road`).
+  Runs in `FixedPostUpdate` after the simulation, overwriting the car's body (wheels hang,
+  engine runs). `car::Rescued` while it's coming/carrying: input ignored (brakes), R off,
+  online a ghost (`haunt`). Lets go if the car is moved by something else (> 2 m), gone,
+  or away. Its pose goes in `CarState::heli` (stamped like the state; protocol 10), so the
+  others draw it, the cable to the car's roof when `hooked`. No sound yet.
+- **Hunt helicopter**: the server flies a `Chase` per running round in `run_rounds` over
+  the hunted (50 m up, at least 30 m over the ground; no top speed, acceleration ≤ 7 m/s²,
+  so it lags, overshoots a hard stop and turns back; wanders ±6 m over a slow target) and
+  sends `ToClient::Heli` 15/s to everyone in the round, wherever they are
+  (`Connection::hunt_heli`; drawn only in a running round).
+- Shots: `STEP=0.05` steps game time per frame (needed: lavapipe's frame times jump),
+  `TOPPLE="side,frame"` moves the car off the road onto its roof, `HELICAM="side,height,along"`
+  looks at the car and helicopter, key `r` is R; e.g. `LINEUP=3,1 STEP=0.05 TOPPLE="14,20"
+  HELICAM="-40,6,-30" bash tools/dev/shot.sh out.png 195 r` (the car in a forest, lifted).
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 

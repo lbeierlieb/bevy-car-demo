@@ -14,11 +14,26 @@ impl Plugin for ShotPlugin {
             );
             // Before the car gets its meshes, which would be added to a despawned car.
             app.add_systems(PreUpdate, (pick_car, line_up, place_car));
-            app.add_systems(PreUpdate, (start_online, say));
+            app.add_systems(PreUpdate, (start_online, say, topple));
+            // STEP="seconds": every frame moves the game on by exactly that (lavapipe's few
+            // frames a second otherwise make it run on in jumps of up to 0.25 s).
+            if let Ok(step) = std::env::var("STEP") {
+                let step: f64 = step.parse().unwrap();
+                app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                    std::time::Duration::from_secs_f64(step),
+                ));
+            }
             app.add_systems(
                 PostUpdate,
                 car_cam
                     .after(forest_cam)
+                    .before(bevy::transform::TransformSystems::Propagate),
+            );
+            app.add_systems(
+                PostUpdate,
+                heli_cam
+                    .after(car_cam)
+                    .before(crate::name_tags::PlaceTags)
                     .before(bevy::transform::TransformSystems::Propagate),
             );
             app.add_systems(
@@ -175,6 +190,7 @@ fn key(c: char) -> KeyCode {
         'k' => KeyCode::KeyK,
         'm' => KeyCode::KeyM,
         'b' => KeyCode::KeyB,
+        'r' => KeyCode::KeyR,
         '0' => KeyCode::Digit0,
         '2' => KeyCode::Digit2,
         '3' => KeyCode::Digit3,
@@ -477,6 +493,64 @@ fn place_car(
     let heading = (car.body.rotation * Vec3::NEG_Z).xz();
     if let Some((spot, yaw)) = terrain.drive_spot(target, heading) {
         car.place(&terrain, spot, yaw);
+    }
+}
+
+/// TOPPLE="side,frame": at that frame, moves the driven car that far to its right (negative:
+/// left) and lays it on its roof (for the rescue helicopter, R).
+fn topple(
+    terrain: Res<crate::terrain::Terrain>,
+    active: Res<crate::car::ActiveCar>,
+    mut cars: Query<&mut crate::car::Car>,
+    mut frame: Local<u32>,
+) {
+    *frame += 1;
+    let Ok(spec) = std::env::var("TOPPLE") else {
+        return;
+    };
+    let v: Vec<f32> = spec.split(',').map(|s| s.parse().unwrap()).collect();
+    if *frame != v[1] as u32 {
+        return;
+    }
+    let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
+        return;
+    };
+    let yaw = crate::car::heading(car.body.rotation);
+    let p = car.body.position.xz() + Vec2::new(yaw.cos(), -yaw.sin()) * v[0];
+    car.place(&terrain, p, yaw);
+    car.body.position.y += 1.0;
+    car.body.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(3.0);
+}
+
+/// HELICAM="side,height,along": like CARCAM for the driven car, looking at the middle
+/// between it and the nearest helicopter (at the car while there's none).
+fn heli_cam(
+    mut cams: Query<&mut Transform, With<Camera3d>>,
+    cars: Query<(&crate::car::Car, &Transform), Without<Camera3d>>,
+    helis: Query<
+        &Transform,
+        (
+            With<crate::heli::Heli>,
+            Without<Camera3d>,
+            Without<crate::car::Car>,
+        ),
+    >,
+) {
+    let Ok(spec) = std::env::var("HELICAM") else {
+        return;
+    };
+    let v: Vec<f32> = spec.split(',').map(|s| s.parse().unwrap()).collect();
+    let Some((_, car)) = cars.iter().next() else {
+        return;
+    };
+    let yaw = crate::car::heading(car.rotation);
+    let at = car.translation;
+    let heli = (helis.iter().map(|t| t.translation))
+        .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)));
+    let middle = heli.map_or(at, |h| (h + at) / 2.0);
+    let eye = at + Quat::from_rotation_y(yaw) * Vec3::new(v[0], 0.0, -v[2]) + Vec3::Y * v[1];
+    for mut t in &mut cams {
+        *t = Transform::from_translation(eye).looking_at(middle, Vec3::Y);
     }
 }
 
