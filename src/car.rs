@@ -418,9 +418,12 @@ impl Car {
     }
 
     /// Puts the car at rest at (x, z) in the xz plane, facing along `yaw`, as it was: its
-    /// setup, fuel, tires and engine wear, and the driver's settings.
+    /// setup, fuel, tires and engine wear, and the driver's settings. In neutral with the
+    /// parking brake on (in gear, a clutch pedal let up would stall it at once).
     pub fn place(&mut self, terrain: &Terrain, p: Vec2, yaw: f32) {
         let mut placed = Self::spawn_at(self.index, self.setup.clone(), terrain, p.x, p.y, yaw);
+        placed.drivetrain.neutral();
+        placed.parking_brake = true;
         placed.keep_settings(self);
         placed.fuel = self.fuel;
         placed.load_fuel();

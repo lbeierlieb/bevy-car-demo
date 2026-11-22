@@ -379,7 +379,6 @@ fn carry(flight: &mut Flight, car: &mut Car, terrain: &Terrain, dt: f32) {
     if s >= carry.duration {
         // Down: in the lane, let go of; the helicopter unhooks and flies off.
         car.place(terrain, flight.to, flight.yaw);
-        car.drivetrain.neutral();
         flight.load = None;
         flight.leaving = Some(t + UNHOOK);
         return;

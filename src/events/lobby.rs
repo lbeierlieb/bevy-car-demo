@@ -319,6 +319,7 @@ pub(super) fn follow(
                 let chassis = CHASSIS.iter().position(|c| c.name == name).unwrap_or(0);
                 let setup = CarSetup::factory(chassis, 0);
                 let mut lent = Car::spawn_at(car.index, setup, &terrain, p.x, p.y, yaw);
+                lent.drivetrain.neutral();
                 lent.keep_settings(&car);
                 state.lent = Some(car.clone());
                 commands.entity(entity).despawn();

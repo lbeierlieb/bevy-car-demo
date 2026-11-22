@@ -272,7 +272,8 @@ as built, in order:
    power = what the wheels push with. The engine dyno window (5) is gone. 11. ✓ Clean-up:
    the panel lost its setup section (springs, dampers, upper pivot, tire μ: they follow
    from the parts); **R only puts the car back on the road** (`Car::place` keeps fuel,
-   tires, engine wear; agreed: no hint suggests anything for an empty tank or a wrecked
+   tires, engine wear, and leaves it in neutral with the parking brake on, so a teleport
+   (rescue, a round starting or over, joining) never stalls it; agreed: no hint suggests anything for an empty tank or a wrecked
    engine, for now); `ui::tool_window` is gone; help, README.
 
 Not done yet: dyno runs aren't saved; the HUD shows the parked car's gauges while in the
