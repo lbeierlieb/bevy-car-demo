@@ -207,8 +207,9 @@ fn hints(
         Hint::ParkingBrake => gas && car.parking_brake && standing,
         Hint::Reverse => reverse,
         Hint::Neutral => gas && running && gear == 0 && standing,
+        // Only in first: past it, the driver knows about shifting (asked for by the user).
         Hint::RevLimit => {
-            running && c.throttle > 0.5 && at_limit && (1..engine.top_gear()).contains(&gear)
+            running && c.throttle > 0.5 && at_limit && gear == 1 && gear < engine.top_gear()
         }
         Hint::Stuck => {
             gas && standing
