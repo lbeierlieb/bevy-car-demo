@@ -49,6 +49,7 @@ impl Plugin for SimPlugin {
 
 pub fn simulate(time: Res<Time>, terrain: Res<Terrain>, mut cars: Query<&mut Car>) {
     let dt = time.delta_secs();
+    let before: Vec<Vec3> = cars.iter().map(|car| car.body.position).collect();
     for mut car in &mut cars {
         step_car(&mut car, &terrain, dt);
     }
@@ -57,6 +58,38 @@ pub fn simulate(time: Res<Time>, terrain: Res<Terrain>, mut cars: Query<&mut Car
     while let Some([mut a, mut b]) = pairs.fetch_next() {
         collide_cars(&mut a, &mut b, dt);
     }
+    for (mut car, before) in cars.iter_mut().zip(before) {
+        recover(&mut car, &terrain, before);
+    }
+}
+
+/// A car whose simulation blew up (any number not finite) is put on the nearest road
+/// from where it was before the step, as R would. It mustn't carry on: online, the
+/// server refuses a state that isn't finite and drops the player.
+fn recover(car: &mut Car, terrain: &Terrain, before: Vec3) {
+    let body = &car.body;
+    let finite = body.position.is_finite()
+        && body.rotation.is_finite()
+        && body.velocity.is_finite()
+        && body.angular_velocity.is_finite()
+        && car.drivetrain.rpm.is_finite()
+        && car.drivetrain.load.is_finite()
+        && car.drivetrain.engine.turbo_speed.is_finite()
+        && (car.corners.iter()).all(|corner| {
+            [corner.omega, corner.theta, corner.spin]
+                .iter()
+                .all(|x| x.is_finite())
+        });
+    if finite {
+        return;
+    }
+    warn!("The car's simulation blew up at {before}: put back on the road");
+    car.body.position = before;
+    if !car.body.rotation.is_finite() {
+        car.body.rotation = Quat::IDENTITY;
+    }
+    let (p, yaw) = car.road_spot(terrain);
+    car.place(terrain, p, yaw);
 }
 
 /// Two cars' bodies pushed apart where their boxes overlap.
@@ -280,6 +313,26 @@ mod tests {
     fn test_car(terrain: &Terrain) -> Car {
         let (p, yaw) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
         Car::spawn_at(0, CarSetup::default(), terrain, p.x, p.y, yaw)
+    }
+
+    #[test]
+    fn a_car_that_blew_up_is_put_back_on_the_road() {
+        let terrain = Terrain::baked();
+        let mut app = App::new();
+        app.insert_resource(Terrain::baked())
+            .insert_resource(Time::<()>::default())
+            .add_systems(Update, simulate);
+        let mut car = test_car(&terrain);
+        let at = car.body.position;
+        car.body.velocity = Vec3::NAN;
+        let entity = app.world_mut().spawn(car).id();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(1.0 / 120.0));
+        app.update();
+        let car = app.world().get::<Car>(entity).unwrap();
+        assert!(car.body.velocity.is_finite() && car.body.position.is_finite());
+        assert!(car.body.position.xz().distance(at.xz()) < 5.0);
     }
 
     #[test]
