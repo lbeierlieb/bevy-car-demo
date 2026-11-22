@@ -331,6 +331,16 @@ impl Drivetrain {
         self.grinding = (lever != 0 && self.selected_gear() != lever).then_some(lever);
     }
 
+    /// Out of gear at once, whatever the lever or a shift under way says.
+    pub fn neutral(&mut self) {
+        self.gear = 0;
+        self.shift = None;
+        self.in_gear = 0.0;
+        self.engaged = 1.0;
+        self.locked = false;
+        self.grinding = None;
+    }
+
     /// Starts a gear change; the clutch opens for `shift_time`. With the clutch pedal
     /// pressed, the gear goes in at once.
     pub fn shift_to(&mut self, engine: &EngineSetup, gear: i8) {

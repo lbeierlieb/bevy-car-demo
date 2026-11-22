@@ -404,7 +404,8 @@ anywhere; `Chase`, the hunt's flight) and `rescue.rs`.
   clearing land, trees and houses along the way, sets it down at the drive spot, unhooks
   (`Car::place`) and flies off 8 s. ~10 s near a road (`the_helicopter_takes_the_car_to_the_road`).
   Runs in `FixedPostUpdate` after the simulation, overwriting the car's body (wheels hang,
-  engine runs). `car::Rescued` while it's coming/carrying: input ignored (brakes), R off,
+  engine runs). `car::Rescued` while it's coming/carrying: input ignored (brakes), neutral (whatever the
+  H-shifter says) and the parking brake on from the call, also once set down, R off,
   online a ghost (`haunt`). Lets go if the car is moved by something else (> 2 m), gone,
   or away. Its pose goes in `CarState::heli` (stamped like the state; protocol 10), so the
   others draw it, the cable to the car's roof when `hooked`. No sound yet.

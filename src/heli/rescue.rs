@@ -348,6 +348,10 @@ fn fly_off(flight: &mut Flight, dt: f32) -> bool {
 /// Flies in and lets the cable down, then carries the car, then sets it down and lets go.
 fn carry(flight: &mut Flight, car: &mut Car, terrain: &Terrain, dt: f32) {
     let t = flight.t;
+    // From the call on: out of gear (an H-shifter's lever counts again once set down) and
+    // the parking brake on.
+    car.drivetrain.neutral();
+    car.parking_brake = true;
     let load = load_point(&car.setup.hull, car.body.position, car.body.rotation);
     let lower = LOWER.max(flight.cable / LOWER_RATE);
     if t < APPROACH + lower {
@@ -375,6 +379,7 @@ fn carry(flight: &mut Flight, car: &mut Car, terrain: &Terrain, dt: f32) {
     if s >= carry.duration {
         // Down: in the lane, let go of; the helicopter unhooks and flies off.
         car.place(terrain, flight.to, flight.yaw);
+        car.drivetrain.neutral();
         flight.load = None;
         flight.leaving = Some(t + UNHOOK);
         return;
