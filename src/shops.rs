@@ -32,6 +32,9 @@ const STOPPED: f32 = 1.5;
 const LEAVE: f32 = 6.0;
 /// Names float above markers nearer than this (m).
 const LABEL_RANGE: f32 = 500.0;
+/// On the map (M), shop names show when zoomed in to fewer metres per screen point than
+/// this: about 2 km across a 1280-point window, a village like Gerach filling it.
+const MAP_NAMES_BELOW: f32 = 1.6;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ShopKind {
@@ -474,12 +477,14 @@ fn place(
             }
         })
         .collect();
-    // On the map: each shop in its kind's colour, and a legend of the kinds there are.
+    // On the map: each shop in its kind's colour, and a legend of the kinds there are; the
+    // names only zoomed in, or they'd crowd the whole map.
     marks.0 = (shops.list.iter())
         .map(|placed| MapMark {
             at: placed.marker,
             color: placed.shop.kind.color(),
             label: placed.shop.name.clone(),
+            label_below: MAP_NAMES_BELOW,
         })
         .collect();
     legend.0 = (ShopKind::ALL.into_iter())

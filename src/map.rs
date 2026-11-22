@@ -57,7 +57,8 @@ impl Plugin for MapPlugin {
     }
 }
 
-/// Spots an app wants on the map (places, destinations): a dot and a label each.
+/// Spots an app wants on the map (places, destinations): a dot each, and a label once
+/// zoomed in far enough.
 #[derive(Resource, Default)]
 pub struct MapMarks(pub Vec<MapMark>);
 
@@ -65,6 +66,9 @@ pub struct MapMark {
     pub at: Vec2,
     pub color: [u8; 3],
     pub label: String,
+    /// The label shows when zoomed in to fewer metres per screen point than this
+    /// (`f32::INFINITY`: always).
+    pub label_below: f32,
 }
 
 /// What the marks' colours mean, listed in a corner of the map.
@@ -351,12 +355,14 @@ fn draw(
                 let [r, g, b] = mark.color;
                 let color = Color32::from_rgb(r, g, b);
                 painter.circle(at, 6.0, color, Stroke::new(1.5, Color32::BLACK));
-                label(
-                    &painter,
-                    at + vec2(12.0, 0.0),
-                    Align2::LEFT_CENTER,
-                    &mark.label,
-                );
+                if scale < mark.label_below {
+                    label(
+                        &painter,
+                        at + vec2(12.0, 0.0),
+                        Align2::LEFT_CENTER,
+                        &mark.label,
+                    );
+                }
             }
 
             // The cars as arrows, the one being driven last, larger and outlined in white.

@@ -185,6 +185,7 @@ fn mark(conflicts: Res<Conflicts>, mut marks: ResMut<MapMarks>) {
             at: c.at,
             color: [230, 40, 30],
             label: c.name.clone(),
+            label_below: f32::INFINITY,
         });
     }
 }

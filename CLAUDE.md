@@ -203,7 +203,7 @@ as built, in order:
    (`CarState::ghost`; `shops` sets `net::WantsGhost`, `client::haunt` puts `looks::Ghost`
    on our car, `move_cars` on remote ones; `push_off_remote_cars` skips ghosts, the server
    removes a ghost's `traffic::Visitor`; `visuals` swaps in a second, blended material set.)
-4. ✓ Shops on the map (M), with a legend (`map::MapLegend`). 5. ✓ **Gas station**: 95/98/102; the tank keeps
+4. ✓ Shops on the map (M), with a legend (`map::MapLegend`); their names only when zoomed in (under 1.6 m per screen point, `MapMark::label_below`; at the user's wish, 2026-11-22). 5. ✓ **Gas station**: 95/98/102; the tank keeps
    its octane, mixing by volume; the engine's knock limit reads the tank's octane (the
    panel's octane and fuel load sliders go). 6. ✓ **Alignment shop**: camber, pressures
    (from the garage), toe and brake torque/balance (from the panel; into `CarBuild`).
