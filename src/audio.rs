@@ -215,7 +215,8 @@ pub struct EngineRun {
 impl EngineRun {
     pub fn of(drivetrain: &Drivetrain) -> Self {
         Self {
-            running: drivetrain.running,
+            // Cranking, its compressions are heard (slow chugs at the starter's speed).
+            running: drivetrain.running || drivetrain.cranking(),
             rpm: drivetrain.rpm,
             load: drivetrain.load,
             turbo_speed: drivetrain.engine.turbo_speed,

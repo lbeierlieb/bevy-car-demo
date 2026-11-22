@@ -675,9 +675,16 @@ pub fn drive(
     (active, away, held, rescued): (Res<ActiveCar>, Res<Away>, Res<Held>, Res<Rescued>),
     aids: Res<DriverAids>,
     mut cars: Query<&mut Car>,
-    mut refused: MessageWriter<ReverseRefused>,
+    (mut refused, mut switching_off): (MessageWriter<ReverseRefused>, Local<bool>),
 ) {
     let pressed = |a, b| keys.pressed(a) || keys.pressed(b);
+    // The ignition button: held, it runs the starter; pressed with the engine running, it
+    // switches it off (and holding on after that doesn't crank).
+    let ignition = keys.pressed(KeyCode::KeyI) || wheel.ignition_held;
+    let ignition_pressed = keys.just_pressed(KeyCode::KeyI) || wheel.ignition;
+    if !ignition {
+        *switching_off = false;
+    }
     for mut car in &mut cars {
         if car.index != active.0 || away.0 || rescued.0 {
             car.controls = Controls {
@@ -686,6 +693,7 @@ pub fn drive(
                 ..default()
             };
             car.drivetrain.grinding = None;
+            car.drivetrain.starter = false;
             continue;
         }
         car.traction_control = aids.traction_control;
@@ -705,9 +713,11 @@ pub fn drive(
             ..
         } = &mut *car;
         c.clutch = wheel.clutch;
-        if keys.just_pressed(KeyCode::KeyI) || wheel.ignition {
-            drivetrain.start(&setup.engine);
+        if ignition_pressed && drivetrain.running {
+            drivetrain.switch_off();
+            *switching_off = true;
         }
+        drivetrain.starter = ignition && !*switching_off;
         let gear = drivetrain.selected_gear();
         let shift = keys.just_pressed(KeyCode::KeyE) as i8 - keys.just_pressed(KeyCode::KeyQ) as i8
             + wheel.shift_up as i8

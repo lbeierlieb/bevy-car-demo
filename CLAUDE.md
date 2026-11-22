@@ -636,7 +636,14 @@ and plays force feedback, both through hid-fanatecff on Linux.
   from sysfs (readable even when not writable) or given in the panel, the axis is
   scaled to the game's range, and force feedback pushes back past either end (full
   force 10° past; stays on with the tire forces switched off).
-- Clutch pedal: engine can stall, ignition restarts it. Without a bound pedal the
+- Starter (asked for by the user, 2026-11-22): the ignition button (I or bound) held
+  runs the starter (`Drivetrain::starter`: `STARTER_TORQUE` falling to nothing at
+  `STARTER_SPEED`, ignition on); the ECU fires after `SYNC_TURNS` revolutions and the
+  engine has caught past `CATCH_RPM` (0.5 s for small engines to 1.25 s for the V12);
+  pressed while running it switches the engine off (`switch_off`), which stays off (the
+  automatic clutch's restart is only for stalls). Cranking is heard as the engine at
+  the starter's speed; no starter whine yet.
+- Clutch pedal: engine can stall, the starter restarts it. Without a bound pedal the
   clutch is automatic and the engine never stalls. The pedal works like a real one
   (`drivetrain::ENGAGEMENT`, asked for by the user: it had to be floored and stalled at
   a slight lift): fully engaged over the top 12 %, apart over the bottom 28 % (and gears

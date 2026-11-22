@@ -434,6 +434,8 @@ pub struct WheelInput {
     pub view: bool,
     /// The look-back button is held.
     pub look_back: bool,
+    /// The ignition button is held (the starter runs while it is).
+    pub ignition_held: bool,
     pub map: bool,
     /// With an H-shifter bound: the gate the lever is in, or neutral (0) between gates.
     pub shifter: Option<i8>,
@@ -589,6 +591,7 @@ fn read_wheel(
         reset: pressed(Action::Reset),
         view: pressed(Action::View),
         look_back: held.contains(&Action::LookBack),
+        ignition_held: held.contains(&Action::Ignition),
         map: pressed(Action::Map),
         shifter,
         held,

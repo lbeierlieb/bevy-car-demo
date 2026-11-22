@@ -129,8 +129,12 @@ fn hud(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) ->
                     Align2::CENTER_CENTER,
                     if blown {
                         "ENGINE BLOWN (R)"
+                    } else if car.drivetrain.cranking() {
+                        "STARTING"
+                    } else if car.drivetrain.switched_off() {
+                        "ENGINE OFF (hold I)"
                     } else {
-                        "STALLED (I)"
+                        "STALLED (hold I)"
                     },
                     FontId::proportional(10.0),
                     RED,

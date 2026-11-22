@@ -22,6 +22,15 @@ use super::engine::{Engine, EngineBuild};
 const RPM: f32 = 60.0 / (2.0 * PI);
 /// Below this, a running engine stalls (only with a clutch pedal).
 const STALL_RPM: f32 = 400.0;
+/// The starter motor: its torque at the crank standing (N·m) and the speed it can't turn
+/// the engine past (rpm), falling straight in between.
+const STARTER_TORQUE: f32 = 60.0;
+const STARTER_SPEED: f32 = 350.0;
+/// Cranked past this by its own firing, the engine has caught and runs.
+const CATCH_RPM: f32 = 550.0;
+/// Revolutions the starter turns the engine before the ECU has seen where the crank is
+/// and fires (crank and cam signals in sync).
+const SYNC_TURNS: f32 = 2.0;
 /// An H-shifter's gear goes in without the clutch when the engine turns within this of
 /// the gear's speed (the synchros manage it): engine off and standing, or rev-matched.
 const SYNC_RPM: f32 = 150.0;
@@ -261,6 +270,15 @@ pub struct Drivetrain {
     /// The H-shifter's gate the lever is held in while its gear can't go in (the clutch
     /// pedal not pressed, or reverse while rolling forward): the gears grind.
     pub grinding: Option<i8>,
+    /// The starter button held (the driver's, set before each step): cranks the engine
+    /// with the ignition on while it isn't running.
+    pub starter: bool,
+    /// Switched off by the driver (not stalled): the automatic clutch doesn't start it
+    /// again by itself.
+    switched_off: bool,
+    /// Cranking in the last step, and the revolutions turned since the starter engaged.
+    cranking: bool,
+    turned: f32,
 }
 
 /// What the drivetrain does to the driven wheels this step (shared by both).
@@ -286,10 +304,32 @@ impl Drivetrain {
             clutch_pedal: None,
             slip: 0.0,
             grinding: None,
+            starter: false,
+            switched_off: false,
+            cranking: false,
+            turned: 0.0,
         }
     }
 
-    /// Starts a stalled engine (the starter spins it up to idle at once), unless it's blown.
+    /// The ignition off: the engine stops firing and runs down. It stays off until
+    /// cranked again.
+    pub fn switch_off(&mut self) {
+        self.running = false;
+        self.switched_off = true;
+    }
+
+    /// Switched off by the driver (rather than stalled).
+    pub fn switched_off(&self) -> bool {
+        self.switched_off
+    }
+
+    /// The starter turning the engine over.
+    pub fn cranking(&self) -> bool {
+        self.cranking
+    }
+
+    /// Starts a stalled engine at once (the automatic clutch's restart), unless it's
+    /// blown. The driver cranks it with `starter` instead.
     pub fn start(&mut self, engine: &EngineSetup) {
         if !self.running && !self.engine.blown(&engine.build.hardware) {
             self.running = true;
@@ -395,13 +435,26 @@ impl Drivetrain {
         let clutch = clutch.filter(|_| !self.automatic);
         self.clutch_pedal = clutch;
         // Without a pedal, the automatic clutch never lets the engine stall: it starts
-        // again by itself, as long as it gets fuel. A blown engine stays off.
-        if clutch.is_none() && self.engine.fuel_supply > 0.5 {
+        // again by itself, as long as it gets fuel, unless the driver switched it off. A
+        // blown engine stays off.
+        if clutch.is_none() && self.engine.fuel_supply > 0.5 && !self.switched_off {
             self.start(engine);
         }
-        if self.engine.blown(&engine.build.hardware) {
+        let blown = self.engine.blown(&engine.build.hardware);
+        if blown {
             self.running = false;
         }
+        // The starter turns it over with the ignition on (a blown engine only turns).
+        let cranking = self.starter && !self.running;
+        if cranking {
+            if !self.cranking {
+                self.engine.start();
+                self.turned = 0.0;
+            }
+            self.turned += self.rpm / 60.0 * dt;
+        }
+        self.cranking = cranking;
+        let synced = self.turned >= SYNC_TURNS;
         self.in_gear += dt;
         if self.automatic && grounded {
             self.auto_shift(engine, throttle, wheel_omega);
@@ -431,7 +484,8 @@ impl Drivetrain {
             (engine.ratio(self.gear), throttle)
         };
         let build = &engine.build;
-        let firing = self.running && (self.shift.is_none() || blip > 0.0);
+        let firing = (self.running || (cranking && synced && !blown))
+            && (self.shift.is_none() || blip > 0.0);
         self.engine
             .step(build, throttle_plate(throttle), self.rpm, firing, dt);
         let cycle = self.engine.cycle(build, self.rpm);
@@ -442,10 +496,19 @@ impl Drivetrain {
         };
         let wheel_rpm = wheel_omega * ratio * RPM;
         let state = self.engine;
-        let engine_torque = move |rpm: f32| state.torque(build, rpm);
+        let starter = move |rpm: f32| {
+            if cranking {
+                STARTER_TORQUE * (1.0 - rpm / STARTER_SPEED).max(0.0)
+            } else {
+                0.0
+            }
+        };
+        let engine_torque = move |rpm: f32| state.torque(build, rpm) + starter(rpm);
         if let Some(travel) = clutch {
             let capacity = engine.clutch_torque * clutch_engagement(travel) * self.engaged;
-            return self.step_pedal(engine, engine_torque, capacity, ratio, wheel_rpm, dt);
+            let drive = self.step_pedal(engine, engine_torque, capacity, ratio, wheel_rpm, dt);
+            self.catch(cranking && !blown);
+            return drive;
         }
 
         // Lock once the wheels have caught up with the engine; slip again below idle, or
@@ -457,7 +520,7 @@ impl Drivetrain {
             self.locked = true;
         }
 
-        if self.locked {
+        let drive = if self.locked {
             self.rpm = wheel_rpm;
             WheelDrive {
                 torque: engine_torque(self.rpm) * ratio,
@@ -479,6 +542,16 @@ impl Drivetrain {
                 torque: clutch * ratio,
                 inertia: 0.0,
             }
+        };
+        self.catch(cranking && !blown);
+        drive
+    }
+
+    /// Cranked (with the ignition on) past what the starter alone reaches: it has caught.
+    fn catch(&mut self, cranking: bool) {
+        if cranking && self.rpm > CATCH_RPM {
+            self.running = true;
+            self.switched_off = false;
         }
     }
 
@@ -916,6 +989,89 @@ mod tests {
             drivetrain.rpm
         );
         assert!(top < target + 400.0, "flared to {top} for {target}");
+    }
+
+    #[test]
+    fn every_factory_engine_starts_on_the_starter() {
+        use crate::physics::engine::families::{FAMILIES, Version};
+        let dt = 1.0 / 120.0;
+        for (f, family) in FAMILIES.iter().enumerate() {
+            for (v, version) in family.versions.iter().enumerate() {
+                let parts = Version::parts(f, v);
+                let engine = EngineSetup {
+                    build: EngineBuild::new(parts.hardware(), parts.ecu),
+                    parts,
+                    ..EngineSetup::default()
+                };
+                let mut drivetrain = Drivetrain::new(&engine);
+                drivetrain.neutral();
+                // Switched off, it runs down and stays off, even with the automatic clutch.
+                drivetrain.switch_off();
+                for _ in 0..(3.0 / dt) as usize {
+                    drivetrain.step(&engine, 0.0, None, 0.0, true, dt);
+                }
+                assert!(
+                    !drivetrain.running && drivetrain.rpm < 1.0,
+                    "{}",
+                    version.code
+                );
+                // Held on the starter, it fires up by itself.
+                drivetrain.starter = true;
+                let mut t = 0.0;
+                while !drivetrain.running {
+                    drivetrain.step(&engine, 0.0, None, 0.0, true, dt);
+                    t += dt;
+                    assert!(
+                        t < 3.0,
+                        "{} doesn't catch: {} rpm",
+                        version.code,
+                        drivetrain.rpm
+                    );
+                }
+                drivetrain.starter = false;
+                for _ in 0..(4.0 / dt) as usize {
+                    drivetrain.step(&engine, 0.0, None, 0.0, true, dt);
+                }
+                let idle = engine.idle_rpm();
+                println!(
+                    "{}: caught after {t:.2} s, idles at {:.0} rpm ({idle:.0})",
+                    version.code, drivetrain.rpm
+                );
+                assert!(drivetrain.running);
+                assert!(
+                    (drivetrain.rpm - idle).abs() < 100.0,
+                    "{}: {} rpm",
+                    version.code,
+                    drivetrain.rpm
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_starter_alone_doesnt_run_the_engine() {
+        let engine = EngineSetup::default();
+        let dt = 1.0 / 120.0;
+        let mut drivetrain = Drivetrain::new(&engine);
+        drivetrain.neutral();
+        drivetrain.switch_off();
+        // Without fuel it only turns over at the starter's speed, and stops when let go.
+        drivetrain.engine.fuel_supply = 0.0;
+        drivetrain.starter = true;
+        for _ in 0..(2.0 / dt) as usize {
+            drivetrain.step(&engine, 0.0, Some(1.0), 0.0, true, dt);
+        }
+        assert!(drivetrain.cranking() && !drivetrain.running);
+        assert!(
+            (150.0..STARTER_SPEED).contains(&drivetrain.rpm),
+            "{} rpm",
+            drivetrain.rpm
+        );
+        drivetrain.starter = false;
+        for _ in 0..(2.0 / dt) as usize {
+            drivetrain.step(&engine, 0.0, Some(1.0), 0.0, true, dt);
+        }
+        assert!(!drivetrain.running && drivetrain.rpm < 1.0);
     }
 
     #[test]

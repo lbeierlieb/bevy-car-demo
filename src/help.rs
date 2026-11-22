@@ -23,7 +23,10 @@ const CONTROLS: [(&str, &str); 18] = [
         "Shift up / down (Q from neutral at a standstill: reverse)",
     ),
     ("Space", "Parking brake on / off (it's on when you start)"),
-    ("I", "Start the engine after it stalled"),
+    (
+        "I",
+        "Hold: starter (starts the engine); press while running: engine off",
+    ),
     ("R", "A helicopter carries the car back to the road"),
     ("C", "Chase or driver's view"),
     ("B (hold)", "Look back"),
@@ -117,6 +120,7 @@ enum Hint {
     Blown,
     NoFuel,
     Stalled,
+    Off,
     ParkingBrake,
     Reverse,
     Neutral,
@@ -125,10 +129,11 @@ enum Hint {
 }
 
 impl Hint {
-    const ALL: [Hint; 8] = [
+    const ALL: [Hint; 9] = [
         Hint::Blown,
         Hint::NoFuel,
         Hint::Stalled,
+        Hint::Off,
         Hint::ParkingBrake,
         Hint::Reverse,
         Hint::Neutral,
@@ -198,12 +203,14 @@ fn hints(
     let blown = drivetrain.engine.blown(&engine.build.hardware);
     let no_fuel = car.fuel.supply < 0.5;
     let running = drivetrain.running;
+    let (off, cranking) = (drivetrain.switched_off(), drivetrain.cranking());
     let clutch_in = c.clutch.is_some_and(|travel| travel > 0.5);
     let at_limit = drivetrain.rpm >= engine.build.ecu.rev_limit - LIMITER_BAND;
     let now = |hint: Hint| match hint {
         Hint::Blown => gas && blown,
         Hint::NoFuel => gas && no_fuel && !blown,
-        Hint::Stalled => gas && !running && !blown && !no_fuel,
+        Hint::Stalled => gas && !running && !off && !cranking && !blown && !no_fuel,
+        Hint::Off => gas && off && !cranking && !blown,
         Hint::ParkingBrake => gas && car.parking_brake && standing,
         Hint::Reverse => reverse,
         Hint::Neutral => gas && running && gear == 0 && standing,
@@ -273,9 +280,16 @@ fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (S
         Hint::Stalled => (
             "The engine has stalled".into(),
             format!(
-                "The clutch dragged it below idle. Press {} to start it again. To pull \
+                "The clutch dragged it below idle. Hold {} to start it again. To pull \
                  away, give a little gas and let the clutch out slowly; press the clutch \
                  whenever you stop.",
+                key("I", Action::Ignition)
+            ),
+        ),
+        Hint::Off => (
+            "The engine is off".into(),
+            format!(
+                "Hold {} until it fires up: the starter turns it over.",
                 key("I", Action::Ignition)
             ),
         ),
