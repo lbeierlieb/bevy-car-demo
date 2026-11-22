@@ -1,6 +1,7 @@
 //! Engine control units: they read the sensors and drive the actuators, using their own
 //! idea of the engine (their maps), which matches the real one only as well as the tune.
 
+use super::damage::TURBINE_LIMIT;
 use super::hardware::EngineHardware;
 use super::maps::{self, EngineMaps};
 use super::table::{self, Table};
@@ -17,6 +18,12 @@ const RUNNING_RPM: f32 = 300.0;
 /// Overrun fuel cut with the throttle closed: from this far above idle, until the revs
 /// drop to the lower margin.
 const OVERRUN_CUT: f32 = 700.0;
+/// A factory tune keeps the turbine inlet this far under what the turbine takes (K),
+/// going richer where it would be hotter: a hot charge and heat soak on the road add to
+/// what the dyno saw.
+const TURBINE_MARGIN: f32 = 40.0;
+/// Richest a factory tune goes to cool the exhaust.
+const RICHEST: f32 = 0.68;
 const OVERRUN_RESUME: f32 = 400.0;
 /// The cams switch back to the first profile this far below the switch-over (rpm, Pa).
 const CAM_HYSTERESIS_RPM: f32 = 200.0;
@@ -145,7 +152,8 @@ impl Ecu {
     /// A factory tune of a `model` ECU for the hardware: its VE table matches the engine,
     /// it runs λ = 1 at part load and richer towards full load, and the spark just short
     /// of MBT or of the knock limit on `octane` fuel, whichever comes first. With a turbo,
-    /// the maps reach 300 kPa and go richer still on boost. With cam control, it switches
+    /// the maps reach 300 kPa and go richer still on boost, and richer again where the
+    /// turbine inlet would come near its limit (`TURBINE_MARGIN`). With cam control, it switches
     /// cams where the second profile breathes better, and phases the cams for the most air
     /// under load (at rest at light load).
     pub fn calibrated(
@@ -217,12 +225,26 @@ impl Ecu {
             let knock = maps.knock_limit(rpm, load) + shift;
             maps.mbt(rpm, load).min(knock) - 2.0
         });
+        let lambda = Table::bake(axes(), |p| {
+            let (rpm, map) = (p[0], p[1]);
+            let lambda = lambda(map);
+            if hardware.turbo.is_none() {
+                return lambda;
+            }
+            let load = load(ve.get(p), map);
+            let offset = spark.get(p) - maps.mbt(rpm, load);
+            let hot = maps.exhaust_temperature(rpm, load)
+                + maps::exhaust_temperature_shift(offset, lambda);
+            // Each hundredth richer takes 4 K off.
+            let over = hot - (TURBINE_LIMIT - TURBINE_MARGIN);
+            (lambda - over.max(0.0) / 400.0).max(RICHEST)
+        });
         Self {
             model,
             cams,
             displacement: hardware.displacement(),
             cylinders: hardware.cylinders,
-            lambda: Table::bake(axes(), |p| lambda(p[1])),
+            lambda,
             ve,
             spark,
             // Wild cams (on the profile it idles on) run too roughly for a low idle.

@@ -34,7 +34,7 @@ const GASKET_WEAR: f32 = 0.02;
 /// second per kelvin over it.
 const TURBO_BURST: f32 = 0.12;
 const TURBO_OVERSPEED_WEAR: f32 = 1.0;
-const TURBINE_LIMIT: f32 = 1423.0;
+pub const TURBINE_LIMIT: f32 = 1423.0;
 const TURBINE_WEAR: f32 = 5e-4;
 /// Efficiency lost with the pistons and rings worn out (blow-by), and with the head
 /// gasket blown (leaking compression).

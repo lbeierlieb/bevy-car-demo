@@ -1015,7 +1015,9 @@ phasing, VTEC-style cam switching).
   full lift, moving mass, lift and duration (`ValveTrain::float_rpm`); floating loses VE.
   The factory tune is knock-limited at boost and stays safe; greedy spark on race fuel
   with big boost breaks stock rods. The parts shops show the condition and repair
-  it. Exhaust temperatures run hot (no losses before the turbine),
+  it. Factory tunes richen where the turbine inlet would come within `TURBINE_MARGIN` (40 K)
+  of its limit (the X25T sat right on it and lost its turbo in ~10 min of hard driving;
+  2026-11-22). Exhaust temperatures run hot (no losses before the turbine),
   hence the high turbine limit.
 - ECUs are switchable (agreed with the user): `EcuModel` (Stock, Programmable) is chosen
   in the garage like a part; the stock one stays. One `Ecu` struct for all models, the
