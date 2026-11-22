@@ -247,8 +247,10 @@ from the street Reckenneusig, about (−100, 2340)):
   the hunted, sets the options and starts (at least one hunter). No late joining.
 - Options (the hunted's): head start (10 s), time until the hunted wins (10 min),
   traffic (on), hunters' reset ("not at all", "to the nearest road" (default), "to the
-  start"), cars ("player cars" (default) or "muscle vs rally": hunters get the Harrow
-  muscle car, the hunted the Skarn rally car; players get their own car back afterwards).
+  start"; the hunted can never reset), cars ("player cars" (default) or "muscle vs
+  rally": hunters get the Harrow muscle car with the 5.0 V8 (M50, its base engine), the
+  hunted the Skarn rally car, factory builds, full and on fresh tires; a lent car leaves
+  no trace, players get their own car back afterwards as it was).
 - Everyone starts near the marker; hunters are held for the head start. Name tags on and
   everyone in the round on the map, whatever the server's settings.
 - Hunters win when the hunted's car is under 10 km/h for 10 s, anywhere (after the head
