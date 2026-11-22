@@ -8,7 +8,7 @@
 //! marker (so other players see it there, a ghost): what the runs do to the engine and
 //! the fuel goes back to the driven car when it leaves the room.
 
-pub mod engine;
+mod chart;
 mod rollers;
 
 use bevy::input::mouse::AccumulatedMouseMotion;
@@ -18,12 +18,17 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::audio::EngineAudio;
 use crate::camera::ChaseCamera;
-use crate::car::{ActiveCar, Away, Car};
+use crate::car::{ActiveCar, Away, Car, CarSetup};
 use crate::ecu_ui::{self, EcuPanel};
 use crate::looks::{Looks, Motion};
+use crate::physics::engine::EngineBuild;
+use crate::physics::engine::hardware::EngineHardware;
+use crate::physics::engine::maps::{self, EngineMaps};
+use crate::physics::engine::parts::Parts;
 use crate::shops::{AtShop, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
-use engine::{Axis, HORSEPOWER, Line, chart};
+use crate::workshop::{self, Work};
+use chart::{Axis, HORSEPOWER, Line, chart};
 use rollers::{Hold, Rollers, STEP, Sample, Stage};
 
 /// A run needs this much fuel in the tank (L).
@@ -65,7 +70,7 @@ impl Plugin for DynoPlugin {
             .add_systems(
                 Update,
                 (
-                    run,
+                    (run, bake),
                     (animate, look.after(crate::camera::follow)),
                     leave_when_gone,
                 )
@@ -143,6 +148,11 @@ struct DynoView {
     runs: Vec<DynoRun>,
     shown: Option<usize>,
     compared: Option<usize>,
+    /// The cam timing and wastegate being set (the parts they go into), and the maps
+    /// baking for them (with the parts and hardware), and what applying did.
+    draft: Option<Parts>,
+    work: Option<(Parts, EngineHardware, Work)>,
+    status: String,
     /// What a hold is set to.
     hold: Hold,
     /// The window's tab, and the ECU tuning's state.
@@ -158,6 +168,7 @@ enum Tab {
     #[default]
     Runs,
     Ecu,
+    Cams,
 }
 
 impl DynoView {
@@ -267,12 +278,21 @@ fn leave(
     view.rollers = None;
     if let Some(copy) = view.car.take()
         && let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0)
-        && car.setup.engine.parts == copy.setup.engine.parts
     {
-        car.setup.engine.build.ecu = copy.setup.engine.build.ecu.clone();
+        // The car as the room left it (the tune, cam timing, wastegate), as it ran.
+        if car.setup.engine.parts != copy.setup.engine.parts {
+            let rebuilt = car.rebuilt(copy.setup.clone());
+            *car = rebuilt;
+        } else {
+            car.setup.engine.build.ecu = copy.setup.engine.build.ecu.clone();
+        }
         car.drivetrain.engine = copy.drivetrain.engine;
         car.fuel = copy.fuel;
     }
+    if let Some((.., work)) = view.work.take() {
+        work.cancel();
+    }
+    view.draft = None;
     away.0 = false;
     audio.hushed = false;
 }
@@ -791,6 +811,7 @@ fn results(
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut view.tab, Tab::Runs, "Runs");
                 ui.selectable_value(&mut view.tab, Tab::Ecu, "ECU tune");
+                ui.selectable_value(&mut view.tab, Tab::Cams, "Cams and boost");
             });
             ui.separator();
             egui::ScrollArea::vertical()
@@ -810,6 +831,10 @@ fn results(
                         if let Some(car) = &mut view.car {
                             ecu_ui::tuning(ui, &mut view.ecu, car);
                         }
+                    }
+                    Tab::Cams => {
+                        ui.set_width(620.0);
+                        cams(ui, view);
                     }
                 });
             ui.separator();
@@ -1073,4 +1098,122 @@ fn run_list(ui: &mut egui::Ui, view: &mut DynoView) {
     };
     view.shown = shift(view.shown).or(view.runs.len().checked_sub(1));
     view.compared = shift(view.compared).filter(|&k| Some(k) != view.shown);
+}
+
+/// The cam gears' timing and the wastegate's spring of the car on the rollers, applied
+/// when asked: right away if the engine's maps are at hand, else once they're baked (a
+/// cam's timing changes how the cylinders breathe), with the old engine running meanwhile.
+/// The tune stays (it's what's to be retuned); the engine keeps its wear.
+fn cams(ui: &mut egui::Ui, view: &mut DynoView) {
+    let running = view.running();
+    let Some(car) = &view.car else {
+        return;
+    };
+    let fitted = &car.setup.engine.parts;
+    let draft = view.draft.get_or_insert_with(|| fitted.clone());
+    egui::Grid::new("cams").num_columns(2).show(ui, |ui| {
+        ui.label("Cam timing").on_hover_text(
+            "Adjustable cam gears: advancing the intake cam fills better low down, retarding \
+             it breathes better high up",
+        );
+        ui.vertical(|ui| {
+            ui.add(degrees(&mut draft.intake_timing, "intake advance"));
+            ui.add(degrees(&mut draft.exhaust_timing, "exhaust retard"));
+        });
+        ui.end_row();
+        ui.label("Wastegate")
+            .on_hover_text("The boost where the wastegate starts to open");
+        ui.add_enabled(
+            draft.has_turbo(),
+            egui::Slider::new(&mut draft.boost, 0.3..=1.5)
+                .step_by(0.05)
+                .suffix(" bar"),
+        );
+        ui.end_row();
+    });
+    let changed = draft != fitted;
+    let busy = view.work.is_some() || running;
+    let mut apply = false;
+    ui.horizontal(|ui| {
+        apply = ui
+            .add_enabled(changed && !busy, egui::Button::new("Apply"))
+            .on_hover_text("The tune stays as it is: retune it for the new timing")
+            .clicked();
+        if ui
+            .add_enabled(changed && !busy, egui::Button::new("Revert"))
+            .clicked()
+        {
+            *draft = fitted.clone();
+        }
+        if let Some((.., work)) = &view.work {
+            ui.add(egui::ProgressBar::new(work.progress()).text("Baking the engine's maps"));
+        } else if running {
+            ui.label(RichText::new("Not while the dyno runs").weak());
+        } else {
+            ui.label(&view.status);
+        }
+    });
+    if !apply {
+        return;
+    }
+    let parts = draft.clone();
+    let hardware = parts.hardware();
+    let current = &car.setup.engine.build;
+    let at_hand = if maps::fingerprint(&hardware) == maps::fingerprint(&current.hardware) {
+        Some(current.maps.clone())
+    } else {
+        workshop::at_hand(&hardware)
+    };
+    match at_hand {
+        Some(maps) => fit(view, parts, hardware, maps),
+        None => {
+            view.status.clear();
+            view.work = Some((parts, hardware.clone(), Work::start(&hardware)));
+        }
+    }
+}
+
+/// A slider for a cam's timing (crank degrees).
+fn degrees<'a>(value: &'a mut f32, text: &str) -> egui::Slider<'a> {
+    egui::Slider::new(value, -10.0..=10.0)
+        .step_by(1.0)
+        .suffix("°")
+        .text(text)
+}
+
+/// Moves the baking on, and fits the engine once its maps are done.
+fn bake(mut view: ResMut<DynoView>) {
+    let Some((.., work)) = &mut view.work else {
+        return;
+    };
+    let Some(baked) = work.poll() else {
+        return;
+    };
+    let (parts, hardware, _) = view.work.take().expect("a job");
+    match baked {
+        Some(maps) => {
+            workshop::keep(&hardware, &maps);
+            fit(&mut view, parts, hardware, maps);
+        }
+        None => view.status = "Baking the maps failed.".to_string(),
+    }
+}
+
+/// The car on the rollers with its engine built from `parts`, keeping its tune and wear.
+fn fit(view: &mut DynoView, parts: Parts, hardware: EngineHardware, maps: EngineMaps) {
+    let Some(car) = &mut view.car else {
+        return;
+    };
+    let old = &car.setup.engine.build;
+    let engine = EngineBuild {
+        hardware,
+        maps,
+        ecu: old.ecu.clone(),
+        octane: old.octane,
+    };
+    let damage = car.drivetrain.engine.damage;
+    let setup = CarSetup::new(car.setup.build.clone(), parts, engine);
+    *car = car.rebuilt(setup);
+    car.drivetrain.engine.damage = damage;
+    view.status = "Fitted.".to_string();
 }

@@ -21,7 +21,7 @@ The game is a library (`src/lib.rs`) and apps, each the list of plugins it adds:
 **sandbox** (`src/main.rs`: the shared `CorePlugin` (`WorldPlugin` (terrain, obstacles,
 simulation, traffic: all the server has too), scenery, input, driving, visuals, camera,
 HUD, map, sound, egui), help (controls screen, hints), stock coupé, R reset,
-gizmos, 2 panel, 3–6 tools, F11 fullscreen in all apps). The career was removed for the multiplayer work (see
+gizmos, 2 panel, shops (online), F11 fullscreen in all apps). The career was removed for the multiplayer work (see
 "Multiplayer"). Keep it that way: no mode flags; something only one app has is a plugin
 of its own (e.g. `car::ResetPlugin`, `ui::PanelPlugin`), and
 shared pieces are public functions (e.g. `workshop`, `garage::start`). An app,
@@ -29,7 +29,8 @@ the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars)
 `editor::EditorPlugin` adds the terrain, scenery, sky and map plugins itself.
 
 - Window keys are on the number row (moved from F1–F6 at the user's wish, 2026-11-19):
-  1 gizmos, 2 panel/settings, 3–6 tool windows. The F keys belong to the browser on the web
+  1 gizmos, 2 panel/settings (3–6 were tool windows until the shops, 2026-11-22). The F
+  keys belong to the browser on the web
   (`web/index.html` keeps them from winit's canvas listeners); natively F11 toggles
   fullscreen (`FullscreenPlugin` in `default_plugins`). The editor keeps F5 (bake).
 - Input while typing (agreed with the user, 2026-11-21: generic, no per-key checks):
@@ -104,14 +105,15 @@ saves a screenshot (`BIN=editor` for the editor); `tools/dev/strip.sh` removes t
 Always run `strip.sh` and check that `grep -c shot src/lib.rs src/main.rs
 src/bin/*.rs` prints 0 for each before committing. Keys are pressed from a third of
 the frames until the shot (`m` opens the map, `0` mutes, `2` shows the panel (hidden by default
-since 2026-11-20; older notes here used `2` to hide it), `3` the ECU window,
-`4` the garage, `5` the dyno, `6` the showroom, `f` shows the gizmos (off by default), `c` the driver's view, `b` looks back; keys stay held through the shot's frame),
+since 2026-11-20; older notes here used `2` to hide it), `f` shows the gizmos (off by default), `c` the driver's view, `b` looks back; keys stay held through the shot's frame),
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
-The tool windows (3–6) only show joined to a server (`JOIN=127.0.0.1`, see below).
-The keys `3`–`6` didn't expand the tool windows in screenshots (as F3–F6) (seen 2026-11-17, also on
-the code before the app split): click their title bars instead. (2026-11-18: neither
-`CLICK` nor `UICLICK` on the "Garage (F4)" bar (now "Garage (4)") at (1190, 57) or its arrow expanded it.)
-`PLACE="x,z,frame"`The editor (`BIN=editor`, hooked by `EditorShotPlugin`): `EDITCAM="x,z,height,yaw,pitch"`
+Shops need a server (`JOIN=127.0.0.1`, see below) and `PLACE` at the building's point
+(the car lands on the marker and goes in): gas `-2603,-1736`, car dealer
+`-1476,-1213`, alignment `-1480,-1305`, paint `3500,-63`, parts `-1950,-3160`, dyno
+`-2601,-3784` (then `CLICK="527,138,180"` is "Onto the rollers"; in the room the
+window's tabs are at y 62: Runs 659, ECU tune 715, Cams and boost 810; "Hold" (659, 179)
+on the Runs tab; a hold needs ~200 frames more to settle).
+The editor (`BIN=editor`, hooked by `EditorShotPlugin`): `EDITCAM="x,z,height,yaw,pitch"`
 (degrees, the first 20 frames), `CLICK="x,y,frame[,x2,y2]"` sets the window's cursor and
 holds the left button (a drag with x2, y2), `UICLICK` is the window-event click for
 egui (the map, buttons), `EDITKEYS="Digit2@25;ControlLeft+KeyS@60"` taps keys. A view
@@ -124,10 +126,8 @@ Two players: start the server (`target/sandbox/release-dev/server`, throwaway
 certificate, in the background with `nohup`), then two shots with `CAR_SIM_INSECURE=1`
 and their own config dirs, the second started a few seconds after the first, more
 frames for the first (they take turns building). Don't `pkill -f` anything matching
-your own command line (it kills the shell); `pgrep -x server`, then `kill`. The tool windows (3–6) are always there,
-collapsed to title bars stacked in the top right (`ui::tool_window`, agreed with the user
-so they can be found); their keys (or a click) expand them, and the bars hide with the
-panel (`2`). `CLICK="x,y,frame;x,y,frame…"` clicks into the
+your own command line (it kills the shell); `pgrep -x server`, then `kill`.
+`CLICK="x,y,frame;x,y,frame…"` clicks into the
 1280×720 window, e.g. on the map. `CAM`/`CAMAT` env vars place the camera (see
 `shot.rs`). `shot.sh` fetches Mesa and Xvfb from the pinned nixpkgs on first use.
 A shot takes about 35 s.
@@ -207,17 +207,16 @@ order (✓ done):
    (from the garage), toe and brake torque/balance (from the panel; into `CarBuild`).
 7. ✓ **Paint shop**: the existing paints only (swatches; gone from the garage). 8. ✓ **Showroom**: the showroom window
    (`shops::shop_window` draws a shop's window for other modules, saying when the car came in).
-9. ✓ **Parts shop**: the garage window without alignment, cam timing and wastegate (those
-   still there until the dyno is);
-   repairs; new tires. 10. **Dyno** (✓ the scene: `dyno/mod.rs`, `dyno/rollers.rs`; a copy of the car runs in
-   the room 200 m under the marker, the driven car stays parked there (`car::Away` holds
-   its input, `EngineAudio::hushed`), engine wear, fuel and tune go back on leaving; runs
-   kept for the session only; ✓ the ECU tuning as a tab of its window, key 3 gone; ✓ hold: the rollers motored to
-   the speed for an rpm in fourth (`HOLD_RATE`), throttle set, power = what the wheels push
-   with): the career's chassis dyno scene back (`career/dyno.rs`,
-   `rollers.rs` at c34bfbf), with the ECU window, cam timing and wastegate, and a hold
-   mode (rollers held at an rpm, throttle set) for tuning cells; others see the car
-   parked on the marker; the engine dyno window (5) goes. 11. Clean-up: the panel loses
+9. ✓ **Parts shop**: the garage window without alignment, cam timing and wastegate;
+   repairs; new tires. 10. ✓ **Dyno** (`dyno/`): the career's chassis dyno room back
+   (`mod.rs`, `rollers.rs`, `chart.rs`). A copy of the car runs in the room 200 m under
+   the marker; the driven car stays parked there, a ghost (`car::Away` holds its input and
+   R, `EngineAudio::hushed`); the engine (tune, cam timing, wastegate, wear) and the fuel
+   go back to it on leaving. The window (up all the time) has tabs: Runs (kept for the
+   session only), ECU tune (`ecu_ui::tuning`), Cams and boost (applied to the copy,
+   baking maps if needed, tune and wear kept). Hold: up through the gears, then the
+   rollers are motored to the speed for an rpm in fourth (`HOLD_RATE`) at a set throttle,
+   power = what the wheels push with. The engine dyno window (5) is gone. 11. Clean-up: the panel loses
    springs, dampers, upper pivot and tire μ (they follow from the parts); **R only puts
    the car back on the road** (no refuelling, repair or tires, no hint about it); tool
    windows and keys 3–6 go; help, README.
@@ -228,9 +227,8 @@ A multiplayer sandbox first; the career comes back later, built on it. Native an
 native offers **"Play alone"** and **"Join server"** (a start menu, chosen at runtime);
 the web only asks for the name and joins the server the page came from (no playing
 alone, no address field; agreed with the user, 2026-11-21). Alone is just driving the
-default car with traffic (panel 2, gizmos, R, M kept); the tool windows (3–6) are only
-there while joined (`ui::tool_window` checks the `Connection`, the one runtime switch
-of that kind), until they become shops on the map (see "Shops").
+default car with traffic (panel 2, gizmos, R, M kept); changing the car is only at the
+shops a server puts on the map (see "Shops").
 No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headless:
 `MinimalPlugins` and the world core) runs on the user's VPS.
 
@@ -759,16 +757,17 @@ phasing, VTEC-style cam switching).
   between the NA and turbo builds (about 310 N·m on 0.7 bar) and sets the octane.
   No exhaust thermal mass yet: the exhaust temperature is that of the gas leaving the
   cylinders, and it drives the turbine directly.
-- ECU tuning window (3, `src/ecu_ui.rs`): VE, target λ and spark grids with the
+- ECU tuning (`src/ecu_ui.rs`, a tab in the dyno's room): VE, target λ and spark grids with the
   operating point, block selection and +/-/set, "Correct VE here" (scales the cells
   around the operating point by measured/target λ), rev limiter, idle, factory tune.
   Tunes are saved by name as text (`src/tunes.rs`: `~/.config/car-sim/tunes/*.tune`,
   local storage on the web) with the build they were made for; loading reads over the
   engine's factory tune and warns if the build differs. Swapping the engine build in
   the setup panel replaces the tune with the new build's factory tune.
-- Garage (4, `src/garage.rs`): parts from a catalogue (`parts.rs`: a slot per kind of
+- Garage (parts shops, `src/garage.rs`): parts from a catalogue (`parts.rs`: a slot per kind of
   part, each part a function fitting it onto the engine's hardware, relative to it; a
-  factory version is a block and a selection), cam-gear timing and wastegate spring. The car's `EngineSetup.parts` says
+  factory version is a block and a selection); cam-gear timing and wastegate spring are
+  set in the dyno's room (`dyno::cams`). The car's `EngineSetup.parts` says
   what it's built from. Building bakes the maps if the fingerprint changed (native: a
   thread; wasm: 12 ms slices per frame), with the old engine running meanwhile, and caches
   them (`storage.rs` folders: `~/.cache/car-sim/engines/<fingerprint>.maps`, local storage
@@ -776,12 +775,9 @@ phasing, VTEC-style cam switching).
   factory tune unless unticked. The redline follows from the hardware (`safe_rpm`: 95 %
   of the valve float speed, rods' pull under 70 % of their strength); the factory tune's
   rev limit (first cam profile's with the stock ECU) and the rev counter follow it.
-- Engine dyno (5, `src/dyno.rs`): a copy of the active car's engine (as built, tuned
-  and worn; a run doesn't wear the car's) held at rpm by the brake, full throttle,
-  settling 3 s at 1000 rpm, then swept at a set rate (100–1000 rpm/s, slow lets a turbo
-  spool) to 50 rpm below the rev limit, sampling crank torque every 100 rpm (1 s
-  simulated per frame). Plots N·m (solid) and hp (dashed); keeps the last 4 runs. The
-  curves are piecewise linear between the maps' 500 rpm grid points.
+- Chassis dyno (dyno shops, `src/dyno/`; it replaced the engine dyno window (5),
+  removed 2026-11-22, in git history before that): see "Shops". The curves are
+  piecewise linear between the maps' 500 rpm grid points.
 - Damage (`damage.rs`, agreed: interference engine, engine and turbo only for now):
   wear 0..1 per part. Per cylinder (with a fixed spread so they fail one by one):
   pistons (knock, divided by `piston_toughness`; holed = dead cylinder), valves (float

@@ -13,7 +13,7 @@
 
 use std::f32::consts::TAU;
 
-use super::engine::HORSEPOWER;
+use super::chart::HORSEPOWER;
 use crate::car::Car;
 use crate::physics::drivetrain::Drive;
 

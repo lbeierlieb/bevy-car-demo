@@ -1,18 +1,16 @@
-//! The windows' common ground (egui, keeping its input from the game, the tool windows),
-//! and the sandbox's panel (2): telemetry and live setup tuning for the active car. The
+//! The windows' common ground (egui, keeping its input from the game), and the sandbox's
+//! panel (2): telemetry and live setup tuning for the active car. The
 //! panel's wheel settings are public for other apps' windows.
 
 use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
-use bevy_egui::egui::collapsing_header::CollapsingState;
 use bevy_egui::input::EguiWantsInput;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPreUpdateSet, EguiPrimaryContextPass, egui};
 
 use crate::car::{ActiveCar, Car, DriverAids};
 use crate::debug::DebugView;
 use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_value, input_name};
-use crate::net::{Connection, Status};
 use crate::physics::engine::AMBIENT_PRESSURE;
 use crate::physics::fuel;
 use crate::physics::suspension::AxleSetup;
@@ -78,85 +76,6 @@ impl Plugin for PanelPlugin {
             panel.run_if(|view: Res<DebugView>| view.ui),
         );
     }
-}
-
-/// How far the stack of collapsed tool windows is from the top right corner, and how far
-/// apart their title bars are.
-const TOOL_MARGIN: f32 = 10.0;
-const TOOL_SPACING: f32 = 30.0;
-
-/// What a tool window needs to know: its key, whether the car's panel is shown, and
-/// whether we're on a server.
-#[derive(SystemParam)]
-pub struct ToolInput<'w> {
-    keys: Res<'w, ButtonInput<KeyCode>>,
-    view: Res<'w, DebugView>,
-    connection: Option<Res<'w, Connection>>,
-}
-
-/// How `key` is written in a window title or help text: "3" for the digit 3.
-pub fn key_name(key: KeyCode) -> String {
-    let name = format!("{key:?}");
-    match name.strip_prefix("Digit").or(name.strip_prefix("Key")) {
-        Some(short) => short.to_string(),
-        None => name,
-    }
-}
-
-/// A tool window (keys 3 to 6): always there, but collapsed to its title bar until its key
-/// or a click on the bar expands it, so it can be found without knowing the key.
-/// Collapsed, it hides with the car's panel (2). The bars stack up in the top right
-/// corner (expanded, a window grows to the left and down), `slot` is the place in the
-/// stack. `expanded` keeps whether it was expanded last frame. Gives the window to
-/// show and whether it was just expanded, or nothing while it's hidden.
-///
-/// Only on a server: playing alone is just driving (the tools are to become places on the
-/// map to drive to).
-pub fn tool_window(
-    ctx: &egui::Context,
-    (name, key): (&str, KeyCode),
-    slot: usize,
-    input: &ToolInput,
-    expanded: &mut bool,
-) -> Option<(egui::Window<'static>, bool)> {
-    let joined =
-        (input.connection.as_ref()).is_some_and(|c| matches!(c.status, Status::Joined { .. }));
-    if !joined {
-        *expanded = false;
-        return None;
-    }
-    let id = egui::Id::new(name);
-    let mut state = CollapsingState::load_with_default_open(ctx, id.with("collapsing"), false);
-    if input.keys.just_pressed(key) {
-        state.set_open(!state.is_open());
-        state.store(ctx);
-    }
-    let opened = state.is_open() && !*expanded;
-    *expanded = state.is_open();
-    if opened {
-        // Over the other windows and the bars below it.
-        ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, id));
-    }
-    if !*expanded && !input.view.ui {
-        return None;
-    }
-    let window = egui::Window::new(format!("{name}  ({})", key_name(key)))
-        .id(id)
-        .default_open(false)
-        .pivot(egui::Align2::RIGHT_TOP)
-        .default_pos(
-            ctx.content_rect().right_top()
-                + egui::vec2(-TOOL_MARGIN, TOOL_MARGIN + slot as f32 * TOOL_SPACING),
-        );
-    Some((window, opened))
-}
-
-/// Collapses the tool window `name` to its title bar.
-pub fn collapse_tool(ctx: &egui::Context, name: &str) {
-    let id = egui::Id::new(name).with("collapsing");
-    let mut state = CollapsingState::load_with_default_open(ctx, id, false);
-    state.set_open(false);
-    state.store(ctx);
 }
 
 /// Everything the wheel section of the panel shows and changes.
@@ -520,7 +439,7 @@ fn engine_setup(ui: &mut egui::Ui, car: &mut Car) {
     ui.strong("Engine");
     let engine = &mut car.setup.engine;
     ui.label(format!(
-        "{}, {} (4: garage)",
+        "{}, {} (parts shops change it)",
         engine.build.hardware.name,
         engine.drive.name()
     ));

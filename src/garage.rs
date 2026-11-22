@@ -632,23 +632,6 @@ fn parts(ui: &mut egui::Ui, garage: &mut Garage) {
                 ui.end_row();
             }
         }
-        ui.label("Cam timing")
-            .on_hover_text("Adjustable cam gears: advancing the intake cam fills better low down");
-        ui.vertical(|ui| {
-            ui.add(degrees(&mut draft.intake_timing, "intake advance"));
-            ui.add(degrees(&mut draft.exhaust_timing, "exhaust retard"));
-        });
-        ui.end_row();
-        ui.label("Wastegate")
-            .on_hover_text("The boost where the wastegate starts to open");
-        let turbo = draft.has_turbo();
-        ui.add_enabled(
-            turbo,
-            egui::Slider::new(&mut draft.boost, 0.3..=1.5)
-                .step_by(0.05)
-                .suffix(" bar"),
-        );
-        ui.end_row();
         ui.label("ECU").on_hover_text(
             "Stock: fuel, spark, rev limiter and idle. Programmable: also switches cams and \
              drives the cam phasers",
@@ -663,14 +646,6 @@ fn parts(ui: &mut egui::Ui, garage: &mut Garage) {
             });
         ui.end_row();
     });
-}
-
-/// A slider for a cam's timing (crank degrees).
-fn degrees<'a>(value: &'a mut f32, text: &str) -> egui::Slider<'a> {
-    egui::Slider::new(value, -10.0..=10.0)
-        .step_by(1.0)
-        .suffix("°")
-        .text(text)
 }
 
 /// What the parts make, and the button to build it: true when it was clicked.

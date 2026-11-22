@@ -22,11 +22,10 @@ fn main() {
             // at first).
             debug::DebugPlugin,
             ui::PanelPlugin,
-            // The engine dyno (5); the garage, the showroom, the chassis dyno and the ECU
-            // tuning (in it) are at shops.
+            // The garage, the showroom, the chassis dyno and the ECU tuning (in it) are
+            // at shops.
             garage::GaragePlugin,
             dyno::DynoPlugin,
-            dyno::engine::EngineDynoPlugin,
         ))
         .run();
 }
