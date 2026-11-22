@@ -32,8 +32,8 @@ A small Bevy demo of car simulation techniques:
 - **Thirteen cars, twelve engine families**: from a city car to a supercar, a
   pickup and a van, each a chassis with a procedurally built low-poly body. Engines
   (a 1.0 three to a 6.5 V12, 22 factory versions) are independent of the cars: the
-  showroom (6) has every car with the engines its factory offers, and the garage
-  (4) fits any engine the engine bay has room for, along with gearboxes, clutches,
+  car dealers (on a server) have every car with the engines its factory offers, and
+  parts shops fit any engine the engine bay has room for, along with gearboxes, clutches,
   final drives, differentials, suspension, tires and the engine's own parts. Weight
   and balance follow from what's fitted where.
 - **Synthesised engine sound** that follows the cylinder layout: each firing sends a
@@ -95,22 +95,33 @@ pull request.
 The game starts with a menu: **Play alone**, or **Join server** with your name and the
 server's address (`host`, `host:port` or `https://host:port`; the port is 4433 unless
 said otherwise). The web version only asks for your name and joins the server the page
-came from. Alone, you just drive around the map with traffic; the ECU, garage, dyno and
-showroom windows (3–6) are only there on a server. On a server each player drives their own car as alone (physics and
+came from. Alone, you just drive around the map with traffic. On a server each player
+drives their own car as alone (physics and
 force feedback stay on your machine) and sees the others near them (within 600 m), with
-their names over the cars; the list of players (top left) has **Leave the server**. A
-server is a program of its own, run headless:
+their names over the cars; the list of players (top left) has **Leave the server**.
+
+The server puts **shops** on the map (M shows them): stop on a marker to go in. Gas
+stations sell 95, 98 and 102 octane (grades mix by volume in the tank, and the engine's
+knock limit follows); alignment shops set camber, toe, tire pressures and the brakes;
+paint shops repaint the car; car dealers sell every car; parts shops fit engines and
+parts, repair the engine and fit new tires; and dyno shops put the car on a chassis dyno
+in a room under the shop, for power runs, holding it at an rpm and throttle, ECU tuning,
+cam timing and the wastegate. A car at a shop is a ghost: other cars drive through it.
+
+A server is a program of its own, run headless:
 
 ```sh
 cargo run --bin server -- --cert fullchain.pem --key key.pem   # options: --port, --traffic, --max-players,
-                                                               # --map-players, --map-near, --chat, --name-tags,
+                                                               # --map-players, --map-near, --chat, --name-tags, --shops,
                                                                # --telegram-token-file with --telegram-chat-file
 ```
 
 Who a player sees of the others on their map (M) is the server's choice:
 `--map-players self` (nobody), `near` (within `--map-near` metres, 200 by default; the
 default) or `all` (everyone, wherever they are). `--chat off` switches the chat off,
-`--name-tags off` the names over the players' cars.
+`--name-tags off` the names over the players' cars. `--shops shops.cfg` says where the
+shops are (lines of kind, x, z and name; `assets/shops.cfg`, the list it has otherwise,
+explains them).
 
 It needs a real certificate for browsers to join (WebTransport). Without `--cert` and
 `--key` it makes a throwaway one, which only the native game joins, with
@@ -142,6 +153,8 @@ joins this server):
             # port = 4433; traffic = 20; maxPlayers = 32;
             # mapPlayers = "near"; mapNear = 200;  # others on the map: "self", "near" or "all"
             # chat = true; nameTags = true;
+            # Shops of its own (null: the built-in list, assets/shops.cfg):
+            # shops = [ { kind = "dyno"; x = -2601; z = -3784; name = "Rollwerk Dyno"; } ];
             # A Telegram bot says who joins and leaves (the token file e.g. from sops-nix):
             # telegram = {
             #   tokenFile = config.sops.secrets.car-sim-telegram-token.path;
@@ -168,7 +181,7 @@ also has the packages alone: `nix build .#server` and `nix build .#web`.
 ## Controls (sandbox)
 
 The game starts with a screen listing the controls (a click or Esc closes it, H brings
-it back); the panel and the tool windows are hidden until their keys open them. When
+it back); the panel is hidden until its key opens it. When
 the car won't do what you seem to want, a hint over the road says why and what to
 press: giving gas with the parking brake on or in neutral, asking for reverse while
 rolling, bouncing off the rev limiter below top gear, a stalled or wrecked engine, an
@@ -181,11 +194,9 @@ empty tank, or a few seconds of gas without moving (stuck: R).
 | I | Start the engine after a stall (only with a clutch pedal) |
 | A / D | Steer |
 | Space | Parking brake on/off (cars start with it on) |
-| R | Put the car on the nearest road (in its lane), as new: repaired, refuelled, fresh tires |
+| R | Put the car on the nearest road (in its lane), as it is (fuel, tires and wear stay) |
 | H | The controls screen |
 | 1 / 2 | Toggle gizmos / telemetry and settings panel |
-| 3 / 4 / 5 | ECU tuning / garage (rebuild the car) / engine dyno |
-| 6 | Showroom: pick a car |
 | F11 | Fullscreen (the browser's on the web; all F keys go to the browser there) |
 | 0 | Mute engine sound |
 | T | Chat, on a server that has it on (Enter sends, Esc cancels) |
@@ -269,7 +280,9 @@ tire grip force, cyan for roll centres.
 | `src/net/`, `src/online.rs`, `src/bin/server.rs` | Multiplayer: protocol, server, client, WebTransport; the start menu; the server app |
 | `src/editor/`, `src/bin/editor.rs` | The map editor |
 | `src/osm.rs` | The map file's reader and writer (shared with the bake) |
-| `src/garage.rs` | Sandbox showroom and garage |
+| `src/shops.rs` | Shops on the map (from the server): going in, gas station, alignment, paint |
+| `src/garage.rs` | The car dealers' showroom and the parts shops |
+| `src/dyno/`, `src/ecu_ui.rs` | The dyno shops' room: rollers, runs, holds, ECU tuning, cam timing |
 | `src/workshop.rs` | Baking engine maps in the background, and their cache |
 | `src/sim.rs` | Multi-rate loop, controls to wheel torques, driving tests |
 | `src/car.rs` | A car's setup from what it's built of, spawning, keyboard and wheel to controls |

@@ -332,9 +332,8 @@ pub struct Car {
     /// wheel right now.
     pub abs: bool,
     pub abs_pressure: [f32; 4],
-    /// The fuel in the tank, and the share of the tank the driver fills it to (on a reset).
+    /// The fuel in the tank.
     pub fuel: Fuel,
-    pub fill: f32,
     /// How hard the body has hit houses, trees and other cars since this was last taken:
     /// the speed the knocks changed (m/s), added up.
     pub knocks: f32,
@@ -380,7 +379,6 @@ impl Car {
             abs: true,
             abs_pressure: [1.0; 4],
             fuel,
-            fill: 1.0,
             knocks: 0.0,
             parking_brake: true,
         }
@@ -401,10 +399,9 @@ impl Car {
         self
     }
 
-    /// Fills the tank to `fill` (a share of it) now and at every reset.
+    /// Fills (or drains) the tank to `fill` (a share of it).
     pub fn refuel(&mut self, fill: f32) {
-        self.fill = fill.clamp(0.0, 1.0);
-        self.fuel = Fuel::new(self.fill * self.setup.tank.litres);
+        self.fuel = Fuel::new(fill.clamp(0.0, 1.0) * self.setup.tank.litres);
         self.load_fuel();
     }
 
@@ -418,12 +415,18 @@ impl Car {
         self.place(terrain, p, yaw);
     }
 
-    /// Puts the car at rest at (x, z) in the xz plane, facing along `yaw`, keeping its
-    /// setup and the driver's settings.
+    /// Puts the car at rest at (x, z) in the xz plane, facing along `yaw`, as it was: its
+    /// setup, fuel, tires and engine wear, and the driver's settings.
     pub fn place(&mut self, terrain: &Terrain, p: Vec2, yaw: f32) {
         let mut placed = Self::spawn_at(self.index, self.setup.clone(), terrain, p.x, p.y, yaw);
         placed.keep_settings(self);
-        placed.refuel(self.fill);
+        placed.fuel = self.fuel;
+        placed.load_fuel();
+        placed.drivetrain.engine.damage = self.drivetrain.engine.damage;
+        placed.drivetrain.engine.thermal = self.drivetrain.engine.thermal;
+        for (corner, old) in placed.corners.iter_mut().zip(&self.corners) {
+            corner.tread = old.tread;
+        }
         *self = placed;
     }
 
@@ -453,7 +456,6 @@ impl Car {
                 corner.tread = old.tread;
             }
         }
-        car.fill = self.fill;
         car.fuel = self.fuel;
         car.fuel.fit(&car.setup.tank);
         car.load_fuel();
@@ -592,7 +594,7 @@ impl Plugin for DefaultCarPlugin {
 }
 
 /// R (or the wheel's reset button) puts the active car back on its wheels on the nearest
-/// road, as new: refuelled to the fuel load, fresh tires, a repaired engine.
+/// road, as it was (fuel, tires and engine wear stay).
 pub struct ResetPlugin;
 
 impl Plugin for ResetPlugin {

@@ -15,10 +15,10 @@ fn main() {
             online::OnlinePlugin,
             // The shops a server puts on the map (none alone).
             shops::ShopsPlugin,
-            // Starts in the coupé; R puts the car back on the nearest road as new.
+            // Starts in the coupé; R puts the car back on the nearest road.
             car::DefaultCarPlugin,
             car::ResetPlugin,
-            // 1: gizmos, 2: the panel with telemetry, setup sliders and bindings (hidden
+            // 1: gizmos, 2: the panel with telemetry, driving aids and bindings (hidden
             // at first).
             debug::DebugPlugin,
             ui::PanelPlugin,

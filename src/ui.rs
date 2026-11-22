@@ -1,5 +1,5 @@
 //! The windows' common ground (egui, keeping its input from the game), and the sandbox's
-//! panel (2): telemetry and live setup tuning for the active car. The
+//! panel (2): telemetry, the driving aids, traffic, and the wheel and pedals. The
 //! panel's wheel settings are public for other apps' windows.
 
 use bevy::ecs::system::SystemParam;
@@ -13,7 +13,6 @@ use crate::debug::DebugView;
 use crate::input::{Action, Capture, Capturing, Gamepads, WheelConfig, action_value, input_name};
 use crate::physics::engine::AMBIENT_PRESSURE;
 use crate::physics::fuel;
-use crate::physics::suspension::AxleSetup;
 use crate::physics::tire::RIBS;
 use crate::sim::{CHASSIS_HZ, SUBSTEPS};
 use crate::traffic::{MOST_CARS, Source, Traffic};
@@ -65,8 +64,8 @@ impl Plugin for ShieldPlugin {
     }
 }
 
-/// The sandbox's panel (2, with `DebugPlugin`): the car's state, telemetry, setup
-/// sliders, the wheel and pedals, and the controls.
+/// The sandbox's panel (2, with `DebugPlugin`): the car's state, telemetry, the driving
+/// aids, the wheel and pedals, and the controls.
 pub struct PanelPlugin;
 
 impl Plugin for PanelPlugin {
@@ -114,13 +113,13 @@ fn credits(ui: &mut egui::Ui) {
 fn panel(
     mut contexts: EguiContexts,
     active: Res<ActiveCar>,
-    mut cars: Query<&mut Car>,
+    cars: Query<&Car>,
     mut wheel_panel: WheelPanel,
     mut traffic: ResMut<Traffic>,
     source: Res<Source>,
     mut aids: ResMut<DriverAids>,
 ) -> Result {
-    let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
+    let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return Ok(());
     };
     egui::Window::new(car.setup.name)
@@ -143,8 +142,8 @@ fn panel(
                 ui.label(format!("Gear {gear}    {:.0} rpm", car.drivetrain.rpm));
                 aids.show(ui);
             });
-            engine(ui, &car);
-            fuel(ui, &car);
+            engine(ui, car);
+            fuel(ui, car);
             // On a server, the server's traffic.
             if *source == Source::Own {
                 ui.add(
@@ -157,8 +156,7 @@ fn panel(
                 CHASSIS_HZ * SUBSTEPS as f64
             ));
             ui.separator();
-            telemetry(ui, &car);
-            ui.collapsing("Setup", |ui| setup(ui, &mut car));
+            telemetry(ui, car);
             ui.collapsing("Wheel and pedals", |ui| wheel_panel.show(ui));
             ui.collapsing("Controls (H)", crate::help::controls);
             credits(ui);
@@ -432,38 +430,4 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
             ui.end_row();
         }
     });
-}
-
-/// The engine (built in the garage).
-fn engine_setup(ui: &mut egui::Ui, car: &mut Car) {
-    ui.strong("Engine");
-    let engine = &mut car.setup.engine;
-    ui.label(format!(
-        "{}, {} (parts shops change it)",
-        engine.build.hardware.name,
-        engine.drive.name()
-    ));
-}
-
-fn setup(ui: &mut egui::Ui, car: &mut Car) {
-    engine_setup(ui, car);
-    let setup = &mut car.setup;
-    for (name, axle) in [("Front", &mut setup.front), ("Rear", &mut setup.rear)] {
-        ui.strong(name);
-        axle_sliders(ui, axle);
-    }
-    ui.strong("Tires");
-    ui.label(setup.front.tire.compound.name)
-        .on_hover_text(setup.front.tire.compound.about);
-    let mut mu = setup.front.tire.mu;
-    ui.add(egui::Slider::new(&mut mu, 0.5..=1.8).text("Peak μ (warm, new)"));
-    setup.front.tire.mu = mu;
-    setup.rear.tire.mu = mu;
-}
-
-fn axle_sliders(ui: &mut egui::Ui, axle: &mut AxleSetup) {
-    ui.add(egui::Slider::new(&mut axle.spring_rate, 20_000.0..=250_000.0).text("Spring N/m"));
-    ui.add(egui::Slider::new(&mut axle.damping, 500.0..=15_000.0).text("Damper N·s/m"));
-    // Moving the upper arm's inner pivot outward shortens the arm: more camber gain.
-    ui.add(egui::Slider::new(&mut axle.geometry.upper_pivot.x, 0.25..=0.6).text("Upper pivot x m"));
 }

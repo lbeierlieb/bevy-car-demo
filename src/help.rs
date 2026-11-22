@@ -24,10 +24,7 @@ const CONTROLS: [(&str, &str); 18] = [
     ),
     ("Space", "Parking brake on / off (it's on when you start)"),
     ("I", "Start the engine after it stalled"),
-    (
-        "R",
-        "Back on the nearest road: repaired, refuelled, fresh tires",
-    ),
+    ("R", "Back on the nearest road"),
     ("C", "Chase or driver's view"),
     ("B (hold)", "Look back"),
     ("Left-drag, scroll", "Look around, zoom"),
@@ -266,19 +263,11 @@ fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (S
     let (what, how) = match hint {
         Hint::Blown => (
             "The engine is wrecked".into(),
-            format!(
-                "It was pushed past what its parts can take. Press {} to put the car back \
-                 on the nearest road with the engine repaired.",
-                key("R", Action::Reset)
-            ),
+            "It was pushed past what its parts can take.".into(),
         ),
         Hint::NoFuel => (
             "The tank is empty".into(),
-            format!(
-                "Without fuel the engine stops. Press {} to put the car back on the \
-                 nearest road with the tank filled.",
-                key("R", Action::Reset)
-            ),
+            "Without fuel the engine stops.".into(),
         ),
         Hint::Stalled => (
             "The engine has stalled".into(),
@@ -350,8 +339,7 @@ fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (S
         Hint::Stuck => (
             "Stuck?".into(),
             format!(
-                "Press {} to put the car back on the nearest road: repaired, refuelled \
-                 and on fresh tires.",
+                "Press {} to put the car back on the nearest road.",
                 key("R", Action::Reset)
             ),
         ),

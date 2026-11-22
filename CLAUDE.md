@@ -52,7 +52,7 @@ bars are hidden by default. Hints over the road say what's wrong, what to press 
 that does: gas with the parking brake on, reverse asked for while rolling
 (`car::ReverseRefused`, a message from `drive`), on the rev limiter below top gear, and
 gas without moving for 3 s (R). Added alone: in neutral, stalled, wrecked engine, empty
-tank. R (`ResetPlugin`) puts the car on the nearest road (`Terrain::drive_spot`: the
+tank (stating the problem only, since 2026-11-22). R (`ResetPlugin`) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
 right-hand lane on roads with traffic lanes). The map teleport was removed at the user's
 wish (2026-11-21). Keys: M map, 0 mute, B (held) looks back.
 
@@ -182,16 +182,16 @@ the ECU); a chassis dyno in its own scene (through the gears to fourth, then a f
 pull; wheel and crank power, runs saved with names and notes); towing home, or mom
 fetching you; 3 own bays, one save slot.
 
-## Shops (agreed with the user, 2026-11-21; being built)
+## Shops (agreed with the user, 2026-11-21; built 2026-11-22)
 
-The tool windows (3–6) become places on the map to drive to; the keys 3–6 go away.
+The tool windows (3–6) became places on the map to drive to; the keys 3–6 are gone.
 `src/shops.rs`. **The server says where they are**: its own list, separate from the map
 (`server --shops FILE`, `services.car-sim.shops`; default `assets/shops.cfg`, embedded:
 lines `kind x z name`, the building's map point), sent as `ToClient::Shops` after the
 welcome (protocol 6). Alone there are none (the plugin is there, idle). The client puts
 each marker (glowing disc, 3.5 m, and a beam) on the nearest paved road at the edge on
-the building's side (`kerb`); names float above within 500 m. Free (no money). Plan, in
-order (✓ done):
+the building's side (`kerb`); names float above within 500 m. Free (no money). The plan
+as built, in order:
 
 1. ✓ server list, protocol, markers and names. 2. ✓ Stop on a marker to go in (window opens,
    parking brake; drive off or Esc leaves). 3. ✓ **Ghosts**: a car stopped on a marker,
@@ -216,10 +216,15 @@ order (✓ done):
    session only), ECU tune (`ecu_ui::tuning`), Cams and boost (applied to the copy,
    baking maps if needed, tune and wear kept). Hold: up through the gears, then the
    rollers are motored to the speed for an rpm in fourth (`HOLD_RATE`) at a set throttle,
-   power = what the wheels push with. The engine dyno window (5) is gone. 11. Clean-up: the panel loses
-   springs, dampers, upper pivot and tire μ (they follow from the parts); **R only puts
-   the car back on the road** (no refuelling, repair or tires, no hint about it); tool
-   windows and keys 3–6 go; help, README.
+   power = what the wheels push with. The engine dyno window (5) is gone. 11. ✓ Clean-up:
+   the panel lost its setup section (springs, dampers, upper pivot, tire μ: they follow
+   from the parts); **R only puts the car back on the road** (`Car::place` keeps fuel,
+   tires, engine wear; agreed: no hint suggests anything for an empty tank or a wrecked
+   engine, for now); `ui::tool_window` is gone; help, README.
+
+Not done yet: dyno runs aren't saved; the HUD shows the parked car's gauges while in the
+dyno's room; alone, a car can't be changed at all (and an empty tank alone is the end of
+the drive).
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 
@@ -578,7 +583,7 @@ catalogue entries, and things like swap subframes are named so they can be price
   within a few seconds in the quick cars.
 - **Fuel** (`physics/fuel.rs`; filled at gas stations (95/98/102, the tank's octane mixes by
   volume, `Fuel::fill`, and the car sets `EngineBuild::octane` from it every step); R
-  still refills until the shops are done; with starvation): each chassis has a `Tank` (litres, centre
+  keeps the fuel; with starvation): each chassis has a `Tank` (litres, centre
   behind the front axle and height; mid-engined Calder and rear-engined Rheon up front).
   The engine reports what it injects (`Engine::fuel_flow`) and gets `fuel_supply`, a
   share of it. Level kept in f64 (a step's burn vanishes against a full tank in f32).
@@ -669,8 +674,8 @@ and without traction control; `trace_power_slide` prints one step by step
   best at 65 °C, lets go gently past the peak, overheats when driven hard), sport, race
   (needs heat, best at 95 °C, peaks early and drops off, wears fast). Each has grip,
   peak slip angle/ratio with the Magic Formula C (stiffness B follows from the peak), a
-  temperature window and a tread life (sliding energy). Cars start on cold tires; R
-  gives fresh ones. A car's tire state survives an engine swap. Tests about other things
+  temperature window and a tread life (sliding energy). Cars start on cold tires; parts
+  shops fit fresh ones. A car's tire state survives an engine swap. Tests about other things
   call `Car::warm_tires`.
 - Ribs, heat and pressure (`tire.rs`, asked for by the user: grip from the surface, a
   spin must not cook the tire, temperatures across the width, pressure, adjustable camber,
@@ -792,8 +797,8 @@ phasing, VTEC-style cam switching).
   over 0.1 s so a step's transient doesn't count. Valve float speed from spring force at
   full lift, moving mass, lift and duration (`ValveTrain::float_rpm`); floating loses VE.
   The factory tune is knock-limited at boost and stays safe; greedy spark on race fuel
-  with big boost breaks stock rods. The garage shows the condition and repairs; R
-  (reset) also repairs. Exhaust temperatures run hot (no losses before the turbine),
+  with big boost breaks stock rods. The parts shops show the condition and repair
+  it. Exhaust temperatures run hot (no losses before the turbine),
   hence the high turbine limit.
 - ECUs are switchable (agreed with the user): `EcuModel` (Stock, Programmable) is chosen
   in the garage like a part; the stock one stays. One `Ecu` struct for all models, the
