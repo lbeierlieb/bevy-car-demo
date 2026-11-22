@@ -130,6 +130,34 @@ const SCRAPE_BANDS: [(f32, f32); 3] = [(650.0, 4.0), (1500.0, 5.0), (3300.0, 6.0
 const SCRAPE_ROUGH: (f32, f32) = (0.7, 35.0);
 const SCRAPE: f32 = 0.3;
 
+/// The starter: motor turns per engine turn (the pinion on the flywheel's ring gear), the
+/// pinion's teeth and the commutator's segments (per motor turn).
+const STARTER_RATIO: f32 = 12.0;
+const PINION_TEETH: f32 = 11.0;
+const COMMUTATOR: f32 = 22.0;
+/// The whine's partials: (order of the motor's turning, gain): the gears meshing and
+/// their second harmonic, the commutator's buzz, the motor's hum.
+const STARTER_PARTIALS: [(f32, f32); 4] = [
+    (PINION_TEETH, 1.0),
+    (2.0 * PINION_TEETH, 0.35),
+    (COMMUTATOR, 0.45),
+    (2.0, 0.5),
+];
+/// Each compression loads the motor: its speed dips and it strains louder (shares).
+const STARTER_LOAD: (f32, f32) = (0.08, 0.5);
+/// Brush noise, relative to the whine, and its band (Hz, Q).
+const BRUSHES: (f32, f32, f32) = (0.35, 3800.0, 2.0);
+/// Let go (or overrun by the engine firing up), the motor freewheels down: how fast its
+/// speed falls and its sound fades (s).
+const SPIN_DOWN: (f32, f32) = (0.45, 0.3);
+/// The solenoid: its resonances (Hz, Q, gain), the clunk engaging and the clack letting
+/// go.
+const SOLENOID: [(f32, f32, f32); 3] =
+    [(170.0, 5.0, 1.0), (950.0, 9.0, 0.55), (2700.0, 14.0, 0.35)];
+const CLUNK: (f32, f32) = (0.6, 0.3);
+/// Level of the starter's whine.
+const STARTER: f32 = 0.1;
+
 /// The trumpet's notes: the countdown's (Hz) and "Go!"'s chord.
 const COUNT_NOTE: f32 = 392.0;
 const GO_CHORD: [f32; 4] = [523.25, 659.26, 783.99, 1046.5];
@@ -174,6 +202,9 @@ struct Cues {
     crash: AtomicU32,
     /// Scraping: level (0..1) and pan.
     scrape: [AtomicU32; 2],
+    /// The starter: engaged (0 or 1), the motor's turning (Hz) and the engine's
+    /// compressions (Hz).
+    starter: [AtomicU32; 3],
     /// Master volume (0 muted).
     volume: AtomicU32,
 }
@@ -203,6 +234,13 @@ impl Cues {
     fn set_scrape(&self, level: f32, pan: f32) {
         store(&self.scrape[0], level);
         store(&self.scrape[1], pan);
+    }
+
+    fn set_starter(&self, engaged: bool, motor: f32, compressions: f32) {
+        let values = [f32::from(u8::from(engaged)), motor, compressions];
+        for (atomic, value) in self.starter.iter().zip(values) {
+            store(atomic, value);
+        }
     }
 
     fn set_grind(&self, level: f32, rate: f32) {
@@ -340,6 +378,7 @@ fn cue(
         }
         cues.set_grind(0.0, CLASH_RATE.0);
         cues.set_scrape(0.0, 0.0);
+        cues.set_starter(false, 0.0, 0.0);
         *crashes = Crashes::default();
         return;
     };
@@ -388,6 +427,16 @@ fn cue(
         None => (0.0, CLASH_RATE.0),
     };
     cues.set_grind(level, rate);
+
+    // The starter turning the engine over: the motor geared up from the crank, loaded by
+    // each cylinder's compression (every other turn).
+    let cylinders = car.setup.engine.build.hardware.cylinders as f32;
+    let turns = drivetrain.rpm.max(0.0) / 60.0;
+    cues.set_starter(
+        drivetrain.cranking(),
+        turns * STARTER_RATIO,
+        turns * cylinders / 2.0,
+    );
 
     // A crash when the body is knocked hard (not again within a moment unless harder),
     // scraping while it keeps being knocked on the move.
@@ -555,8 +604,95 @@ struct EffectsVoice {
     scrape_bands: [Resonator; 3],
     scrape_gains: [f32; 3],
     rough: f32,
+    starter: Starter,
     seed: u32,
     right: Option<f32>,
+}
+
+/// The starter motor's sound.
+#[derive(Default)]
+struct Starter {
+    engaged: bool,
+    /// The motor's turning (Hz) and the whine's level, gliding.
+    motor: f32,
+    level: f32,
+    /// Where the compressions are (0..1 to the next), and their rate (Hz).
+    load: f32,
+    compressions: f32,
+    /// Each partial's phase (0..1).
+    phases: [f32; 4],
+    brushes: Resonator,
+    brush_gain: f32,
+    solenoid: [Resonator; 3],
+    solenoid_gains: [f32; 3],
+}
+
+impl Starter {
+    fn new() -> Self {
+        let mut starter = Self::default();
+        let (_, frequency, q) = BRUSHES;
+        starter.brushes.tune(frequency, q);
+        // Back to an RMS of 1, as the turbo's whistle.
+        starter.brush_gain = 3f32.sqrt() / (PI * frequency / (q * SAMPLE_RATE as f32)).sqrt();
+        for (i, &(frequency, q, gain)) in SOLENOID.iter().enumerate() {
+            starter.solenoid[i].tune(frequency, q);
+            // A band-pass rings at about its `b0` from a click.
+            starter.solenoid_gains[i] = gain / starter.solenoid[i].b0;
+        }
+        starter
+    }
+
+    /// The next sample: engaged or not, the motor at `motor` (Hz) loaded by
+    /// `compressions` a second, with `noise` (-1..1) for the brushes.
+    fn next(&mut self, engaged: bool, motor: f32, compressions: f32, noise: f32) -> f32 {
+        let rate = SAMPLE_RATE as f32;
+        let dt = 1.0 / rate;
+        // The solenoid clunks in, the pinion clacks out.
+        let mut kick = 0.0;
+        if engaged != self.engaged {
+            self.engaged = engaged;
+            kick = if engaged { CLUNK.0 } else { CLUNK.1 };
+        }
+        let mut clunk = 0.0;
+        for (resonator, gain) in self.solenoid.iter_mut().zip(self.solenoid_gains) {
+            clunk += gain * resonator.process(kick);
+        }
+        if engaged {
+            if self.level == 0.0 {
+                self.motor = motor;
+            }
+            self.motor += (motor.max(0.0) - self.motor) * (dt / 0.02).min(1.0);
+            self.level += (1.0 - self.level) * (dt / 0.01).min(1.0);
+            self.compressions = compressions.max(0.0);
+        } else {
+            self.motor *= (-dt / SPIN_DOWN.0).exp();
+            self.level *= (-dt / SPIN_DOWN.1).exp();
+        }
+        if self.level < 1e-3 {
+            self.level = 0.0;
+            return STARTER * clunk;
+        }
+        // The compressions load it only while it's meshed.
+        self.load = (self.load + self.compressions * dt).fract();
+        let pulse = if engaged {
+            let wave = 0.5 - 0.5 * (TAU * self.load).cos();
+            wave * wave
+        } else {
+            0.0
+        };
+        let turning = self.motor * (1.0 - STARTER_LOAD.0 * pulse);
+        let mut tone = 0.0;
+        for (phase, &(order, gain)) in self.phases.iter_mut().zip(&STARTER_PARTIALS) {
+            let frequency = order * turning;
+            if frequency < 0.45 * rate {
+                *phase = (*phase + frequency * dt).fract();
+                tone += gain * (TAU * *phase).sin();
+            }
+        }
+        let brushes = self.brush_gain * self.brushes.process(noise);
+        let strain = 1.0 + STARTER_LOAD.1 * (pulse - 0.4);
+        STARTER * (self.level * strain * (0.6 * tone + BRUSHES.0 * brushes) + clunk)
+    }
 }
 
 impl EffectsVoice {
@@ -597,6 +733,7 @@ impl EffectsVoice {
             scrape_bands,
             scrape_gains,
             rough: 0.0,
+            starter: Starter::new(),
             seed: 0x9e37_79b9,
             right: None,
         }
@@ -858,6 +995,12 @@ impl EffectsVoice {
         left += crashes + scrape * angle.cos() * 2f32.sqrt();
         right += crashes + scrape * angle.sin() * 2f32.sqrt();
 
+        let [engaged, motor, compressions] = self.cues.starter.each_ref().map(read);
+        let brush_noise = self.noise();
+        let starter = self
+            .starter
+            .next(engaged > 0.5, motor, compressions, brush_noise);
+
         let mut brass = 0.0;
         for player in &mut self.players {
             if player.playing {
@@ -867,8 +1010,8 @@ impl EffectsVoice {
 
         let volume = self.volume;
         (
-            (volume * (left + grind + brass)).tanh(),
-            (volume * (right + grind + brass)).tanh(),
+            (volume * (left + grind + starter + brass)).tanh(),
+            (volume * (right + grind + starter + brass)).tanh(),
         )
     }
 }
@@ -1038,6 +1181,36 @@ mod tests {
     }
 
     #[test]
+    fn the_starter_whines_while_cranking_and_spins_down() {
+        let (cues, mut voice) = voice();
+        // A four cranked at 250 rpm: the motor at 50 turns a second.
+        cues.set_starter(true, 250.0 / 60.0 * STARTER_RATIO, 250.0 / 60.0 * 2.0);
+        let (cranking, peak) = run(&mut voice, 1.0);
+        assert!(cranking > 0.02 && peak < 0.9, "{cranking} {peak}");
+        // The compressions are heard: louder and quieter within each one.
+        let window = SAMPLE_RATE as usize / 100;
+        let mut levels = Vec::new();
+        for _ in 0..12 {
+            let mut sum = 0.0;
+            for _ in 0..window {
+                let (left, _) = voice.frame();
+                sum += left * left;
+            }
+            levels.push((sum / window as f32).sqrt());
+        }
+        let (low, high) = levels
+            .iter()
+            .fold((f32::MAX, 0.0f32), |(l, h), &x| (l.min(x), h.max(x)));
+        assert!(high > 1.3 * low, "{low} {high}");
+        // Let go: it spins down and is quiet within two seconds.
+        cues.set_starter(false, 0.0, 0.0);
+        let (down, _) = run(&mut voice, 0.2);
+        assert!(down > 0.002 && down < cranking, "{down}");
+        run(&mut voice, 1.8);
+        assert!(run(&mut voice, 0.2).1 < 1e-3);
+    }
+
+    #[test]
     fn the_trumpet_plays_its_calls_and_stops() {
         let (cues, mut voice) = voice();
         let effects = Effects { cues: cues.clone() };
@@ -1115,6 +1288,15 @@ mod tests {
         play(&mut voice, 1.5);
         cues.set_scrape(0.0, 0.3);
         play(&mut voice, 0.5);
+        // The starter: a four cranked for a second, then let go; a V8 cranked longer,
+        // slower.
+        for (rpm, cylinders, seconds) in [(260.0, 4.0, 1.0), (210.0, 8.0, 1.6)] {
+            let turns: f32 = rpm / 60.0;
+            cues.set_starter(true, turns * STARTER_RATIO, turns * cylinders / 2.0);
+            play(&mut voice, seconds);
+            cues.set_starter(false, 0.0, 0.0);
+            play(&mut voice, 1.0);
+        }
         let mut wav = Vec::new();
         let data = (samples.len() * 2) as u32;
         wav.extend_from_slice(b"RIFF");

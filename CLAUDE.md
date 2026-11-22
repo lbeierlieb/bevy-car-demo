@@ -642,7 +642,7 @@ and plays force feedback, both through hid-fanatecff on Linux.
   engine has caught past `CATCH_RPM` (0.5 s for small engines to 1.25 s for the V12);
   pressed while running it switches the engine off (`switch_off`), which stays off (the
   automatic clutch's restart is only for stalls). Cranking is heard as the engine at
-  the starter's speed; no starter whine yet.
+  the starter's speed, with the starter's whine (`audio/effects.rs`).
 - Clutch pedal: engine can stall, the starter restarts it. Without a bound pedal the
   clutch is automatic and the engine never stalls. The pedal works like a real one
   (`drivetrain::ENGAGEMENT`, asked for by the user: it had to be floored and stalled at
@@ -1196,7 +1196,11 @@ at the green; `Effects::call`); **crashes** from `Car::knocks` (the body's speed
 from houses, trees, fences, cars and, since this, the ground; taken every frame by
 `effects::cue`): 1 m/s in a frame is a crash, 15 the hardest (a gliding thud, a crunch of
 crackles ringing panel resonances, glass pings from 0.45), knocks kept up while moving
-scrape. `write_effects_wav` (ignored, `EFFECTS_WAV=path`) renders
+scrape. the **starter** while cranking (2026-11-22: the motor geared 12:1 to the crank;
+partials at the pinion's 11 teeth and twice that, the commutator's 22 segments and the
+motor's hum, brush noise; each compression dips its speed and swells it; the solenoid
+clunks in and the pinion clacks out; let go or overrun, it spins down over ~0.5 s).
+`write_effects_wav` (ignored, `EFFECTS_WAV=path`) renders
 them all to listen to. Not done: other cars' squeal and crashes (`Motion` has no slip), tuned by ear.
 
 The engine sound goes through bevy_audio, which can't set the output buffer size. An
