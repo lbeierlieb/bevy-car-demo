@@ -14,7 +14,7 @@ use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, TAU};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Align2, Color32, RichText};
+use bevy_egui::egui::Color32;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::audio::{EngineAudio, EngineRun};
@@ -22,7 +22,8 @@ use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car};
 use crate::chassis::{PAINTS, SHOP_PAINTS};
 use crate::looks::{Looks, Motion};
-use crate::shops::{self, AtShop, ShopKind, Shops, shop_window};
+use crate::menu::kit::{self, Panel, Place};
+use crate::shops::{self, AtShop, SceneBack, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
 
 /// How far under the ground at the shop the booth is (m).
@@ -192,10 +193,8 @@ fn shop(
     let mut enter = false;
     let ctx = contexts.ctx_mut()?;
     shop_window(ctx, &shops, &mut at, ShopKind::Paint, |ui, _| {
-        ui.label(format!("Now: {}", PAINTS[car.setup.build.paint].0));
-        enter = ui
-            .button(RichText::new("Into the paint booth").strong())
-            .clicked();
+        enter = kit::button(ui, "Into the paint booth").clicked();
+        kit::note(ui, &format!("Now: {}", PAINTS[car.setup.build.paint].0));
     });
     let Some(marker) = marker.filter(|_| enter) else {
         return Ok(());
@@ -898,42 +897,20 @@ fn window(
     active: Res<ActiveCar>,
     cars: Query<&Car>,
     (mut away, mut audio): (ResMut<Away>, ResMut<EngineAudio>),
-    mut cameras: Query<(&ChaseCamera, &mut Projection)>,
+    (mut cameras, mut back): (Query<(&ChaseCamera, &mut Projection)>, ResMut<SceneBack>),
 ) -> Result {
     let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return Ok(());
     };
     let now = car.setup.build.paint;
-    let mut out = false;
-    egui::Window::new("Paint booth")
-        .anchor(Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
-        .collapsible(false)
-        .resizable(false)
-        .show(contexts.ctx_mut()?, |ui| {
-            ui.label(format!("Now: {}", PAINTS[now].0));
+    let mut out = back.take();
+    let ctx = contexts.ctx_mut()?;
+    Panel::new("paint booth", "Paint booth")
+        .place(Place::Right)
+        .width(420.0)
+        .back(Some("Back to the car"))
+        .show(ctx, |ui| {
             let spraying = booth.spray;
-            ui.add_enabled_ui(spraying.is_none(), |ui| {
-                egui::Grid::new("paints").num_columns(5).show(ui, |ui| {
-                    for (i, (name, [r, g, b])) in PAINTS[..SHOP_PAINTS].iter().enumerate() {
-                        let color = Color32::from_rgb(
-                            (r * 255.0) as u8,
-                            (g * 255.0) as u8,
-                            (b * 255.0) as u8,
-                        );
-                        let swatch = egui::Button::new("")
-                            .fill(color)
-                            .min_size(egui::vec2(48.0, 32.0))
-                            .selected(i == booth.picked);
-                        if ui.add(swatch).on_hover_text(*name).clicked() {
-                            booth.picked = i;
-                        }
-                        if i % 5 == 4 {
-                            ui.end_row();
-                        }
-                    }
-                });
-            });
-            ui.label(format!("Picked: {}", PAINTS[booth.picked].0));
             match spraying {
                 Some(coat) => {
                     let words = if coat.time < THICKEST {
@@ -941,18 +918,16 @@ fn window(
                     } else {
                         "Clearing the air…"
                     };
-                    ui.add(egui::ProgressBar::new(coat.time / SPRAY).text(words));
+                    kit::progress(ui, words, coat.time / SPRAY);
                 }
                 None => {
                     let picked = booth.picked;
-                    let button = egui::Button::new(
-                        RichText::new(format!("Spray it {}", PAINTS[picked].0)).strong(),
-                    );
-                    if ui
-                        .add_enabled(picked != now, button)
-                        .on_disabled_hover_text("The car is in this paint already")
-                        .clicked()
-                    {
+                    let spray = ui
+                        .add_enabled_ui(picked != now, |ui| {
+                            kit::button(ui, &format!("Spray it {}", PAINTS[picked].0))
+                        })
+                        .inner;
+                    if spray.clicked() {
                         booth.spray = Some(Spray {
                             paint: picked,
                             time: 0.0,
@@ -960,15 +935,23 @@ fn window(
                     }
                 }
             }
-            ui.label(
-                RichText::new("Drag to look round, the mouse wheel to go nearer.")
-                    .small()
-                    .weak(),
-            );
-            ui.separator();
-            out = ui
-                .button(RichText::new("Back to the car").strong())
-                .clicked();
+            let colors: Vec<(&str, Color32)> = PAINTS[..SHOP_PAINTS]
+                .iter()
+                .map(|(name, [r, g, b])| {
+                    let color =
+                        Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+                    (*name, color)
+                })
+                .collect();
+            ui.add_enabled_ui(spraying.is_none(), |ui| {
+                kit::swatches(ui, &colors, 5, &mut booth.picked);
+            });
+            kit::info(ui, "Picked", PAINTS[booth.picked].0);
+            kit::info(ui, "Now", PAINTS[now].0);
+            kit::note(ui, "Drag to look round, the mouse wheel to go nearer.");
+            if kit::button(ui, "Back to the car").clicked() {
+                out = true;
+            }
         });
     if out {
         leave(

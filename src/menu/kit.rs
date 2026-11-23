@@ -388,6 +388,119 @@ pub fn slider(
     response
 }
 
+/// Colour swatches in rows of `per_row`, the picked one ringed in white. One widget for
+/// the focus: the arrows move the pick (up from the top row and down from the bottom one
+/// leave it), a click picks. Returns whether the pick changed.
+pub fn swatches(
+    ui: &mut Ui,
+    colors: &[(&str, Color32)],
+    per_row: usize,
+    picked: &mut usize,
+) -> bool {
+    let gap = 8.0;
+    let rows = colors.len().div_ceil(per_row);
+    let width = (ui.available_width() - gap * (per_row as f32 - 1.0)) / per_row as f32;
+    let height = 40.0;
+    let size = vec2(ui.available_width(), rows as f32 * (height + gap) - gap);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let cell = |i: usize| {
+        let (r, c) = (i / per_row, i % per_row);
+        Rect::from_min_size(
+            rect.min + vec2(c as f32 * (width + gap), r as f32 * (height + gap)),
+            vec2(width, height),
+        )
+    };
+    let old = *picked;
+    if focused(ui, &response) && ui.is_enabled() {
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                response.id,
+                EventFilter {
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    ..Default::default()
+                },
+            );
+        });
+        let (up, down, left, right) = ui.input(|i| {
+            (
+                i.key_pressed(Key::ArrowUp),
+                i.key_pressed(Key::ArrowDown),
+                i.key_pressed(Key::ArrowLeft),
+                i.key_pressed(Key::ArrowRight),
+            )
+        });
+        let (r, c) = (*picked / per_row, *picked % per_row);
+        if left && c > 0 {
+            *picked -= 1;
+        }
+        if right && c + 1 < per_row && *picked + 1 < colors.len() {
+            *picked += 1;
+        }
+        if up {
+            if r == 0 {
+                ui.memory_mut(|m| m.move_focus(egui::FocusDirection::Up));
+            } else {
+                *picked -= per_row;
+            }
+        }
+        if down {
+            if r + 1 >= rows || *picked + per_row >= colors.len() {
+                ui.memory_mut(|m| m.move_focus(egui::FocusDirection::Down));
+            } else {
+                *picked += per_row;
+            }
+        }
+    }
+    if response.clicked()
+        && let Some(pointer) = response.interact_pointer_pos()
+        && let Some(i) = (0..colors.len()).find(|&i| cell(i).contains(pointer))
+    {
+        *picked = i;
+    }
+    let painter = ui.painter();
+    for (i, (_, color)) in colors.iter().enumerate() {
+        let r = cell(i);
+        painter.rect_filled(r, 7.0, *color);
+        if i == *picked {
+            painter.rect_stroke(
+                r.shrink(1.0),
+                7.0,
+                Stroke::new(3.0, Color32::WHITE),
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
+    if let Some(pointer) = response.hover_pos()
+        && let Some(i) = (0..colors.len()).find(|&i| cell(i).contains(pointer))
+    {
+        response.clone().on_hover_text(colors[i].0);
+    }
+    *picked != old
+}
+
+/// A row with a bar filling up and what's going on.
+pub fn progress(ui: &mut Ui, label: &str, fraction: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 7.0, ROW_FILL);
+    let filled = Rect::from_min_max(
+        rect.min,
+        pos2(
+            rect.left() + fraction.clamp(0.0, 1.0) * rect.width(),
+            rect.bottom(),
+        ),
+    );
+    painter.rect_filled(filled, 7.0, Color32::from_rgb(110, 80, 25));
+    painter.text(
+        pos2(rect.left() + 14.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        row_font(),
+        TEXT,
+    );
+}
+
 /// A heading between groups of rows.
 pub fn section(ui: &mut Ui, text: &str) {
     ui.add_space(6.0);
