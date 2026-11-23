@@ -58,8 +58,7 @@ A small Bevy demo of car simulation techniques:
 - **Streamed meshes**: ground, roads, houses and trees are meshed per 96 m chunk
   when the chunk comes within 560 m of the camera, and freed again when it's left
   behind. GPU memory therefore doesn't grow with the map size.
-- Debug gizmos for the linkage and forces, and a telemetry panel with live-tunable springs, dampers, camber, toe, arm geometry,
-  tire parameters and brakes (torque and front/rear split). A HUD in the bottom
+- Debug gizmos for the linkage and forces, and a telemetry panel. A HUD in the bottom
   right shows speed and gear inside a rev counter.
 - A map of the whole area (M): the ground in its land use colours, drawn once into
   a single image, so it needs no terrain chunks. Roads, houses and the cars are drawn
@@ -226,8 +225,14 @@ also has the packages alone: `nix build .#server` and `nix build .#web`.
 
 ## Controls (sandbox)
 
-The game starts with a screen listing the controls (a click or Esc closes it, H brings
-it back); the panel is hidden until its key opens it. When
+The game starts with a screen listing the controls (Esc or "Let's drive" closes it, H
+brings it back). **Esc** (or a gamepad's Start, or a wheel button bound to it) opens the
+menu: resetting the car, the map, the camera, starting the engine, the parking brake, the
+driving aids, the controls and bindings, force feedback, sound, display, the players
+online, help. Every menu and shop works with the arrows, Enter and Esc, a gamepad's
+D-pad (or left stick), A and B, or a wheel's buttons bound to the menu, as well as with
+the mouse. Menus and text grow with the window, whatever the display's scaling (the menu
+has a size setting on top). When
 the car won't do what you seem to want, a hint over the road says why and what to
 press: giving gas with the parking brake on or in neutral, asking for reverse while
 rolling, bouncing off the rev limiter in first gear, a stalled or wrecked engine, an
@@ -242,23 +247,25 @@ empty tank, or a few seconds of gas without moving (stuck: R).
 | Space | Parking brake on/off (cars start with it on) |
 | R | Call the rescue helicopter: it lifts the car and sets it down on the nearest road (in its lane), as it is (fuel, tires and wear stay); about 10 s near a road |
 | H | The controls screen |
-| 1 / 2 | Toggle gizmos (with the car's map coordinates) / telemetry and settings panel |
+| Esc | The menu (everything else is in it) |
+| 1 / 2 | Toggle gizmos (with the car's map coordinates) / telemetry panel |
 | F11 | Fullscreen (the browser's on the web; all F keys go to the browser there) |
-| 0 | Mute engine sound |
 | T | Chat, on a server that has it on (Enter sends, Esc cancels) |
 | C | Switch between chase and driver's view (facing forward) |
 | B (hold) | Look back |
-| M | Map of the whole area (drag to move, scroll to zoom; M or Esc closes) |
+| M | Map of the whole area (drag or a pad's stick to move, scroll, + - or the triggers to zoom; M or Esc closes) |
 | Left-drag, scroll | Orbit and zoom the camera (driver's view: look around) |
 
 ### Steering wheel and pedals
 
 Wheels, pedals and shifters work through the system's gamepad support; the keyboard
-keeps working alongside. Open the panel (2), expand "Wheel and pedals", and click
-**Bind** next to each control, then move it: turn the wheel left, press a pedal fully
-and release it, press a button. Pedals can rest at either end of their axis. The
+keeps working alongside. Open the menu (Esc), go to Controls, "Wheel, pedals and
+gamepad", choose a control's row, then move it: turn the wheel left, press a pedal fully
+and release it, press a button (Left clears a row). "Set up the menu buttons, one by
+one" binds the wheel's buttons for working the menus (menu, up, down, left, right,
+choose, back), so the wheel alone does everything afterwards. Pedals can rest at either end of their axis. The
 bindings and settings are saved to `~/.config/car-sim/wheel.cfg` (on the web, in the
-browser's local storage). Untick **Use wheel and pedals** at the top of the section to drive
+browser's local storage). Turn off **Use wheel, pedals and gamepad** at the top to drive
 with the keyboard only (the bindings are kept, and force feedback stops).
 
 The wheel steers the front wheels directly at a fixed ratio: either end of the
@@ -269,7 +276,7 @@ restores their own range on exit. Writing the range needs the driver's udev rule
 (your user in the `games` group). If it can't, or on other systems, a base turning
 farther than the slider gets a soft lock, like in BeamNG: the steering covers the
 slider's range and force feedback holds the wheel at either end. The game reads the
-base's range from hid-fanatecff; elsewhere, enter it in the panel (or set the base to
+base's range from hid-fanatecff; elsewhere, enter it in the menu (or set the base to
 the slider's range by hand). The paddles shift like Q/E. Buttons can also be bound to resetting the car (like R), the camera view (like C), looking
 back (like B, held) and the map (like M).
 
@@ -347,6 +354,7 @@ tire grip force, cyan for roll centres.
 | `src/debug.rs`, `src/ui.rs`, `src/camera.rs` | Gizmos, telemetry panel, chase and driver cameras |
 | `src/hud.rs` | Speed, gear and rev counter HUD |
 | `src/help.rs` | The controls screen and the hints for beginners |
+| `src/menu/` | The menus' scale, fonts and look (`kit.rs`), working them with any device (`nav.rs`), and the central menu (`central.rs`) |
 | `src/map.rs` | Map of the whole area with roads, houses and the cars |
 | `src/cockpit.rs` | Interior for the driver's view: dashboard, steering wheel, gauges |
 

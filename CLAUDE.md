@@ -21,7 +21,7 @@ The game is a library (`src/lib.rs`) and apps, each the list of plugins it adds:
 **sandbox** (`src/main.rs`: the shared `CorePlugin` (`WorldPlugin` (terrain, obstacles,
 simulation, traffic: all the server has too), scenery, input, driving, visuals, camera,
 HUD, map, sound, egui), help (controls screen, hints), stock coupé, R reset,
-gizmos, 2 panel, shops (online), F11 fullscreen in all apps). The career was removed for the multiplayer work (see
+gizmos, 2 telemetry, the central menu (Esc), shops (online), F11 fullscreen in all apps). The career was removed for the multiplayer work (see
 "Multiplayer"). Keep it that way: no mode flags; something only one app has is a plugin
 of its own (e.g. `car::ResetPlugin`, `ui::PanelPlugin`), and
 shared pieces are public functions (e.g. `workshop`, `garage::start`). An app,
@@ -30,7 +30,7 @@ the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars)
 
 - Window keys are on the number row (moved from F1–F6 at the user's wish, 2026-11-19):
   1 gizmos (with the car's map x, z, height and heading top right, for placing things in
-  the server's lists; the map (M) shows the pointer's x, z at the bottom), 2 panel/settings (3–6 were tool windows until the shops, 2026-11-22). The F
+  the server's lists; the map (M) shows the pointer's x, z at the bottom), 2 telemetry (3–6 were tool windows until the shops, 2026-11-22; the settings moved into the central menu, Esc, 2026-11-23). The F
   keys belong to the browser on the web
   (`web/index.html` keeps them from winit's canvas listeners); natively F11 toggles
   fullscreen (`FullscreenPlugin` in `default_plugins`). The editor keeps F5 (bake).
@@ -48,8 +48,7 @@ the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars)
 
 Made to be easy to pick up: `help.rs` (`HelpPlugin`, sandbox). At every start a
 controls screen (`egui::Modal`; a click anywhere or Esc closes it, H reopens it; the
-start menu waits for it) lists the keyboard controls; the panel (2) and the tool window
-bars are hidden by default. Hints over the road say what's wrong, what to press and what
+start menu waits for it) lists the keyboard controls; the telemetry panel (2) is hidden by default. Hints over the road say what's wrong, what to press and what
 that does: gas with the parking brake on, reverse asked for while rolling
 (`car::ReverseRefused`, a message from `drive`), on the rev limiter in first gear (only
 there, at the user's wish, 2026-11-22), and
@@ -57,30 +56,64 @@ gas without moving for 3 s (R). In neutral with the parking brake on, the neutra
 tank (stating the problem only, since 2026-11-22). R (`ResetPlugin`) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
 right-hand lane on roads with traffic lanes), carried there by the rescue helicopter (see
 "Helicopters"). The map teleport was removed at the user's
-wish (2026-11-21). Keys: M map, 0 mute, B (held) looks back.
+wish (2026-11-21). Keys: M map, B (held) looks back, Esc the central menu (the 0 mute key went into it, 2026-11-23).
 
-## Menus (agreed with the user, 2026-11-23; being built)
+## Menus (agreed with the user, 2026-11-23; built the same day)
 
 The egui windows weren't it. Every menu must be fully usable with six buttons (up, down,
-left, right, confirm, back) plus a menu button, so a gamepad or a wheel alone does
-everything (except typing: chat, name, server address); the mouse keeps working. Sizes
-don't follow the display scaling (a 4K screen showed everything tiny): the UI scales with
-the window. One central menu (Esc, a pad's Start, or a wheel button bound to "Menu")
-holds the driving aids, the controls and bindings, the map, reset, sound, display,
-online and help, so whoever doesn't know the keys, or whose controller lacks a button,
+left, right, choose, back) plus a menu button, so a gamepad or a wheel alone does
+everything (except typing: chat, name, server address, a run's name); the mouse keeps
+working. Sizes don't follow the display scaling (a 4K screen showed everything tiny).
+One central menu (Esc, a pad's Start, or a wheel button bound to "Menu") holds what a
+driver needs, so whoever doesn't know the keys, or whose controller lacks a button,
 finds everything there. Decisions: **no pause and no parking brake** while it's open
-(not even alone); the 0 (mute) key goes (sound is in the menu), H and M stay; the shop,
-dyno (ECU grids too) and event windows get the same treatment, controller friendly and
-well sized. The font is my choice.
+(not even alone); the 0 (mute) key went (sound is in the menu), H and M stay; shops, the
+dyno (ECU grids too) and events got the same treatment. The font was my choice: Ubuntu
+Regular and Medium (`assets/fonts`, Ubuntu Font Licence; egui's own Light is too thin).
 
-Plan as agreed: (1) UI zoom from the window's size and a "UI size" setting; (2) menu
-input from every device (keyboard arrows/Enter/Esc; a pad's D-pad, stick, South, East,
-Start without setup; wheel buttons bound to menu actions, with a guided setup), handed to
-egui as key events so its own focus navigation works on every widget, a focus ring,
-lists scrolled to the focus, focus kept in the topmost menu, and driving input held back
-while a menu has it; (3) a small kit for the look (big rows, panels, prompts); (4) the
-central menu; (5) start menu; (6) the map with a controller; (7) every shop and event
-window; (8) clean-up (panel 2 only telemetry).
+As built (`src/menu/`):
+- `mod.rs`: `LookPlugin` (in `ui::UiPlugin`): egui's zoom so a point is a pixel in a
+  1280×720 window and grows with the window (`pixels_per_point`: the smaller of
+  height/720 and width/1280, times `Display::ui_size`, saved in `display.cfg`), whatever
+  the display's scaling; fonts and style; selectable labels off (one took the focus and
+  dropped it). `to_points` turns `Camera::world_to_viewport` positions into points (the
+  scenes' egui-painted screens and the shops' floating labels need it).
+- `nav.rs`: `MenuInput` from every device (keyboard arrows/Enter/Esc; any pad's D-pad or
+  left stick, South, East, Start, unless the driving has them bound; the wheel's buttons
+  bound to `Action::Menu(Nav::…)`), held directions repeating (0.4 s, then 0.08 s). Pad
+  and wheel directions and choose go into egui as arrow keys and Enter (`hand_to_egui`),
+  so **egui's own focus navigation** moves between widgets. A menu calls `claim(ui,
+  rank)` (the kit's `Panel` does): the highest rank shown keeps the focus in it (its first
+  widget gets it); a text field being typed in elsewhere keeps it. Lists scroll to a newly
+  focused widget from inside their scroll area (`follow_focus`: a scroll area ignores
+  targets set before it); the ring is drawn at the end of the pass, clipped to what's in
+  view, not while the mouse is in use. While a menu has the focus, `ShieldPlugin` keeps
+  keys from the game (egui wants the keyboard) and `read_wheel` drops wheel button
+  presses (pedals, steering and gates go on). "Back" and the menu button are taken in
+  order (`MenuSet`: Top = central menu and controls screen, Windows = shops, scenes,
+  lobbies, the map, Open = a back nobody took opens the central menu).
+- `kit.rs`: `Panel` (title, scrolling contents, prompt line naming the device's buttons;
+  `Place::Center` or `Right`), rows: `button`, `button_with`, `submenu`, `toggle`,
+  `choice`, `pick` (any values), `slider` (left/right step), `swatches` (one widget the
+  arrows pick in), `progress`, `section`, `note`, `info`, `warning`. Left/right on a
+  toggle, choice or slider lock the horizontal arrows (`set_focus_lock_filter`). Grids
+  (swatches, the ECU tables) are one focusable widget with a cursor, leaving at their top
+  and bottom edges (`move_focus`). Ranks: window 10, start menu 20, central 30, intro 40.
+- `central.rs`: screens Main (back to driving, reset, map, camera, engine start/off,
+  parking brake, all pressed for the driver through `input::MenuPresses` as the wheel's
+  next frame; an event round's restart/leave; settings; online players/leave or join;
+  help, credits, fullscreen, quit), Driving aids (+ traffic alone), Controls (keys,
+  bindings with a guided setup of the menu buttons, force feedback), Sound
+  (`audio::SoundSettings`: on/off, volume, `sound.cfg`), Display, Online.
+- Scenes: `shops::SceneBack` hands "back" to the scene's window (back to the car);
+  `shops::shop_window` is a right panel. The race bar while driving never claims (it
+  would stop the driving); its buttons are for the mouse, the menu has the same.
+- Gotchas: under Xvfb the window never has focus, and egui's `Response::has_focus` asks
+  for it: the kit uses `kit::focused` (egui's memory), so shots show the focus; egui's own
+  sliders don't take arrows in shots. Shots press keys for egui with `TAPS=
+  "ArrowDown*3@100;Enter@110;Escape@120"` (window key events; the keys argument only
+  presses `ButtonInput`). Not done: driving with a gamepad needs its sticks bound (no
+  default driving bindings for pads); typing on a controller.
 
 ## Sandbox workflow
 
@@ -130,19 +163,19 @@ the embedded copy, `Terrain::baked`, the fallback otherwise); commit the re-bake
 saves a screenshot (`BIN=editor` for the editor); `tools/dev/strip.sh` removes the hook.
 Always run `strip.sh` and check that `grep -c shot src/lib.rs src/main.rs
 src/bin/*.rs` prints 0 for each before committing. Keys are pressed from a third of
-the frames until the shot (`m` opens the map, `0` mutes, `2` shows the panel (hidden by default
-since 2026-11-20; older notes here used `2` to hide it), `f` shows the gizmos (off by default), `c` the driver's view, `b` looks back; keys stay held through the shot's frame),
+the frames until the shot (`m` opens the map, `2` shows the telemetry panel, `f` shows the gizmos (off by default), `c` the driver's view, `b` looks back; keys stay held through the shot's frame),
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
 Shops need a server (`JOIN=127.0.0.1`, see below) and `PLACE` at the building's point
 (the car lands on the marker and goes in): gas `-2603,-1736`, car dealer
 `-1476,-1213`, alignment `-1480,-1305`, paint `3500,-63`, parts `-1950,-3160`, dyno
-`-2601,-3784` (then `CLICK="527,138,180"` is "Onto the rollers";
+`-2601,-3784` (the shop's window takes the focus on its first row, so
+`TAPS="Enter@200"` goes into the scene: onto the rollers, up to the pump…; older click
+coordinates in these notes are from before the menus, 2026-11-23, and are wrong now;
 the car hunt's marker `-95,2341` with `--events assets/events.cfg`, its lobby window opens
 at once; the race marker exactly: `PLACE_EXACT=1 PLACE="-62,2280,150"`, then
-`CLICK="508,141,200"` is "Time trial" (its "Start" at (495, 183)), `537,162` "Race";
-in the room the
-window's tabs are at y 62: Runs 659, ECU tune 715, Cams and boost 810; "Hold" (659, 179)
-on the Runs tab; a hold needs ~200 frames more to settle).
+`TAPS="Enter@200"` is "Time trial", `ArrowDown@200;Enter@204` "Race"; in the dyno's room
+the page is the first row (`ArrowRight` steps it: runs, ECU tune, cams and boost), "Hold"
+the third; a hold needs ~200 frames more to settle).
 The editor (`BIN=editor`, hooked by `EditorShotPlugin`): `EDITCAM="x,z,height,yaw,pitch"`
 (degrees, the first 20 frames), `CLICK="x,y,frame[,x2,y2]"` sets the window's cursor and
 holds the left button (a drag with x2, y2), `UICLICK` is the window-event click for
@@ -247,10 +280,10 @@ as built, in order:
    perspective, point by point) shows grade, litres of this fill and the tank; the grade's
    button lights and its nozzle leaves the holster. The window on the right: grade,
    litres, "Pump N L"/"Fill up"/"Stop", pumping at `FLOW` (2 L/s, quicker than real) into
-   the parked car. Shots: "Up to the pump" at (527, 108), then "Fill up" (1055, 122),
-   grades at y 80 (95 at 965, 98 1045, 102 1133); `FUEL=12` empties the tank to 12 L at
+   the parked car. Shots: `TAPS="Enter@200"` is "Up to the pump", then "Fill up" is
+   the pump window's first row (`Enter@240`); `FUEL=12` empties the tank to 12 L at
    frame 160. 6. ✓ **Alignment shop**: camber, pressures
-   (from the garage), toe and brake torque/balance (from the panel; into `CarBuild`).
+   (from the garage), toe and brake torque/balance (from the old panel; into `CarBuild`).
    Since 2026-11-22 (asked for by the user) a scene like the dyno's (`alignment.rs`): the
    shop's window has "Onto the alignment lift", a bay 220 m under the marker with a
    four-post lift (turn plates, slip plates, ramps), the car on it drawn from the driven
@@ -260,8 +293,8 @@ as built, in order:
    wheel's camber (measured from the pose, so the car's weight shows), toe and pressure
    against the spec (kit camber ±0.5°, `FACTORY_TOE` ±0.1°, suited pressure ±0.15 bar),
    green or red. The window on the right is `garage::alignment`, applied live to the
-   parked car (`car::Away` set, as in the dyno); drag swings, the wheel zooms. Shots: the
-   shop's button at (547, 123), "Back to the car" (655, 204).
+   parked car (`car::Away` set, as in the dyno); drag swings, the wheel zooms. Shots: `TAPS="Enter@200"`
+   onto the lift; the rows are back to the car, then camber, toe, pressure per axle.
 7. ✓ **Paint shop**: the shop paints (swatches; gone from the garage). Every chassis
    leaves the factory in one dull paint, no choice (asked for by the user, 2026-11-22, so
    there's a reason to paint): `PAINTS` is the 10 shop paints (`SHOP_PAINTS`), then 11
@@ -278,8 +311,8 @@ as built, in order:
    right: swatches pick, "Spray it X" sprays a coat (`SPRAY` 6 s): a mist of the paint (12
    nested unlit ellipsoid shells round the body, `cull_mode` none, plus 600 droplets going
    round and sinking) thickens, the paint goes onto the parked car at `THICKEST` (3 s,
-   `shops::rebuild`), then it clears. Shots: the shop's button at (538, 108); swatches at
-   y 87 and 122 (x 958, 1014, 1071, 1127, 1183), "Spray it" (990, 168); use `STEP=0.05`
+   `shops::rebuild`), then it clears. Shots: `TAPS="Enter@200"` into the booth; "Spray it" is the first
+   row, the swatches one grid under it (the arrows pick in it); use `STEP=0.05`
    (60 frames to the thickest). 8. ✓ **Showroom**: since 2026-11-22 (asked for by the user) a scene like the gas
    station's (`garage/showroom.rs`): "Into the showroom" puts you in a hall with glass
    front and left side, 600 m **over** the marker (meadow, forecourt with flags and a
@@ -291,8 +324,8 @@ as built, in order:
    blips it every 3.5 s. The window on the right: the list and `brochure`; "Drive it"
    builds the car and goes straight out to it (once built), in neutral with the parking
    brake on (`fit` leaves every car put down afresh so). The camera stays within `REACH` (7.4 m) of the
-   turntable, clear of the floor cars. Shots: the shop's button at (535, 123), then the
-   list at x 905 (Minim y 62, 21 px a row), "Start it" (909, 406) or so.
+   turntable, clear of the floor cars. Shots: `TAPS="Enter@200"` in, then the first row is the car
+   (`ArrowRight` the next), then the engine, "Drive it", "Start it".
    (`shops::shop_window` draws a shop's window for other modules, saying when the car came in).
 9. ✓ **Parts shop**: the garage window without alignment, cam timing and wastegate;
    repairs; new tires. Since 2026-11-22 (asked for by the user, "car on a lift") a scene
@@ -304,7 +337,7 @@ as built, in order:
    V or flat; a turbo if it has one), the draft's tires in a rack at the back; workbench
    with pegboard, tool chest, shelves of boxes, roller door, oil drain. The parts window
    (`garage::parts_shop`) is on the right; the draft is taken from the car on entering.
-   Shots: the shop's button at (516, 123), "Back to the car" at (903, 677). 10. ✓ **Dyno** (`dyno/`): the career's chassis dyno room back
+   Shots: `TAPS="Enter@200"` onto the lift; the rows start with back to the car and building. 10. ✓ **Dyno** (`dyno/`): the career's chassis dyno room back
    (`mod.rs`, `rollers.rs`, `chart.rs`). A copy of the car runs in the room 200 m under
    the marker; the driven car stays parked there, a ghost (`car::Away` holds its input and
    R, `EngineAudio::hushed`); the engine (tune, cam timing, wastegate, wear) and the fuel
@@ -470,7 +503,7 @@ A multiplayer sandbox first; the career comes back later, built on it. Native an
 native offers **"Play alone"** and **"Join server"** (a start menu, chosen at runtime);
 the web only asks for the name and joins the server the page came from (no playing
 alone, no address field; agreed with the user, 2026-11-21). Alone is just driving the
-default car with traffic (panel 2, gizmos, R, M kept); changing the car is only at the
+default car with traffic (the menu, gizmos, R, M kept); changing the car is only at the
 shops a server puts on the map (see "Shops").
 No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headless:
 `MinimalPlugins` and the world core) runs on the user's VPS.
@@ -656,8 +689,8 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
 
 ## Wheel support
 
-Wheel and pedals come through gamepad input (gilrs), bound in the panel (2, "Wheel and
-pedals") and saved to a config file. `src/wheel_base.rs` sets the base's rotation range
+Wheel and pedals come through gamepad input (gilrs), bound in the central menu (Esc,
+Controls, "Wheel, pedals and gamepad") and saved to a config file. `src/wheel_base.rs` sets the base's rotation range
 and plays force feedback, both through hid-fanatecff on Linux.
 
 ### Design decisions (agreed with the user)
@@ -676,7 +709,7 @@ and plays force feedback, both through hid-fanatecff on Linux.
   menu (evdev 0.13 can't send damper parameters). Rate-limited, fades in with speed.
 - The game sets the base's rotation range (default 540°) and restores it on exit;
   either end is full lock. If it can't, soft lock like BeamNG: the base's range is read
-  from sysfs (readable even when not writable) or given in the panel, the axis is
+  from sysfs (readable even when not writable) or given in the menu, the axis is
   scaled to the game's range, and force feedback pushes back past either end (full
   force 10° past; stays on with the tire forces switched off).
 - Starter (asked for by the user, 2026-11-22): the ignition button (I or bound) held
@@ -709,7 +742,7 @@ and plays force feedback, both through hid-fanatecff on Linux.
 
 ### Still to check on the real wheel
 
-- "Test: push left" in the panel: tick "Reverse direction" if it pushes right (the sign
+- "Test: push left" in the menu (Controls, Force feedback): turn on "Reverse direction" if it pushes right (the sign
   convention of hid-fanatecff couldn't be verified without hardware).
 - Tune the default force strength (0.5) and road feel (2.5) on the real wheel; the
   physical road content is small (std ~2 % of full scale on a rough road, ~5 % floored
@@ -729,14 +762,14 @@ both named "Fanatec FANATEC Wheel" (padded with spaces). NixOS config uses
   `lsmod | grep hid_fanatec`, `sudo evtest /dev/input/eventN` (EV_FF with FF_CONSTANT).
   A reboot into a kernel with the module fixed it; replugging the base can also help.
 - **"Couldn't set the wheel range in …/range: Permission denied":** the game falls
-  back to the soft lock (the panel says "Wheel base is at …°"). The `range` sysfs file is root's; the udev
+  back to the soft lock (the menu says "Wheel base is at …°"). The `range` sysfs file is root's; the udev
   rule only does `chown -f :games` on it when the device is added. Needs a `games` group
   (NixOS doesn't create one; `users.groups.games = { };`), the user in it (log in
   again), and the rule to have run after that (replug, or
   `sudo udevadm trigger --action=change --subsystem-match=hid`). Check with
   `ls -l /sys/module/hid_fanatec/drivers/hid:fanatec/*/range`, `getent group games`
   and `id`. If the group owns it but can't write, the mode needs `g+w` too.
-- The panel shows "Wheel base set to 540°" once the range was written, and names the
+- The menu (Controls, "Wheel, pedals and gamepad") shows "Wheel base set to 540°" once the range was written, and names the
   force feedback device or what's wrong with each candidate.
 
 ## Cars
@@ -817,7 +850,7 @@ catalogue entries, and things like swap subframes are named so they can be price
 - **Showroom (car dealers) and garage (parts shops)** are both in `garage/mod.rs`; both go through `start`
   and `fit`. A changed `CarBuild` respawns the car's entity (its meshes are children);
   an engine-only change swaps it in while driving.
-- **Traction control** (my addition, on by default, a checkbox in the panel): without
+- **Traction control** (my addition, on by default, in the central menu's driving aids): without
   it full throttle on the keyboard just spins the wheels of anything strong. It eases
   the throttle to hold the driven wheels at a slip ratio of 0.12, at a rate that follows
   the slip smoothly (no chopping; turbos still hunt a little with the boost lag).
@@ -866,7 +899,7 @@ catalogue entries, and things like swap subframes are named so they can be price
   just stops the body (wheel spin is left as it was).
 - **Traffic** (`traffic.rs`, `traffic/network.rs`; agreed with the user: no real
   physics needed, following the roads matters, crashes at junctions are fine, a
-  "Traffic density" slider in the panel, 0–60 cars, default 20; no HUD or map changes).
+  "Cars around" slider in the menu's driving aids (alone), 0–60 cars, default 20; no HUD or map changes).
   The network: roads 4 m and wider (not water) split into edges at shared OSM points,
   a lane each way a quarter of the width right of the centreline (1.05–2.6 m), 1781
   edges / 151 km, built in ~5 ms. Speed limits every 20 m, German defaults from what the
@@ -1287,7 +1320,7 @@ sound is late too). Not done: propagation delay, occlusion, the cost of 6 voices
 untried (a slow page could lower `VOICES`).
 
 Sound effects (asked for by the user, 2026-11-22; `audio/effects.rs`, a second synth
-next to the engine's, muted by 0 too): **tire squeal** of the driven car per wheel (band
+next to the engine's, with the same sound setting): **tire squeal** of the driven car per wheel (band
 of noise at ~780 Hz with two overtones, wobble and flutter, pitch rising past the peak),
 from the combined slip relative to the peak (from 0.55, full at 1.4), the tread's sliding
 speed, the load, asphalt (cobbles half, unpaved none); **gear grinding** while an
