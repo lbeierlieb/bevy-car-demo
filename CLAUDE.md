@@ -56,7 +56,8 @@ gas without moving for 3 s (R). In neutral with the parking brake on, the neutra
 tank (stating the problem only, since 2026-11-22). R (`ResetPlugin`) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
 right-hand lane on roads with traffic lanes), carried there by the rescue helicopter (see
 "Helicopters"). The map teleport was removed at the user's
-wish (2026-11-21). Keys: M map, B (held) looks back, Esc the central menu (the 0 mute key went into it, 2026-11-23).
+wish (2026-11-21). Keys (the keyboard profile's): M map, B (held) looks back; Esc the central menu (the 0
+mute key went into it, 2026-11-23).
 
 ## Menus (agreed with the user, 2026-11-23; built the same day)
 
@@ -99,12 +100,34 @@ As built (`src/menu/`):
   toggle, choice or slider lock the horizontal arrows (`set_focus_lock_filter`). Grids
   (swatches, the ECU tables) are one focusable widget with a cursor, leaving at their top
   and bottom edges (`move_focus`). Ranks: window 10, start menu 20, central 30, intro 40.
-- `central.rs`: screens Main (back to driving, reset, map, camera, engine start/off,
-  parking brake, all pressed for the driver through `input::MenuPresses` as the wheel's
-  next frame; an event round's restart/leave; settings; online players/leave or join;
-  help, credits, fullscreen, quit), Driving aids (+ traffic alone), Controls (keys,
-  bindings with a guided setup of the menu buttons, force feedback), Sound
-  (`audio::SoundSettings`: on/off, volume, `sound.cfg`), Display, Online.
+- `central.rs` (restructured at the user's wish, 2026-11-23): Main = In-game actions
+  (reset, map, camera: pressed for the driver through `input::MenuPresses` as the
+  wheel's next frame), Settings (Driving aids (+ traffic alone), Controls, Sound
+  (`audio::SoundSettings`: on/off, volume, `sound.cfg`), Display (UI size, fullscreen)),
+  an event round's restart/leave, online players/leave or join, help and credits, quit,
+  and "Back to driving" at the bottom. No engine or parking brake rows, no fullscreen on
+  Main (the user: not wanted there). Controls: the profile in use (a choice), its name,
+  its bindings (with a guided setup of the menu buttons, fill with the keyboard's
+  defaults, clear), force feedback, the fixed keys. Going into a screen starts at its
+  first row; back focuses the row gone into (rows on different screens share egui's
+  automatic ids: the push clears the focus, and `claim` keeps a focus asked for before
+  its widget is drawn).
+- **Control profiles** (asked for by the user, 2026-11-23; `input.rs`): keys are
+  bindings like pad inputs (`Input::Key`/`Input::Pad`); `WheelConfig::profiles` (4) and
+  `active`; the first is `Profile::keyboard()` (WASD and arrows, Space, Q/E, I, R, C, B,
+  M), the others start empty ("set one up for a gamepad, one for a wheel"); each action
+  up to `PER_ACTION` (2) inputs, binding a third drops the oldest, an input belongs to one
+  action per profile. Only the profile in use drives (`read_wheel` turns all of it into
+  `WheelInput`; `drive`, the camera, reset and the map read only that). Steering by keys
+  or buttons is `Action::SteerLeft`/`SteerRight` (rate-limited as the keys were), by an
+  axis `Action::Steer`. Fixed, never bindable: Esc (menu), H, T, 1, 2, F11, and the
+  menus' arrows/Enter. `wheel.cfg`: `active N`, `profile N name`, then its `bind` lines
+  (`key:KeyW`, `axis:…`, `button:…`); a file from before has its bindings put in profile
+  2 ("Wheel"), in use. While a key is bound (and the frame after), egui gets no key
+  events. A pad's standard buttons work the menus while one has the focus even if the
+  profile drives with them, outside only when it doesn't.
+- The map (M) moves with the arrow keys (asked for by the user): `map::take_arrows`
+  takes them before `read_wheel`, so they don't steer while it's open.
 - Scenes: `shops::SceneBack` hands "back" to the scene's window (back to the car);
   `shops::shop_window` is a right panel. The race bar while driving never claims (it
   would stop the driving); its buttons are for the mouse, the menu has the same.
@@ -689,8 +712,8 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
 
 ## Wheel support
 
-Wheel and pedals come through gamepad input (gilrs), bound in the central menu (Esc,
-Controls, "Wheel, pedals and gamepad") and saved to a config file. `src/wheel_base.rs` sets the base's rotation range
+Wheel and pedals come through gamepad input (gilrs), bound in a control profile in the
+central menu (Esc, Settings, Controls) and saved to a config file. `src/wheel_base.rs` sets the base's rotation range
 and plays force feedback, both through hid-fanatecff on Linux.
 
 ### Design decisions (agreed with the user)

@@ -227,9 +227,9 @@ also has the packages alone: `nix build .#server` and `nix build .#web`.
 
 The game starts with a screen listing the controls (Esc or "Let's drive" closes it, H
 brings it back). **Esc** (or a gamepad's Start, or a wheel button bound to it) opens the
-menu: resetting the car, the map, the camera, starting the engine, the parking brake, the
-driving aids, the controls and bindings, force feedback, sound, display, the players
-online, help. Every menu and shop works with the arrows, Enter and Esc, a gamepad's
+menu: in-game actions (resetting the car, the map, the camera), settings (driving aids,
+controls with four switchable profiles of bindings, force feedback, sound, display), the
+players online, help. Every menu and shop works with the arrows, Enter and Esc, a gamepad's
 D-pad (or left stick), A and B, or a wheel's buttons bound to the menu, as well as with
 the mouse. Menus and text grow with the window, whatever the display's scaling (the menu
 has a size setting on top). When
@@ -237,6 +237,8 @@ the car won't do what you seem to want, a hint over the road says why and what t
 press: giving gas with the parking brake on or in neutral, asking for reverse while
 rolling, bouncing off the rev limiter in first gear, a stalled or wrecked engine, an
 empty tank, or a few seconds of gas without moving (stuck: R).
+
+The keys below are the keyboard profile's defaults (Esc, H, T, 1, 2 and F11 are fixed).
 
 | Key | Action |
 | --- | --- |
@@ -253,20 +255,22 @@ empty tank, or a few seconds of gas without moving (stuck: R).
 | T | Chat, on a server that has it on (Enter sends, Esc cancels) |
 | C | Switch between chase and driver's view (facing forward) |
 | B (hold) | Look back |
-| M | Map of the whole area (drag or a pad's stick to move, scroll, + - or the triggers to zoom; M or Esc closes) |
+| M | Map of the whole area (drag, the arrows or a pad's stick to move, scroll, + - or the triggers to zoom; M or Esc closes) |
 | Left-drag, scroll | Orbit and zoom the camera (driver's view: look around) |
 
 ### Steering wheel and pedals
 
 Wheels, pedals and shifters work through the system's gamepad support; the keyboard
-keeps working alongside. Open the menu (Esc), go to Controls, "Wheel, pedals and
-gamepad", choose a control's row, then move it: turn the wheel left, press a pedal fully
-and release it, press a button (Left clears a row). "Set up the menu buttons, one by
+works alongside as far as the profile in use binds keys. Bindings live in four
+profiles: the first is the keyboard's defaults, the others start empty (set one up for a
+gamepad, one for a wheel) and are switched in the menu (Esc, Settings, Controls,
+"Profile in use"). Open "Bindings of …", choose a control's row, then press a key or move
+the control: turn the wheel left, press a pedal fully and release it, press a button (up
+to two inputs each; Left clears a row). "Set up the menu buttons, one by
 one" binds the wheel's buttons for working the menus (menu, up, down, left, right,
 choose, back), so the wheel alone does everything afterwards. Pedals can rest at either end of their axis. The
 bindings and settings are saved to `~/.config/car-sim/wheel.cfg` (on the web, in the
-browser's local storage). Turn off **Use wheel, pedals and gamepad** at the top to drive
-with the keyboard only (the bindings are kept, and force feedback stops).
+browser's local storage). Switch to the keyboard profile to drive with the keyboard only.
 
 The wheel steers the front wheels directly at a fixed ratio: either end of the
 rotation range is full lock, and the steering wheel in the cockpit turns with yours.
