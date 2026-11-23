@@ -159,6 +159,8 @@ pub(crate) fn style(ctx: &egui::Context) {
             (TextStyle::Monospace, FontId::monospace(13.0)),
         ]
         .into();
+        // Text isn't for selecting in a game, and a selectable label would take the focus.
+        style.interaction.selectable_labels = false;
         let spacing = &mut style.spacing;
         spacing.item_spacing = egui::vec2(8.0, 6.0);
         spacing.button_padding = egui::vec2(10.0, 4.0);

@@ -82,6 +82,9 @@ pub struct MenuInput {
     pub pressed: [bool; 4],
     /// The directions held, as an analog stick or ±1 (x right, y down).
     pub held: Vec2,
+    /// The same from pads and the wheel's menu buttons only (the keyboard's arrows steer
+    /// the car where nothing has the focus: the map).
+    pub pad_held: Vec2,
     /// "Choose" pressed this frame.
     pub confirm: bool,
     /// "Back" pressed this frame and not yet taken (see `take_back`).
@@ -283,6 +286,7 @@ fn read(
     mut input: ResMut<MenuInput>,
 ) {
     let mut held = [false; 4];
+    let mut pad_held = [false; 4];
     let mut stick = Vec2::ZERO;
     let (mut confirm, mut back, mut open, mut zoom) = (false, false, false, 0.0);
     let mut device = None;
@@ -328,6 +332,7 @@ fn read(
         ];
         for (i, button) in dpad.into_iter().enumerate() {
             held[i] |= down(button);
+            pad_held[i] |= down(button);
         }
         let left = Vec2::new(
             pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0),
@@ -367,6 +372,7 @@ fn read(
         let dirs = [Nav::Up, Nav::Down, Nav::Left, Nav::Right];
         for (i, nav) in dirs.into_iter().enumerate() {
             held[i] |= wheel.nav_held(nav);
+            pad_held[i] |= wheel.nav_held(nav);
         }
         let wheel_pressed = |nav, last: &mut bool| {
             let now = wheel.nav_held(nav);
@@ -404,16 +410,22 @@ fn read(
         }
         *since += dt.max(1e-4);
     }
-    let digital = Vec2::new(
-        f32::from(u8::from(held[3])) - f32::from(u8::from(held[2])),
-        f32::from(u8::from(held[1])) - f32::from(u8::from(held[0])),
-    );
-    input.pressed = pressed;
-    input.held = if stick.length() > digital.length() {
-        stick.clamp_length_max(1.0)
-    } else {
-        digital
+    let digital = |held: [bool; 4]| {
+        Vec2::new(
+            f32::from(u8::from(held[3])) - f32::from(u8::from(held[2])),
+            f32::from(u8::from(held[1])) - f32::from(u8::from(held[0])),
+        )
     };
+    let analog = |digital: Vec2| {
+        if stick.length() > digital.length() {
+            stick.clamp_length_max(1.0)
+        } else {
+            digital
+        }
+    };
+    input.pressed = pressed;
+    input.held = analog(digital(held));
+    input.pad_held = analog(digital(pad_held));
     input.confirm = confirm;
     input.back = back;
     input.open = open;

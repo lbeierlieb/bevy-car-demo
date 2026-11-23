@@ -17,6 +17,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use crate::buildings::Footprint;
 use crate::car::{ActiveCar, Car};
 use crate::input::WheelInput;
+use crate::menu::nav::{Device, MenuInput};
 use crate::terrain::{self, RoadKind, Terrain};
 
 /// Metres per pixel of the ground image: 1920 pixels across this map, within the 2048
@@ -28,6 +29,10 @@ const HOUSES_BELOW: f32 = 3.0;
 const MIN_SCALE: f32 = 0.2;
 /// Narrowest a road is drawn, in screen points, however far out the map is zoomed.
 const MIN_ROAD_WIDTH: f32 = 1.5;
+/// How fast a pad moves the map (screen heights per second) and zooms (e-folds per
+/// second).
+const PAN: f32 = 0.8;
+const ZOOM_RATE: f32 = 2.0;
 /// Time per frame spent building the ground image until it's done (it takes about 0.1 s
 /// natively).
 const BUILD_BUDGET: Duration = Duration::from_millis(3);
@@ -299,8 +304,8 @@ fn draw(
     active: Option<Res<ActiveCar>>,
     cars: Query<&Car>,
     (marks, lines, legend, others): (Res<MapMarks>, Res<MapLines>, Res<MapLegend>, Res<MapCars>),
-    mut view: ResMut<MapView>,
-    mut clicks: MessageWriter<MapClicked>,
+    (mut view, mut clicks): (ResMut<MapView>, MessageWriter<MapClicked>),
+    (time, nav): (Res<Time<Real>>, Option<Res<MenuInput>>),
 ) -> Result {
     let view = &mut *view;
     let active = active.map_or(usize::MAX, |a| a.0);
@@ -332,6 +337,35 @@ fn draw(
                     view.center = under - offset * view.scale;
                 }
             }
+            // A pad's stick or D-pad (or the wheel's menu buttons) moves, its triggers
+            // zoom, choose zooms in a step (from the closest back to the whole map); + and
+            // - zoom too.
+            let dt = time.delta_secs().min(0.1);
+            if let Some(nav) = &nav {
+                view.center += nav.pad_held * PAN * screen.height() * view.scale * dt;
+                view.scale *= (-nav.zoom * ZOOM_RATE * dt).exp();
+                if nav.confirm {
+                    view.scale = if view.scale <= MIN_SCALE * 1.01 {
+                        fit
+                    } else {
+                        view.scale / 2.0
+                    };
+                }
+            }
+            let (closer, farther) = ui.input(|i| {
+                let any = |keys: &[egui::Key]| keys.iter().any(|&k| i.key_pressed(k));
+                (
+                    any(&[egui::Key::Plus, egui::Key::Equals]),
+                    any(&[egui::Key::Minus]),
+                )
+            });
+            if closer {
+                view.scale /= 2.0;
+            }
+            if farther {
+                view.scale *= 2.0;
+            }
+            view.scale = view.scale.clamp(MIN_SCALE, fit * 1.5);
             view.center = view.center.clamp(-half, half);
 
             let (center, scale) = (view.center, view.scale);
@@ -467,7 +501,15 @@ fn draw(
                     center + Vec2::new(p.x - screen.center().x, p.y - screen.center().y) * scale;
                 format!("    x {:.0}  z {:.0}", at.x, at.y)
             });
-            let help = format!("Drag: move    Scroll: zoom    {click}{key} / Esc: close{pointer}");
+            let help = match crate::menu::nav::device(ui.ctx()) {
+                Device::Pad => format!("Stick: move    Triggers or A: zoom    {key} / B: close"),
+                Device::Wheel => {
+                    format!("Menu buttons: move    Choose: zoom    {key} / Back: close")
+                }
+                _ => format!(
+                    "Drag: move    Scroll or + -: zoom    {click}{key} / Esc: close{pointer}"
+                ),
+            };
             label(
                 &painter,
                 screen.left_bottom() + vec2(12.0, -12.0),
