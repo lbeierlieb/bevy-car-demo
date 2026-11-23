@@ -27,6 +27,9 @@ const WATER_LIFT: f32 = 0.05;
 const DRAPE_STEP: f32 = 1.0;
 /// Cell size of the grid of road segments, for looking up the surface (m).
 const ROAD_CELL: f32 = 4.0;
+/// A corner's spokes are divided about this finely (m), its surface following the roads'
+/// where it meets them (see `Terrain::settle_corners`).
+const CORNER_LATTICE: f32 = 1.5;
 /// Where roads overlap (junctions), the surface blends them, each by how far inside its
 /// edge the point is, fading out over this distance towards the road's ends (m), so the
 /// surface stays continuous where a side road's crown meets a main road's camber.
@@ -282,26 +285,59 @@ struct Chunk {
 }
 
 /// The inside of a turn between two roads leaving a junction, filled out to an arc: a fan
-/// of triangles around its first point (x, height, z).
+/// of triangles around its first point (x, height, z). Its surface is divided along the
+/// fan's spokes (from the first point to each of the arc's), and its heights there follow
+/// the roads' surface where they meet them (`Terrain::settle_corners`).
 pub struct Corner {
     pub kind: RoadKind,
     pub points: Vec<Vec3>,
+    /// How many pieces each spoke is divided into, and per spoke the heights at its
+    /// division points, from the first point out (empty: the fan's flat triangles).
+    divisions: usize,
+    spokes: Vec<Vec<f32>>,
 }
 
 impl Corner {
-    /// Its triangles as drawn: a little under the ribbons, which it reaches in under.
+    fn new(kind: RoadKind, points: Vec<Vec3>) -> Self {
+        Self {
+            kind,
+            points,
+            divisions: 1,
+            spokes: Vec::new(),
+        }
+    }
+
+    /// Division point `k` of spoke `s` (to arc point `s`), at its height.
+    fn spoke_point(&self, s: usize, k: usize) -> Vec3 {
+        let (e, b) = (self.points[0], self.points[s + 1]);
+        let p = e + (b - e) * (k as f32 / self.divisions as f32);
+        match self.spokes.get(s) {
+            Some(heights) => p.with_y(heights[k]),
+            None => p,
+        }
+    }
+
+    /// Its fan's triangles in the xz plane (heights as the fan's).
     fn fan(&self) -> impl Iterator<Item = [Vec3; 3]> + '_ {
-        let lift = Vec3::Y * (self.kind.lift() - 0.004).max(0.001);
-        let e = self.points[0] + lift;
-        self.points[1..]
-            .windows(2)
-            .map(move |w| [e, w[0] + lift, w[1] + lift])
+        let e = self.points[0];
+        self.points[1..].windows(2).map(move |w| [e, w[0], w[1]])
+    }
+
+    /// Its outline at the height it's drawn at (the ground's, `cut`, follows it): from the
+    /// first point out along the first spoke, round the arc, and back along the last.
+    fn outline(&self) -> Vec<Vec3> {
+        let (n, last) = (self.divisions, self.points.len() - 2);
+        let lift = Vec3::Y * self.kind.lift();
+        let mut out: Vec<Vec3> = (0..=n).map(|k| self.spoke_point(0, k)).collect();
+        out.extend((1..=last).map(|s| self.spoke_point(s, n)));
+        out.extend((0..n).rev().map(|k| self.spoke_point(last, k)));
+        out.iter().map(|p| *p + lift).collect()
     }
 
     /// Height and upward normal of its surface at `p`, if it's inside.
     fn at(&self, p: Vec2) -> Option<(f32, Vec3)> {
         let e = self.points[0];
-        for w in self.points[1..].windows(2) {
+        for (t, w) in self.points[1..].windows(2).enumerate() {
             let (b, c) = (w[0], w[1]);
             let (eb, ec) = (b.xz() - e.xz(), c.xz() - e.xz());
             let det = eb.perp_dot(ec);
@@ -311,9 +347,29 @@ impl Corner {
             let ep = p - e.xz();
             let (u, v) = (ep.perp_dot(ec) / det, eb.perp_dot(ep) / det);
             if u >= -1e-4 && v >= -1e-4 && u + v <= 1.0 + 1e-4 {
-                let normal = (b - e).cross(c - e).normalize();
+                // Between the spokes `t` and `t + 1`, in the strip from division `k` out:
+                // the quad's triangle the point is in.
+                let n = self.divisions;
+                let k = (((u + v) * n as f32).max(0.0) as usize).min(n - 1);
+                let q = |s, k| self.spoke_point(s, k);
+                let (a, b, c, d) = (q(t, k), q(t + 1, k), q(t + 1, k + 1), q(t, k + 1));
+                // Split along a–c; the innermost strip is one triangle (a and b are the
+                // first point).
+                let side = (c.xz() - a.xz()).perp_dot(p - a.xz());
+                let turn = (c.xz() - a.xz()).perp_dot(b.xz() - a.xz());
+                let tri = if k > 0 && side * turn >= 0.0 {
+                    [a, b, c]
+                } else {
+                    [a, c, d]
+                };
+                let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or_zero();
+                if normal.y.abs() < 1e-6 {
+                    continue;
+                }
                 let normal = if normal.y < 0.0 { -normal } else { normal };
-                return Some((e.y + u * (b.y - e.y) + v * (c.y - e.y), normal));
+                let h = tri[0].y
+                    - (normal.x * (p.x - tri[0].x) + normal.z * (p.y - tri[0].z)) / normal.y;
+                return Some((h, normal));
             }
         }
         None
@@ -493,11 +549,11 @@ impl Terrain {
                         Vec3::new(x, y, z)
                     })
                     .collect();
-                Corner { kind, points }
+                Corner::new(kind, points)
             })
             .collect();
         let half = Vec2::new(cells_x as f32, cells_z as f32) * cell / 2.0;
-        Ok(Self {
+        let mut terrain = Self {
             cells_x,
             cells_z,
             cell,
@@ -515,7 +571,9 @@ impl Terrain {
             fingerprint: file.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
                 (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
             }),
-        })
+        };
+        terrain.settle_corners();
+        Ok(terrain)
     }
 
     /// A flat, empty square 1 km across at height 0, paved all over, for driving tests.
@@ -653,6 +711,12 @@ impl Terrain {
     /// roads covering the point (blended where they overlap, see `ROAD_FADE`), else the
     /// terrain (and its land use, or a waterway on it).
     pub fn ground(&self, x: f32, z: f32, y: f32) -> Ground {
+        self.ground_and_roads(x, z, y).0
+    }
+
+    /// `ground`, and the height of the roads on the ground there (blended), if any cover
+    /// it.
+    fn ground_and_roads(&self, x: f32, z: f32, y: f32) -> (Ground, Option<f32>) {
         let p = Vec2::new(x, z);
         // Per road covering it: (road, weight, height, slope as d height / d (x, z)).
         let mut covering: [(usize, f32, f32, Vec2); 8] = [(usize::MAX, 0.0, 0.0, Vec2::ZERO); 8];
@@ -723,7 +787,8 @@ impl Terrain {
                 surface: self.roads[main.0].kind.surface(),
             })
         };
-        let below = blend(Some(false)).or(corner).unwrap_or_else(|| {
+        let roads = blend(Some(false));
+        let below = roads.or(corner).unwrap_or_else(|| {
             let (height, normal) = self.land(x, z);
             let surface = if water {
                 Surface::Water
@@ -736,14 +801,149 @@ impl Terrain {
                 surface,
             }
         });
-        match blend(Some(true)) {
+        let ground = match blend(Some(true)) {
             // Level with the roads on the ground (where they meet a bridge's end): one.
             Some(deck) if (deck.height - below.height).abs() < LEVEL_REACH / 2.0 => {
                 blend(None).unwrap()
             }
             Some(deck) if deck.height <= y + LEVEL_REACH && deck.height > below.height => deck,
             _ => below,
+        };
+        (ground, roads.map(|r| r.height))
+    }
+
+    /// Divides the corners' spokes (`CORNER_LATTICE` apart) and sets their heights to
+    /// follow the roads where they meet them: a point on a road is on its surface
+    /// as the ribbons are drawn (blended where roads overlap), one off the roads blends
+    /// the nearest road edge's height and the baked corner's by how near each of the
+    /// edge and the arc is. Baked from each road's own surface, a corner could otherwise
+    /// sit well under or over the ribbons where roads at different heights overlap.
+    fn settle_corners(&mut self) {
+        // Natively spread over the cores (a fifth of a second on one); the web has one.
+        #[cfg(not(target_arch = "wasm32"))]
+        let settled: Vec<(usize, Vec<Vec<f32>>)> = {
+            let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+            let share = self.corners.len().div_ceil(threads).max(1);
+            let this = &*self;
+            std::thread::scope(|scope| {
+                let parts: Vec<_> = this
+                    .corners
+                    .chunks(share)
+                    .map(|part| {
+                        scope.spawn(move || {
+                            part.iter()
+                                .map(|corner| this.corner_spokes(corner))
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                parts
+                    .into_iter()
+                    .flat_map(|part| part.join().expect("settling corners"))
+                    .collect()
+            })
+        };
+        #[cfg(target_arch = "wasm32")]
+        let settled: Vec<(usize, Vec<Vec<f32>>)> = self
+            .corners
+            .iter()
+            .map(|corner| self.corner_spokes(corner))
+            .collect();
+        for (corner, (n, spokes)) in self.corners.iter_mut().zip(settled) {
+            corner.divisions = n;
+            corner.spokes = spokes;
         }
+    }
+
+    fn corner_spokes(&self, corner: &Corner) -> (usize, Vec<Vec<f32>>) {
+        let e = corner.points[0];
+        let longest = corner.points[1..]
+            .iter()
+            .map(|p| p.xz().distance(e.xz()))
+            .fold(0.0, f32::max);
+        let n = ((longest / CORNER_LATTICE).ceil() as usize).clamp(1, 16);
+        // The road segments near it: those it lies between, whose edges its arc meets.
+        let (lo, hi) = corner
+            .points
+            .iter()
+            .fold((Vec2::MAX, Vec2::MIN), |(lo, hi), p| {
+                (lo.min(p.xz()), hi.max(p.xz()))
+            });
+        let mut near: Vec<(usize, usize)> = Vec::new();
+        let (c0, c1) = (self.road_grid.cell(lo - 4.0), self.road_grid.cell(hi + 4.0));
+        for cz in c0.1..=c1.1 {
+            for cx in c0.0..=c1.0 {
+                let k = cz * self.road_grid.cells_x + cx;
+                let cell = &self.road_grid.entries
+                    [self.road_grid.starts[k] as usize..self.road_grid.starts[k + 1] as usize];
+                for &(r, i) in cell {
+                    let (r, i) = (r as usize, i as usize);
+                    let keep = self
+                        .roads
+                        .get(r)
+                        .is_some_and(|road| road.kind != RoadKind::Water && !road.bridge);
+                    if keep {
+                        near.push((r, i));
+                    }
+                }
+            }
+        }
+        near.sort_unstable();
+        near.dedup();
+        let arc = &corner.points[1..];
+        let to_arc = |p: Vec2| {
+            arc.windows(2)
+                .map(|w| {
+                    let (a, b) = (w[0].xz(), w[1].xz());
+                    let t =
+                        ((p - a).dot(b - a) / (b - a).length_squared().max(1e-9)).clamp(0.0, 1.0);
+                    a.lerp(b, t).distance(p)
+                })
+                .fold(f32::INFINITY, f32::min)
+        };
+        let roads_at = |p: Vec2| self.ground_and_roads(p.x, p.y, f32::NEG_INFINITY).1;
+        let height = |p: Vec3| -> f32 {
+            let q = p.xz();
+            if let Some(h) = roads_at(q) {
+                return h;
+            }
+            // The nearest road edge: its distance, and a point just inside it.
+            let mut edge: Option<(f32, Vec2)> = None;
+            for &(r, i) in &near {
+                let road = &self.roads[r];
+                let (a, b) = (road.points[i], road.points[i + 1]);
+                let length = a.distance(b).max(1e-6);
+                let t = ((q - a).dot(b - a) / (length * length)).clamp(0.0, 1.0);
+                let centre = a.lerp(b, t);
+                let off = centre.distance(q);
+                let half = road.width_at(road.along[i] + t * length) / 2.0;
+                let beyond = off - half;
+                if edge.is_none_or(|(d, _)| beyond < d) {
+                    let inside = centre + (q - centre).normalize_or_zero() * (half - 0.05).max(0.0);
+                    edge = Some((beyond.max(0.0), inside));
+                }
+            }
+            let Some((d_road, inside)) = edge else {
+                return p.y;
+            };
+            let Some(h_road) = roads_at(inside) else {
+                return p.y;
+            };
+            let d_arc = to_arc(q);
+            let f = d_arc / (d_arc + d_road).max(1e-6);
+            f * h_road + (1.0 - f) * p.y
+        };
+        // The first point is every spoke's first.
+        let middle = height(e);
+        let spokes = corner.points[1..]
+            .iter()
+            .map(|&b| {
+                let mut heights = vec![middle];
+                heights.extend((1..=n).map(|k| height(e + (b - e) * (k as f32 / n as f32))));
+                heights
+            })
+            .collect();
+        (n, spokes)
     }
 
     /// Whether (x, z) is inside the map, away from the rim that slopes down at its edge.
@@ -1059,13 +1259,7 @@ impl RoadRibbons {
                 );
             }
         }
-        // Corners a little under the ribbons, which they reach in under.
-        for &c in &self.corners[index] {
-            let corner = &terrain.corners[c];
-            for tri in corner.fan() {
-                mesh.triangle(tri, corner.kind.color());
-            }
-        }
+        // (The corners are part of the ground: `cut`.)
     }
 }
 

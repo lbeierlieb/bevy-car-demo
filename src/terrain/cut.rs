@@ -1,13 +1,16 @@
-//! The ground of a chunk with the roads cut out of it: where the ribbons and corners lie,
-//! there's no terrain, and the terrain's edge there is the ribbon's edge, vertex for
-//! vertex, so the two meet without a gap to see under the road or terrain coming up
-//! through it.
+//! The ground of a chunk with the roads cut out of it: where the ribbons lie there's no
+//! terrain, and the terrain's edge there is the ribbon's edge, vertex for vertex, so the
+//! two meet without a gap to see under the road or terrain coming up through it. The
+//! corners between roads at junctions are part of this ground too, so they meet the
+//! ribbons and the terrain the same way.
 //!
-//! The grid's triangles that a road's outline crosses are cut along the outlines by a
-//! constrained Delaunay triangulation of their corners, edges and diagonals and the
-//! outlines (crossing each other where roads overlap); the pieces inside a road are
-//! dropped. A piece's corners are the grid's (at the terrain's height) or on an outline
-//! (at the drawn ribbon's height there). Bridges and waterways aren't cut.
+//! The grid's triangles that an outline (a ribbon's or a corner's) crosses are cut along
+//! the outlines by a constrained Delaunay triangulation of their corners, edges and
+//! diagonals and the outlines (crossing each other where roads overlap); the pieces
+//! inside a ribbon are dropped, those inside a corner are the corner's. A point on a
+//! ribbon's outline is at the drawn ribbon's height there, else one on a corner's at the
+//! corner's, else one inside a corner on its surface, else a grid corner at the
+//! terrain's height. Bridges and waterways aren't cut.
 
 use std::collections::HashSet;
 
@@ -36,6 +39,14 @@ impl HasPosition for Vertex {
     }
 }
 
+/// What a piece of the cover, or an outline, belongs to.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Part {
+    Ribbon,
+    /// A corner, by its place in `Terrain::corners`.
+    Corner(usize),
+}
+
 /// What of the roads lies on a chunk: the triangles they cover it with (in the xz plane)
 /// and their outlines ((x, drawn height, z), clipped to the chunk), each listed in the
 /// cells it reaches into.
@@ -44,8 +55,8 @@ struct Cover {
     lo: DVec2,
     cell: f64,
     m: usize,
-    pieces: Vec<[DVec2; 3]>,
-    outlines: Vec<[DVec3; 2]>,
+    pieces: Vec<([DVec2; 3], Part)>,
+    outlines: Vec<([DVec3; 2], Part)>,
     piece_cells: Vec<Vec<u32>>,
     outline_cells: Vec<Vec<u32>>,
     /// The outlines so far, either way round (the triangulation fails on a constraint
@@ -89,7 +100,7 @@ impl Cover {
         index(v.y) * self.m + index(v.x)
     }
 
-    fn piece(&mut self, [a, b, c]: [Vec3; 3]) {
+    fn piece(&mut self, [a, b, c]: [Vec3; 3], part: Part) {
         let tri = [a, b, c].map(|v| DVec2::new(v.x as f64, v.z as f64));
         let lo = tri[0].min(tri[1]).min(tri[2]) - 1e-6;
         let hi = tri[0].max(tri[1]).max(tri[2]) + 1e-6;
@@ -101,12 +112,12 @@ impl Cover {
         for c in cells {
             self.piece_cells[c].push(k);
         }
-        self.pieces.push(tri);
+        self.pieces.push((tri, part));
     }
 
     /// An outline from `a` to `b`, clipped to the chunk; where it's clipped, its end lies
     /// exactly on the chunk's edge, the same in the chunk next to it.
-    fn outline(&mut self, a: Vec3, b: Vec3) {
+    fn outline(&mut self, a: Vec3, b: Vec3, part: Part) {
         let key = |v: Vec3| [v.x.to_bits() as u64, v.z.to_bits() as u64];
         let (ka, kb) = (key(a), key(b));
         if ka == kb || !self.seen.insert([ka.min(kb), ka.max(kb)]) {
@@ -167,36 +178,46 @@ impl Cover {
         for c in self.cells(p.min(q) - reach, p.max(q) + reach) {
             self.outline_cells[c].push(k);
         }
-        self.outlines.push(ends);
+        self.outlines.push((ends, part));
     }
 
-    /// Whether `p` is inside a road (or a corner).
-    fn inside(&self, p: DVec2) -> bool {
-        self.piece_cells[self.cell_of(p)].iter().any(|&k| {
-            let [a, b, c] = self.pieces[k as usize];
+    /// What `p` is inside: a ribbon (before any corner it's also in), a corner, or
+    /// neither.
+    fn inside(&self, p: DVec2) -> Option<Part> {
+        let mut found = None;
+        for &k in &self.piece_cells[self.cell_of(p)] {
+            let ([a, b, c], part) = self.pieces[k as usize];
             let det = (b - a).perp_dot(c - a);
             if det.abs() < 1e-12 {
-                return false;
+                continue;
             }
             let u = (p - a).perp_dot(c - a) / det;
             let v = (b - a).perp_dot(p - a) / det;
-            u >= 0.0 && v >= 0.0 && u + v <= 1.0
-        })
+            if u >= 0.0 && v >= 0.0 && u + v <= 1.0 {
+                if part == Part::Ribbon {
+                    return Some(part);
+                }
+                found = Some(part);
+            }
+        }
+        found
     }
 
-    /// The drawn height of the highest outline `p` lies on, if any.
+    /// The drawn height of the highest ribbon outline `p` lies on, or if none, of the
+    /// highest corner outline.
     fn on_outline(&self, p: DVec2) -> Option<f64> {
-        let mut best: Option<f64> = None;
+        let mut best: [Option<f64>; 2] = [None, None];
         for &k in &self.outline_cells[self.cell_of(p)] {
-            let [a, b] = self.outlines[k as usize];
+            let ([a, b], part) = self.outlines[k as usize];
             let (a2, d) = (a.xz(), b.xz() - a.xz());
             let t = ((p - a2).dot(d) / d.length_squared().max(1e-18)).clamp(0.0, 1.0);
             if (a2 + d * t).distance(p) < ON_OUTLINE {
                 let h = a.y + (b.y - a.y) * t;
-                best = Some(best.map_or(h, |b| b.max(h)));
+                let slot = &mut best[(part != Part::Ribbon) as usize];
+                *slot = Some(slot.map_or(h, |b| b.max(h)));
             }
         }
-        best
+        best[0].or(best[1])
     }
 }
 
@@ -245,19 +266,37 @@ impl RoadRibbons {
         };
         let touched: Vec<bool> = cover.outline_cells.iter().map(|o| !o.is_empty()).collect();
 
-        // Untouched cells: as they are, unless they're inside a road.
+        // A corner's surface as drawn at `p`, if `p` is on it.
+        let on_corner = |k: usize, p: DVec2| {
+            let corner = &terrain.corners[k];
+            let (h, _) = corner.at(p.as_vec2())?;
+            Some(h + corner.kind.lift())
+        };
+
+        // Untouched cells: as they are, unless they're inside a ribbon; inside a corner,
+        // on its surface.
         for c in (0..m * m).filter(|&c| !touched[c]) {
             let (jx, jz) = (c % m, c / m);
             let centre = cover.lo + (DVec2::new(jx as f64, jz as f64) + 0.5) * cover.cell;
-            if cover.inside(centre) {
+            let part = cover.inside(centre);
+            if part == Some(Part::Ribbon) {
                 continue;
             }
             let (ix, iz) = corner(jx, jz);
-            let (a, b) = (terrain.vertex(ix, iz), terrain.vertex(ix + s, iz));
-            let (cc, d) = (terrain.vertex(ix, iz + s), terrain.vertex(ix + s, iz + s));
+            let (mut a, mut b) = (terrain.vertex(ix, iz), terrain.vertex(ix + s, iz));
+            let (mut cc, mut d) = (terrain.vertex(ix, iz + s), terrain.vertex(ix + s, iz + s));
+            if let Some(Part::Corner(k)) = part {
+                for v in [&mut a, &mut b, &mut cc, &mut d] {
+                    v.y = on_corner(k, v.xz().as_dvec2()).unwrap_or(v.y);
+                }
+            }
             for tri in [[a, d, b], [a, cc, d]] {
                 let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
-                mesh.triangle(tri, color(c, normal.y));
+                let color = match part {
+                    Some(Part::Corner(k)) => terrain.corners[k].kind.color(),
+                    _ => color(c, normal.y),
+                };
+                mesh.triangle(tri, color);
             }
         }
 
@@ -288,7 +327,7 @@ impl RoadRibbons {
         }
         let mut cdt = ConstrainedDelaunayTriangulation::<Vertex>::bulk_load_cdt(vertices, edges)
             .expect("grid cells triangulate");
-        for &[a, b] in &cover.outlines {
+        for &([a, b], _) in &cover.outlines {
             let insert = |cdt: &mut ConstrainedDelaunayTriangulation<Vertex>, v: DVec3| {
                 cdt.insert(Vertex {
                     at: Point2::new(v.x, v.z),
@@ -310,8 +349,13 @@ impl RoadRibbons {
         let mut height = |k: usize, data: &Vertex| {
             if heights[k].is_nan() {
                 let p = DVec2::new(data.at.x, data.at.y);
+                let in_corner = || match cover.inside(p) {
+                    Some(Part::Corner(c)) => on_corner(c, p).map(f64::from),
+                    _ => None,
+                };
                 heights[k] = cover
                     .on_outline(p)
+                    .or_else(in_corner)
                     .or(data.height.is_finite().then_some(data.height))
                     .map_or_else(|| terrain.land(p.x as f32, p.y as f32).0, |h| h as f32);
             }
@@ -327,7 +371,8 @@ impl RoadRibbons {
             if !touched[c] || flat[0] == flat[1] || flat[1] == flat[2] || flat[2] == flat[0] {
                 continue;
             }
-            if cover.inside(centre) {
+            let part = cover.inside(centre);
+            if part == Some(Part::Ribbon) {
                 continue;
             }
             let tri = [0, 1, 2].map(|k| {
@@ -335,7 +380,11 @@ impl RoadRibbons {
                 Vec3::new(flat[k].x, h, flat[k].y)
             });
             let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or_zero();
-            mesh.triangle(tri, color(c, normal.y.abs()));
+            let color = match part {
+                Some(Part::Corner(k)) => terrain.corners[k].kind.color(),
+                _ => color(c, normal.y.abs()),
+            };
+            mesh.triangle(tri, color);
         }
     }
 
@@ -371,10 +420,10 @@ impl RoadRibbons {
                     .collect();
                 for pair in edges.windows(2) {
                     let ([l0, r0], [l1, r1]) = ([pair[0][0], pair[0][1]], [pair[1][0], pair[1][1]]);
-                    cover.piece([l0, r0, r1]);
-                    cover.piece([l0, r1, l1]);
-                    cover.outline(l0, l1);
-                    cover.outline(r0, r1);
+                    cover.piece([l0, r0, r1], Part::Ribbon);
+                    cover.piece([l0, r1, l1], Part::Ribbon);
+                    cover.outline(l0, l1, Part::Ribbon);
+                    cover.outline(r0, r1, Part::Ribbon);
                 }
                 // The road's ends, across, but where it runs on into another road's
                 // end (its ribbon ends on the same mitre).
@@ -384,30 +433,27 @@ impl RoadRibbons {
                 for k in [first, last].into_iter().flatten() {
                     let row = strip.row(k, 0..=across);
                     for w in row.windows(2) {
-                        cover.outline(w[0], w[1]);
+                        cover.outline(w[0], w[1], Part::Ribbon);
                     }
                 }
             }
             for &k in &self.corners[c] {
                 let corner = &terrain.corners[k];
-                let fan: Vec<[Vec3; 3]> = corner.fan().collect();
-                let (Some(first), Some(last)) = (fan.first(), fan.last()) else {
-                    continue;
-                };
-                let (a, b) = fan
+                let (a, b) = corner
+                    .points
                     .iter()
-                    .flatten()
                     .fold((Vec2::MAX, Vec2::MIN), |(a, b), v| {
                         (a.min(v.xz()), b.max(v.xz()))
                     });
                 if !overlaps(a, b) {
                     continue;
                 }
-                cover.outline(first[0], first[1]);
-                cover.outline(last[2], last[0]);
-                for tri in &fan {
-                    cover.piece(*tri);
-                    cover.outline(tri[1], tri[2]);
+                let part = Part::Corner(k);
+                for tri in corner.fan() {
+                    cover.piece(tri, part);
+                }
+                for w in corner.outline().windows(2) {
+                    cover.outline(w[0], w[1], part);
                 }
             }
         }
@@ -454,7 +500,7 @@ mod tests {
                         .abs()
                         / 2.0;
                     assert!(
-                        area < 1e-3 || !cover.inside(centre),
+                        area < 1e-3 || cover.inside(centre) != Some(Part::Ribbon),
                         "terrain {tri:?} (area {area}) is inside a road"
                     );
                     for (a, b) in [(0, 1), (1, 2), (2, 0)] {
@@ -474,7 +520,7 @@ mod tests {
         // Within a millimetre: the mesh is in f32, a quarter millimetre apart out here.
         let on_outline = |p: Vec2| {
             let p = p.as_dvec2();
-            covers.iter().flat_map(|c| &c.outlines).any(|&[a, b]| {
+            covers.iter().flat_map(|c| &c.outlines).any(|&([a, b], _)| {
                 let (a, d) = (a.xz(), b.xz() - a.xz());
                 let t = ((p - a).dot(d) / d.length_squared().max(1e-18)).clamp(0.0, 1.0);
                 (a + d * t).distance(p) < 1e-3
@@ -650,5 +696,159 @@ mod tests {
                 &holes[..holes.len().min(8)]
             );
         }
+    }
+
+    /// Low rays over a block of chunks, every way: none may pass under the drawn
+    /// surfaces (a slit between two of them, or a hole) before it's well under the
+    /// ground. Returns where they did.
+    fn rays_through(terrain: &Terrain, ribbons: &RoadRibbons, centre: Vec2) -> Vec<(Vec3, Vec3)> {
+        let per_side = terrain.chunks_x();
+        let middle = terrain.chunk_at(centre);
+        let mut tris: Vec<[Vec3; 3]> = Vec::new();
+        for z in 0..3 {
+            for x in 0..3 {
+                let index = middle - per_side - 1 + z * per_side + x;
+                let (mut ground, mut roads, mut structure) = Default::default();
+                ribbons.ground_mesh(terrain, index, &mut ground);
+                ribbons.mesh(terrain, index, &mut roads, &mut structure);
+                for mesh in [&ground, &roads, &structure] {
+                    for t in mesh.positions.chunks(3) {
+                        tris.push([0, 1, 2].map(|k| Vec3::from(t[k])));
+                    }
+                }
+            }
+        }
+        // Binned by 2 m cells over the block.
+        let (lo, _) = terrain.chunk_bounds(middle - per_side - 1);
+        let n = (3.0 * terrain.chunk_cells as f32 * terrain.cell / 2.0) as usize;
+        let cell = |p: Vec2| {
+            let v = ((p - lo) / 2.0).floor();
+            (v.x >= 0.0 && v.y >= 0.0 && (v.x as usize) < n && (v.y as usize) < n)
+                .then(|| v.y as usize * n + v.x as usize)
+        };
+        let mut bins: Vec<Vec<u32>> = vec![Vec::new(); n * n];
+        for (k, t) in tris.iter().enumerate() {
+            let (a, b) = (
+                t[0].xz().min(t[1].xz()).min(t[2].xz()),
+                t[0].xz().max(t[1].xz()).max(t[2].xz()),
+            );
+            let (a, b) = (((a - lo) / 2.0).floor(), ((b - lo) / 2.0).floor());
+            for z in a.y.max(0.0) as usize..=(b.y.max(0.0) as usize).min(n - 1) {
+                for x in a.x.max(0.0) as usize..=(b.x.max(0.0) as usize).min(n - 1) {
+                    bins[z * n + x].push(k as u32);
+                }
+            }
+        }
+        let hit = |eye: Vec3, dir: Vec3, t: [Vec3; 3]| {
+            let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
+            let h = dir.cross(e2);
+            let det = e1.dot(h);
+            if det.abs() < 1e-12 {
+                return None;
+            }
+            let s = eye - t[0];
+            let u = s.dot(h) / det;
+            let q = s.cross(e1);
+            let v = dir.dot(q) / det;
+            let d = e2.dot(q) / det;
+            // A millimetre or two of slack: a ray can graze the seam between two meshes.
+            (u >= -2e-3 && v >= -2e-3 && u + v <= 1.0 + 2e-3 && d > 0.0).then_some(d)
+        };
+        let (mid_lo, _) = terrain.chunk_bounds(middle);
+        let mut through = Vec::new();
+        let mut stamp = vec![0u32; tris.len()];
+        let mut stamps = 0;
+        for j in 0..24 {
+            for i in 0..24 {
+                let at = mid_lo + (Vec2::new(i as f32, j as f32) + 0.5) * 4.0;
+                let eye = Vec3::new(at.x, terrain.sample(at.x, at.y).0 + 1.2, at.y);
+                for k in 0..16 {
+                    let a = k as f32 / 16.0 * std::f32::consts::TAU + 0.1;
+                    let dir = Vec3::new(a.cos(), -0.12, a.sin()).normalize();
+                    stamps += 1;
+                    let mut best = f32::INFINITY;
+                    let mut t = 0.0;
+                    // Until the ray is well under the ground (or the drawn surface hit).
+                    while t < 40.0 && t < best {
+                        let p = eye + dir * t;
+                        if p.y < terrain.sample(p.x, p.z).0 - 0.5 {
+                            break;
+                        }
+                        for c in [-0.3f32, 0.3]
+                            .into_iter()
+                            .flat_map(|dx| {
+                                [-0.3f32, 0.3].map(|dz| cell(p.xz() + Vec2::new(dx, dz)))
+                            })
+                            .flatten()
+                        {
+                            for &q in &bins[c] {
+                                if stamp[q as usize] != stamps {
+                                    stamp[q as usize] = stamps;
+                                    if let Some(d) = hit(eye, dir, tris[q as usize]) {
+                                        best = best.min(d);
+                                    }
+                                }
+                            }
+                        }
+                        t += 0.25;
+                    }
+                    let end = eye + dir * t;
+                    if best.is_infinite() && t < 40.0 && cell(end.xz()).is_some() {
+                        through.push((eye, dir));
+                    }
+                }
+            }
+        }
+        through
+    }
+
+    #[test]
+    fn rays_never_pass_under_the_roads() {
+        let terrain = Terrain::baked();
+        let ribbons = RoadRibbons::new(&terrain);
+        for centre in [
+            Vec2::new(-2646.0, -2217.0),
+            Vec2::new(-2941.0, -2070.0),
+            Vec2::new(-2984.5, -2007.2),
+        ] {
+            let through = rays_through(&terrain, &ribbons, centre);
+            assert!(
+                through.is_empty(),
+                "{} rays through around {centre}, e.g. {:?}",
+                through.len(),
+                &through[..through.len().min(4)]
+            );
+        }
+    }
+
+    /// The same at every hundredth junction of the map (about 15 s).
+    #[test]
+    #[ignore]
+    fn rays_at_many_junctions() {
+        let terrain = Terrain::baked();
+        let ribbons = RoadRibbons::new(&terrain);
+        let (mut blocks, mut bad) = (0, Vec::new());
+        for corner in terrain.corners.iter().step_by(100) {
+            let at = corner.points[0].xz();
+            let index = terrain.chunk_at(at);
+            let per_side = terrain.chunks_x();
+            if index.is_multiple_of(per_side)
+                || index % per_side == per_side - 1
+                || index < per_side
+                || index + per_side >= terrain.chunk_count()
+            {
+                continue;
+            }
+            blocks += 1;
+            let through = rays_through(&terrain, &ribbons, at);
+            if !through.is_empty() {
+                bad.push((at, through.len(), through[0]));
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "{} of {blocks} blocks with rays through: {bad:?}",
+            bad.len()
+        );
     }
 }
