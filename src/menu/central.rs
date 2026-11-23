@@ -364,9 +364,6 @@ fn main(
     if !cfg!(target_arch = "wasm32") && kit::button(ui, "Quit").clicked() {
         exit.write(AppExit::Success);
     }
-    if kit::button(ui, "Back to driving").clicked() {
-        menu.close();
-    }
     go
 }
 
