@@ -248,13 +248,7 @@ fn settings(ui: &mut egui::Ui, car: &mut Car) {
 fn saved_tunes(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
     let build = &mut car.setup.engine.build;
     kit::section(ui, "Tunes");
-    ui.add(
-        egui::TextEdit::singleline(&mut panel.name)
-            .hint_text("Name to save the tune under")
-            .desired_width(f32::INFINITY)
-            .font(FontId::proportional(16.0))
-            .margin(vec2(12.0, 8.0)),
-    );
+    kit::text_field(ui, &mut panel.name, "Name to save the tune under", 1);
     if kit::button(ui, "Save the tune").clicked() {
         // Without a name typed (a controller), a numbered one.
         let name = if panel.name.trim().is_empty() {

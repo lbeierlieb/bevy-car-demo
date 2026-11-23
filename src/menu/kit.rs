@@ -544,6 +544,104 @@ pub fn note(ui: &mut Ui, text: &str) {
     ui.label(egui::RichText::new(text).size(14.0).color(WEAK));
 }
 
+/// A text field that the arrows pass over like any row: choose (Enter, a click) starts
+/// typing, Enter keeps what was typed, Esc throws it away, and either way the focus is
+/// back on the row. With `rows` over 1 it takes several lines: Enter is a new line, and
+/// leaving it (Esc, a click elsewhere) keeps the text. Changed when the text was kept.
+pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str, rows: usize) -> Response {
+    // The same id whether it's the row or the field being typed in.
+    let id = ui.next_auto_id().with("text field");
+    let edit_id = id.with("editing");
+    let typing: Option<String> = ui.data(|d| d.get_temp(edit_id));
+    let font = FontId::proportional(16.0);
+    if let Some(mut draft) = typing {
+        let edit = if rows > 1 {
+            egui::TextEdit::multiline(&mut draft).desired_rows(rows)
+        } else {
+            egui::TextEdit::singleline(&mut draft)
+        };
+        // Esc is the field's: left to egui, it drops the focus before the field sees it,
+        // and the menu would give it to its first row.
+        let filter = EventFilter {
+            horizontal_arrows: true,
+            vertical_arrows: true,
+            escape: true,
+            ..Default::default()
+        };
+        let mut response = ui.add(
+            edit.id(edit_id)
+                .event_filter(filter)
+                .hint_text(hint)
+                .desired_width(f32::INFINITY)
+                .font(font)
+                .margin(vec2(12.0, 10.0)),
+        );
+        let escape = focused(ui, &response) && ui.input(|i| i.key_pressed(Key::Escape));
+        // Enter (single line) ends it in egui; a click elsewhere too, leaving the focus
+        // where it went.
+        let entered = response.lost_focus();
+        if escape || entered {
+            if !(escape && rows == 1) && draft != *text {
+                *text = draft;
+                response.mark_changed();
+            }
+            ui.data_mut(|d| d.remove::<String>(edit_id));
+            let clicked_away = entered && ui.memory(|m| m.focused().is_some());
+            if !clicked_away {
+                ui.memory_mut(|m| m.request_focus(id));
+            }
+        } else {
+            ui.data_mut(|d| d.insert_temp(edit_id, draft));
+        }
+        return response;
+    }
+    let lines = rows.max(1) as f32;
+    let height = ROW + (lines - 1.0) * 20.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let response = ui.interact(rect, id, Sense::click());
+    let fill = if focused(ui, &response) {
+        ROW_FOCUS
+    } else if response.hovered() {
+        ROW_HOVER
+    } else {
+        ROW_FILL
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, 7.0, fill);
+    painter.rect_stroke(
+        rect,
+        7.0,
+        Stroke::new(1.0, Color32::from_gray(70)),
+        egui::StrokeKind::Inside,
+    );
+    let (shown, color) = if text.is_empty() {
+        (hint, WEAK)
+    } else {
+        (text.as_str(), TEXT)
+    };
+    let galley = painter.layout(shown.to_string(), font, color, rect.width() - 28.0 - 50.0);
+    let top = if rows > 1 {
+        rect.top() + 10.0
+    } else {
+        rect.center().y - galley.size().y / 2.0
+    };
+    painter
+        .with_clip_rect(rect.shrink(4.0))
+        .galley(pos2(rect.left() + 12.0, top), galley, color);
+    painter.text(
+        pos2(rect.right() - 14.0, rect.center().y),
+        Align2::RIGHT_CENTER,
+        "Edit",
+        FontId::proportional(14.0),
+        WEAK,
+    );
+    if response.clicked() {
+        ui.data_mut(|d| d.insert_temp(edit_id, text.clone()));
+        ui.memory_mut(|m| m.request_focus(edit_id));
+    }
+    response
+}
+
 /// A line of text (not focusable), with a value on the right.
 pub fn info(ui: &mut Ui, label: &str, value: &str) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
@@ -622,5 +720,63 @@ mod tests {
         pass(&ctx, &[Key::ArrowLeft], &draw);
         pass(&ctx, &[Key::ArrowLeft], &draw);
         assert!((volume.get() - 0.9).abs() < 1e-5, "{}", volume.get());
+    }
+
+    #[test]
+    fn a_text_field_is_typed_in_only_after_choose() {
+        let ctx = egui::Context::default();
+        super::super::style(&ctx);
+        nav::hook(&ctx);
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+        let text = std::cell::RefCell::new(String::from("Keyboard"));
+        let (above, below) = (Cell::new(0), Cell::new(0));
+        let draw = |ui: &mut Ui| {
+            if button(ui, "Above").clicked() {
+                above.set(above.get() + 1);
+            }
+            text_field(ui, &mut text.borrow_mut(), "", 1);
+            if button(ui, "Below").clicked() {
+                below.set(below.get() + 1);
+            }
+        };
+        let typed = |ctx: &egui::Context, s: &str| {
+            let mut input = egui::RawInput::default();
+            input.events.push(egui::Event::Text(s.into()));
+            let _ = ctx.run_ui(input, |root| {
+                Panel::new("test", "Test").show(root.ctx(), draw);
+            });
+        };
+        let field_focused = || ctx.text_edit_focused();
+        pass(&ctx, &[], &draw);
+        pass(&ctx, &[], &draw);
+        pass(&ctx, &[Key::ArrowDown], &draw);
+        // On the row, the arrows pass and typing does nothing.
+        typed(&ctx, "x");
+        assert!(!field_focused());
+        pass(&ctx, &[Key::ArrowDown], &draw);
+        pass(&ctx, &[Key::Enter], &draw);
+        assert_eq!(below.get(), 1);
+        pass(&ctx, &[Key::ArrowUp], &draw);
+        // Enter starts typing, Esc throws it away and leaves the focus on the row.
+        pass(&ctx, &[Key::Enter], &draw);
+        pass(&ctx, &[], &draw);
+        assert!(field_focused());
+        typed(&ctx, " 2");
+        pass(&ctx, &[Key::Escape], &draw);
+        pass(&ctx, &[], &draw);
+        assert!(!field_focused());
+        assert_eq!(*text.borrow(), "Keyboard");
+        // Again, and Enter keeps it; the focus stays on the row (Enter again types).
+        pass(&ctx, &[Key::Enter], &draw);
+        pass(&ctx, &[], &draw);
+        typed(&ctx, " 2");
+        pass(&ctx, &[Key::Enter], &draw);
+        pass(&ctx, &[], &draw);
+        assert_eq!(*text.borrow(), "Keyboard 2");
+        assert!(!field_focused());
+        pass(&ctx, &[Key::Enter], &draw);
+        pass(&ctx, &[], &draw);
+        assert!(field_focused());
+        assert_eq!((above.get(), below.get()), (0, 1));
     }
 }

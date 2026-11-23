@@ -7,7 +7,6 @@
 
 use bevy::app::AppExit;
 use bevy::prelude::*;
-use bevy_egui::egui;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car, SETTINGS};
@@ -153,11 +152,11 @@ fn menu(
             menu.open = false;
         }
         kit::section(ui, "Your name");
-        field(ui, &mut settings.name, "");
+        kit::text_field(ui, &mut settings.name, "", 1);
         // On the web, the page's server is joined: no address to give.
         if !web {
             kit::section(ui, "Server");
-            field(ui, &mut settings.address, "cars.example.org");
+            kit::text_field(ui, &mut settings.address, "cars.example.org", 1);
         }
         if !can_join {
             kit::note(ui, "Give your name and a server's address to join it.");
@@ -173,17 +172,6 @@ fn menu(
         }
     });
     Ok(())
-}
-
-/// A text field as wide and tall as a row.
-fn field(ui: &mut egui::Ui, text: &mut String, hint: &str) {
-    ui.add(
-        egui::TextEdit::singleline(text)
-            .hint_text(hint)
-            .desired_width(f32::INFINITY)
-            .font(egui::FontId::proportional(17.0))
-            .margin(egui::vec2(12.0, 9.0)),
-    );
 }
 
 /// Once joined, the car goes to a spot of its own on the road by the spawn point.

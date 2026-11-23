@@ -91,6 +91,8 @@ pub struct MenuInput {
     pub confirm: bool,
     /// "Back" pressed this frame and not yet taken (see `take_back`).
     back: bool,
+    /// A pad's or the wheel's "back" while a text field is typed in: Esc for it.
+    escape: bool,
     /// The menu button pressed and not yet taken.
     open: bool,
     /// Zooming (the map): the pad's triggers or right stick, -1 out to 1 in.
@@ -485,7 +487,9 @@ fn read(
     input.held = analog(digital(held));
     input.pad_held = analog(digital(pad_held));
     input.confirm = confirm;
-    input.back = back;
+    // Typing, "back" is the field's (the keyboard's Esc goes to it anyway).
+    input.escape = back && focus.text;
+    input.back = back && !focus.text;
     input.open = open;
     input.zoom = zoom.clamp(-1.0, 1.0);
     if let Some(device) = device {
@@ -536,6 +540,9 @@ fn hand_to_egui(
     }
     if input.confirm {
         keys_out.push(egui::Key::Enter);
+    }
+    if input.escape {
+        keys_out.push(egui::Key::Escape);
     }
     for key in keys_out {
         for pressed in [true, false] {

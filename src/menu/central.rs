@@ -485,13 +485,7 @@ fn controls(ui: &mut egui::Ui, config: &mut WheelConfig) -> Option<Screen> {
     );
     kit::section(ui, "The profile's name");
     let mut name = config.profile().name.clone();
-    ui.add(
-        egui::TextEdit::singleline(&mut name)
-            .desired_width(f32::INFINITY)
-            .font(egui::FontId::proportional(16.0))
-            .margin(egui::vec2(12.0, 8.0)),
-    );
-    if name != config.profile().name && !name.trim().is_empty() {
+    if kit::text_field(ui, &mut name, "Name", 1).changed() && !name.trim().is_empty() {
         config.profile_mut().name = name.replace(['\n', '\r'], " ");
     }
     kit::section(ui, "Always");

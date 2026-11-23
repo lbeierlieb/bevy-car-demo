@@ -1020,18 +1020,12 @@ fn shown_run(ui: &mut egui::Ui, view: &mut DynoView) {
         );
     }
     let run = &mut view.runs[i];
-    ui.add(
-        egui::TextEdit::singleline(&mut run.name)
-            .hint_text("Name")
-            .desired_width(f32::INFINITY)
-            .font(FontId::proportional(16.0))
-            .margin(egui::vec2(12.0, 8.0)),
-    );
-    ui.add(
-        egui::TextEdit::multiline(&mut run.notes)
-            .hint_text("Notes: what was changed, the weather, …")
-            .desired_rows(2)
-            .desired_width(f32::INFINITY),
+    kit::text_field(ui, &mut run.name, "Name", 1);
+    kit::text_field(
+        ui,
+        &mut run.notes,
+        "Notes: what was changed, the weather, …",
+        2,
     );
 }
 
