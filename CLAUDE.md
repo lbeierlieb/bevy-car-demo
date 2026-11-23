@@ -1094,14 +1094,25 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    length) and to stay out of houses; a fan from the edges' corner pulled 0.3 m in under
    the roads, heights from the roads' edges. 4528 on the map. The game's `Corner`s are
    in the road grid (entries past the roads), count as ground where no road covers, and
-   are drawn 4 mm under the ribbons. **The ground is cut out under the roads** (asked
+   are part of the ground mesh since 2026-11-23 (see below). **The ground is cut out under the roads** (asked
    for by the user, 2026-11-22: no seeing under a road's edge, no terrain through it;
    `src/terrain/cut.rs`, `RoadRibbons::ground_mesh`): per chunk, the grid cells a
    ribbon's or corner's outline crosses go into a constrained Delaunay triangulation
    (crate `spade`) with their corners, sides and diagonals (so the rest stays the grid's
    triangles) and the outlines (`add_constraint_and_split`); pieces whose centroid is
-   inside a ribbon segment or corner fan are dropped, points on an outline get the
-   drawn ribbon's height. Not cut: bridges, waterways. The ribbon segment is shared
+   inside a ribbon segment are dropped, those inside a corner fan are the corner (road
+   colour); a point on a ribbon outline gets the drawn ribbon's height, else on a
+   corner outline the corner's, else inside a corner its surface, else the grid's.
+   Corners were separate fans before, 4 mm under the ribbons: with nothing beneath
+   them, a corner lower than the blended ribbon over it opened a gap to see under the
+   map (the user found one at (−2646, −2217)). Corner surfaces follow the ribbons:
+   `Terrain::settle_corners` divides each spoke (first point to an arc point) ~1.5 m
+   apart at load, heights on a road = the roads' blend (`ground_and_roads`), off the
+   roads a blend of the nearest road edge's and the baked height by distance to the
+   edge vs. the arc (0.2 s on one core, threaded natively; physics uses the same
+   `Corner::at`). `rays_never_pass_under_the_roads` casts low rays over junction
+   blocks (`rays_at_many_junctions`, ignored, every hundredth junction). Not cut:
+   bridges, waterways. The ribbon segment is shared
    code (`Strip`), so outline and ribbon agree exactly; its last row is exactly the next
    segment's first. ~0.8 ms a chunk. Spade asserts on degenerate input: an outline
    added twice once split (so outlines are deduplicated, and a road's end row isn't one
@@ -1122,9 +1133,10 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    a tie (`Problem::ties`: weighted terms with a target, solved like the bends) pulls
    the two surfaces (crowns included) together; road ribbon triangles steeper than 26°
    went from 352 m² to 44 m² (waterways on steep banks aside).
-   Not done: junction middles as one mesh (the overlapping ribbons show seams; a road
-   sloping away from a low camera looks bluish, the sky reflected at a grazing angle,
-   e.g. at (−2642, −2212) seen from the south), tunnels, piers.
+   Not done: junction middles as one mesh (the overlapping ribbons show seams; a side
+   road's ribbon end sticking out past a main road's edge stays at its own height, a
+   steep sliver where they differ, e.g. a 32 cm drop at (−2644.3, −2216.3)), tunnels,
+   piers.
 4. Road condition (done): `relief.rs`, OSM `smoothness` to ISO 8608 roughness (waves
    0.5–20 m), features from `traffic_calming=bump|hump|table` and `hazard=pothole`
    nodes. The baked file is zlib-compressed, heights predicted from neighbours.
