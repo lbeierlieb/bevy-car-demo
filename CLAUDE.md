@@ -20,7 +20,7 @@ repo, so everything worth knowing between sessions belongs here.
 The game is a library (`src/lib.rs`) and apps, each the list of plugins it adds: the
 **sandbox** (`src/main.rs`: the shared `CorePlugin` (`WorldPlugin` (terrain, obstacles,
 simulation, traffic: all the server has too), scenery, input, driving, visuals, camera,
-HUD, map, sound, egui), help (quick start, hints), stock coupé, R reset,
+HUD, map, sound, egui), help (quick start, hints), the Vireo hot hatch (B16), R reset,
 gizmos, 2 telemetry, the central menu (Esc), shops (online), F11 fullscreen in all apps). The career was removed for the multiplayer work (see
 "Multiplayer"). Keep it that way: no mode flags; something only one app has is a plugin
 of its own (e.g. `car::ResetPlugin`, `ui::PanelPlugin`), and
@@ -813,8 +813,8 @@ with a campaign, upgrades and personal cars, so a car is an instance built from
 catalogue entries, and things like swap subframes are named so they can be priced.
 
 - **Catalogues** (statics, entries referred to by their place; engine versions also by
-  code): `chassis.rs` has `CHASSIS` (13: Minim city car, Vireo hot hatch, Linnet
-  roadster, Tarn coupé (the default), Halden saloon, Skarn rally car, Harrow muscle car,
+  code): `chassis.rs` has `CHASSIS` (13: Minim city car, Vireo hot hatch (the default, B16), Linnet
+  roadster, Tarn coupé, Halden saloon, Skarn rally car, Harrow muscle car,
   Calder mid-engined, Rheon rear-engined, Vespera supercar, Wisp track-day special,
   Drover pickup, Carrow van; names are made up, no real cars), `GEARBOXES` (8, of three
   kinds: transverse, inline, transaxle), clutches, suspension kits and paints (the tire

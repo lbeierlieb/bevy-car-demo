@@ -293,7 +293,7 @@ pub fn body_box(chassis: &Chassis, fitted: &[Wheel; 2]) -> Obb {
 }
 
 impl Default for CarSetup {
-    /// The coupé with its base engine.
+    /// The car the game starts with, with its base engine.
     fn default() -> Self {
         Self::factory(DEFAULT_CHASSIS, 0)
     }

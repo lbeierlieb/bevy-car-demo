@@ -543,8 +543,8 @@ const fn detail(at: [f32; 3], size: [f32; 3], tone: Tone) -> Detail {
     Detail { at, size, tone }
 }
 
-/// The coupé, which the game starts with.
-pub const DEFAULT_CHASSIS: usize = 3;
+/// The hot hatch (with its base engine, the B16), which the game starts with.
+pub const DEFAULT_CHASSIS: usize = 1;
 
 pub static CHASSIS: [Chassis; 13] = [
     Chassis {
@@ -1764,7 +1764,7 @@ mod tests {
 
     #[test]
     fn factory_cars_are_complete() {
-        assert_eq!(CHASSIS[DEFAULT_CHASSIS].class, "Sports coupé");
+        assert_eq!(CHASSIS[DEFAULT_CHASSIS].name, "Vireo");
         for (index, made) in CHASSIS.iter().enumerate() {
             let build = CarBuild::factory(index);
             assert!(made.gearboxes().any(|gearbox| gearbox == made.gearbox));
