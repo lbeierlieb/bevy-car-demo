@@ -101,12 +101,18 @@ As built (`src/menu/`):
   order (`MenuSet`: Top = central menu and quick start, Windows = shops, scenes,
   lobbies, the map, Open = a back nobody took opens the central menu).
 - `kit.rs`: `Panel` (title, scrolling contents, prompt line naming the device's buttons;
-  `Place::Center` or `Right`), rows: `button`, `button_with`, `submenu`, `toggle`,
-  `choice`, `pick` (any values), `slider` (left/right step), `swatches` (one widget the
-  arrows pick in), `progress`, `section`, `note`, `info`, `warning`. Left/right on a
-  toggle, choice or slider lock the horizontal arrows (`set_focus_lock_filter`). Grids
-  (swatches, the ECU tables) are one focusable widget with a cursor, leaving at their top
-  and bottom edges (`move_focus`). Ranks: window 10, start menu 20, central 30, intro 40.
+  `Place::Center` or `Right`), rows: `button`, `button_with`, `submenu`, `submenu_with`
+  (showing its value), `toggle`, `choice`, `pick` (any values), `slider` (left/right
+  step), `swatches` (one widget the arrows pick in, for a picker screen of its own: the
+  arrows stay in it), `progress`, `section`, `note`, `info`, `warning`. Left/right on a
+  toggle, choice or slider lock the horizontal arrows (`set_focus_lock_filter`). The ECU
+  tables are one focusable widget with a cursor, leaving at their top and bottom edges
+  (`move_focus`). Ranks: window 10, start menu 20, central 30, intro 40. Only Enter
+  chooses (`hand_to_egui` drops egui's Space key events; typing a space is text).
+  Focusable widgets go through `kit::allocate`: a disabled one gets another id, since
+  egui keeps an id among the arrows' targets while it's drawn, and a row disabled under
+  the menu (dyno buttons while holding, the garage's build) took the focus from the
+  arrows and dropped it, `claim` giving it to the first row: stuck there (2026-11-23).
 - `central.rs` (restructured at the user's wish, 2026-11-23): Main = In-game actions
   (reset, map, camera: pressed for the driver through `input::MenuPresses` as the
   wheel's next frame), Settings (Driving aids (+ traffic alone), Controls, Sound
@@ -139,6 +145,15 @@ As built (`src/menu/`):
 - Scenes: `shops::SceneBack` hands "back" to the scene's window (back to the car);
   `shops::shop_window` is a right panel. The race bar while driving never claims (it
   would stop the driving); its buttons are for the mouse, the menu has the same.
+- Flicker (reported 2026-11-23, not reproduced here): natively the egui panels and the
+  scenes' egui-painted screens flicker for a few seconds in shops; in Firefox (wasm)
+  black rectangles flickered over the lower half of the screen, not following geometry.
+  Suspected for the first: egui's font atlas (glyphs per exact size; the screens'
+  perspective text made new sizes as the camera moved, so text painted onto the scene now
+  goes through `menu::scene_text`). bevy_egui skips any egui draw whose texture has no
+  GPU image that frame (`queue_bind_groups_system`), and nearly everything egui draws
+  samples the font texture; under lavapipe a full font update or atlas rebuild showed
+  no gap.
 - Gotchas: under Xvfb the window never has focus, and egui's `Response::has_focus` asks
   for it: the kit uses `kit::focused` (egui's memory), so shots show the focus; egui's own
   sliders don't take arrows in shots. Shots press keys for egui with `TAPS=
@@ -309,11 +324,12 @@ as built, in order:
    filler flap open on the right over the rear wheel (front wheel when the tank is up
    front), nozzle and a hanging hose from the pump; the pump's display (egui-painted in
    perspective, point by point) shows grade, litres of this fill and the tank; the grade's
-   button lights and its nozzle leaves the holster. The window on the right: grade,
-   litres, "Pump N L"/"Fill up"/"Stop", pumping at `FLOW` (2 L/s, quicker than real) into
-   the parked car. Shots: `TAPS="Enter@200"` is "Up to the pump", then "Fill up" is
-   the pump window's first row (`Enter@240`); `FUEL=12` empties the tank to 12 L at
-   frame 160. 6. ✓ **Alignment shop**: camber, pressures
+   button lights and its nozzle leaves the holster. The window on the right (simplified
+   at the user's wish, 2026-11-23): the grade, then "Pump" (at `FLOW`, 1 L/s, until
+   stopped or full; while it pumps the focus is locked on it, now "Stop", and back does
+   nothing), what's in the tank, back to the car. Shots: `TAPS="Enter@200"` is "Up to the
+   pump", then "Pump" is the pump window's second row (`ArrowDown@236;Enter@240`);
+   `FUEL=12` empties the tank to 12 L at frame 160. 6. ✓ **Alignment shop**: camber, pressures
    (from the garage), toe and brake torque/balance (from the old panel; into `CarBuild`).
    Since 2026-11-22 (asked for by the user) a scene like the dyno's (`alignment.rs`): the
    shop's window has "Onto the alignment lift", a bay 220 m under the marker with a
@@ -339,11 +355,14 @@ as built, in order:
    yellow filter bank at the back, control panel and door on the left, a shelf of tins
    (lids in each paint, the picked one pulled out) and the gun on its hook on the right, a
    test card on a stand by the right front wheel in the picked paint). The window on the
-   right: swatches pick, "Spray it X" sprays a coat (`SPRAY` 6 s): a mist of the paint (12
+   right: "Colour" (a row opening a picker screen of swatches: the arrows pick, the booth
+   showing it, choose keeps, back goes back to the one before; at the user's wish,
+   2026-11-23: in the list, up from the swatches always picked another colour first),
+   "Spray it X" sprays a coat (`SPRAY` 6 s): a mist of the paint (12
    nested unlit ellipsoid shells round the body, `cull_mode` none, plus 600 droplets going
    round and sinking) thickens, the paint goes onto the parked car at `THICKEST` (3 s,
-   `shops::rebuild`), then it clears. Shots: `TAPS="Enter@200"` into the booth; "Spray it" is the first
-   row, the swatches one grid under it (the arrows pick in it); use `STEP=0.05`
+   `shops::rebuild`), then it clears. Shots: `TAPS="Enter@200"` into the booth; "Colour" is the first
+   row (`Enter` opens the picker), "Spray it" the second; use `STEP=0.05`
    (60 frames to the thickest). 8. ✓ **Showroom**: since 2026-11-22 (asked for by the user) a scene like the gas
    station's (`garage/showroom.rs`): "Into the showroom" puts you in a hall with glass
    front and left side, 600 m **over** the marker (meadow, forecourt with flags and a
@@ -376,7 +395,8 @@ as built, in order:
    session only), ECU tune (`ecu_ui::tuning`), Cams and boost (applied to the copy,
    baking maps if needed, tune and wear kept). Hold: up through the gears, then the
    rollers are motored to the speed for an rpm in fourth (`HOLD_RATE`) at a set throttle,
-   power = what the wheels push with. The engine dyno window (5) is gone. 11. ✓ Clean-up:
+   power = what the wheels push with. Runs can't be skipped (at the user's wish,
+   2026-11-23). The engine dyno window (5) is gone. 11. ✓ Clean-up:
    the panel lost its setup section (springs, dampers, upper pivot, tire μ: they follow
    from the parts); **R only puts the car back on the road** (`Car::place` keeps fuel,
    tires, engine wear, and leaves it in neutral with the parking brake on, so a teleport

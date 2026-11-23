@@ -101,7 +101,7 @@ their names over the cars; the list of players (top left) has **Leave the server
 
 The server puts **shops** on the map (M shows them): stop on a marker to go in. Gas
 stations take the car up to a pump under their canopy, with 95, 98 and 102 octane
-(pumped at 2 L/s; grades mix by volume in the tank, and the engine's knock limit follows); alignment shops put the car on an alignment lift with laser
+(pumped at 1 L/s; grades mix by volume in the tank, and the engine's knock limit follows); alignment shops put the car on an alignment lift with laser
 heads on its wheels, to set camber, toe, tire pressures and the brakes against the
 aligner's screen;
 paint shops put the car in a spray booth and spray it in a new paint; car dealers sell every car; parts shops put the car up on a lift in their workshop, with the engine picked on a stand in front of it, and fit engines and
