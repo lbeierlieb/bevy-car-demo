@@ -34,8 +34,11 @@ impl Plugin for NavPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MenuInput>()
             .init_resource::<MenuFocus>()
-            .configure_sets(Update, (MenuSet::Top, MenuSet::Windows, MenuSet::Open).chain())
-            .add_systems(Startup, install)
+            .configure_sets(
+                Update,
+                (MenuSet::Top, MenuSet::Windows, MenuSet::Open).chain(),
+            )
+            .add_systems(Update, install)
             .add_systems(
                 PreUpdate,
                 (
@@ -138,8 +141,13 @@ struct Scopes {
     this: Vec<(u8, egui::LayerId)>,
     /// The widget that had the focus in the last pass.
     focused: Option<egui::Id>,
-    /// Draw the ring (not while the mouse is in use).
-    ring: bool,
+    /// The device last used: no ring while it's the mouse.
+    device: Device,
+}
+
+/// The device the menus were last worked with.
+pub fn device(ctx: &egui::Context) -> Device {
+    ctx.data_mut(|d| d.get_temp::<Scopes>(scopes_id()).unwrap_or_default().device)
 }
 
 fn scopes_id() -> egui::Id {
@@ -148,8 +156,14 @@ fn scopes_id() -> egui::Id {
 
 /// Hooks into egui's passes: each pass starts by scrolling a newly focused widget into
 /// view and ends by drawing the ring round the focused one.
-fn install(mut contexts: EguiContexts) -> Result {
-    let ctx = contexts.ctx_mut()?;
+fn install(mut contexts: EguiContexts, mut done: Local<bool>) -> Result {
+    if *done {
+        return Ok(());
+    }
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return Ok(());
+    };
+    *done = true;
     ctx.on_begin_pass(
         "menu focus",
         std::sync::Arc::new(|ui: &mut egui::Ui| {
@@ -171,14 +185,20 @@ fn install(mut contexts: EguiContexts) -> Result {
         std::sync::Arc::new(|ui: &mut egui::Ui| {
             let ctx = ui.ctx();
             let scopes: Scopes = ctx.data_mut(|d| d.get_temp(scopes_id()).unwrap_or_default());
-            if !scopes.ring {
+            if scopes.device == Device::Mouse {
                 return;
             }
-            let Some(response) = ctx.memory(|m| m.focused()).and_then(|id| ctx.read_response(id))
+            let Some(response) = ctx
+                .memory(|m| m.focused())
+                .and_then(|id| ctx.read_response(id))
             else {
                 return;
             };
-            if !scopes.this.iter().any(|(_, layer)| *layer == response.layer_id) {
+            if !scopes
+                .this
+                .iter()
+                .any(|(_, layer)| *layer == response.layer_id)
+            {
                 return;
             }
             let painter = ctx.layer_painter(egui::LayerId::new(
@@ -228,9 +248,13 @@ pub fn claim(ui: &egui::Ui, rank: u8) {
 
 /// Whether a menu holds the focus and whether it's a text field, from the last pass.
 fn focus_state(mut contexts: EguiContexts, mut state: ResMut<MenuFocus>) -> Result {
-    let ctx = contexts.ctx_mut()?;
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return Ok(());
+    };
     let scopes: Scopes = ctx.data_mut(|d| d.get_temp(scopes_id()).unwrap_or_default());
-    let focused = ctx.memory(|m| m.focused()).and_then(|id| ctx.read_response(id));
+    let focused = ctx
+        .memory(|m| m.focused())
+        .and_then(|id| ctx.read_response(id));
     let active = focused.is_some_and(|r| scopes.this.iter().any(|(_, l)| *l == r.layer_id));
     let text = ctx.text_edit_focused();
     if (state.active, state.text) != (active, text) {
@@ -404,7 +428,7 @@ fn hand_to_egui(
     let ctx = contexts.ctx_mut()?;
     ctx.data_mut(|d| {
         let scopes = d.get_temp_mut_or_default::<Scopes>(scopes_id());
-        scopes.ring = input.device != Device::Mouse;
+        scopes.device = input.device;
     });
     let Ok(mut egui_input) = egui_input.single_mut() else {
         return Ok(());

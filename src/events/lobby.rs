@@ -18,6 +18,7 @@ use super::round::{Action, Game, Phase, Play, Round};
 use super::{EventKind, Events};
 use crate::car::{ActiveCar, Car, CarSetup, Held, ResetRule};
 use crate::chassis::CHASSIS;
+use crate::menu::nav::MenuInput;
 use crate::net::protocol::PlayerId;
 use crate::net::{Connection, GhostPlayers, Status, Touching, WantsGhost};
 use crate::online::lane_spots;
@@ -55,6 +56,7 @@ impl Plugin for LobbyPlugin {
                 (follow, arrive, report_touches)
                     .chain()
                     .after(crate::shops::arrive)
+                    .in_set(crate::menu::nav::MenuSet::Windows)
                     .run_if(resource_exists::<Connection>),
             )
             .add_systems(EguiPrimaryContextPass, window);
@@ -167,9 +169,10 @@ fn arrive(
     mut ghost: ResMut<WantsGhost>,
     active: Res<ActiveCar>,
     mut cars: Query<&mut Car>,
-    keys: Res<ButtonInput<KeyCode>>,
+    mut input: Option<ResMut<MenuInput>>,
     time: Res<Time<Real>>,
 ) {
+    let mut back = || input.as_mut().is_some_and(|input| input.take_back());
     if you(&connection).is_none() {
         return;
     }
@@ -189,7 +192,7 @@ fn arrive(
                 // Asked what to do at a race's marker.
                 ghost.0 = true;
                 let stood = *state.stood.get_or_insert(p);
-                if p.distance(stood) > LEAVE || keys.just_pressed(KeyCode::Escape) {
+                if p.distance(stood) > LEAVE || back() {
                     state.choosing = None;
                     state.left = Some(i);
                 }
@@ -215,7 +218,7 @@ fn arrive(
             state.choosing = None;
             ghost.0 = true;
             let stood = *state.stood.get_or_insert(p);
-            if p.distance(stood) > LEAVE || keys.just_pressed(KeyCode::Escape) {
+            if p.distance(stood) > LEAVE || back() {
                 leave(&mut connection, &mut state);
             }
         }

@@ -1,5 +1,5 @@
 //! Help for beginners: a screen listing the controls (shown at the start, H brings it
-//! back; a click or Esc closes it), and hints over the road when the car won't do what the
+//! back; "back" closes it), and hints over the road when the car won't do what the
 //! driver seems to want: what's wrong, what to press, and what that does.
 
 use bevy::prelude::*;
@@ -8,38 +8,30 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car, ReverseRefused, drive};
 use crate::input::{Action, WheelConfig, WheelInput};
+use crate::menu::kit::{self, Panel, rank};
+use crate::menu::nav::{MenuInput, MenuSet};
 
 /// The key that brings the controls screen back.
 const KEY: KeyCode = KeyCode::KeyH;
 
 /// The controls of the sandbox, keyboard first: (keys, what they do).
-const CONTROLS: [(&str, &str); 18] = [
-    ("H", "This screen"),
+pub const CONTROLS: [(&str, &str); 17] = [
+    ("Esc", "Menu: everything else is in it"),
     ("W or Up", "Throttle"),
     ("S or Down", "Brake"),
     ("A D or Left Right", "Steer"),
-    (
-        "E / Q",
-        "Shift up / down (Q from neutral at a standstill: reverse)",
-    ),
-    ("Space", "Parking brake on / off (it's on when you start)"),
-    (
-        "I",
-        "Hold: starter (starts the engine); press while running: engine off",
-    ),
+    ("E / Q", "Shift up / down (Q in neutral, standing: reverse)"),
+    ("Space", "Parking brake on / off (on when you start)"),
+    ("I", "Hold: starter; press while running: engine off"),
     ("R", "A helicopter carries the car back to the road"),
     ("C", "Chase or driver's view"),
     ("B (hold)", "Look back"),
     ("Left-drag, scroll", "Look around, zoom"),
     ("M", "Map"),
-    (
-        "Stop on a marker",
-        "Go into a shop (on a server): fuel, parts, alignment, paint, cars, dyno",
-    ),
-    ("0", "Mute"),
+    ("Stop on a marker", "Shops and events (on a server)"),
     ("T", "Chat (on a server): Enter sends, Esc cancels"),
-    ("2", "Settings: wheel, pedals and gamepad, driving aids"),
-    ("5", "Engine dyno (on a server)"),
+    ("H", "This screen"),
+    ("2", "Telemetry"),
     ("1 / F11", "Debug gizmos / fullscreen"),
 ];
 
@@ -49,7 +41,7 @@ impl Plugin for HelpPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Intro { open: true })
             .init_resource::<Hints>()
-            .add_systems(Update, (toggle, hints.after(drive)))
+            .add_systems(Update, (toggle.in_set(MenuSet::Top), hints.after(drive)))
             .add_systems(EguiPrimaryContextPass, (intro, show_hint));
     }
 }
@@ -60,54 +52,40 @@ pub struct Intro {
     pub open: bool,
 }
 
-fn toggle(keys: Res<ButtonInput<KeyCode>>, mut intro: ResMut<Intro>) {
+/// H opens or closes it; open, "back" or the menu button closes it.
+fn toggle(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<MenuInput>, mut intro: ResMut<Intro>) {
     if keys.just_pressed(KEY) {
         intro.open ^= true;
+    } else if intro.open && (input.take_back() || input.take_open()) {
+        intro.open = false;
     }
 }
 
-/// The controls as a grid, for the screen and the settings panel.
-pub fn controls(ui: &mut egui::Ui) {
-    egui::Grid::new("controls")
-        .num_columns(2)
-        .spacing([24.0, 6.0])
-        .striped(true)
-        .show(ui, |ui| {
-            for (keys, action) in CONTROLS {
-                ui.label(egui::RichText::new(keys).strong().color(KEY_COLOR));
-                ui.label(action);
-                ui.end_row();
-            }
-        });
-}
-
+/// The controls screen: the keys, and what else there is.
 fn intro(mut contexts: EguiContexts, mut intro: ResMut<Intro>) -> Result {
     if !intro.open {
         return Ok(());
     }
-    let modal = egui::Modal::new(egui::Id::new("intro"))
-        .backdrop_color(Color32::from_black_alpha(140))
-        .show(contexts.ctx_mut()?, |ui| {
-            ui.set_max_width(520.0);
-            ui.heading("Controls");
-            ui.add_space(6.0);
-            controls(ui);
-            ui.add_space(8.0);
-            ui.label(
-                "You shift gears yourself. The clutch works by itself, unless you bind a \
-                 clutch pedal. A steering wheel, pedals, a shifter or a gamepad can be bound \
-                 in the settings (2, \"Wheel and pedals\").",
+    let ctx = contexts.ctx_mut()?;
+    let close = Panel::new("intro", "Controls")
+        .rank(rank::INTRO)
+        .width(620.0)
+        .back(Some("Close"))
+        .show(ctx, |ui| {
+            let drive = kit::button(ui, "Let's drive").clicked();
+            for (keys, action) in CONTROLS {
+                kit::info(ui, action, keys);
+            }
+            kit::note(
+                ui,
+                "You shift gears yourself. The clutch works by itself unless you bind a \
+                 clutch pedal. A gamepad works the menus as it is (D-pad, A, B, Start); \
+                 steering wheels, pedals, shifters and gamepads are bound in the menu \
+                 (Esc), under Controls.",
             );
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let drive = ui.button("Let's drive");
-                ui.label(egui::RichText::new("(or Esc, or click anywhere)").weak());
-                drive.clicked()
-            })
-            .inner
+            drive
         });
-    let clicked = modal.response.ctx.input(|i| i.pointer.any_click());
-    if modal.inner || modal.should_close() || clicked {
+    if close {
         intro.open = false;
     }
     Ok(())

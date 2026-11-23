@@ -13,6 +13,8 @@ fn main() {
             help::HelpPlugin,
             // The start menu (after the controls): play alone or join a server.
             online::OnlinePlugin,
+            // Esc, Start or the wheel's menu button: everything else.
+            menu::central::CentralMenuPlugin,
             // The shops a server puts on the map (none alone).
             shops::ShopsPlugin,
             // The events a server puts on the map: a car hunt (none alone).

@@ -19,10 +19,16 @@ impl Plugin for InputPlugin {
         app.insert_resource(WheelConfig::load())
             .init_resource::<WheelInput>()
             .init_resource::<Capture>()
+            .init_resource::<MenuPresses>()
             .init_resource::<Reported>()
             .add_systems(
                 PreUpdate,
-                (unfilter_gamepads, track_reported, capture, read_wheel.in_set(ReadWheel))
+                (
+                    unfilter_gamepads,
+                    track_reported,
+                    capture,
+                    (read_wheel, press_from_menus).chain().in_set(ReadWheel),
+                )
                     .chain()
                     .after(bevy::input::InputSystems),
             )
@@ -663,6 +669,50 @@ fn read_wheel(
         shifter,
         held,
     };
+}
+
+/// Buttons a menu presses for the driver (reset, the camera, the map, the parking brake,
+/// the ignition), taken as the wheel's next frame: so a controller without those buttons
+/// still has them, and nothing else needs to know about the menu.
+#[derive(Resource, Default)]
+pub struct MenuPresses {
+    press: Vec<Action>,
+    /// The ignition held for this long (s): the starter turns until the engine catches.
+    crank: f32,
+}
+
+impl MenuPresses {
+    pub fn press(&mut self, action: Action) {
+        self.press.push(action);
+    }
+
+    /// Runs the starter for `seconds`.
+    pub fn crank(&mut self, seconds: f32) {
+        self.crank = seconds;
+    }
+}
+
+fn press_from_menus(
+    time: Res<Time>,
+    mut presses: ResMut<MenuPresses>,
+    mut wheel: ResMut<WheelInput>,
+) {
+    for action in std::mem::take(&mut presses.press) {
+        match action {
+            Action::Handbrake => wheel.handbrake_toggle = true,
+            Action::ShiftUp => wheel.shift_up = true,
+            Action::ShiftDown => wheel.shift_down = true,
+            Action::Ignition => wheel.ignition = true,
+            Action::Reset => wheel.reset = true,
+            Action::View => wheel.view = true,
+            Action::Map => wheel.map = true,
+            _ => {}
+        }
+    }
+    if presses.crank > 0.0 {
+        presses.crank -= time.delta_secs();
+        wheel.ignition_held = true;
+    }
 }
 
 impl WheelInput {

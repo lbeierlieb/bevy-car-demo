@@ -167,7 +167,6 @@ fn panel(
             ui.separator();
             telemetry(ui, car);
             ui.collapsing("Wheel and pedals", |ui| wheel_panel.show(ui));
-            ui.collapsing("Controls (H)", crate::help::controls);
             credits(ui);
         });
     Ok(())

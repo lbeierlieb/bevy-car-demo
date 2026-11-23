@@ -1,18 +1,20 @@
 //! Playing alone or on a server: the start menu (name, server address, "Play alone",
 //! "Join server"; on the web only the name and "Join", for the server the page came
-//! from), what's shown while joining or when it fails, the players' list with
-//! "Leave" while on a server, name tags (`name_tags`), and the players the
+//! from), what's shown while joining or when it fails (the players and leaving are in
+//! the central menu), name tags (`name_tags`), and the players the
 //! server puts on the map (`MapCars`), and the chat (`chat`). Joined, the car is put in a lane near the spawn
 //! point, in a spot of its own (by player number).
 
+use bevy::app::AppExit;
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Align2};
+use bevy_egui::egui;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car, SETTINGS};
 use crate::chassis::PAINTS;
 use crate::help::Intro;
 use crate::map::{MapCar, MapCars};
+use crate::menu::kit::{self, Panel, rank};
 use crate::name_tags::NameTagPlugin;
 use crate::net::{self, Connection, Status};
 use crate::terrain::Terrain;
@@ -35,7 +37,7 @@ impl Plugin for OnlinePlugin {
                 settings,
             })
             .add_systems(Update, (place_on_joining, show_on_map))
-            .add_systems(EguiPrimaryContextPass, (menu, players));
+            .add_systems(EguiPrimaryContextPass, menu);
     }
 }
 
@@ -44,6 +46,13 @@ impl Plugin for OnlinePlugin {
 pub struct Menu {
     pub open: bool,
     settings: Settings,
+}
+
+impl Menu {
+    /// The player's name.
+    pub fn name(&self) -> &str {
+        &self.settings.name
+    }
 }
 
 /// The player's name and the server last joined, kept between runs
@@ -87,26 +96,26 @@ fn menu(
     terrain: Res<Terrain>,
     connection: Option<ResMut<Connection>>,
     intro: Option<Res<Intro>>,
+    mut exit: MessageWriter<AppExit>,
 ) -> Result {
     // After the controls screen.
     if intro.is_some_and(|intro| intro.open) {
         return Ok(());
     }
     let ctx = contexts.ctx_mut()?;
-    let window = |title: &str| {
-        egui::Window::new(title.to_string())
-            .anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .order(egui::Order::Foreground)
-            .collapsible(false)
-            .resizable(false)
+    let panel = |title| {
+        Panel::new("start menu", title)
+            .rank(rank::START)
+            .width(460.0)
+            .back(None)
     };
     if let Some(mut connection) = connection {
         match connection.status.clone() {
             Status::Joined { .. } => {}
             Status::Joining => {
-                window("Joining").show(ctx, |ui| {
-                    ui.label(format!("Joining {} …", menu.settings.address));
-                    if ui.button("Cancel").clicked() {
+                panel("Joining").show(ctx, |ui| {
+                    kit::note(ui, &format!("Joining {} …", menu.settings.address));
+                    if kit::button(ui, "Cancel").clicked() {
                         connection.close();
                         commands.remove_resource::<Connection>();
                         menu.open = true;
@@ -114,9 +123,9 @@ fn menu(
                 });
             }
             Status::Refused(why) | Status::Lost(why) => {
-                window("Not on the server").show(ctx, |ui| {
-                    ui.label(why);
-                    if ui.button("Back").clicked() {
+                panel("Not on the server").show(ctx, |ui| {
+                    kit::note(ui, &why);
+                    if kit::button(ui, "Back").clicked() {
                         commands.remove_resource::<Connection>();
                         menu.open = true;
                     }
@@ -129,90 +138,52 @@ fn menu(
         return Ok(());
     }
     let menu = &mut *menu;
-    window("Car Sim").show(ctx, |ui| {
+    panel("Car Sim").show(ctx, |ui| {
         let settings = &mut menu.settings;
-        egui::Grid::new("online").num_columns(2).show(ui, |ui| {
-            ui.label("Your name");
-            ui.text_edit_singleline(&mut settings.name);
-            ui.end_row();
-            // On the web, the page's server is joined: no address to give.
-            if !cfg!(target_arch = "wasm32") {
-                ui.label("Server");
-                ui.add(
-                    egui::TextEdit::singleline(&mut settings.address).hint_text("cars.example.org"),
-                );
-                ui.end_row();
-            }
-        });
-        ui.horizontal(|ui| {
-            // On the web, the page came from the server: always online.
-            if !cfg!(target_arch = "wasm32") && ui.button("Play alone").clicked() {
-                menu.open = false;
-            }
-            let can_join = !settings.address.trim().is_empty() && !settings.name.trim().is_empty();
-            let join = if cfg!(target_arch = "wasm32") {
-                "Join"
-            } else {
-                "Join server"
-            };
-            if ui.add_enabled(can_join, egui::Button::new(join)).clicked() {
-                settings.save();
-                let link = net::connect(&settings.address);
-                commands.insert_resource(Connection::new(link, settings.name.trim(), &terrain));
-                menu.open = false;
-            }
-        });
+        let can_join = !settings.address.trim().is_empty() && !settings.name.trim().is_empty();
+        // On the web, the page came from the server: always online.
+        let web = cfg!(target_arch = "wasm32");
+        let join = if web { "Join" } else { "Join server" };
+        // The join button first, so choose alone joins the last server.
+        let joined = ui
+            .add_enabled_ui(can_join, |ui| kit::button(ui, join))
+            .inner
+            .clicked();
+        if !web && kit::button(ui, "Play alone").clicked() {
+            menu.open = false;
+        }
+        kit::section(ui, "Your name");
+        field(ui, &mut settings.name, "");
+        // On the web, the page's server is joined: no address to give.
+        if !web {
+            kit::section(ui, "Server");
+            field(ui, &mut settings.address, "cars.example.org");
+        }
+        if !can_join {
+            kit::note(ui, "Give your name and a server's address to join it.");
+        }
+        if !web && kit::button(ui, "Quit").clicked() {
+            exit.write(AppExit::Success);
+        }
+        if joined {
+            settings.save();
+            let link = net::connect(&settings.address);
+            commands.insert_resource(Connection::new(link, settings.name.trim(), &terrain));
+            menu.open = false;
+        }
     });
     Ok(())
 }
 
-/// On a server: who's there with their pings (ours too), and leaving it.
-fn players(
-    mut commands: Commands,
-    mut contexts: EguiContexts,
-    mut menu: ResMut<Menu>,
-    connection: Option<ResMut<Connection>>,
-) -> Result {
-    let Some(mut connection) = connection else {
-        return Ok(());
-    };
-    let Status::Joined { you } = connection.status else {
-        return Ok(());
-    };
-    egui::Window::new(format!("Online ({} more)", connection.players.len()))
-        .id(egui::Id::new("players"))
-        .anchor(Align2::LEFT_TOP, egui::vec2(8.0, 8.0))
-        .default_open(false)
-        .resizable(false)
-        .show(contexts.ctx_mut()?, |ui| {
-            let ping =
-                |id| (connection.pings.get(&id)).map_or(String::new(), |ms| format!("{ms} ms"));
-            egui::Grid::new("players").num_columns(3).show(ui, |ui| {
-                // And the event each is in, if any.
-                let event = |id| {
-                    (connection.busy.get(&id))
-                        .and_then(|&e| connection.events.get(usize::from(e)))
-                        .map_or(String::new(), |event| event.name.clone())
-                };
-                ui.label(format!("You: {}", menu.settings.name));
-                ui.label(ping(you));
-                ui.label(event(you));
-                ui.end_row();
-                for (&id, name) in &connection.players {
-                    ui.label(name);
-                    ui.label(ping(id));
-                    ui.label(event(id));
-                    ui.end_row();
-                }
-            });
-            ui.separator();
-            if ui.button("Leave the server").clicked() {
-                connection.close();
-                commands.remove_resource::<Connection>();
-                menu.open = true;
-            }
-        });
-    Ok(())
+/// A text field as wide and tall as a row.
+fn field(ui: &mut egui::Ui, text: &mut String, hint: &str) {
+    ui.add(
+        egui::TextEdit::singleline(text)
+            .hint_text(hint)
+            .desired_width(f32::INFINITY)
+            .font(egui::FontId::proportional(17.0))
+            .margin(egui::vec2(12.0, 9.0)),
+    );
 }
 
 /// Once joined, the car goes to a spot of its own on the road by the spawn point.

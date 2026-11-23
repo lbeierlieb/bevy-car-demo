@@ -47,7 +47,7 @@ impl Plugin for MapPlugin {
             .init_resource::<MapLegend>()
             .init_resource::<MapCars>()
             .add_message::<MapClicked>()
-            .add_systems(Update, toggle)
+            .add_systems(Update, toggle.in_set(crate::menu::nav::MenuSet::Windows))
             .add_systems(
                 EguiPrimaryContextPass,
                 (
@@ -246,13 +246,18 @@ impl Layers {
 /// map on the car being driven (without one, where the camera is), at the last zoom.
 fn toggle(
     keys: Res<ButtonInput<KeyCode>>,
+    mut menu_input: Option<ResMut<crate::menu::nav::MenuInput>>,
     wheel: Option<Res<WheelInput>>,
     active: Option<Res<ActiveCar>>,
     cars: Query<&Car>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
     mut view: ResMut<MapView>,
 ) {
-    let close = view.open && keys.just_pressed(KeyCode::Escape);
+    let close = view.open
+        && match &mut menu_input {
+            Some(input) => input.take_back(),
+            None => keys.just_pressed(KeyCode::Escape),
+        };
     if !(keys.just_pressed(view.key) || wheel.is_some_and(|w| w.map) || close) {
         return;
     }

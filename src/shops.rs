@@ -15,6 +15,7 @@ use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car, CarSetup};
 use crate::chassis::CarBuild;
 use crate::map::{MapLegend, MapMark, MapMarks};
+use crate::menu::nav::{MenuInput, MenuSet};
 use crate::net::wire::{Reader, Wire};
 use crate::net::{Connection, Status, WantsGhost};
 use crate::terrain::Terrain;
@@ -184,7 +185,7 @@ impl Plugin for ShopsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Shops>()
             .init_resource::<AtShop>()
-            .add_systems(Update, (place, arrive).chain())
+            .add_systems(Update, (place, arrive.in_set(MenuSet::Windows)).chain())
             .add_systems(EguiPrimaryContextPass, labels);
     }
 }
@@ -215,7 +216,7 @@ pub fn arrive(
     mut ghost: ResMut<WantsGhost>,
     active: Res<ActiveCar>,
     mut cars: Query<&mut Car>,
-    keys: Res<ButtonInput<KeyCode>>,
+    mut input: ResMut<MenuInput>,
     away: Res<Away>,
 ) {
     if away.0 && at.shop.is_some() {
@@ -236,7 +237,7 @@ pub fn arrive(
     if !near(at.left) {
         at.left = None;
     }
-    if at.shop.is_some() && (!near(at.shop) || keys.just_pressed(KeyCode::Escape)) {
+    if at.shop.is_some() && (!near(at.shop) || input.take_back()) {
         at.leave();
     }
     let stopped = car.body.velocity.length() < STOPPED;

@@ -7,6 +7,8 @@ use bevy_egui::{EguiContexts, egui};
 
 use crate::car::SETTINGS;
 
+pub mod central;
+pub mod kit;
 pub mod nav;
 
 /// The window size the UI is laid out for, in points: in a window this many pixels (or a
@@ -21,7 +23,7 @@ const LEAST_PPP: f32 = 0.6;
 /// The highlight colour: the focus, keys in hints, what's picked.
 pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(255, 184, 64);
 /// The panels' background.
-pub const PANEL: egui::Color32 = egui::Color32::from_rgba_premultiplied(14, 16, 21, 240);
+pub const PANEL: egui::Color32 = egui::Color32::from_rgb(15, 17, 21);
 /// The font family of titles and menu rows (Ubuntu Medium).
 pub const MEDIUM: &str = "medium";
 
@@ -92,7 +94,9 @@ fn scale(
     let Ok(window) = windows.single() else {
         return Ok(());
     };
-    let ctx = contexts.ctx_mut()?;
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return Ok(());
+    };
     if !*styled {
         *styled = true;
         style(ctx);

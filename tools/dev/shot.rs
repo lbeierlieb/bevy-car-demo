@@ -15,6 +15,7 @@ impl Plugin for ShotPlugin {
             // Before the car gets its meshes, which would be added to a despawned car.
             app.add_systems(PreUpdate, (pick_car, line_up, place_car));
             app.add_systems(PreUpdate, (start_online, say, topple, drain));
+            app.add_systems(PreUpdate, taps.before(bevy::input::InputSystems));
             // STEP="seconds": every frame moves the game on by exactly that (lavapipe's few
             // frames a second otherwise make it run on in jumps of up to 0.25 s).
             if let Ok(step) = std::env::var("STEP") {
@@ -49,6 +50,57 @@ impl Plugin for ShotPlugin {
                     .before(crate::name_tags::PlaceTags)
                     .before(bevy::transform::TransformSystems::Propagate),
             );
+        }
+    }
+}
+
+/// TAPS="ArrowDown@100;Enter@110;Escape@120": taps those keys at those frames as window
+/// key events, which egui reads too (`EDITKEYS` and the keys argument only press the
+/// game's `ButtonInput`). `ArrowDown*3@100` taps it three times, a frame apart each.
+fn taps(
+    mut frame: Local<u32>,
+    windows: Query<Entity, With<bevy::window::PrimaryWindow>>,
+    mut events: MessageWriter<bevy::input::keyboard::KeyboardInput>,
+) {
+    use bevy::input::keyboard::{Key, KeyboardInput};
+    *frame += 1;
+    let (Ok(spec), Ok(window)) = (std::env::var("TAPS"), windows.single()) else {
+        return;
+    };
+    for one in spec.split(';') {
+        let (name, at) = one.split_once('@').unwrap();
+        let (name, times) = name
+            .split_once('*')
+            .map_or((name, 1), |(n, t)| (n, t.parse().unwrap()));
+        let at: u32 = at.parse().unwrap();
+        let (code, logical) = match name {
+            "ArrowUp" => (KeyCode::ArrowUp, Key::ArrowUp),
+            "ArrowDown" => (KeyCode::ArrowDown, Key::ArrowDown),
+            "ArrowLeft" => (KeyCode::ArrowLeft, Key::ArrowLeft),
+            "ArrowRight" => (KeyCode::ArrowRight, Key::ArrowRight),
+            "Enter" => (KeyCode::Enter, Key::Enter),
+            "Escape" => (KeyCode::Escape, Key::Escape),
+            "Space" => (KeyCode::Space, Key::Space),
+            "Tab" => (KeyCode::Tab, Key::Tab),
+            other => panic!("TAPS: unknown key {other}"),
+        };
+        for t in 0..times {
+            let pressed = at + 2 * t;
+            let state = if *frame == pressed {
+                bevy::input::ButtonState::Pressed
+            } else if *frame == pressed + 1 {
+                bevy::input::ButtonState::Released
+            } else {
+                continue;
+            };
+            events.write(KeyboardInput {
+                key_code: code,
+                logical_key: logical.clone(),
+                state,
+                text: None,
+                repeat: false,
+                window,
+            });
         }
     }
 }

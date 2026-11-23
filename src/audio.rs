@@ -273,11 +273,71 @@ impl Default for ExhaustSound {
 
 pub struct AudioPlugin;
 
+/// The sound on or off and its volume, set in the central menu and kept between runs
+/// (`~/.config/car-sim/settings/sound.cfg`).
+#[derive(Resource, Clone, Copy, PartialEq, Debug)]
+pub struct SoundSettings {
+    pub on: bool,
+    /// 0 to 1.
+    pub volume: f32,
+}
+
+impl Default for SoundSettings {
+    fn default() -> Self {
+        Self {
+            on: true,
+            volume: 1.0,
+        }
+    }
+}
+
+impl SoundSettings {
+    /// What everything is played at.
+    pub fn master(&self) -> f32 {
+        if self.on { self.volume } else { 0.0 }
+    }
+
+    fn load() -> Self {
+        let mut sound = Self::default();
+        for line in crate::car::SETTINGS
+            .load("sound")
+            .unwrap_or_default()
+            .lines()
+        {
+            match line.split_once(' ') {
+                Some(("on", on)) => sound.on = on.trim().parse().unwrap_or(sound.on),
+                Some(("volume", volume)) => {
+                    if let Ok(volume) = volume.trim().parse::<f32>()
+                        && volume.is_finite()
+                    {
+                        sound.volume = volume.clamp(0.0, 1.0);
+                    }
+                }
+                _ => {}
+            }
+        }
+        sound
+    }
+}
+
+fn save_sound(sound: Res<SoundSettings>) {
+    if sound.is_changed() && !sound.is_added() {
+        let text = format!("on {}\nvolume {}\n", sound.on, sound.volume);
+        if let Err(e) = crate::car::SETTINGS.save("sound", &text) {
+            warn!("Couldn't save the sound settings: {e}");
+        }
+    }
+}
+
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_audio_source::<EngineSynth>()
+            .insert_resource(SoundSettings::load())
             .add_systems(Startup, start_engine)
-            .add_systems(Update, update_engine.after(crate::looks::show_cars))
+            .add_systems(
+                Update,
+                (update_engine.after(crate::looks::show_cars), save_sound),
+            )
             // Where everything ended up this frame, the camera included.
             .add_systems(
                 PostUpdate,
@@ -754,12 +814,11 @@ impl Source for EngineVoice {
     }
 }
 
-/// The engine sound: what the audio thread plays, whether it's muted (0), and whether the
+/// The engine sound: what the audio thread plays, and whether the
 /// driven car is out of earshot (`hushed`: its driver is in the dyno's room).
 #[derive(Resource)]
 pub struct EngineAudio {
     targets: Arc<Targets>,
-    muted: bool,
     pub hushed: bool,
 }
 
@@ -799,31 +858,23 @@ fn start_engine(mut commands: Commands, mut synths: ResMut<Assets<EngineSynth>>)
     })));
     commands.insert_resource(EngineAudio {
         targets,
-        muted: false,
         hushed: false,
     });
 }
 
 fn update_engine(
-    keys: Res<ButtonInput<KeyCode>>,
+    sound: Res<SoundSettings>,
     active: Res<ActiveCar>,
     cars: Query<(&Car, &Looks, &Motion)>,
-    mut engine: ResMut<EngineAudio>,
+    engine: Res<EngineAudio>,
 ) {
-    if keys.just_pressed(KeyCode::Digit0) {
-        engine.muted = !engine.muted;
-    }
     let Some((_, looks, motion)) = cars.iter().find(|(car, ..)| car.index == active.0) else {
         // No car to drive (yet): silence.
         let (rpm, load, _) = engine.targets.get();
         engine.targets.set(rpm, load, 0.0);
         return;
     };
-    let volume = if engine.muted || engine.hushed {
-        0.0
-    } else {
-        1.0
-    };
+    let volume = if engine.hushed { 0.0 } else { sound.master() };
     engine.targets.hear(&looks.engine, &motion.engine, volume);
 }
 
@@ -844,7 +895,7 @@ fn placed(distance: f32, closing: f32) -> (f32, f32, f32) {
 fn hear_others(
     mut commands: Commands,
     time: Res<Time>,
-    engine: Res<EngineAudio>,
+    sound: Res<SoundSettings>,
     mut synths: ResMut<Assets<EngineSynth>>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     cars: Query<(Entity, &GlobalTransform, &Looks, &Motion), Without<Car>>,
@@ -890,7 +941,7 @@ fn hear_others(
         }
     }
 
-    let master = if engine.muted { 0.0 } else { 1.0 };
+    let master = sound.master();
     for (distance, car) in heard {
         let Ok((_, transform, looks, motion)) = cars.get(car) else {
             continue;

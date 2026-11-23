@@ -348,6 +348,7 @@ fn cue(
     time: Res<Time>,
     effects: Res<Effects>,
     engine: Res<EngineAudio>,
+    sound: Res<super::SoundSettings>,
     active: Res<ActiveCar>,
     rescued: Res<Rescued>,
     mut cars: Query<(&mut Car, &GlobalTransform)>,
@@ -357,8 +358,8 @@ fn cue(
 ) {
     let cues = &effects.cues;
     let dt = time.delta_secs();
-    let quiet = engine.muted || engine.hushed;
-    store(&cues.volume, if engine.muted { 0.0 } else { 1.0 });
+    let quiet = sound.master() == 0.0 || engine.hushed;
+    store(&cues.volume, sound.master());
     *burst = (*burst - dt).max(0.0);
     if refused.read().count() > 0 {
         *burst = GRIND_BURST;
