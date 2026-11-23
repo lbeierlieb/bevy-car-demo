@@ -1148,6 +1148,16 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    a tie (`Problem::ties`: weighted terms with a target, solved like the bends) pulls
    the two surfaces (crowns included) together; road ribbon triangles steeper than 26°
    went from 352 m² to 44 m² (waterways on steep banks aside).
+   **No two ribbons on top of each other** (asked for by the user, 2026-11-23: a cobbled
+   lane showed through Grubenweg at (−2945.5, −1939.2)): `RoadRibbons::mesh` clips each
+   ribbon triangle against the better roads' ribbons over it (`Strip::covered`,
+   `outranks`: kind as `RoadKind::ALL`, then width, then index; bridges and waterways
+   neither), leaving `SEAM_OVERLAP` (3 cm) under their edge against slits. The cut
+   needs no change (the ribbons' union is the same); the physics' surface is the best
+   covering road's. `join_ends` also mitres where more than two ends meet (the
+   straightest pair of equal width; unequal widths on a mitre leave the cut open edges),
+   so a road split at a side road's node has no wedge. ~5 % more meshing time.
+   `where_roads_overlap_only_the_best_is_drawn` checks three chunks by colour.
    Not done: junction middles as one mesh (the overlapping ribbons' facets show faint
    shading seams), tunnels, piers.
 4. Road condition (done): `relief.rs`, OSM `smoothness` to ISO 8608 roughness (waves
