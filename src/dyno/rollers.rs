@@ -340,7 +340,8 @@ impl Rollers {
         }
     }
 
-    /// Runs to the end (a hold only ends when stopped).
+    /// Runs to the end (a hold only ends when stopped), for the tests.
+    #[cfg(test)]
     pub fn finish(&mut self, car: &mut Car) {
         if self.hold.is_some() && self.stage != Stage::Coast {
             return;
@@ -460,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn all_wheel_drive_loses_more_and_skipping_ends_the_run() {
+    fn all_wheel_drive_loses_more() {
         // The rally car drives all four wheels.
         let (mut car, mut rollers) = on_rollers(5);
         rollers.finish(&mut car);

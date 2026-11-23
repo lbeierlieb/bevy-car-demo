@@ -79,7 +79,7 @@ impl Plugin for DynoPlugin {
             )
             .add_systems(
                 EguiPrimaryContextPass,
-                (shop, (screen, skip, results).run_if(in_room)),
+                (shop, (screen, results).run_if(in_room)),
             );
     }
 }
@@ -537,15 +537,12 @@ fn model_at(view: &DynoView, car: &Car, squat: f32, shake: f32) -> Transform {
     Transform::from_translation(ground - rotation * car.setup.body_offset).with_rotation(rotation)
 }
 
-/// Runs the dyno in real time (Space skips to the end), and files the run when it's done.
-fn run(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mut view: ResMut<DynoView>) {
+/// Runs the dyno in real time, and files the run when it's done.
+fn run(time: Res<Time>, mut view: ResMut<DynoView>) {
     let view = &mut *view;
     let (Some(car), Some(rollers)) = (&mut view.car, &mut view.rollers) else {
         return;
     };
-    if keys.just_pressed(KeyCode::Space) {
-        rollers.finish(car);
-    }
     view.owed = (view.owed + time.delta_secs()).min(0.1);
     while view.owed >= STEP && rollers.stage != Stage::Done {
         view.owed -= STEP;
@@ -758,27 +755,6 @@ fn screen(
         })
         .collect();
     painter.add(egui::Shape::line(points, Stroke::new(2.0, ink)));
-    Ok(())
-}
-
-/// While the run is on: skipping it.
-fn skip(mut contexts: EguiContexts, mut view: ResMut<DynoView>) -> Result {
-    if !view.running() || view.rollers.as_ref().is_some_and(|run| run.hold.is_some()) {
-        return Ok(());
-    }
-    let mut skipped = false;
-    egui::Area::new(egui::Id::new("dyno skip"))
-        .anchor(Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
-        .show(contexts.ctx_mut()?, |ui| {
-            skipped = ui.button("Skip to the results  (Space)").clicked();
-        });
-    if skipped {
-        let view = &mut *view;
-        if let (Some(car), Some(rollers)) = (&mut view.car, &mut view.rollers) {
-            // `run` files it.
-            rollers.finish(car);
-        }
-    }
     Ok(())
 }
 
