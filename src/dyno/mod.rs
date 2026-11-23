@@ -13,7 +13,7 @@ mod rollers;
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Align2, Color32, FontId, RichText, Stroke};
+use bevy_egui::egui::{self, Align2, Color32, FontId, Stroke};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::audio::EngineAudio;
@@ -21,11 +21,12 @@ use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car, CarSetup};
 use crate::ecu_ui::{self, EcuPanel};
 use crate::looks::{Looks, Motion};
+use crate::menu::kit::{self, Panel, Place};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::hardware::EngineHardware;
 use crate::physics::engine::maps::{self, EngineMaps};
 use crate::physics::engine::parts::Parts;
-use crate::shops::{AtShop, ShopKind, Shops, shop_window};
+use crate::shops::{AtShop, SceneBack, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
 use crate::workshop::{self, Work};
 use chart::{Axis, HORSEPOWER, Line, chart};
@@ -60,7 +61,6 @@ const POWER: Color32 = Color32::from_rgb(255, 170, 50);
 const TORQUE: Color32 = Color32::from_rgb(90, 170, 255);
 const COMPARED: Color32 = Color32::from_rgb(170, 170, 180);
 const SCREEN_INK: Color32 = Color32::from_rgb(120, 255, 160);
-const BROKE: Color32 = Color32::from_rgb(255, 90, 70);
 
 pub struct DynoPlugin;
 
@@ -207,20 +207,19 @@ fn shop(
     let mut enter = false;
     let ctx = contexts.ctx_mut()?;
     shop_window(ctx, &shops, &mut at, ShopKind::Dyno, |ui, _| {
-        ui.label(
+        enter = kit::button(ui, "Onto the rollers").clicked();
+        kit::note(
+            ui,
             "An all-wheel chassis dyno: a run warms up through the gears and pulls in fourth \
              to the rev limiter, measuring the power at the wheels.",
         );
         if !view.runs.is_empty() {
             let runs = view.runs.len();
-            ui.label(format!(
-                "{runs} run{} on file.",
-                if runs == 1 { "" } else { "s" }
-            ));
+            kit::note(
+                ui,
+                &format!("{runs} run{} on file.", if runs == 1 { "" } else { "s" }),
+            );
         }
-        enter = ui
-            .button(RichText::new("Onto the rollers").strong())
-            .clicked();
     });
     let Some(marker) = marker.filter(|_| enter) else {
         return Ok(());
@@ -795,99 +794,92 @@ fn results(
     mut cars: Query<&mut Car>,
     active: Res<ActiveCar>,
     (mut away, mut audio): (ResMut<Away>, ResMut<EngineAudio>),
-    mut cameras: Query<(&ChaseCamera, &mut Projection)>,
+    (mut cameras, mut back): (Query<(&ChaseCamera, &mut Projection)>, ResMut<SceneBack>),
 ) -> Result {
     let mut again = false;
     let (mut hold, mut stop) = (false, false);
-    let mut out = false;
+    let mut out = back.take();
     let ctx = contexts.ctx_mut()?;
-    let height = ctx.content_rect().height() - 110.0;
-    egui::Window::new("Dyno")
-        .anchor(Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
-        .collapsible(false)
-        .resizable(false)
+    let width = match view.tab {
+        Tab::Ecu => ecu_ui::WIDTH + 32.0,
+        Tab::Runs => 640.0,
+        Tab::Cams => 460.0,
+    };
+    Panel::new("dyno", "Dyno")
+        .place(Place::Right)
+        .width(width)
+        .back(Some("Back to the car"))
         .show(ctx, |ui| {
             let view = &mut *view;
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut view.tab, Tab::Runs, "Runs");
-                ui.selectable_value(&mut view.tab, Tab::Ecu, "ECU tune");
-                ui.selectable_value(&mut view.tab, Tab::Cams, "Cams and boost");
+            let tabs = [Tab::Runs, Tab::Ecu, Tab::Cams];
+            kit::pick(ui, "Page", &mut view.tab, &tabs, |tab| {
+                match tab {
+                    Tab::Runs => "Runs",
+                    Tab::Ecu => "ECU tune",
+                    Tab::Cams => "Cams and boost",
+                }
+                .to_string()
             });
-            ui.separator();
-            egui::ScrollArea::vertical()
-                .max_height(height)
-                .show(ui, |ui| match view.tab {
-                    Tab::Runs => {
-                        ui.set_width(620.0);
-                        if !view.news.is_empty() {
-                            ui.colored_label(BROKE, view.news.trim());
-                        }
-                        shown_run(ui, view);
-                        ui.separator();
-                        run_list(ui, view);
-                    }
-                    Tab::Ecu => {
-                        ui.set_width(ecu_ui::WIDTH);
-                        if let Some(car) = &mut view.car {
-                            ecu_ui::tuning(ui, &mut view.ecu, car);
-                        }
-                    }
-                    Tab::Cams => {
-                        ui.set_width(620.0);
-                        cams(ui, view);
-                    }
-                });
-            ui.separator();
             let running = view.running();
             let holding = view.rollers.as_ref().and_then(|run| run.hold).is_some() && running;
             let why_not = view.car.as_ref().and_then(cannot_run);
-            ui.horizontal(|ui| {
-                let label = if view.rollers.is_some() {
-                    "Run it again"
-                } else {
-                    "Run it"
-                };
-                let can = !running && why_not.is_none();
-                again = ui
-                    .add_enabled(can, egui::Button::new(label))
-                    .on_hover_text("Up through the gears, then a pull in fourth to the rev limiter")
+            let can = !running && why_not.is_none();
+            let label = if view.rollers.is_some() {
+                "Run it again: through the gears, a pull in fourth"
+            } else {
+                "Run it: through the gears, a pull in fourth"
+            };
+            again = ui
+                .add_enabled_ui(can, |ui| kit::button(ui, label))
+                .inner
+                .clicked();
+            if holding {
+                stop = kit::button(ui, "Stop holding").clicked();
+            } else {
+                hold = ui
+                    .add_enabled_ui(can, |ui| {
+                        kit::button(ui, "Hold at this rpm and throttle, in fourth")
+                    })
+                    .inner
                     .clicked();
-                out = ui
-                    .button(RichText::new("Back to the car").strong())
-                    .clicked();
-                if let Some(why) = why_not {
-                    ui.label(RichText::new(why).weak());
-                }
-            });
+            }
             // Holding at an rpm and throttle, to tune the cells there.
             let limit =
                 (view.car.as_ref()).map_or(7000.0, |car| car.setup.engine.build.ecu.rev_limit);
-            ui.horizontal(|ui| {
-                let can = !running && why_not.is_none();
-                if holding {
-                    stop = ui.button("Stop holding").clicked();
-                } else {
-                    hold = ui
-                        .add_enabled(can, egui::Button::new("Hold"))
-                        .on_hover_text(
-                            "Up through the gears, then the brake holds the engine at this rpm \
-                             in fourth at this throttle: see where it runs on the ECU's maps",
-                        )
-                        .clicked();
-                }
-                ui.add(
-                    egui::Slider::new(&mut view.hold.rpm, 1000.0..=limit)
-                        .step_by(100.0)
-                        .suffix(" rpm"),
-                );
-                let mut percent = view.hold.throttle * 100.0;
-                ui.add(
-                    egui::Slider::new(&mut percent, 0.0..=100.0)
-                        .step_by(1.0)
-                        .suffix(" % throttle"),
-                );
-                view.hold.throttle = percent / 100.0;
+            kit::slider(
+                ui,
+                "Hold at",
+                &mut view.hold.rpm,
+                1000.0..=limit,
+                100.0,
+                |v| format!("{v:.0} rpm"),
+            );
+            let mut percent = view.hold.throttle * 100.0;
+            kit::slider(ui, "Throttle", &mut percent, 0.0..=100.0, 5.0, |v| {
+                format!("{v:.0} %")
             });
+            view.hold.throttle = percent / 100.0;
+            if let Some(why) = why_not {
+                kit::warning(ui, why);
+            }
+            if kit::button(ui, "Back to the car").clicked() {
+                out = true;
+            }
+            match view.tab {
+                Tab::Runs => {
+                    if !view.news.is_empty() {
+                        kit::warning(ui, view.news.trim());
+                    }
+                    shown_run(ui, view);
+                    run_list(ui, view);
+                }
+                Tab::Ecu => {
+                    if let Some(car) = &mut view.car {
+                        ecu_ui::tuning(ui, &mut view.ecu, car);
+                    }
+                }
+                Tab::Cams => cams(ui, view),
+            }
         });
     let view = &mut *view;
     if let Some(run) = view.rollers.as_mut().filter(|run| run.hold.is_some()) {
@@ -987,63 +979,54 @@ fn shown_run(ui: &mut egui::Ui, view: &mut DynoView) {
     // The shown run on top of the one compared with.
     let compared = lines.len() - 4;
     lines.rotate_left(compared);
-    ui.horizontal(|ui| {
-        ui.strong(format!("#{}", run.number));
-        ui.label(&run.car);
-        ui.label(RichText::new(format!("pulled in gear {}", run.gear)).weak());
-    });
+    kit::section(
+        ui,
+        &format!("#{} {}, pulled in gear {}", run.number, run.car, run.gear),
+    );
     chart(ui, &lines, 250.0);
-    ui.label(
-        RichText::new(
-            "Solid: at the wheels. Dashed: at the crank. Orange: power (hp, right). Blue: \
-             torque (N·m, left); at the wheels, it's their power over the engine's speed.",
-        )
-        .small()
-        .weak(),
+    kit::note(
+        ui,
+        "Solid: at the wheels. Dashed: at the crank. Orange: power (hp, right). Blue: \
+         torque (N·m, left); at the wheels, it's their power over the engine's speed.",
     );
     let (wheel_rpm, wheel_hp) = run.peak(Sample::wheel_hp);
     let (crank_rpm, crank_hp) = run.peak(Sample::crank_hp);
     let (wheel_torque_rpm, wheel_torque) = run.peak(Sample::wheel_torque);
     let (crank_torque_rpm, crank_torque) = run.peak(|s| s.crank);
-    egui::Grid::new("dyno peaks").show(ui, |ui| {
-        ui.label("");
-        ui.strong("Power");
-        ui.strong("Torque");
-        ui.end_row();
-        ui.colored_label(POWER, "Wheels");
-        ui.label(format!("{wheel_hp:.0} hp at {wheel_rpm:.0} rpm"));
-        ui.label(format!(
-            "{wheel_torque:.0} N·m at {wheel_torque_rpm:.0} rpm"
-        ));
-        ui.end_row();
-        ui.colored_label(POWER, "Crank");
-        ui.label(format!("{crank_hp:.0} hp at {crank_rpm:.0} rpm"));
-        ui.label(format!(
-            "{crank_torque:.0} N·m at {crank_torque_rpm:.0} rpm"
-        ));
-        ui.end_row();
-    });
+    kit::info(
+        ui,
+        &format!("Wheels: {wheel_hp:.0} hp at {wheel_rpm:.0} rpm"),
+        &format!("{wheel_torque:.0} N·m at {wheel_torque_rpm:.0} rpm"),
+    );
+    kit::info(
+        ui,
+        &format!("Crank: {crank_hp:.0} hp at {crank_rpm:.0} rpm"),
+        &format!("{crank_torque:.0} N·m at {crank_torque_rpm:.0} rpm"),
+    );
     if crank_hp > 0.0 {
         let lost = (1.0 - wheel_hp / crank_hp) * 100.0;
-        ui.label(
-            RichText::new(format!(
+        kit::note(
+            ui,
+            &format!(
                 "{lost:.0} % of the peak power doesn't reach the rollers: the gearbox and \
                  differentials, the tires, and spinning up the engine and wheels."
-            ))
-            .weak(),
+            ),
         );
     }
     if !run.broke.is_empty() {
-        ui.colored_label(
-            BROKE,
-            format!("Broke during the run: {}", run.broke.join(", ")),
+        kit::warning(
+            ui,
+            &format!("Broke during the run: {}", run.broke.join(", ")),
         );
     }
     let run = &mut view.runs[i];
-    ui.horizontal(|ui| {
-        ui.label("Name");
-        ui.add(egui::TextEdit::singleline(&mut run.name).desired_width(400.0));
-    });
+    ui.add(
+        egui::TextEdit::singleline(&mut run.name)
+            .hint_text("Name")
+            .desired_width(f32::INFINITY)
+            .font(FontId::proportional(16.0))
+            .margin(egui::vec2(12.0, 8.0)),
+    );
     ui.add(
         egui::TextEdit::multiline(&mut run.notes)
             .hint_text("Notes: what was changed, the weather, …")
@@ -1052,41 +1035,44 @@ fn shown_run(ui: &mut egui::Ui, view: &mut DynoView) {
     );
 }
 
-/// Every run, newest first: pick one to show, another to compare with, or delete.
+/// Every run, newest first: pick one to show; compare the shown one with another, or
+/// delete it.
 fn run_list(ui: &mut egui::Ui, view: &mut DynoView) {
-    ui.strong(format!("Runs ({})", view.runs.len()));
     let mut delete = None;
-    egui::ScrollArea::vertical()
-        .max_height(150.0)
-        .show(ui, |ui| {
-            egui::Grid::new("dyno runs").striped(true).show(ui, |ui| {
-                for (i, run) in view.runs.iter().enumerate().rev() {
-                    let shown = view.shown == Some(i);
-                    let text = format!("#{} {}", run.number, run.name);
-                    if ui.selectable_label(shown, text).clicked() {
-                        view.shown = Some(i);
-                        if view.compared == Some(i) {
-                            view.compared = None;
-                        }
-                    }
-                    ui.label(RichText::new(&run.car).weak());
-                    let (_, wheel) = run.peak(Sample::wheel_hp);
-                    let (_, crank) = run.peak(Sample::crank_hp);
-                    ui.label(format!("{wheel:.0} whp / {crank:.0} hp"));
-                    let mut compared = view.compared == Some(i);
-                    if ui
-                        .add_enabled(!shown, egui::Checkbox::new(&mut compared, "compare"))
-                        .changed()
-                    {
-                        view.compared = compared.then_some(i);
-                    }
-                    if ui.small_button("Delete").clicked() {
-                        delete = Some(i);
-                    }
-                    ui.end_row();
-                }
-            });
-        });
+    if let Some(shown) = view.shown.filter(|&i| i < view.runs.len()) {
+        let mut options: Vec<Option<usize>> = vec![None];
+        options.extend((0..view.runs.len()).rev().filter(|&k| k != shown).map(Some));
+        if options.len() > 1 {
+            let runs = &view.runs;
+            kit::pick(
+                ui,
+                "Compare with",
+                &mut view.compared,
+                &options,
+                |k| match k {
+                    Some(k) => format!("#{} {}", runs[k].number, runs[k].name),
+                    None => "nothing".to_string(),
+                },
+            );
+        }
+        if kit::button(ui, "Delete this run").clicked() {
+            delete = Some(shown);
+        }
+    }
+    kit::section(ui, &format!("Runs ({})", view.runs.len()));
+    for (i, run) in view.runs.iter().enumerate().rev() {
+        let (_, wheel) = run.peak(Sample::wheel_hp);
+        let (_, crank) = run.peak(Sample::crank_hp);
+        let mark = if view.shown == Some(i) { "● " } else { "" };
+        let label = format!("{mark}#{} {}", run.number, run.name);
+        let detail = format!("{}: {wheel:.0} whp / {crank:.0} hp", run.car);
+        if kit::button_with(ui, &label, &detail).clicked() {
+            view.shown = Some(i);
+            if view.compared == Some(i) {
+                view.compared = None;
+            }
+        }
+    }
     let Some(i) = delete else {
         return;
     };
@@ -1111,48 +1097,59 @@ fn cams(ui: &mut egui::Ui, view: &mut DynoView) {
     };
     let fitted = &car.setup.engine.parts;
     let draft = view.draft.get_or_insert_with(|| fitted.clone());
-    egui::Grid::new("cams").num_columns(2).show(ui, |ui| {
-        ui.label("Cam timing").on_hover_text(
-            "Adjustable cam gears: advancing the intake cam fills better low down, retarding \
-             it breathes better high up",
+    kit::slider(
+        ui,
+        "Intake cam advance",
+        &mut draft.intake_timing,
+        -10.0..=10.0,
+        1.0,
+        |v| format!("{v:.0}°"),
+    );
+    kit::slider(
+        ui,
+        "Exhaust cam retard",
+        &mut draft.exhaust_timing,
+        -10.0..=10.0,
+        1.0,
+        |v| format!("{v:.0}°"),
+    );
+    kit::note(
+        ui,
+        "Adjustable cam gears: advancing the intake cam fills better low down, retarding it \
+         breathes better high up.",
+    );
+    ui.add_enabled_ui(draft.has_turbo(), |ui| {
+        kit::slider(
+            ui,
+            "Wastegate opens at",
+            &mut draft.boost,
+            0.3..=1.5,
+            0.05,
+            |v| format!("{v:.2} bar"),
         );
-        ui.vertical(|ui| {
-            ui.add(degrees(&mut draft.intake_timing, "intake advance"));
-            ui.add(degrees(&mut draft.exhaust_timing, "exhaust retard"));
-        });
-        ui.end_row();
-        ui.label("Wastegate")
-            .on_hover_text("The boost where the wastegate starts to open");
-        ui.add_enabled(
-            draft.has_turbo(),
-            egui::Slider::new(&mut draft.boost, 0.3..=1.5)
-                .step_by(0.05)
-                .suffix(" bar"),
-        );
-        ui.end_row();
     });
     let changed = draft != fitted;
     let busy = view.work.is_some() || running;
-    let mut apply = false;
-    ui.horizontal(|ui| {
-        apply = ui
-            .add_enabled(changed && !busy, egui::Button::new("Apply"))
-            .on_hover_text("The tune stays as it is: retune it for the new timing")
-            .clicked();
-        if ui
-            .add_enabled(changed && !busy, egui::Button::new("Revert"))
-            .clicked()
-        {
-            *draft = fitted.clone();
-        }
-        if let Some((.., work)) = &view.work {
-            ui.add(egui::ProgressBar::new(work.progress()).text("Baking the engine's maps"));
-        } else if running {
-            ui.label(RichText::new("Not while the dyno runs").weak());
-        } else {
-            ui.label(&view.status);
-        }
-    });
+    let apply = ui
+        .add_enabled_ui(changed && !busy, |ui| {
+            kit::button(ui, "Apply (the tune stays)")
+        })
+        .inner
+        .clicked();
+    let revert = ui
+        .add_enabled_ui(changed && !busy, |ui| kit::button(ui, "Back to how it is"))
+        .inner
+        .clicked();
+    if revert {
+        *draft = fitted.clone();
+    }
+    if let Some((.., work)) = &view.work {
+        kit::progress(ui, "Baking the engine's maps…", work.progress());
+    } else if running {
+        kit::note(ui, "Not while the dyno runs.");
+    } else if !view.status.is_empty() {
+        kit::note(ui, &view.status);
+    }
     if !apply {
         return;
     }
@@ -1171,14 +1168,6 @@ fn cams(ui: &mut egui::Ui, view: &mut DynoView) {
             view.work = Some((parts, hardware.clone(), Work::start(&hardware)));
         }
     }
-}
-
-/// A slider for a cam's timing (crank degrees).
-fn degrees<'a>(value: &'a mut f32, text: &str) -> egui::Slider<'a> {
-    egui::Slider::new(value, -10.0..=10.0)
-        .step_by(1.0)
-        .suffix("°")
-        .text(text)
 }
 
 /// Moves the baking on, and fits the engine once its maps are done.

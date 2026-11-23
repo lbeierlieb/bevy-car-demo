@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, Rect, Sense, Stroke, pos2, vec2};
 
 use crate::car::Car;
+use crate::menu::kit;
 use crate::physics::engine::ecu::{Ecu, EcuModel};
 use crate::physics::engine::table::Table;
 use crate::tunes;
@@ -26,6 +27,10 @@ pub struct EcuPanel {
     /// Selected cells: the first clicked and the last (shift-)clicked, as (rpm, manifold
     /// pressure) indices.
     selection: Option<[(usize, usize); 2]>,
+    /// Working the grid with the arrows: the cell they're on, and where a block being
+    /// selected started (choose starts and ends one).
+    cursor: (usize, usize),
+    anchor: Option<(usize, usize)>,
     /// Value for "Set", as shown.
     value: f32,
     /// Name to save the tune under, the saved tunes, the one picked from them, whether
@@ -117,23 +122,21 @@ impl MapKind {
 }
 
 /// The ECU tuning in the dyno's room, on the car on the rollers: what the engine does
-/// right now against what the ECU aims for, the rev limiter and idle settings, saving and
-/// loading tunes, and the maps as grids to edit with the operating point on them.
+/// right now against what the ECU aims for, the maps as grids to edit with the operating
+/// point on them, the rev limiter and idle settings, and saving and loading tunes.
 pub fn tuning(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
     if !panel.listed {
         panel.saved = tunes::list();
         panel.listed = true;
     }
     readings(ui, car);
-    ui.separator();
+    map_editor(ui, panel, car);
     settings(ui, car);
     saved_tunes(ui, panel, car);
-    ui.separator();
-    map_editor(ui, panel, car);
 }
 
 /// How wide `tuning` is (points).
-pub const WIDTH: f32 = LABEL_WIDTH + 19.0 * CELL.x + 20.0;
+pub const WIDTH: f32 = LABEL_WIDTH + 19.0 * CELL.x + 8.0;
 
 /// What the engine does right now, against what the ECU aims for.
 fn readings(ui: &mut egui::Ui, car: &Car) {
@@ -142,31 +145,31 @@ fn readings(ui: &mut egui::Ui, car: &Car) {
     let (rpm, map) = (drivetrain.rpm, engine.intake_pressure);
     let cycle = engine.cycle(build, rpm);
     let target = build.ecu.lambda.get(&[rpm, map]);
-    ui.label(format!(
-        "{rpm:.0} rpm    {:.0} kPa    intake {:.0} °C",
-        map / 1000.0,
-        engine.charge_temperature - 273.15,
-    ));
-    ui.horizontal(|ui| {
-        if cycle.lambda.is_finite() {
-            let off = (cycle.lambda - target).abs() > LAMBDA_OFF;
-            let text = format!("λ {:.2} (target {target:.2})", cycle.lambda);
-            let color = if off {
-                Color32::from_rgb(255, 170, 60)
-            } else {
-                ui.visuals().text_color()
-            };
-            ui.colored_label(color, text);
+    kit::info(
+        ui,
+        &format!("{rpm:.0} rpm    {:.0} kPa", map / 1000.0),
+        &format!("intake {:.0} °C", engine.charge_temperature - 273.15),
+    );
+    let lambda = if cycle.lambda.is_finite() {
+        let off = if (cycle.lambda - target).abs() > LAMBDA_OFF {
+            "  off"
         } else {
-            ui.label("λ - (no fuel)");
-        }
-        ui.label(format!(
-            "    spark {:.1}°    knock {:.1}°    wear {:.0} %",
+            ""
+        };
+        format!("λ {:.2} (target {target:.2}){off}", cycle.lambda)
+    } else {
+        "λ - (no fuel)".to_string()
+    };
+    kit::info(
+        ui,
+        &lambda,
+        &format!(
+            "spark {:.1}°  knock {:.1}°  wear {:.0} %",
             engine.actuators.spark,
             cycle.knock,
             engine.damage.worst(build.hardware.cylinders as usize) * 100.0,
-        ));
-    });
+        ),
+    );
     if build.ecu.model.cam_control() {
         let actuators = &engine.actuators;
         let profile = if actuators.cam_profile == 0 {
@@ -174,10 +177,14 @@ fn readings(ui: &mut egui::Ui, car: &Car) {
         } else {
             "second"
         };
-        ui.label(format!(
-            "cams on the {profile} profile    intake advanced {:.0}°    exhaust retarded {:.0}°",
-            actuators.intake_phase, actuators.exhaust_phase,
-        ));
+        kit::info(
+            ui,
+            &format!("Cams on the {profile} profile"),
+            &format!(
+                "intake +{:.0}°, exhaust −{:.0}°",
+                actuators.intake_phase, actuators.exhaust_phase,
+            ),
+        );
     }
 }
 
@@ -185,107 +192,101 @@ fn readings(ui: &mut egui::Ui, car: &Car) {
 fn settings(ui: &mut egui::Ui, car: &mut Car) {
     let build = &mut car.setup.engine.build;
     let ecu = &mut build.ecu;
-    ui.horizontal(|ui| {
-        ui.label("Rev limit");
-        ui.add(
-            egui::DragValue::new(&mut ecu.rev_limit)
-                .range(3000.0..=9500.0)
-                .speed(10.0)
-                .suffix(" rpm"),
-        );
-        ui.label("Idle");
-        ui.add(
-            egui::DragValue::new(&mut ecu.idle_rpm)
-                .range(600.0..=1500.0)
-                .speed(5.0)
-                .suffix(" rpm"),
-        );
+    kit::section(ui, "Limits and idle");
+    kit::slider(
+        ui,
+        "Rev limit",
+        &mut ecu.rev_limit,
+        3000.0..=9500.0,
+        50.0,
+        |v| format!("{v:.0} rpm"),
+    );
+    kit::slider(ui, "Idle", &mut ecu.idle_rpm, 600.0..=1500.0, 10.0, |v| {
+        format!("{v:.0} rpm")
     });
-    ui.horizontal(|ui| {
-        ui.label("Limiter: cut");
-        let mut cut = ecu.limiter_cut * 1000.0;
-        ui.add(
-            egui::DragValue::new(&mut cut)
-                .range(10.0..=300.0)
-                .suffix(" ms"),
-        );
-        ecu.limiter_cut = cut / 1000.0;
-        ui.label("then fuel");
-        let mut fuel = ecu.limiter_fuel * 1000.0;
-        ui.add(
-            egui::DragValue::new(&mut fuel)
-                .range(10.0..=300.0)
-                .suffix(" ms"),
-        );
-        ecu.limiter_fuel = fuel / 1000.0;
-        if ui
-            .button("Factory tune")
-            .on_hover_text("Back to the tune calibrated for this engine on 95 octane")
-            .clicked()
-        {
-            *ecu = Ecu::calibrated(&build.hardware, &build.maps, 95.0, ecu.model);
-        }
+    let mut cut = ecu.limiter_cut * 1000.0;
+    kit::slider(ui, "Limiter: cut for", &mut cut, 10.0..=300.0, 5.0, |v| {
+        format!("{v:.0} ms")
     });
+    ecu.limiter_cut = cut / 1000.0;
+    let mut fuel = ecu.limiter_fuel * 1000.0;
+    kit::slider(
+        ui,
+        "Limiter: then fuel for",
+        &mut fuel,
+        10.0..=300.0,
+        5.0,
+        |v| format!("{v:.0} ms"),
+    );
+    ecu.limiter_fuel = fuel / 1000.0;
     if ecu.model.cam_control() {
         let cams = &mut ecu.cams;
-        ui.horizontal(|ui| {
-            ui.label("Second cam profile above");
-            ui.add(
-                egui::DragValue::new(&mut cams.switch_rpm)
-                    .range(1000.0..=9500.0)
-                    .speed(10.0)
-                    .suffix(" rpm"),
-            );
-            ui.label("and");
-            let mut map = cams.switch_map / 1000.0;
-            ui.add(
-                egui::DragValue::new(&mut map)
-                    .range(10.0..=300.0)
-                    .suffix(" kPa"),
-            );
-            cams.switch_map = map * 1000.0;
-        })
-        .response
-        .on_hover_text("Only for switching cams: with fixed cams there is no second profile");
+        kit::slider(
+            ui,
+            "Second cam profile above",
+            &mut cams.switch_rpm,
+            1000.0..=9500.0,
+            50.0,
+            |v| format!("{v:.0} rpm"),
+        );
+        let mut map = cams.switch_map / 1000.0;
+        kit::slider(ui, "… and above", &mut map, 10.0..=300.0, 5.0, |v| {
+            format!("{v:.0} kPa")
+        });
+        cams.switch_map = map * 1000.0;
+        kit::note(
+            ui,
+            "Only for switching cams: with fixed cams there is no second profile.",
+        );
+    }
+    if kit::button(ui, "Factory tune (for 95 octane)").clicked() {
+        *ecu = Ecu::calibrated(&build.hardware, &build.maps, 95.0, ecu.model);
     }
 }
 
 /// Saving the tune under a name, and loading or deleting saved ones.
 fn saved_tunes(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
     let build = &mut car.setup.engine.build;
-    ui.horizontal(|ui| {
-        ui.label("Tune");
-        let name = egui::TextEdit::singleline(&mut panel.name)
-            .hint_text("name")
-            .desired_width(140.0);
-        ui.add(name);
-        if ui.button("Save").clicked() {
-            panel.status = match tunes::clean_name(&panel.name) {
-                None => "Give the tune a name first.".to_string(),
-                Some(name) => match tunes::save(&name, &build.ecu.to_text(&build.hardware.name)) {
-                    Ok(()) => {
-                        panel.saved = tunes::list();
-                        panel.chosen = Some(name.clone());
-                        panel.name = name.clone();
-                        format!("Saved \"{name}\".")
-                    }
-                    Err(err) => format!("Couldn't save: {err}"),
-                },
-            };
-        }
-        ui.separator();
-        let shown = panel.chosen.as_deref().unwrap_or("Saved tunes");
-        egui::ComboBox::from_id_salt("saved tunes")
-            .selected_text(shown)
-            .show_ui(ui, |ui| {
-                for name in &panel.saved {
-                    ui.selectable_value(&mut panel.chosen, Some(name.clone()), name);
-                }
-            });
-        let Some(chosen) = panel.chosen.clone() else {
-            return;
+    kit::section(ui, "Tunes");
+    ui.add(
+        egui::TextEdit::singleline(&mut panel.name)
+            .hint_text("Name to save the tune under")
+            .desired_width(f32::INFINITY)
+            .font(FontId::proportional(16.0))
+            .margin(vec2(12.0, 8.0)),
+    );
+    if kit::button(ui, "Save the tune").clicked() {
+        // Without a name typed (a controller), a numbered one.
+        let name = if panel.name.trim().is_empty() {
+            (1..)
+                .map(|n| format!("Tune {n}"))
+                .find(|name| !panel.saved.contains(name))
+                .expect("a free number")
+        } else {
+            panel.name.clone()
         };
-        if ui.button("Load").clicked() {
+        panel.status = match tunes::clean_name(&name) {
+            None => "That name won't do as a file name.".to_string(),
+            Some(name) => match tunes::save(&name, &build.ecu.to_text(&build.hardware.name)) {
+                Ok(()) => {
+                    panel.saved = tunes::list();
+                    panel.chosen = Some(name.clone());
+                    panel.name = name.clone();
+                    format!("Saved \"{name}\".")
+                }
+                Err(err) => format!("Couldn't save: {err}"),
+            },
+        };
+    }
+    if !panel.saved.is_empty() {
+        let mut index = (panel.chosen.as_ref())
+            .and_then(|chosen| panel.saved.iter().position(|name| name == chosen))
+            .unwrap_or(0);
+        kit::choice(ui, "Saved tune", &mut index, &panel.saved);
+        panel.chosen = panel.saved.get(index).cloned();
+    }
+    if let Some(chosen) = panel.chosen.clone() {
+        if kit::button(ui, &format!("Load \"{chosen}\"")).clicked() {
             panel.deleting = false;
             panel.status = match tunes::load(&chosen) {
                 None => format!("Couldn't read \"{chosen}\"."),
@@ -311,11 +312,11 @@ fn saved_tunes(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
             };
         }
         let delete = if panel.deleting {
-            "Really delete?"
+            format!("Really delete \"{chosen}\"?")
         } else {
-            "Delete"
+            format!("Delete \"{chosen}\"")
         };
-        if ui.button(delete).clicked() {
+        if kit::button(ui, &delete).clicked() {
             if panel.deleting {
                 tunes::delete(&chosen);
                 panel.saved = tunes::list();
@@ -324,25 +325,24 @@ fn saved_tunes(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
             }
             panel.deleting = !panel.deleting;
         }
-    });
+    }
     if !panel.status.is_empty() {
-        ui.label(&panel.status);
+        kit::note(ui, &panel.status);
     }
 }
 
-/// Map choice, editing tools, and the grid.
+/// Map choice, the grid, and the editing tools under it.
 fn map_editor(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
     let model = car.setup.engine.build.ecu.model;
     if !panel.map.available(model) {
         panel.map = MapKind::Fuel;
     }
-    ui.horizontal(|ui| {
-        for kind in MapKind::ALL
-            .into_iter()
-            .filter(|kind| kind.available(model))
-        {
-            ui.selectable_value(&mut panel.map, kind, kind.name());
-        }
+    let kinds: Vec<MapKind> = MapKind::ALL
+        .into_iter()
+        .filter(|kind| kind.available(model))
+        .collect();
+    kit::pick(ui, "Map", &mut panel.map, &kinds, |kind| {
+        kind.name().to_string()
     });
     let kind = panel.map;
     let (rpm, map) = (car.drivetrain.rpm, car.drivetrain.engine.intake_pressure);
@@ -356,59 +356,65 @@ fn map_editor(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
     let table = kind.table(ecu);
     let (low, high) = kind.range();
 
-    ui.horizontal(|ui| {
-        let selected = panel.selection;
-        let mut apply = |f: &dyn Fn(f32) -> f32| {
-            if let Some(selection) = selected {
-                for cell in cells(selection) {
-                    let value = f(table.cell(&cell) * kind.scale()) / kind.scale();
-                    table.set_cell(&cell, value.clamp(low, high));
-                }
-            }
-        };
-        ui.add_enabled_ui(selected.is_some(), |ui| {
-            let step = kind.step();
-            if ui.button(format!("−{step}")).clicked() {
-                apply(&|v| v - step);
-            }
-            if ui.button(format!("+{step}")).clicked() {
-                apply(&|v| v + step);
-            }
-            ui.add(
-                egui::DragValue::new(&mut panel.value)
-                    .speed(step)
-                    .max_decimals(kind.decimals()),
-            );
-            let value = panel.value;
-            if ui.button("Set").clicked() {
-                apply(&|_| value);
-            }
-        });
-        if kind == MapKind::Fuel {
-            let measured = lambda.is_finite();
-            let button = ui
-                .add_enabled(measured, egui::Button::new("Correct VE here"))
-                .on_hover_text(
-                    "Scales the cells around the operating point by measured over target λ, \
-                     so the mixture comes out on target",
-                );
-            if button.clicked() {
-                table.scale_at(&[rpm, map], lambda / target);
-            }
-        }
-    });
-    ui.label(
-        "Click a cell to select it, shift-click to select a block; double-click picks its value.",
-    );
     let operating = [rpm, map];
     if let Some((cell, shift, double)) = grid(ui, panel, table, kind, operating) {
         panel.selection = match panel.selection {
             Some([anchor, _]) if shift => Some([anchor, cell]),
             _ => Some([cell, cell]),
         };
+        panel.cursor = cell;
+        panel.anchor = None;
         if double {
             panel.value = table.cell(&[cell.0, cell.1]) * kind.scale();
         }
+    }
+    kit::note(
+        ui,
+        "The arrows move over the cells, choose starts and ends a block; the mouse: click a \
+         cell, shift-click a block, double-click picks its value. The yellow ring is where \
+         the engine runs.",
+    );
+    let selected = panel.selection;
+    let mut apply = |f: &dyn Fn(f32) -> f32| {
+        if let Some(selection) = selected {
+            for cell in cells(selection) {
+                let value = f(table.cell(&cell) * kind.scale()) / kind.scale();
+                table.set_cell(&cell, value.clamp(low, high));
+            }
+        }
+    };
+    let step = kind.step();
+    ui.add_enabled_ui(selected.is_some(), |ui| {
+        if kit::button(ui, &format!("Raise the selected cells by {step}")).clicked() {
+            apply(&|v| v + step);
+        }
+        if kit::button(ui, &format!("Lower them by {step}")).clicked() {
+            apply(&|v| v - step);
+        }
+        let (lo, hi) = (low * kind.scale(), high * kind.scale());
+        kit::slider(ui, "Value to set", &mut panel.value, lo..=hi, step, |v| {
+            format!("{v:.*}", kind.decimals())
+        });
+        let value = panel.value;
+        if kit::button(ui, &format!("Set them to {value:.*}", kind.decimals())).clicked() {
+            apply(&|_| value);
+        }
+    });
+    if kind == MapKind::Fuel {
+        let measured = lambda.is_finite();
+        let correct = ui
+            .add_enabled_ui(measured, |ui| {
+                kit::button(ui, "Correct VE where the engine runs")
+            })
+            .inner;
+        if correct.clicked() {
+            table.scale_at(&[rpm, map], lambda / target);
+        }
+        kit::note(
+            ui,
+            "Scales the cells around the operating point by measured over target λ, so the \
+             mixture comes out on target.",
+        );
     }
 }
 
@@ -427,10 +433,12 @@ fn selected(selection: Option<[(usize, usize); 2]>, cell: [usize; 2]) -> bool {
 
 /// Draws the table (rpm across, manifold pressure up) coloured by value, with the selection
 /// and the operating point, and returns a clicked cell (with whether shift was held, and
-/// whether it was a double click).
+/// whether it was a double click). One widget for the focus: while it has it, the arrows
+/// move the cursor (up from the top row and down from the bottom one leave the grid) and
+/// choose starts or ends a block.
 fn grid(
     ui: &mut egui::Ui,
-    panel: &EcuPanel,
+    panel: &mut EcuPanel,
     table: &Table,
     kind: MapKind,
     operating: [f32; 2],
@@ -440,78 +448,149 @@ fn grid(
     let low = values().fold(f32::INFINITY, f32::min);
     let high = values().fold(f32::NEG_INFINITY, f32::max);
     let mut clicked = None;
-    egui::ScrollArea::both().max_height(560.0).show(ui, |ui| {
-        let size = vec2(
-            LABEL_WIDTH + CELL.x * rpms.len() as f32,
-            CELL.y * (maps.len() + 1) as f32,
-        );
-        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-        let painter = ui.painter_at(rect);
-        let font = FontId::monospace(11.0);
-        let text_color = ui.visuals().text_color();
-        let origin = rect.min + vec2(LABEL_WIDTH, CELL.y);
-        for (i, rpm) in rpms.iter().enumerate() {
-            let at = origin + vec2((i as f32 + 0.5) * CELL.x, -CELL.y / 2.0);
-            painter.text(
-                at,
-                Align2::CENTER_CENTER,
-                format!("{:.1}k", rpm / 1000.0),
-                font.clone(),
-                text_color,
+    let size = vec2(
+        LABEL_WIDTH + CELL.x * rpms.len() as f32,
+        CELL.y * (maps.len() + 1) as f32,
+    );
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let origin = rect.min + vec2(LABEL_WIDTH, CELL.y);
+    // The arrows and choose, while it has the focus.
+    let (columns, rows) = (rpms.len(), maps.len());
+    panel.cursor = (
+        panel.cursor.0.min(columns.saturating_sub(1)),
+        panel.cursor.1.min(rows.saturating_sub(1)),
+    );
+    if kit::focused(ui, &response) {
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                response.id,
+                egui::EventFilter {
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    ..Default::default()
+                },
             );
+        });
+        let (up, down, left, right, enter) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::ArrowDown),
+                i.key_pressed(egui::Key::ArrowLeft),
+                i.key_pressed(egui::Key::ArrowRight),
+                i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space),
+            )
+        });
+        let (mut i, mut j) = panel.cursor;
+        if left {
+            i = i.saturating_sub(1);
         }
-        for (row, j) in (0..maps.len()).rev().enumerate() {
-            let y = origin.y + row as f32 * CELL.y;
-            let label = pos2(rect.min.x + LABEL_WIDTH - 6.0, y + CELL.y / 2.0);
-            painter.text(
-                label,
-                Align2::RIGHT_CENTER,
-                format!("{:.0} kPa", maps[j] / 1000.0),
-                font.clone(),
-                text_color,
-            );
-            for i in 0..rpms.len() {
-                let cell = Rect::from_min_size(pos2(origin.x + i as f32 * CELL.x, y), CELL);
-                let value = table.cell(&[i, j]);
-                let t = if high > low {
-                    (value - low) / (high - low)
-                } else {
-                    0.5
-                };
-                painter.rect_filled(cell.shrink(0.5), 2.0, heat(t));
-                let shown = format!("{:.*}", kind.decimals(), value * kind.scale());
-                painter.text(
-                    cell.center(),
-                    Align2::CENTER_CENTER,
-                    shown,
-                    font.clone(),
-                    Color32::WHITE,
-                );
-                if selected(panel.selection, [i, j]) {
-                    painter.rect_stroke(
-                        cell.shrink(1.0),
-                        2.0,
-                        Stroke::new(2.0, Color32::WHITE),
-                        egui::StrokeKind::Inside,
-                    );
-                }
-                let response = ui.interact(cell, ui.id().with(("ecu cell", i, j)), Sense::click());
-                if response.clicked() || response.double_clicked() {
-                    let shift = ui.input(|input| input.modifiers.shift);
-                    clicked = Some(((i, j), shift, response.double_clicked()));
-                }
+        if right {
+            i = (i + 1).min(columns - 1);
+        }
+        // Up is a higher manifold pressure (the top row).
+        if up {
+            if j + 1 >= rows {
+                ui.memory_mut(|m| m.move_focus(egui::FocusDirection::Up));
+            } else {
+                j += 1;
             }
         }
-        // The operating point, where the lookup blends the cells.
-        let x = origin.x + (fraction(rpms, operating[0]) + 0.5) * CELL.x;
-        let y = origin.y + (maps.len() as f32 - 0.5 - fraction(maps, operating[1])) * CELL.y;
-        painter.circle(
-            pos2(x, y),
-            5.0,
-            Color32::from_black_alpha(80),
-            Stroke::new(2.0, Color32::YELLOW),
+        if down {
+            if j == 0 {
+                ui.memory_mut(|m| m.move_focus(egui::FocusDirection::Down));
+            } else {
+                j -= 1;
+            }
+        }
+        if enter {
+            panel.anchor = match panel.anchor {
+                Some(_) => None,
+                None => Some((i, j)),
+            };
+        }
+        if (i, j) != panel.cursor || enter || panel.selection.is_none() {
+            panel.cursor = (i, j);
+            panel.selection = Some([panel.anchor.unwrap_or((i, j)), (i, j)]);
+        }
+    }
+    let painter = ui.painter_at(rect);
+    let font = FontId::monospace(11.0);
+    let text_color = ui.visuals().text_color();
+    for (i, rpm) in rpms.iter().enumerate() {
+        let at = origin + vec2((i as f32 + 0.5) * CELL.x, -CELL.y / 2.0);
+        painter.text(
+            at,
+            Align2::CENTER_CENTER,
+            format!("{:.1}k", rpm / 1000.0),
+            font.clone(),
+            text_color,
         );
-    });
+    }
+    for (row, j) in (0..maps.len()).rev().enumerate() {
+        let y = origin.y + row as f32 * CELL.y;
+        let label = pos2(rect.min.x + LABEL_WIDTH - 6.0, y + CELL.y / 2.0);
+        painter.text(
+            label,
+            Align2::RIGHT_CENTER,
+            format!("{:.0} kPa", maps[j] / 1000.0),
+            font.clone(),
+            text_color,
+        );
+        for i in 0..rpms.len() {
+            let cell = Rect::from_min_size(pos2(origin.x + i as f32 * CELL.x, y), CELL);
+            let value = table.cell(&[i, j]);
+            let t = if high > low {
+                (value - low) / (high - low)
+            } else {
+                0.5
+            };
+            painter.rect_filled(cell.shrink(0.5), 2.0, heat(t));
+            let shown = format!("{:.*}", kind.decimals(), value * kind.scale());
+            painter.text(
+                cell.center(),
+                Align2::CENTER_CENTER,
+                shown,
+                font.clone(),
+                Color32::WHITE,
+            );
+            if selected(panel.selection, [i, j]) {
+                painter.rect_stroke(
+                    cell.shrink(1.0),
+                    2.0,
+                    Stroke::new(2.0, Color32::WHITE),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            if kit::focused(ui, &response) && panel.cursor == (i, j) {
+                painter.rect_stroke(
+                    cell,
+                    2.0,
+                    Stroke::new(2.0, crate::menu::ACCENT),
+                    egui::StrokeKind::Outside,
+                );
+            }
+        }
+    }
+    if let Some(pointer) = response.interact_pointer_pos()
+        && (response.clicked() || response.double_clicked())
+    {
+        let i = ((pointer.x - origin.x) / CELL.x).floor();
+        let row = ((pointer.y - origin.y) / CELL.y).floor();
+        if i >= 0.0 && row >= 0.0 && (i as usize) < columns && (row as usize) < rows {
+            let j = rows - 1 - row as usize;
+            let shift = ui.input(|input| input.modifiers.shift);
+            clicked = Some(((i as usize, j), shift, response.double_clicked()));
+        }
+    }
+    // The operating point, where the lookup blends the cells.
+    let x = origin.x + (fraction(rpms, operating[0]) + 0.5) * CELL.x;
+    let y = origin.y + (maps.len() as f32 - 0.5 - fraction(maps, operating[1])) * CELL.y;
+    painter.circle(
+        pos2(x, y),
+        5.0,
+        Color32::from_black_alpha(80),
+        Stroke::new(2.0, Color32::YELLOW),
+    );
     clicked
 }
 
