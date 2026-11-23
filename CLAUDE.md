@@ -59,6 +59,29 @@ right-hand lane on roads with traffic lanes), carried there by the rescue helico
 "Helicopters"). The map teleport was removed at the user's
 wish (2026-11-21). Keys: M map, 0 mute, B (held) looks back.
 
+## Menus (agreed with the user, 2026-11-23; being built)
+
+The egui windows weren't it. Every menu must be fully usable with six buttons (up, down,
+left, right, confirm, back) plus a menu button, so a gamepad or a wheel alone does
+everything (except typing: chat, name, server address); the mouse keeps working. Sizes
+don't follow the display scaling (a 4K screen showed everything tiny): the UI scales with
+the window. One central menu (Esc, a pad's Start, or a wheel button bound to "Menu")
+holds the driving aids, the controls and bindings, the map, reset, sound, display,
+online and help, so whoever doesn't know the keys, or whose controller lacks a button,
+finds everything there. Decisions: **no pause and no parking brake** while it's open
+(not even alone); the 0 (mute) key goes (sound is in the menu), H and M stay; the shop,
+dyno (ECU grids too) and event windows get the same treatment, controller friendly and
+well sized. The font is my choice.
+
+Plan as agreed: (1) UI zoom from the window's size and a "UI size" setting; (2) menu
+input from every device (keyboard arrows/Enter/Esc; a pad's D-pad, stick, South, East,
+Start without setup; wheel buttons bound to menu actions, with a guided setup), handed to
+egui as key events so its own focus navigation works on every widget, a focus ring,
+lists scrolled to the focus, focus kept in the topmost menu, and driving input held back
+while a menu has it; (3) a small kit for the look (big rows, panels, prompts); (4) the
+central menu; (5) start menu; (6) the map with a controller; (7) every shop and event
+window; (8) clean-up (panel 2 only telemetry).
+
 ## Sandbox workflow
 
 - Build inside the dev shell with a separate target dir (the shared `target/` broke):
