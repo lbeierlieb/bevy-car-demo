@@ -1116,10 +1116,15 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    (so an island between roads at different heights slopes instead of a wall at one
    edge), beyond that `EMBANKMENT` from the nearest. A 2 m shoulder was tried and
    dropped (terrain rose under bridge ends). The bake is deterministic (BTreeMaps where
-   it iterates; the same map bakes to the same bytes).
-   Not done: junction middles as one mesh (the overlapping ribbons show seams; where
-   two roads at different heights overlap, a steep fold of ribbon can show, seen
-   bluish at grazing angles, e.g. at (−2642, −2212)), tunnels, piers.
+   it iterates; the same map bakes to the same bytes). Overlapping roads are one
+   surface in the profile solve (`tie_overlaps`, 2026-11-23): at five places across
+   each road point lying ≥ 0.25 m inside another road on the ground, connected or not,
+   a tie (`Problem::ties`: weighted terms with a target, solved like the bends) pulls
+   the two surfaces (crowns included) together; road ribbon triangles steeper than 26°
+   went from 352 m² to 44 m² (waterways on steep banks aside).
+   Not done: junction middles as one mesh (the overlapping ribbons show seams; a road
+   sloping away from a low camera looks bluish, the sky reflected at a grazing angle,
+   e.g. at (−2642, −2212) seen from the south), tunnels, piers.
 4. Road condition (done): `relief.rs`, OSM `smoothness` to ISO 8608 roughness (waves
    0.5–20 m), features from `traffic_calming=bump|hump|table` and `hazard=pothole`
    nodes. The baked file is zlib-compressed, heights predicted from neighbours.
