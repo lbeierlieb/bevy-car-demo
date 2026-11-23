@@ -571,18 +571,6 @@ impl DriverAids {
         }
         aids
     }
-
-    /// Checkboxes for them all; saves a change.
-    pub fn show(&mut self, ui: &mut bevy_egui::egui::Ui) {
-        let before = *self;
-        ui.checkbox(&mut self.traction_control, "Traction control")
-            .on_hover_text("Eases the throttle while a driven wheel spins");
-        ui.checkbox(&mut self.abs, "ABS")
-            .on_hover_text("Eases the brake of a wheel that's about to lock");
-        if *self != before {
-            self.save();
-        }
-    }
 }
 
 /// Driving the active car, and its entity following the simulation. Which cars there are

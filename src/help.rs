@@ -269,7 +269,8 @@ fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (S
         Hint::Off => (
             "The engine is off".into(),
             format!(
-                "Hold {} until it fires up: the starter turns it over.",
+                "Hold {} until it fires up: the starter turns it over (or \"Start the \
+                 engine\" in the menu, [Esc]).",
                 key("I", Action::Ignition)
             ),
         ),
@@ -334,7 +335,8 @@ fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (S
         Hint::Stuck => (
             "Stuck?".into(),
             format!(
-                "Press {} and a helicopter carries the car back to the road.",
+                "Press {} (or \"Reset the car\" in the menu, [Esc]) and a helicopter carries \
+                 the car back to the road.",
                 key("R", Action::Reset)
             ),
         ),

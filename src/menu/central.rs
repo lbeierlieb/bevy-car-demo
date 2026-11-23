@@ -404,6 +404,11 @@ fn main(
         intro.open = true;
         menu.close();
     }
+    kit::note(
+        ui,
+        "Map: Gerach to Rattelsdorf and Baunach, Bavaria. Map data © OpenStreetMap \
+         contributors (ODbL). Elevation: DGM1 © Bayerische Vermessungsverwaltung (CC BY 4.0).",
+    );
     if !cfg!(target_arch = "wasm32") {
         if kit::button_with(ui, "Fullscreen", "F11").clicked() {
             toggle_fullscreen(windows);
