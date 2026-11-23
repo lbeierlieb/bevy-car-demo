@@ -29,9 +29,8 @@ pub const GRADES: [(&str, f32, [f32; 3]); 3] = [
     ("Racing 102", 102.0, [0.85, 0.18, 0.10]),
 ];
 
-/// How fast a pump fills (L/s): quicker than a real one (about 0.7), so a tank doesn't
-/// take a minute.
-const FLOW: f32 = 2.0;
+/// How fast a pump fills (L/s): a little quicker than a real one (about 0.7).
+const FLOW: f32 = 1.0;
 /// How far over the ground at the shop the forecourt is (m).
 const ABOVE: f32 = 600.0;
 /// The pump island: its width, height and length (m), and the gap between it and the car.
@@ -91,11 +90,10 @@ struct Station {
     eye: Option<Vec3>,
     /// The display's middle, and its right and up (as seen from in front), in the world.
     display: [Vec3; 3],
-    /// The grade (in `GRADES`) and the litres to pump, as last set (kept between visits).
+    /// The grade (in `GRADES`), as last set (kept between visits).
     grade: usize,
-    litres: f32,
-    /// Pumping, up to this much for this fill (L); and how much went in so far.
-    pumping: Option<f32>,
+    /// Pumping (until stopped or full), and how much went in this fill (L).
+    pumping: bool,
     pumped: f32,
 }
 
@@ -186,11 +184,6 @@ fn shop(
         zoom: 1.1,
         display: [display, Vec3::NEG_Z, Vec3::Y],
         grade: station.grade,
-        litres: if station.litres > 0.0 {
-            station.litres
-        } else {
-            10.0
-        },
         ..default()
     };
     for mut projection in &mut cameras {
@@ -230,7 +223,7 @@ fn leave(
             (perspective.fov, perspective.near) = camera.lens();
         }
     }
-    (station.inside, station.pumping) = (false, None);
+    (station.inside, station.pumping) = (false, false);
     away.0 = false;
     audio.hushed = false;
 }
@@ -674,16 +667,16 @@ fn looks_at_pump(car: &Car) -> (Looks, Motion) {
 /// Pumps into the driven car while it's on, until this fill's litres are in or the tank
 /// is full.
 fn pump_fuel(station: &mut Station, car: &mut Car, dt: f32) {
-    let Some(goal) = station.pumping else {
+    if !station.pumping {
         return;
-    };
+    }
     let tank = car.setup.tank;
     let room = (tank.litres - car.fuel.litres()).max(0.0);
-    let step = (FLOW * dt).min(goal - station.pumped).min(room).max(0.0);
+    let step = (FLOW * dt).min(room).max(0.0);
     car.fuel.fill(&tank, step, GRADES[station.grade].1);
     station.pumped += step;
-    if station.pumped >= goal - 1e-4 || room - step < 1e-3 {
-        station.pumping = None;
+    if room - step < 1e-3 {
+        station.pumping = false;
     }
 }
 
@@ -850,7 +843,7 @@ fn display(
     );
     text(0.82, 0.42, 0.12, Align2::LEFT_TOP, "L", dim);
     let (litres, tank) = (car.fuel.litres(), car.setup.tank.litres);
-    let state = if station.pumping.is_some() {
+    let state = if station.pumping {
         "PUMPING"
     } else if tank - litres < 0.05 {
         "FULL"
@@ -899,8 +892,8 @@ fn display(
     Ok(())
 }
 
-/// The pump's window, on the right: the grade and how much, pumping and stopping; and back
-/// to the car.
+/// The pump's window, on the right: the grade, pumping (nothing but stopping while it
+/// pumps), what's in the tank, and back to the car.
 #[allow(clippy::too_many_arguments)]
 fn window(
     mut commands: Commands,
@@ -925,68 +918,60 @@ fn window(
         .width(400.0)
         .back(Some("Back to the car"))
         .show(ctx, |ui| {
-            kit::note(ui, &tank_line(car));
-            let pumping = station.pumping.is_some();
-            let grade = GRADES[station.grade].1;
-            let mixed = |added: f32| {
-                let added = added.min(room);
-                (litres * octane + added * grade) / (litres + added).max(1e-6)
-            };
-            if pumping {
-                if kit::button(ui, "Stop").clicked() {
-                    station.pumping = None;
-                }
+            let pumping = station.pumping;
+            let names: Vec<String> = GRADES.iter().map(|(name, ..)| name.to_string()).collect();
+            ui.add_enabled_ui(!pumping, |ui| {
+                kit::choice(ui, "Grade", &mut station.grade, &names);
+            });
+            let label = if pumping {
+                format!("Stop ({:.1} L in)", station.pumped)
+            } else if room < 0.05 {
+                "The tank is full".to_string()
             } else {
-                let some = station.litres.min(room);
-                let start = |station: &mut Station, goal: f32| {
-                    (station.pumping, station.pumped) = (Some(goal), 0.0);
-                };
-                let fill = ui
-                    .add_enabled_ui(room > 0.05, |ui| {
-                        kit::button_with(
-                            ui,
-                            &format!("Fill up ({room:.1} L)"),
-                            &format!("then {:.1} octane", mixed(room)),
-                        )
-                    })
-                    .inner;
-                if fill.clicked() {
-                    start(&mut station, room);
-                }
-                let pump = ui
-                    .add_enabled_ui(some > 0.05, |ui| {
-                        kit::button_with(
-                            ui,
-                            &format!("Pump {some:.1} L"),
-                            &format!("then {:.1} octane", mixed(some)),
-                        )
-                    })
-                    .inner;
-                if pump.clicked() {
-                    start(&mut station, some);
+                format!("Pump {}", GRADES[station.grade].0)
+            };
+            let pump = ui
+                .add_enabled_ui(pumping || room >= 0.05, |ui| kit::button(ui, &label))
+                .inner;
+            if pumping {
+                // Nothing but stopping while it pumps: the focus stays on the button.
+                ui.memory_mut(|m| {
+                    m.request_focus(pump.id);
+                    m.set_focus_lock_filter(
+                        pump.id,
+                        egui::EventFilter {
+                            horizontal_arrows: true,
+                            vertical_arrows: true,
+                            tab: true,
+                            escape: true,
+                        },
+                    );
+                });
+            }
+            if pump.clicked() {
+                station.pumping = !pumping;
+                if !pumping {
+                    station.pumped = 0.0;
                 }
             }
-            ui.add_enabled_ui(!pumping, |ui| {
-                let names: Vec<String> = GRADES.iter().map(|(name, ..)| name.to_string()).collect();
-                kit::choice(ui, "Grade", &mut station.grade, &names);
-                kit::slider(
-                    ui,
-                    "Litres",
-                    &mut station.litres,
-                    1.0..=tank.max(1.0),
-                    1.0,
-                    |v| format!("{v:.0} L"),
-                );
-            });
+            kit::info(
+                ui,
+                "In the tank",
+                &format!("{litres:.1} of {tank:.0} L, {octane:.1} octane"),
+            );
             kit::note(
                 ui,
                 "Grades mix by volume. Higher octane resists knock: the factory tunes are \
                  for 95; more spark advance or boost may want more, and lower knocks.",
             );
-            if kit::button(ui, "Back to the car").clicked() {
-                out = true;
-            }
+            ui.add_enabled_ui(!pumping, |ui| {
+                if kit::button(ui, "Back to the car").clicked() {
+                    out = true;
+                }
+            });
         });
+    // Back does nothing while it pumps.
+    out &= !station.pumping;
     if out {
         leave(
             &mut commands,
@@ -1012,26 +997,25 @@ mod tests {
         car.fuel = Fuel::new(10.0);
         let mut station = Station {
             grade: 2,
-            pumping: Some(5.0),
+            pumping: true,
             ..default()
         };
-        pump_fuel(&mut station, &mut car, 1.0);
-        assert!((car.fuel.litres() - (10.0 + FLOW)).abs() < 1e-4);
-        // On to the litres asked for, and no further.
-        for _ in 0..10 {
+        for _ in 0..5 {
             pump_fuel(&mut station, &mut car, 1.0);
         }
-        assert_eq!(station.pumping, None);
-        assert!((car.fuel.litres() - 15.0).abs() < 1e-4);
-        let octane = (10.0 * 95.0 + 5.0 * 102.0) / 15.0;
+        assert!((car.fuel.litres() - (10.0 + 5.0 * FLOW)).abs() < 1e-4);
+        let octane = (10.0 * 95.0 + 5.0 * FLOW * 102.0) / (10.0 + 5.0 * FLOW);
         assert!((car.fuel.octane() - octane).abs() < 1e-3);
-        // Filling up stops when it's full.
-        station.pumping = Some(100.0);
-        station.pumped = 0.0;
+        // Stopped, it pumps no more.
+        station.pumping = false;
+        pump_fuel(&mut station, &mut car, 1.0);
+        assert!((car.fuel.litres() - (10.0 + 5.0 * FLOW)).abs() < 1e-4);
+        // It stops by itself when it's full.
+        station.pumping = true;
         for _ in 0..100 {
             pump_fuel(&mut station, &mut car, 1.0);
         }
-        assert_eq!(station.pumping, None);
+        assert!(!station.pumping);
         assert!((car.fuel.litres() - tank).abs() < 1e-3);
     }
 
