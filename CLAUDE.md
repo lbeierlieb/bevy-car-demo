@@ -1089,10 +1089,18 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    on the outside of the bend. Curbed corners (asked for by the user, 2026-11-22; format
    16; `tools/bake/src/corners.rs`): at nodes where 3+ roads on the ground leave (none
    with a bridge), between each two neighbouring ones 25–160° apart, the inside of the
-   turn is filled to an arc tangent to both edges, radius by the narrower road (2.5 m
-   under 3.5 m wide, 5 m under 6 m, else 8 m), shrunk to fit the arms (0.8 of their
-   length) and to stay out of houses; a fan from the edges' corner pulled 0.3 m in under
-   the roads, heights from the roads' edges. 4528 on the map. The game's `Corner`s are
+   turn is filled to an arc of radius by the narrower road (2.5 m under 3.5 m wide, 5 m
+   under 6 m, else 8 m; ×0.6, ×0.35 if it doesn't fit in 0.8 of the arms or its arc
+   reaches into a house). Since 2026-11-23 (the user: corners didn't meet curved roads
+   or odd angles, gaps) built on the roads' edges as drawn (`Arm::stations`, across as
+   the game's `Strip::side`): the arc's centre is where both edges moved out by the
+   radius first cross, its ends where it touches them; the outline runs from the node
+   out along one centreline, across to the arc, round it and back along the other
+   centreline, so all but the visible part is under the roads (the cut adds no outline
+   segment lying under a road, `Terrain::under_road`: corners either side of a road
+   would overlap along its centreline, which spade asserts on). Heights: each arm's
+   surface at the nearest point, weighted 1/(distance beyond its edge + 0.05)². The
+   game's `Corner`s are
    in the road grid (entries past the roads), count as ground where no road covers, and
    are part of the ground mesh since 2026-11-23 (see below). **The ground is cut out under the roads** (asked
    for by the user, 2026-11-22: no seeing under a road's edge, no terrain through it;
@@ -1106,12 +1114,14 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    Corners were separate fans before, 4 mm under the ribbons: with nothing beneath
    them, a corner lower than the blended ribbon over it opened a gap to see under the
    map (the user found one at (−2646, −2217)). Corner surfaces follow the ribbons:
-   `Terrain::settle_corners` divides each spoke (first point to an arc point) ~1.5 m
-   apart at load, heights on a road = the roads' blend (`ground_and_roads`), off the
-   roads a blend of the nearest road edge's and the baked height by distance to the
-   edge vs. the arc (0.2 s on one core, threaded natively; physics uses the same
-   `Corner::at`). `rays_never_pass_under_the_roads` casts low rays over junction
-   blocks (`rays_at_many_junctions`, ignored, every hundredth junction). Not cut:
+   `Terrain::settle_corners` divides each spoke (first point to an outline point)
+   ~1.5 m apart at load, heights on a road = the roads' blend (`ground_and_roads`), off
+   the roads every near road's drawn surface just inside its nearest edge, weighted
+   1/(distance + 0.05)² (no baked heights: those made it lean towards the terrain;
+   threaded natively; physics uses the same `Corner::at`). `rays_never_pass_under_the_roads` casts low rays over junction
+   blocks (`rays_at_many_junctions`, ignored, every hundredth junction); slits under
+   1 cm don't count (where two overlapping roads' edges cross at heights a few mm
+   apart, the ground can meet only one). Not cut:
    bridges, waterways. The ribbon segment is shared
    code (`Strip`), so outline and ribbon agree exactly; its last row is exactly the next
    segment's first. ~0.8 ms a chunk. Spade asserts on degenerate input: an outline

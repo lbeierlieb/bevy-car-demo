@@ -391,7 +391,10 @@ edge to the other's), then sloping at 0.6 to the natural ground. In the game, a 
 surface (blended where roads overlap, so junctions have no steps) is both what is
 drawn and what the tires drive on, and the ground is cut out under the roads and
 joined to their edges vertex for vertex, so there's no gap under a road's edge and no
-terrain coming up through it.
+terrain coming up through it. At junctions the inside of each turn between two roads
+is filled out to a curbed arc that touches both roads' edges as they're drawn (curved
+roads and odd angles too); its surface runs smoothly between the roads' edge heights,
+and the ground meets it along the arc.
 
 Roads have small bumps on top (`src/relief.rs`), as uneven as their `smoothness` tag
 says: `excellent`, `good` (ISO 8608 class A), `intermediate` (B), `bad` (C),
