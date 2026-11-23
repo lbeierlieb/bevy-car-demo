@@ -317,6 +317,8 @@ impl Default for WheelConfig {
 /// How many profiles there are, and how many inputs a control takes in one.
 pub const PROFILES: usize = 4;
 pub const PER_ACTION: usize = 2;
+/// The keyboard defaults' version written to `wheel.cfg` (2: no arrows; see `from_text`).
+const KEYS_VERSION: u32 = 2;
 
 /// A set of bindings with a name.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -331,13 +333,9 @@ impl Profile {
         use KeyCode::*;
         let keys = [
             (Action::Throttle, KeyW),
-            (Action::Throttle, ArrowUp),
             (Action::Brake, KeyS),
-            (Action::Brake, ArrowDown),
             (Action::SteerLeft, KeyA),
-            (Action::SteerLeft, ArrowLeft),
             (Action::SteerRight, KeyD),
-            (Action::SteerRight, ArrowRight),
             (Action::Handbrake, Space),
             (Action::ShiftUp, KeyE),
             (Action::ShiftDown, KeyQ),
@@ -423,7 +421,7 @@ impl WheelConfig {
 
     fn to_text(&self) -> String {
         let mut text = format!(
-            "# car-sim wheel settings\nrange {}\ndeadzone {}\nffb_gain {}\nffb_road {}\nffb_enabled {}\nffb_invert {}\nactive {}\n",
+            "# car-sim wheel settings\nkeys {KEYS_VERSION}\nrange {}\ndeadzone {}\nffb_gain {}\nffb_road {}\nffb_enabled {}\nffb_invert {}\nactive {}\n",
             self.range,
             self.deadzone,
             self.ffb_gain,
@@ -455,9 +453,11 @@ impl WheelConfig {
 
     /// Reads settings written by `to_text`; unknown or broken lines are skipped. A file
     /// from before the profiles has its bindings put in the second profile ("Wheel"),
-    /// which is then in use; the first gets the keyboard's defaults.
+    /// which is then in use; the first gets the keyboard's defaults. A file from when the
+    /// keyboard's defaults steered with the arrows too has those taken out of the first.
     fn from_text(text: &str) -> Self {
         let mut config = Self::default();
+        let mut keys_version = 1;
         let mut profiles: Option<Vec<Profile>> = None;
         let mut current = 0;
         let mut old = Profile {
@@ -471,6 +471,7 @@ impl WheelConfig {
                 continue;
             };
             match key {
+                "keys" => keys_version = value.parse().unwrap_or(keys_version),
                 "range" => config.range = value.parse().unwrap_or(config.range),
                 "base_range" => config.base_range = value.parse().ok().or(config.base_range),
                 "deadzone" => config.deadzone = value.parse().unwrap_or(config.deadzone),
@@ -522,7 +523,20 @@ impl WheelConfig {
             }
         }
         match profiles {
-            Some(list) => {
+            Some(mut list) => {
+                if keys_version < 2 {
+                    let arrows = [
+                        (Action::Throttle, KeyCode::ArrowUp),
+                        (Action::Brake, KeyCode::ArrowDown),
+                        (Action::SteerLeft, KeyCode::ArrowLeft),
+                        (Action::SteerRight, KeyCode::ArrowRight),
+                    ];
+                    list[0].bindings.retain(|(action, b)| {
+                        !arrows
+                            .iter()
+                            .any(|&(a, key)| a == *action && b.input == Input::Key(key))
+                    });
+                }
                 config.profiles = list;
                 config.active = active.unwrap_or(0);
             }
@@ -1257,6 +1271,26 @@ mod tests {
         world.run_system_once(read_wheel).unwrap();
         let wheel = world.resource::<WheelInput>();
         assert_eq!((wheel.throttle, wheel.steer_keys), (None, 0.0));
+    }
+
+    #[test]
+    fn a_file_from_before_drops_the_arrows() {
+        let mut old = Profile::keyboard();
+        old.bind(Action::Throttle, Binding::key(KeyCode::ArrowUp));
+        old.bind(Action::SteerLeft, Binding::key(KeyCode::ArrowLeft));
+        let mut config = WheelConfig::default();
+        config.profiles[0] = old;
+        let text = config.to_text().replace("keys 2\n", "");
+        assert_eq!(
+            WheelConfig::from_text(&text).profiles[0],
+            Profile::keyboard()
+        );
+        // Bound since, they stay.
+        let text = config.to_text();
+        assert_eq!(
+            WheelConfig::from_text(&text).profiles[0],
+            config.profiles[0]
+        );
     }
 
     #[test]
