@@ -446,7 +446,7 @@ fn grid(
         LABEL_WIDTH + CELL.x * rpms.len() as f32,
         CELL.y * (maps.len() + 1) as f32,
     );
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let (rect, response) = crate::menu::kit::allocate(ui, size, Sense::click());
     let origin = rect.min + vec2(LABEL_WIDTH, CELL.y);
     // The arrows and choose, while it has the focus.
     let (columns, rows) = (rpms.len(), maps.len());

@@ -163,9 +163,25 @@ pub fn focused(ui: &Ui, response: &Response) -> bool {
     ui.memory(|m| m.has_focus(response.id))
 }
 
+/// Space for a focusable widget, and its response. Disabled, it has another id: egui
+/// keeps a widget among the arrows' targets for as long as its id is drawn, and a
+/// disabled one can't keep the focus, so a row disabled under the menu (a button while
+/// the dyno runs) took the focus from the arrows and dropped it, and the menu gave it to
+/// its first row again: stuck there.
+pub fn allocate(ui: &mut Ui, size: egui::Vec2, sense: Sense) -> (Rect, Response) {
+    let id = ui.next_auto_id();
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let id = if ui.is_enabled() {
+        id.with("on")
+    } else {
+        id.with("off")
+    };
+    (rect, ui.interact(rect, id, sense))
+}
+
 /// The common part of a row: its rect and response (focusable), its background painted.
 fn row(ui: &mut Ui, height: f32, sense: Sense) -> (Rect, Response) {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), sense);
+    let (rect, response) = allocate(ui, vec2(ui.available_width(), height), sense);
     let fill = if focused(ui, &response) {
         ROW_FOCUS
     } else if response.hovered() && ui.is_enabled() {
@@ -430,7 +446,7 @@ pub fn swatches(
     let width = (ui.available_width() - gap * (per_row as f32 - 1.0)) / per_row as f32;
     let height = 40.0;
     let size = vec2(ui.available_width(), rows as f32 * (height + gap) - gap);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let (rect, response) = allocate(ui, size, Sense::click());
     let cell = |i: usize| {
         let (r, c) = (i / per_row, i % per_row);
         Rect::from_min_size(
@@ -720,6 +736,47 @@ mod tests {
         pass(&ctx, &[Key::ArrowLeft], &draw);
         pass(&ctx, &[Key::ArrowLeft], &draw);
         assert!((volume.get() - 0.9).abs() < 1e-5, "{}", volume.get());
+    }
+
+    #[test]
+    fn a_row_disabled_under_the_menu_doesnt_stop_the_arrows() {
+        let ctx = egui::Context::default();
+        super::super::style(&ctx);
+        nav::hook(&ctx);
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+        let (page, holding) = (Cell::new(0), Cell::new(false));
+        let draw = |ui: &mut Ui| {
+            let mut p = page.get();
+            choice(ui, "Page", &mut p, &["A".into(), "B".into()]);
+            page.set(p);
+            let _ = ui.add_enabled_ui(!holding.get(), |ui| button(ui, "Run"));
+            if holding.get() {
+                if button(ui, "Stop").clicked() {
+                    holding.set(false);
+                }
+            } else if ui
+                .add_enabled_ui(true, |ui| button(ui, "Hold"))
+                .inner
+                .clicked()
+            {
+                holding.set(true);
+            }
+            button(ui, "Back");
+        };
+        pass(&ctx, &[], &draw);
+        pass(&ctx, &[], &draw);
+        pass(&ctx, &[Key::ArrowDown], &draw);
+        pass(&ctx, &[Key::ArrowDown], &draw);
+        pass(&ctx, &[Key::Enter], &draw);
+        assert!(holding.get());
+        for _ in 0..3 {
+            pass(&ctx, &[], &draw);
+        }
+        // The focus went back to the top; "Run" is disabled now, so down goes to "Stop".
+        pass(&ctx, &[Key::ArrowDown], &draw);
+        pass(&ctx, &[], &draw);
+        pass(&ctx, &[Key::Enter], &draw);
+        assert!(!holding.get(), "stuck on the top row");
     }
 
     #[test]
