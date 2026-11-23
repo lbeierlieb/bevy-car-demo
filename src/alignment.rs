@@ -11,7 +11,7 @@
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Align2, Color32, FontId, RichText, Stroke};
+use bevy_egui::egui::{self, Align2, Color32, FontId, Stroke};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::audio::EngineAudio;
@@ -20,7 +20,8 @@ use crate::car::{ActiveCar, Away, Car};
 use crate::chassis::FACTORY_TOE;
 use crate::garage;
 use crate::looks::{Looks, Motion};
-use crate::shops::{self, AtShop, ShopKind, Shops, shop_window};
+use crate::menu::kit::{self, Panel, Place};
+use crate::shops::{self, AtShop, SceneBack, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
 
 /// How far under the ground at the shop the bay is (m).
@@ -159,13 +160,12 @@ fn shop(
     let mut enter = false;
     let ctx = contexts.ctx_mut()?;
     shop_window(ctx, &shops, &mut at, ShopKind::Alignment, |ui, _| {
-        ui.label(
+        enter = kit::button(ui, "Onto the alignment lift").clicked();
+        kit::note(
+            ui,
             "A four-post alignment lift with laser heads on the wheels: camber, toe, tire \
              pressures and the brakes.",
         );
-        enter = ui
-            .button(RichText::new("Onto the alignment lift").strong())
-            .clicked();
     });
     let Some(marker) = marker.filter(|_| enter) else {
         return Ok(());
@@ -963,32 +963,29 @@ fn window(
     active: Res<ActiveCar>,
     mut cars: Query<&mut Car>,
     (mut away, mut audio): (ResMut<Away>, ResMut<EngineAudio>),
-    mut cameras: Query<(&ChaseCamera, &mut Projection)>,
+    (mut cameras, mut back): (Query<(&ChaseCamera, &mut Projection)>, ResMut<SceneBack>),
 ) -> Result {
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
         return Ok(());
     };
-    let mut out = false;
-    egui::Window::new("Alignment")
-        .anchor(Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
-        .collapsible(false)
-        .resizable(false)
-        .show(contexts.ctx_mut()?, |ui| {
+    let mut out = back.take();
+    let ctx = contexts.ctx_mut()?;
+    Panel::new("alignment", "Alignment")
+        .place(Place::Right)
+        .width(440.0)
+        .back(Some("Back to the car"))
+        .show(ctx, |ui| {
+            if kit::button(ui, "Back to the car").clicked() {
+                out = true;
+            }
             let mut build = car.setup.build.clone();
             garage::alignment(ui, &mut build, &car.setup);
             shops::rebuild(&mut car, build);
-            ui.label(
-                RichText::new(
-                    "The screen shows each wheel against the spec: green within it. Drag to \
-                     look round, the mouse wheel to go nearer.",
-                )
-                .small()
-                .weak(),
+            kit::note(
+                ui,
+                "The screen shows each wheel against the spec: green within it. Drag to look \
+                 round, the mouse wheel to go nearer.",
             );
-            ui.separator();
-            out = ui
-                .button(RichText::new("Back to the car").strong())
-                .clicked();
         });
     if out {
         leave(
