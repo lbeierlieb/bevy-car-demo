@@ -523,6 +523,17 @@ fn hand_to_egui(
             .retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_)));
         return Ok(());
     }
+    // Only Enter chooses: egui would click the focused widget on Space too (typing a
+    // space comes as text, which stays).
+    egui_input.events.retain(|e| {
+        !matches!(
+            e,
+            egui::Event::Key {
+                key: egui::Key::Space,
+                ..
+            }
+        )
+    });
     let arrows = [
         egui::Key::ArrowUp,
         egui::Key::ArrowDown,
