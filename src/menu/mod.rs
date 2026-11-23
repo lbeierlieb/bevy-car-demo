@@ -126,7 +126,7 @@ pub fn to_points(ctx: &egui::Context, logical: Vec2) -> egui::Pos2 {
 /// sign), which changes as the camera moves: rounded to 12 steps an octave. egui keeps
 /// glyphs per exact size, so a new size every frame (dragging or zooming a shop's camera)
 /// fills its font atlas, which it then throws away and builds again, the whole font
-/// texture going to the GPU anew each time (suspected in the egui flicker in shops).
+/// texture going to the GPU anew each time: every egui panel flickered in shops.
 pub fn scene_text(size: f32) -> f32 {
     2f32.powf((size.max(1.0).log2() * 12.0).round() / 12.0)
 }

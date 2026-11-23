@@ -145,15 +145,14 @@ As built (`src/menu/`):
 - Scenes: `shops::SceneBack` hands "back" to the scene's window (back to the car);
   `shops::shop_window` is a right panel. The race bar while driving never claims (it
   would stop the driving); its buttons are for the mouse, the menu has the same.
-- Flicker (reported 2026-11-23, not reproduced here): natively the egui panels and the
-  scenes' egui-painted screens flicker for a few seconds in shops; in Firefox (wasm)
-  black rectangles flickered over the lower half of the screen, not following geometry.
-  Suspected for the first: egui's font atlas (glyphs per exact size; the screens'
-  perspective text made new sizes as the camera moved, so text painted onto the scene now
-  goes through `menu::scene_text`). bevy_egui skips any egui draw whose texture has no
-  GPU image that frame (`queue_bind_groups_system`), and nearly everything egui draws
-  samples the font texture; under lavapipe a full font update or atlas rebuild showed
-  no gap.
+- Flicker (reported 2026-11-23): natively the egui panels and the scenes' egui-painted
+  screens flickered for a few seconds in shops. Cause: egui's font atlas (glyphs per
+  exact size; the screens' perspective text made new sizes as the camera moved, filling
+  the atlas until egui rebuilt it and re-sent the whole font texture). Fixed by
+  `menu::scene_text` (a ladder of sizes), confirmed by the user: **any text whose size
+  follows the camera must go through it**. Under lavapipe the rebuilds showed no gap, so
+  shots can't catch it. Still open: in Firefox (wasm) black rectangles flickered over
+  the lower half of the screen, not following geometry (not investigated).
 - Gotchas: under Xvfb the window never has focus, and egui's `Response::has_focus` asks
   for it: the kit uses `kit::focused` (egui's memory), so shots show the focus; egui's own
   sliders don't take arrows in shots. Shots press keys for egui with `TAPS=
