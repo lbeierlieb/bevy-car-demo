@@ -15,8 +15,8 @@ const SHOULDER: f64 = 1.0;
 const EMBANKMENT: f64 = 0.6;
 /// How far beyond the shoulder the terrain may be reshaped (m).
 const EMBANKMENT_REACH: f64 = 12.0;
-/// The terrain under a road and its shoulders lies this far below the road's edge (m),
-/// out of sight under the road's own surface.
+/// The terrain a metre or more inside a road lies this far below the road's surface (m),
+/// fading to none at the edge.
 const SINK: f64 = 0.08;
 /// Under a bridge the ground stays this far below the deck's edges at least: the slab's
 /// depth (`DECK_DEPTH` in the game's `terrain.rs`) and a little room (m)...
@@ -593,15 +593,17 @@ impl Grid {
 }
 
 /// Cuts and fills the terrain `heights` (one per grid vertex) to the drivable roads that
-/// aren't bridges and the corners between them: under a road and its shoulders it lies
-/// `SINK` below the road's surface, beyond them it slopes at `EMBANKMENT` up or down to
-/// the natural ground. Each vertex follows the road or corner whose edge is nearest, or,
-/// on or beside several (where roads overlap at junctions), the lowest of them: the game
-/// blends overlapping roads' surfaces, and the terrain must stay under the blend.
+/// aren't bridges and the corners between them. The game cuts the roads out of the
+/// ground and joins the ground to their edges, so what's under a road is out of sight
+/// (it lies up to `SINK` below the lowest road over it). Beside the roads, within their
+/// shoulders, the terrain is level with their edges: with the nearest one's, blended
+/// with the others' by how near each is, so between two roads at different heights it
+/// slopes from one to the other instead of stepping at either's edge. Beyond the
+/// shoulders it slopes at `EMBANKMENT` up or down to the natural ground, from the
+/// nearest road or corner.
 pub fn conform(roads: &[Road], corners: &[Corner], heights: &mut [f64], grid: &Grid) {
     let n = grid.cells_x + 1;
-    // Per vertex: (distance beyond the nearest road's edge, that road's surface there).
-    let mut nearest = vec![(f64::INFINITY, 0.0); heights.len()];
+    let mut near = vec![Near::default(); heights.len()];
     for road in roads.iter().filter(|r| r.drivable() && !r.bridge) {
         for (i, pair) in road.points.windows(2).enumerate() {
             let ((x0, z0), (x1, z1)) = (pair[0], pair[1]);
@@ -618,32 +620,72 @@ pub fn conform(roads: &[Road], corners: &[Corner], heights: &mut [f64], grid: &G
                     let edge = off - half;
                     let centre = road.heights[i] * (1.0 - t) + road.heights[i + 1] * t;
                     let surface = centre - road.crown() * off.min(half);
-                    follow(&mut nearest[iz * n + ix], (edge, surface));
+                    near[iz * n + ix].add(edge, surface);
                 }
             }
         }
     }
     for corner in corners {
         for (i, edge, surface) in corner.near_vertices(grid, SHOULDER + EMBANKMENT_REACH) {
-            follow(&mut nearest[i], (edge, surface));
+            near[i].add(edge, surface);
         }
     }
-    for (h, &(edge, surface)) in heights.iter_mut().zip(&nearest) {
-        if edge.is_infinite() {
+    for (h, near) in heights.iter_mut().zip(&near) {
+        if near.edge.is_infinite() {
             continue;
         }
-        let level = surface - SINK;
-        let run = (edge - SHOULDER).max(0.0);
-        *h = level + (*h - level).clamp(-run * EMBANKMENT, run * EMBANKMENT);
+        if near.edge < 0.0 {
+            *h = near.under - SINK * (-near.edge).min(1.0);
+        } else if near.weights > 0.0 {
+            *h = near.blend / near.weights;
+        } else {
+            let run = near.edge - SHOULDER;
+            *h = near.surface + (*h - near.surface).clamp(-run * EMBANKMENT, run * EMBANKMENT);
+        }
     }
 }
 
-/// What a vertex follows (see `conform`), given another road or corner it's `edge` from.
-fn follow(slot: &mut (f64, f64), (edge, surface): (f64, f64)) {
-    if edge < SHOULDER && slot.0 < SHOULDER {
-        *slot = (edge.min(slot.0), surface.min(slot.1));
-    } else if edge < slot.0 {
-        *slot = (edge, surface);
+/// What a grid vertex has seen of the roads and corners near it (see `conform`).
+#[derive(Clone, Copy)]
+struct Near {
+    /// The distance beyond the nearest one's edge (negative inside) and its surface there.
+    edge: f64,
+    surface: f64,
+    /// The lowest surface of those it's inside.
+    under: f64,
+    /// Of those whose shoulder it's on: the sum of their weights, and of their edges'
+    /// heights times their weights.
+    weights: f64,
+    blend: f64,
+}
+
+impl Default for Near {
+    fn default() -> Self {
+        Self {
+            edge: f64::INFINITY,
+            surface: 0.0,
+            under: f64::INFINITY,
+            weights: 0.0,
+            blend: 0.0,
+        }
+    }
+}
+
+impl Near {
+    /// Another road or corner, `edge` from the vertex, its surface `surface` there. A
+    /// road's segments each count: only the one nearest the vertex adds to the blend
+    /// (its weight falls fast with distance), roughly.
+    fn add(&mut self, edge: f64, surface: f64) {
+        if edge < self.edge {
+            (self.edge, self.surface) = (edge, surface);
+        }
+        if edge < 0.0 {
+            self.under = self.under.min(surface);
+        } else if edge < SHOULDER {
+            let w = 1.0 / (edge + 0.05).powi(4);
+            self.weights += w;
+            self.blend += w * surface;
+        }
     }
 }
 
