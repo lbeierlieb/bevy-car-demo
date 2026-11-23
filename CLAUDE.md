@@ -475,7 +475,9 @@ out on the road to the north-east). Agreed with the user:
   passed, right half of the road; time trials never reset, "Start again"
   (`Action::Restart`) instead). Player cars only, for now.
 - Running (`race.rs`: `Course` = a route one way with laps): a grid at the route's start
-  (pairs on roads 5 m+, rows 6 m, else single file 9 m), held (`car::Held`) for
+  (pairs on roads 5 m+, rows 6 m, else single file 9 m; past a turn over 0.6 rad within
+  30 m of the start, `Course::grid_start`: the sprint's first point is round a corner and
+  its front row stood sideways on that stub, 2026-11-23), held (`car::Held`) for
   `COUNTDOWN` (5 s), the parking brake off, in neutral (put in gear during the countdown;
   agreed with the user, 2026-11-22); the clock runs from the green light. Gates
   every ≤ 150 m from 187 m on (past the longest grid), the last at the lap's end (a

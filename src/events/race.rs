@@ -38,6 +38,11 @@ const GRID_FRONT: f32 = 12.0;
 const GRID_ROW: f32 = 6.0;
 const GRID_PAIRS: f32 = 5.0;
 const GRID_SINGLE: f32 = 9.0;
+/// The grid starts past any turn of more than `GRID_TURN` (rad) within `GRID_STRAIGHT`
+/// (m) of where it would start: a route's first point just round a corner (on a side
+/// street, or the junction's other arm) put the front row on that stub, sideways.
+const GRID_TURN: f32 = 0.6;
+const GRID_STRAIGHT: f32 = 30.0;
 /// The first gate is past the longest grid by this (m).
 const FIRST_GATE_GAP: f32 = 40.0;
 /// A route must be this long at least (m).
@@ -126,6 +131,8 @@ pub struct Course {
     pub at: Vec<f32>,
     /// One lap's gates, in order; the last is the finish (a loop's: its start).
     pub gates: Vec<Gate>,
+    /// Where the grid's measured from, along the line (m): past a turn right at the start.
+    pub grid_start: f32,
 }
 
 impl Course {
@@ -151,9 +158,11 @@ impl Course {
             widths,
             at,
             gates: Vec::new(),
+            grid_start: 0.0,
         };
         let length = course.length();
-        let first = first_gate().min(length * 0.5);
+        course.grid_start = course.straight_from(0.0).min(length * 0.25);
+        let first = (course.grid_start + first_gate()).min(length * 0.5);
         let count = ((length - first) / GATE_SPACING).ceil().max(1.0) as usize;
         course.gates = (0..=count)
             .map(|i| {
@@ -203,15 +212,37 @@ impl Course {
         (self.line[i].lerp(self.line[i + 1], t), forward, width)
     }
 
+    /// Where the line runs on straight (no turn over `GRID_TURN` within `GRID_STRAIGHT`
+    /// of it) from `s` on: past the turns ahead.
+    fn straight_from(&self, mut s: f32) -> f32 {
+        let n = self.line.len();
+        let heading = |i: usize| (self.line[i + 1] - self.line[i]).normalize_or_zero();
+        // Each segment once at most, so it ends.
+        for _ in 0..n {
+            let Some(first) = (0..n - 1).find(|&i| self.at[i + 1] > s + 1e-3) else {
+                return s;
+            };
+            let along = heading(first);
+            let turned = (first + 1..n - 1)
+                .take_while(|&i| self.at[i] < s + GRID_STRAIGHT)
+                .find(|&i| heading(i).angle_to(along).abs() > GRID_TURN);
+            match turned {
+                Some(i) => s = self.at[i],
+                None => return s,
+            }
+        }
+        s
+    }
+
     /// Where the racer in `slot` (0: the front) of `count` starts, and the yaw they face.
     pub fn grid(&self, slot: usize, count: usize) -> (Vec2, f32) {
-        let (_, _, width) = self.point(GRID_FRONT);
+        let (_, _, width) = self.point(self.grid_start + GRID_FRONT);
         let pairs = width >= GRID_PAIRS;
         let rows = |n: usize| if pairs { n / 2 } else { n };
         let gap = if pairs { GRID_ROW } else { GRID_SINGLE };
         // The back row at the front's place along the course, plus the rows ahead of it.
         let behind = rows(count.max(1) - 1) - rows(slot);
-        let s = GRID_FRONT + behind as f32 * gap;
+        let s = self.grid_start + GRID_FRONT + behind as f32 * gap;
         let (point, forward, width) = self.point(s);
         let side = if pairs {
             let left = slot.is_multiple_of(2);
@@ -605,6 +636,38 @@ mod tests {
         assert!((spots[0].1 + std::f32::consts::FRAC_PI_2).abs() < 1e-4);
         // Whoever comes, the front row is at the front.
         assert!((course.grid(0, 2).0.x - GRID_FRONT).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_grid_starts_past_a_turn_at_the_start() {
+        // 14 m north, then east: the route's first point just round a corner.
+        let line = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.0, -14.0),
+            Vec2::new(600.0, -14.0),
+        ];
+        let route = Route {
+            name: "Stub".into(),
+            looped: false,
+            via: vec![line[0], line[2]],
+            widths: vec![6.0; 3],
+            line,
+        };
+        let course = Course::new(&route, false, 1);
+        assert!((course.grid_start - 14.0).abs() < 1e-3);
+        for count in [1, 2, 5] {
+            for slot in 0..count {
+                let (at, yaw) = course.grid(slot, count);
+                assert!(at.x > 5.0, "{slot} of {count} at {at}");
+                assert!(
+                    (yaw + std::f32::consts::FRAC_PI_2).abs() < 1e-4,
+                    "facing east"
+                );
+                assert!(at.x < course.gates[0].point.x, "past the first gate");
+            }
+        }
+        // A route straight from its start keeps its grid where it was.
+        assert_eq!(Course::new(&square(), false, 1).grid_start, 0.0);
     }
 
     #[test]

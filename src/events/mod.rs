@@ -375,6 +375,20 @@ mod tests {
         for route in &race.routes {
             let length = route.length();
             println!("{}: {length:.0} m, {} points", route.name, route.line.len());
+            // The grid faces the way the route goes on from it (the sprint's first
+            // point is just round a corner: the grid was on that stub, sideways).
+            for reverse in [false, true] {
+                let course = race::Course::new(route, reverse, 1);
+                let (at, yaw) = course.grid(0, 1);
+                let (s, _) = course.nearest(at, 0.0, 100.0).unwrap();
+                let (_, ahead, _) = course.point(s + 25.0);
+                let facing = Vec2::new(-yaw.sin(), -yaw.cos());
+                assert!(
+                    facing.dot(ahead) > 0.8,
+                    "{} (reverse {reverse}) grid faces {facing}, the route goes {ahead}",
+                    route.name
+                );
+            }
             assert!(length > race::SHORTEST, "{}", route.name);
             // Along the roads: every point on one.
             for &p in &route.line {
