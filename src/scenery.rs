@@ -145,7 +145,7 @@ fn build_chunk(
     index: usize,
 ) -> Vec<Entity> {
     let (mut ground, mut roads, mut objects) = Default::default();
-    terrain.ground_mesh(index, &mut ground);
+    scenery.roads.ground_mesh(terrain, index, &mut ground);
     scenery.roads.mesh(terrain, index, &mut roads, &mut objects);
     scenery.buildings.mesh(terrain, index, &mut objects);
     scenery.fences.mesh(terrain, index, &mut objects);

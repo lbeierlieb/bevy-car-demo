@@ -1,7 +1,8 @@
 //! Real-world terrain baked by `tools/bake`: a heightfield rendered flat-shaded and queried
-//! analytically (the physics sees exactly the triangles that are drawn), and roads with
-//! their own heights on it (`Terrain::ground`), drawn as ribbons on that same surface.
-//! Meshes are built per chunk, on demand (see `scenery`).
+//! analytically (the physics sees exactly the triangles that are drawn, but right beside
+//! the roads, where the ground is cut to meet their edges: `cut`), and roads with their
+//! own heights on it (`Terrain::ground`), drawn as ribbons on that same surface. Meshes
+//! are built per chunk, on demand (see `scenery`).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -11,6 +12,8 @@ use crate::fences::{Fence, FenceKind};
 use crate::physics::collision::Obstacles;
 use crate::physics::surface::Surface;
 use crate::relief::{Feature, Waves};
+
+mod cut;
 
 /// From Gerach (96161, Bavaria) to Rattelsdorf, Ebing and Baunach: 9.6 × 8.4 km.
 const BAKED: &[u8] = include_bytes!("../assets/gerach.terrain");
@@ -286,6 +289,15 @@ pub struct Corner {
 }
 
 impl Corner {
+    /// Its triangles as drawn: a little under the ribbons, which it reaches in under.
+    fn fan(&self) -> impl Iterator<Item = [Vec3; 3]> + '_ {
+        let lift = Vec3::Y * (self.kind.lift() - 0.004).max(0.001);
+        let e = self.points[0] + lift;
+        self.points[1..]
+            .windows(2)
+            .map(move |w| [e, w[0] + lift, w[1] + lift])
+    }
+
     /// Height and upward normal of its surface at `p`, if it's inside.
     fn at(&self, p: Vec2) -> Option<(f32, Vec3)> {
         let e = self.points[0];
@@ -1021,61 +1033,9 @@ impl RoadRibbons {
         structure: &mut FlatMesh,
     ) {
         for &(r, i) in &self.by_chunk[index] {
-            let road = &terrain.roads[r];
-            let (points, n) = (&road.points, road.points.len());
-            // Finer where there's more to see: twice on rough roads, four times around
-            // bumps and potholes.
-            let fine = if road.feature_near(road.along[i], 1.0) {
-                4
-            } else if road.roughness >= 64.0 {
-                2
-            } else {
-                1
-            };
-            let step = DRAPE_STEP / fine as f32;
-            let width = |i: usize| road.width_at(road.along[i]);
-            let across = 2 * (width(i).max(width(i + 1)) / 2.0 / step).ceil().max(1.0) as usize;
-            // Half the road across at point `i`: where it meets another road's end at an
-            // angle, along the mitre between them, stretched to keep the width.
-            let side = |i: usize| {
-                let tangent =
-                    (points[(i + 1).min(n - 1)] - points[i.saturating_sub(1)]).normalize_or_zero();
-                let join = match i {
-                    0 => road.joins[0],
-                    i if i == n - 1 => road.joins[1],
-                    _ => None,
-                };
-                let (across, stretch) = match join {
-                    Some(mitre) => (mitre, 1.0 / mitre.dot(tangent).max(0.7)),
-                    None => (tangent, 1.0),
-                };
-                Vec2::new(-across.y, across.x) * stretch * width(i) / 2.0
-            };
-            // The vertices across the road `f` of the way from point `i` to the next.
-            let row = |f: f32| -> Vec<Vec3> {
-                let centre = points[i].lerp(points[i + 1], f);
-                let here = road.width_at(road.along[i] + f * (road.along[i + 1] - road.along[i]));
-                let (near, far) = (side(i), side(i + 1));
-                let stretch = (near.length() / width(i)).lerp(far.length() / width(i + 1), f);
-                let side = near.lerp(far, f).normalize_or_zero() * stretch * here;
-                let level = road.heights[i] + (road.heights[i + 1] - road.heights[i]) * f;
-                (0..=across)
-                    .map(|j| {
-                        let u = 2.0 * j as f32 / across as f32 - 1.0;
-                        let p = centre + side * u;
-                        // Looked up a little inside the edge, which may lie just outside
-                        // the segments' cover on a bend (and would drop off a bridge).
-                        let q = centre + side * u * 0.98;
-                        let ground = if road.kind == RoadKind::Water {
-                            terrain.land(p.x, p.y).0
-                        } else {
-                            terrain.ground(q.x, q.y, level).height
-                        };
-                        Vec3::new(p.x, ground + road.kind.lift(), p.y)
-                    })
-                    .collect()
-            };
-            let rows: Vec<Vec<Vec3>> = (0..=fine).map(|k| row(k as f32 / fine as f32)).collect();
+            let strip = Strip::new(terrain, r, i);
+            let (road, fine, across) = (strip.road, strip.fine, strip.across);
+            let rows: Vec<Vec<Vec3>> = (0..=fine).map(|k| strip.row(k, 0..=across)).collect();
             let color = road.kind.color();
             for pair in rows.windows(2) {
                 let (near, far) = (&pair[0], &pair[1]);
@@ -1088,11 +1048,13 @@ impl RoadRibbons {
             }
             let (near, far) = (&rows[0], &rows[fine]);
             if road.bridge && road.kind != RoadKind::Water {
-                let edges = |row: &[Vec3], i: usize| [(row[0], -side(i)), (row[across], side(i))];
+                let edges = |row: &[Vec3], i: usize| {
+                    [(row[0], -strip.side(i)), (row[across], strip.side(i))]
+                };
                 bridge_segment(
                     edges(near, i),
                     edges(far, i + 1),
-                    (i == 0, i + 2 == n),
+                    (i == 0, i + 2 == road.points.len()),
                     structure,
                 );
             }
@@ -1100,12 +1062,102 @@ impl RoadRibbons {
         // Corners a little under the ribbons, which they reach in under.
         for &c in &self.corners[index] {
             let corner = &terrain.corners[c];
-            let lift = Vec3::Y * (corner.kind.lift() - 0.004).max(0.001);
-            let e = corner.points[0] + lift;
-            for w in corner.points[1..].windows(2) {
-                mesh.triangle([e, w[0] + lift, w[1] + lift], corner.kind.color());
+            for tri in corner.fan() {
+                mesh.triangle(tri, corner.kind.color());
             }
         }
+    }
+}
+
+/// One segment of a road's ribbon as drawn: from point `i` to the next, in `fine` + 1 rows
+/// across the road of `across` + 1 vertices each.
+struct Strip<'a> {
+    terrain: &'a Terrain,
+    road: &'a Road,
+    i: usize,
+    /// Rows along: finer where there's more to see (twice on rough roads, four times
+    /// around bumps and potholes).
+    fine: usize,
+    across: usize,
+}
+
+impl<'a> Strip<'a> {
+    fn new(terrain: &'a Terrain, r: usize, i: usize) -> Self {
+        let road = &terrain.roads[r];
+        let fine = if road.feature_near(road.along[i], 1.0) {
+            4
+        } else if road.roughness >= 64.0 {
+            2
+        } else {
+            1
+        };
+        let step = DRAPE_STEP / fine as f32;
+        let width = road
+            .width_at(road.along[i])
+            .max(road.width_at(road.along[i + 1]));
+        let across = 2 * (width / 2.0 / step).ceil().max(1.0) as usize;
+        Self {
+            terrain,
+            road,
+            i,
+            fine,
+            across,
+        }
+    }
+
+    fn width(&self, i: usize) -> f32 {
+        self.road.width_at(self.road.along[i])
+    }
+
+    /// Half the road across at point `i`: where it meets another road's end at an angle,
+    /// along the mitre between them, stretched to keep the width.
+    fn side(&self, i: usize) -> Vec2 {
+        let (points, n) = (&self.road.points, self.road.points.len());
+        let tangent =
+            (points[(i + 1).min(n - 1)] - points[i.saturating_sub(1)]).normalize_or_zero();
+        let join = match i {
+            0 => self.road.joins[0],
+            i if i == n - 1 => self.road.joins[1],
+            _ => None,
+        };
+        let (across, stretch) = match join {
+            Some(mitre) => (mitre, 1.0 / mitre.dot(tangent).max(0.7)),
+            None => (tangent, 1.0),
+        };
+        Vec2::new(-across.y, across.x) * stretch * self.width(i) / 2.0
+    }
+
+    /// Row `k`'s vertices `js` (0 at the left edge, `across` at the right one).
+    fn row(&self, k: usize, js: impl Iterator<Item = usize>) -> Vec<Vec3> {
+        let (road, i, terrain) = (self.road, self.i, self.terrain);
+        // The last row is exactly the next segment's first (lerping to 1 can round off).
+        let f = k as f32 / self.fine as f32;
+        let mix = |a: f32, b: f32| if k == self.fine { b } else { a + (b - a) * f };
+        let mix2 = |a: Vec2, b: Vec2| if k == self.fine { b } else { a.lerp(b, f) };
+        let points = &road.points;
+        let centre = mix2(points[i], points[i + 1]);
+        let here = road.width_at(mix(road.along[i], road.along[i + 1]));
+        let (near, far) = (self.side(i), self.side(i + 1));
+        let stretch = mix(
+            near.length() / self.width(i),
+            far.length() / self.width(i + 1),
+        );
+        let side = mix2(near, far).normalize_or_zero() * stretch * here;
+        let level = mix(road.heights[i], road.heights[i + 1]);
+        js.map(|j| {
+            let u = 2.0 * j as f32 / self.across as f32 - 1.0;
+            let p = centre + side * u;
+            // Looked up a little inside the edge, which may lie just outside the
+            // segments' cover on a bend (and would drop off a bridge).
+            let q = centre + side * u * 0.98;
+            let ground = if road.kind == RoadKind::Water {
+                terrain.land(p.x, p.y).0
+            } else {
+                terrain.ground(q.x, q.y, level).height
+            };
+            Vec3::new(p.x, ground + road.kind.lift(), p.y)
+        })
+        .collect()
     }
 }
 
@@ -1299,6 +1351,13 @@ impl FlatMesh {
 
     pub fn is_empty(&self) -> bool {
         self.positions.is_empty()
+    }
+
+    /// Adds another mesh's triangles.
+    pub fn append(&mut self, other: FlatMesh) {
+        self.positions.extend(other.positions);
+        self.normals.extend(other.normals);
+        self.colors.extend(other.colors);
     }
 
     pub fn build(self) -> Mesh {
