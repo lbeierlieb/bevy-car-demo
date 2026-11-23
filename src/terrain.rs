@@ -41,6 +41,9 @@ const JOIN_REACH: f32 = 2.0;
 /// A surface carries something at most this far below it (m): a car on a bridge is on the
 /// deck, one under it on the road below.
 const LEVEL_REACH: f32 = 1.0;
+/// Where a better road covers a lesser one, the lesser one's ribbon is drawn only up to
+/// this far under the better one's edge (m), so no slit opens between them.
+const SEAM_OVERLAP: f32 = 0.03;
 
 /// Where the cars start: they're placed on the nearest paved road, facing along it in the
 /// direction closest to the heading. Not part of the map: the server says where (alone,
@@ -135,6 +138,11 @@ impl RoadKind {
             RoadKind::Cobbles,
             RoadKind::Dirt,
         ][byte as usize]
+    }
+
+    /// Its place in `ALL`: where roads overlap, the higher one is drawn (see `outranks`).
+    fn rank(self) -> usize {
+        RoadKind::ALL.iter().position(|&k| k == self).unwrap()
     }
 
     /// Asphalt or stones.
@@ -245,6 +253,13 @@ impl Road {
             .iter()
             .any(|f| (f.along - along).abs() < f.reach() + distance)
     }
+}
+
+/// Whether road `a` is drawn over road `b` where they overlap (and its surface is the one
+/// under the wheels): the better kind, else the wider one, else the later one.
+fn outranks(roads: &[Road], a: usize, b: usize) -> bool {
+    let key = |r: usize| (roads[r].kind.rank(), roads[r].width, r);
+    key(a) > key(b)
 }
 
 /// The ground somewhere: its height, upward normal, and what it is.
@@ -804,7 +819,8 @@ impl Terrain {
         // Each road's weight: how far inside its edge; near a road it meets, as if both
         // edges were `JOIN_REACH` further out, each scaled by how near the other's and
         // its own edge are (so at the point where the two edges part, they're even).
-        let mut covering: [(usize, f32, f32, Vec2); 12] = [(usize::MAX, 0.0, 0.0, Vec2::ZERO); 12];
+        let mut covering: [(usize, f32, f32, Vec2, bool); 12] =
+            [(usize::MAX, 0.0, 0.0, Vec2::ZERO, false); 12];
         let mut count = 0;
         for &(r, margin, fade, height, slope) in near {
             let road = &self.roads[r];
@@ -817,7 +833,7 @@ impl Terrain {
             let own = if margin >= 0.0 { margin.max(1e-3) } else { 0.0 };
             let weight = own.max(joined * nearness(margin) * (margin + JOIN_REACH)) * fade;
             if weight > 0.0 {
-                covering[count] = (r, weight, height, slope);
+                covering[count] = (r, weight, height, slope, margin >= 0.0);
                 count += 1;
             }
         }
@@ -836,7 +852,17 @@ impl Terrain {
                     .filter(move |c| bridges.is_none_or(|b| self.roads[c.0].bridge == b))
             };
             let total: f32 = layer().map(|c| c.1).sum();
-            let main = layer().max_by(|a, b| a.1.total_cmp(&b.1))?;
+            // The surface is the one drawn: the best road covering the point.
+            let main = layer()
+                .filter(|c| c.4)
+                .reduce(|a, b| {
+                    if outranks(&self.roads, b.0, a.0) {
+                        b
+                    } else {
+                        a
+                    }
+                })
+                .or_else(|| layer().max_by(|a, b| a.1.total_cmp(&b.1)))?;
             let slope = layer().map(|c| c.1 * c.3).sum::<Vec2>() / total;
             Some(Ground {
                 height: layer().map(|c| c.1 * c.2).sum::<f32>() / total,
@@ -1289,13 +1315,17 @@ impl RoadRibbons {
             let (road, fine, across) = (strip.road, strip.fine, strip.across);
             let rows: Vec<Vec<Vec3>> = (0..=fine).map(|k| strip.row(k, 0..=across)).collect();
             let color = road.kind.color();
+            // Where a better road covers it, only what's left (no two ribbons on top of
+            // each other, but for a sliver along the better one's edge).
+            let covered = strip.covered(r);
             for pair in rows.windows(2) {
                 let (near, far) = (&pair[0], &pair[1]);
                 for j in 0..across {
                     let (a, b) = (near[j], near[j + 1]);
                     let (c, d) = (far[j], far[j + 1]);
-                    mesh.triangle([a, b, c], color);
-                    mesh.triangle([b, d, c], color);
+                    for tri in [[a, b, c], [b, d, c]] {
+                        uncovered(tri, &covered, |tri| mesh.triangle(tri, color));
+                    }
                 }
             }
             let (near, far) = (&rows[0], &rows[fine]);
@@ -1373,9 +1403,10 @@ impl<'a> Strip<'a> {
         Vec2::new(-across.y, across.x) * stretch * self.width(i) / 2.0
     }
 
-    /// Row `k`'s vertices `js` (0 at the left edge, `across` at the right one).
-    fn row(&self, k: usize, js: impl Iterator<Item = usize>) -> Vec<Vec3> {
-        let (road, i, terrain) = (self.road, self.i, self.terrain);
+    /// Row `k`'s centre, half the road across from there to the right, and the centreline's
+    /// height.
+    fn frame(&self, k: usize) -> (Vec2, Vec2, f32) {
+        let (road, i) = (self.road, self.i);
         // The last row is exactly the next segment's first (lerping to 1 can round off).
         let f = k as f32 / self.fine as f32;
         let mix = |a: f32, b: f32| if k == self.fine { b } else { a + (b - a) * f };
@@ -1389,7 +1420,81 @@ impl<'a> Strip<'a> {
             far.length() / self.width(i + 1),
         );
         let side = mix2(near, far).normalize_or_zero() * stretch * here;
-        let level = mix(road.heights[i], road.heights[i + 1]);
+        (centre, side, mix(road.heights[i], road.heights[i + 1]))
+    }
+
+    /// The ribbon in the xz plane, as convex pieces (counter-clockwise) between its rows,
+    /// moved `inset` in from its sides and from the road's ends.
+    fn pieces(&self, inset: f32) -> impl Iterator<Item = Vec<Vec2>> + '_ {
+        let edges = move |k: usize| {
+            let (centre, side, _) = self.frame(k);
+            let side = side * (1.0 - inset / side.length().max(1e-3));
+            [centre - side, centre + side]
+        };
+        let n = self.road.points.len();
+        (0..self.fine).flat_map(move |k| {
+            let ([mut l0, mut r0], [mut l1, mut r1]) = (edges(k), edges(k + 1));
+            let first = self.i == 0 && k == 0 && self.road.joins[0].is_none();
+            let last = self.i + 2 == n && k + 1 == self.fine && self.road.joins[1].is_none();
+            let ahead = ((l1 + r1) - (l0 + r0)).normalize_or_zero() * inset;
+            if first {
+                (l0, r0) = (l0 + ahead, r0 + ahead);
+            }
+            if last {
+                (l1, r1) = (l1 - ahead, r1 - ahead);
+            }
+            convex([l0, r0, r1, l1])
+        })
+    }
+
+    /// What of this segment better roads cover (see `outranks`), as convex pieces
+    /// (counter-clockwise, `SEAM_OVERLAP` in from their edges). Bridges and waterways
+    /// cover nothing and are never covered.
+    fn covered(&self, r: usize) -> Vec<Vec<Vec2>> {
+        let (terrain, road, i) = (self.terrain, self.road, self.i);
+        let level = |road: &Road| !road.bridge && road.kind != RoadKind::Water;
+        if !level(road) {
+            return Vec::new();
+        }
+        // Mitred ends are stretched up to 1/0.7.
+        let reach = road.widest() / 2.0 / 0.7 + 0.1;
+        let (p, q) = (road.points[i], road.points[i + 1]);
+        let (lo, hi) = (p.min(q) - reach, p.max(q) + reach);
+        let grid = &terrain.road_grid;
+        let ((x0, z0), (x1, z1)) = (grid.cell(lo), grid.cell(hi));
+        let mut over: Vec<(usize, usize)> = Vec::new();
+        for cz in z0..=z1 {
+            for cx in x0..=x1 {
+                let k = cz * grid.cells_x + cx;
+                for &(b, j) in &grid.entries[grid.starts[k] as usize..grid.starts[k + 1] as usize] {
+                    let b = b as usize;
+                    if terrain.roads.get(b).is_some_and(|other| {
+                        b != r && level(other) && outranks(&terrain.roads, b, r)
+                    }) {
+                        over.push((b, j as usize));
+                    }
+                }
+            }
+        }
+        over.sort_unstable();
+        over.dedup();
+        over.into_iter()
+            .flat_map(|(b, j)| {
+                Strip::new(terrain, b, j)
+                    .pieces(SEAM_OVERLAP)
+                    .filter(|piece| {
+                        let (a, z) = bounds(piece);
+                        a.x <= hi.x && a.y <= hi.y && z.x >= lo.x && z.y >= lo.y
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// Row `k`'s vertices `js` (0 at the left edge, `across` at the right one).
+    fn row(&self, k: usize, js: impl Iterator<Item = usize>) -> Vec<Vec3> {
+        let (road, terrain) = (self.road, self.terrain);
+        let (centre, side, level) = self.frame(k);
         js.map(|j| {
             let u = 2.0 * j as f32 / self.across as f32 - 1.0;
             let p = centre + side * u;
@@ -1413,7 +1518,136 @@ fn smoothstep(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Sets each road's `meets`: the roads on the ground (not bridges or waterways) it shares
+/// The lower and upper corners of a polygon's bounding box.
+fn bounds(poly: &[Vec2]) -> (Vec2, Vec2) {
+    poly.iter().fold((Vec2::MAX, Vec2::MIN), |(lo, hi), p| {
+        (lo.min(*p), hi.max(*p))
+    })
+}
+
+/// Twice a polygon's signed area (positive counter-clockwise).
+fn area2(poly: &[Vec2]) -> f32 {
+    (0..poly.len())
+        .map(|k| poly[k].perp_dot(poly[(k + 1) % poly.len()]))
+        .sum()
+}
+
+/// A quad as convex polygons, counter-clockwise: itself, or (bent past convex, on a
+/// tight bend) its two triangles.
+fn convex(quad: [Vec2; 4]) -> Vec<Vec<Vec2>> {
+    let turns = (0..4).map(|k| {
+        let (a, b, c) = (quad[k], quad[(k + 1) % 4], quad[(k + 2) % 4]);
+        (b - a).perp_dot(c - b)
+    });
+    let (left, right) = turns.fold((0, 0), |(l, r), t| {
+        (l + (t > 0.0) as usize, r + (t < 0.0) as usize)
+    });
+    let pieces = if left == 0 || right == 0 {
+        vec![quad.to_vec()]
+    } else {
+        vec![
+            vec![quad[0], quad[1], quad[2]],
+            vec![quad[0], quad[2], quad[3]],
+        ]
+    };
+    pieces
+        .into_iter()
+        .filter_map(|mut p| {
+            let a = area2(&p);
+            if a < 0.0 {
+                p.reverse();
+            }
+            (a.abs() > 1e-6).then_some(p)
+        })
+        .collect()
+}
+
+/// The parts of convex polygon `p` outside convex polygon `q` (both counter-clockwise),
+/// as convex polygons, into `out`.
+fn subtract(p: Vec<Vec2>, q: &[Vec2], out: &mut Vec<Vec<Vec2>>) {
+    let mut rest = p;
+    for k in 0..q.len() {
+        let (a, b) = (q[k], q[(k + 1) % q.len()]);
+        // Inside q is left of a → b.
+        let side = |v: Vec2| (b - a).perp_dot(v - a);
+        let (mut inside, mut outside) = (Vec::new(), Vec::new());
+        for m in 0..rest.len() {
+            let (u, v) = (rest[m], rest[(m + 1) % rest.len()]);
+            let (su, sv) = (side(u), side(v));
+            if su >= 0.0 {
+                inside.push(u);
+            }
+            if su <= 0.0 {
+                outside.push(u);
+            }
+            if (su > 0.0 && sv < 0.0) || (su < 0.0 && sv > 0.0) {
+                let x = u.lerp(v, su / (su - sv));
+                inside.push(x);
+                outside.push(x);
+            }
+        }
+        if outside.len() >= 3 && area2(&outside) > 1e-6 {
+            out.push(outside);
+        }
+        if inside.len() < 3 || area2(&inside) <= 1e-6 {
+            return;
+        }
+        rest = inside;
+    }
+}
+
+/// What of triangle `tri` lies outside the convex polygons `covered`, as triangles in its
+/// plane, each to `emit` (the whole triangle if nothing covers it).
+fn uncovered(tri: [Vec3; 3], covered: &[Vec<Vec2>], mut emit: impl FnMut([Vec3; 3])) {
+    let flat = tri.map(|v| v.xz());
+    let (lo, hi) = bounds(&flat);
+    let mut over = covered.iter().filter(|q| {
+        let (a, b) = bounds(q);
+        a.x < hi.x && a.y < hi.y && b.x > lo.x && b.y > lo.y
+    });
+    let Some(first) = over.next() else {
+        return emit(tri);
+    };
+    let det = (flat[1] - flat[0]).perp_dot(flat[2] - flat[0]);
+    if det.abs() < 1e-9 {
+        return emit(tri);
+    }
+    // Clipped near the triangle's first corner, where f32 has room for the decimals.
+    let origin = flat[0];
+    let local = |v: &Vec2| *v - origin;
+    let start: Vec<Vec2> = flat.iter().map(local).collect();
+    let start = if det < 0.0 {
+        start.into_iter().rev().collect()
+    } else {
+        start
+    };
+    let mut pieces = vec![start];
+    for q in std::iter::once(first).chain(over) {
+        let q: Vec<Vec2> = q.iter().map(local).collect();
+        let mut left = Vec::new();
+        for piece in pieces {
+            subtract(piece, &q, &mut left);
+        }
+        pieces = left;
+        if pieces.is_empty() {
+            return;
+        }
+    }
+    // Heights on the triangle's plane.
+    let (e1, e2) = (flat[1] - flat[0], flat[2] - flat[0]);
+    let lift = |p: Vec2| {
+        let (u, v) = (p.perp_dot(e2) / det, e1.perp_dot(p) / det);
+        let y = tri[0].y + (tri[1].y - tri[0].y) * u + (tri[2].y - tri[0].y) * v;
+        Vec3::new(p.x + origin.x, y, p.y + origin.y)
+    };
+    for piece in pieces {
+        for k in 1..piece.len() - 1 {
+            emit([lift(piece[0]), lift(piece[k]), lift(piece[k + 1])]);
+        }
+    }
+}
+
+/// Sets each road's `meets`:the roads on the ground (not bridges or waterways) it shares
 /// a point with (a junction).
 fn find_meetings(roads: &mut [Road]) {
     let on_ground = |road: &Road| !road.bridge && road.kind != RoadKind::Water;
@@ -1438,10 +1672,15 @@ fn find_meetings(roads: &mut [Road]) {
     }
 }
 
-/// Where exactly two roads on the same level (not waterways) end at one point, sets each
-/// one's `joins` there to the direction halfway between theirs.
+/// Where roads on the same level (not waterways) end at one point, sets the `joins` there
+/// of the two running on into each other most straight (bending less than a right angle;
+/// where more end there, as wide as each other there) to the direction halfway between
+/// theirs. (Any others ending there end square, under the better roads:
+/// `Strip::covered`.)
 fn join_ends(roads: &mut [Road]) {
-    let mut at: std::collections::HashMap<IVec2, Vec<(usize, usize)>> = Default::default();
+    // A road's end: (road, 0 for its first point or 1 for its last).
+    type End = (usize, usize);
+    let mut at: std::collections::HashMap<IVec2, Vec<End>> = Default::default();
     for (r, road) in roads.iter().enumerate() {
         if road.kind == RoadKind::Water {
             continue;
@@ -1461,17 +1700,32 @@ fn join_ends(roads: &mut [Road]) {
             _ => (p[n - 1] - p[n - 2]).normalize_or_zero(),
         }
     };
-    for meeting in at.values().filter(|m| m.len() == 2) {
-        let [(a, ea), (b, eb)] = [meeting[0], meeting[1]];
-        if a == b || roads[a].bridge != roads[b].bridge {
-            continue;
+    // Sorted, so the same map always joins the same way.
+    let mut meetings: Vec<Vec<End>> = at.into_values().filter(|m| m.len() >= 2).collect();
+    meetings.sort_unstable();
+    for meeting in meetings {
+        // Per pair: both directions as running from the first into the second.
+        let mut best: Option<(End, End, Vec2, Vec2)> = None;
+        for (k, &(a, ea)) in meeting.iter().enumerate() {
+            for &(b, eb) in &meeting[k + 1..] {
+                let (wa, wb) = (roads[a].ends[ea].0, roads[b].ends[eb].0);
+                let alike = meeting.len() == 2 || (wa - wb).abs() < 0.01;
+                if a == b || roads[a].bridge != roads[b].bridge || !alike {
+                    continue;
+                }
+                let into = |road: usize, end: usize| {
+                    let d = direction(&roads[road], end);
+                    if (road == a) == (end == 1) { d } else { -d }
+                };
+                let (da, db) = (into(a, ea), into(b, eb));
+                if best.is_none_or(|(_, _, ba, bb)| da.dot(db) > ba.dot(bb)) {
+                    best = Some(((a, ea), (b, eb), da, db));
+                }
+            }
         }
-        // Both directions as running from `a` into `b`.
-        let into = |road: usize, end: usize| {
-            let d = direction(&roads[road], end);
-            if (road == a) == (end == 1) { d } else { -d }
+        let Some(((a, ea), (b, eb), da, db)) = best else {
+            continue;
         };
-        let (da, db) = (into(a, ea), into(b, eb));
         let mean = (da + db).normalize_or_zero();
         // Only bends gentler than a right angle.
         if mean == Vec2::ZERO || da.dot(db) < 0.0 {
@@ -1906,6 +2160,86 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn where_roads_overlap_only_the_best_is_drawn() {
+        let terrain = Terrain::baked();
+        let ribbons = RoadRibbons::new(&terrain);
+        // How far inside each road (on the ground or not) `p` is, where it's inside.
+        let inside = |p: Vec2| {
+            let mut found: Vec<(usize, f32)> = Vec::new();
+            for &(r, i) in terrain.road_grid.near(p) {
+                let Some(road) = terrain.roads.get(r as usize) else {
+                    continue;
+                };
+                let (a, b) = (road.points[i as usize], road.points[i as usize + 1]);
+                let length = a.distance(b).max(1e-6);
+                let t = (p - a).dot(b - a) / (length * length);
+                // Ribbons end square.
+                let n = road.points.len();
+                if (t < 0.0 && i == 0) || (t > 1.0 && i as usize + 2 == n) {
+                    continue;
+                }
+                let t = t.clamp(0.0, 1.0);
+                let s = road.along[i as usize] + t * length;
+                let margin = road.width_at(s) / 2.0 - a.lerp(b, t).distance(p);
+                match found.iter_mut().find(|f| f.0 == r as usize) {
+                    Some(f) => f.1 = f.1.max(margin),
+                    None => found.push((r as usize, margin)),
+                }
+            }
+            found.retain(|f| f.1 >= 0.0);
+            found
+        };
+        let (mut checked, mut wrong) = (0, Vec::new());
+        // At the junction the user found (a cobbled lane into Grubenweg), around Gerach
+        // and in Baunach.
+        for centre in [
+            Vec2::new(-2945.5, -1939.2),
+            Vec2::new(-2984.5, -2007.2),
+            Vec2::new(-87.0, 2286.0),
+        ] {
+            let index = terrain.chunk_at(centre);
+            let (mut roads, mut structure) = (FlatMesh::default(), FlatMesh::default());
+            ribbons.mesh(&terrain, index, &mut roads, &mut structure);
+            for (t, color) in roads.positions.chunks(3).zip(roads.colors.chunks(3)) {
+                let c = t
+                    .iter()
+                    .fold(Vec2::ZERO, |c, v| c + Vec2::new(v[0], v[2]) / 3.0);
+                let found = inside(c);
+                let level = |r: usize| {
+                    let road = &terrain.roads[r];
+                    !road.bridge && road.kind != RoadKind::Water
+                };
+                if found.iter().any(|f| !level(f.0)) {
+                    continue;
+                }
+                let best = found.iter().copied().reduce(|a, b| {
+                    if outranks(&terrain.roads, b.0, a.0) {
+                        b
+                    } else {
+                        a
+                    }
+                });
+                if let Some((r, _)) = best.filter(|b| b.1 > 0.1 && found.len() > 1) {
+                    checked += 1;
+                    if color[0] != terrain.roads[r].kind.color() {
+                        wrong.push(c);
+                    }
+                }
+            }
+        }
+        assert!(
+            checked > 200,
+            "only {checked} triangles where roads overlap"
+        );
+        assert!(
+            wrong.is_empty(),
+            "{} of {checked} triangles show a lesser road, e.g. {:?}",
+            wrong.len(),
+            &wrong[..wrong.len().min(8)]
+        );
     }
 
     #[test]
