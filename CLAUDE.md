@@ -1094,12 +1094,32 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    length) and to stay out of houses; a fan from the edges' corner pulled 0.3 m in under
    the roads, heights from the roads' edges. 4528 on the map. The game's `Corner`s are
    in the road grid (entries past the roads), count as ground where no road covers, and
-   are drawn 4 mm under the ribbons. The bake's `conform` keeps the terrain under the
-   lowest road or corner a vertex is on or within the shoulder of (`follow`): following
-   only the nearest edge let terrain poke through the game's blend of overlapping roads.
-   A 2 m shoulder was tried and dropped (terrain rose under bridge ends).
-   Not done: junction middles as one mesh (the overlapping ribbons show seams), tunnels,
-   piers.
+   are drawn 4 mm under the ribbons. **The ground is cut out under the roads** (asked
+   for by the user, 2026-11-22: no seeing under a road's edge, no terrain through it;
+   `src/terrain/cut.rs`, `RoadRibbons::ground_mesh`): per chunk, the grid cells a
+   ribbon's or corner's outline crosses go into a constrained Delaunay triangulation
+   (crate `spade`) with their corners, sides and diagonals (so the rest stays the grid's
+   triangles) and the outlines (`add_constraint_and_split`); pieces whose centroid is
+   inside a ribbon segment or corner fan are dropped, points on an outline get the
+   drawn ribbon's height. Not cut: bridges, waterways. The ribbon segment is shared
+   code (`Strip`), so outline and ribbon agree exactly; its last row is exactly the next
+   segment's first. ~0.8 ms a chunk. Spade asserts on degenerate input: an outline
+   added twice once split (so outlines are deduplicated, and a road's end row isn't one
+   where it runs on into another road's end); `every_chunk_is_cut` cuts the whole map
+   (the web build aborts on a panic; natively a failed chunk stays uncut). Tests also
+   check the ground is closed up to the outlines and nothing is uncovered from above
+   (sample points within ~1 mm: the mesh is f32, a quarter millimetre apart at x 3000).
+   The physics' `land` still is the grid's triangles, so right beside a road the drawn
+   ground differs from it by the edge's mismatch. The bake's `conform` (`Near`): under
+   a road up to `SINK` below the lowest road over it (out of sight), within the 1 m
+   shoulder level with the edge, blended between several roads by inverse distance⁴
+   (so an island between roads at different heights slopes instead of a wall at one
+   edge), beyond that `EMBANKMENT` from the nearest. A 2 m shoulder was tried and
+   dropped (terrain rose under bridge ends). The bake is deterministic (BTreeMaps where
+   it iterates; the same map bakes to the same bytes).
+   Not done: junction middles as one mesh (the overlapping ribbons show seams; where
+   two roads at different heights overlap, a steep fold of ribbon can show, seen
+   bluish at grazing angles, e.g. at (−2642, −2212)), tunnels, piers.
 4. Road condition (done): `relief.rs`, OSM `smoothness` to ISO 8608 roughness (waves
    0.5–20 m), features from `traffic_calming=bump|hump|table` and `hazard=pothole`
    nodes. The baked file is zlib-compressed, heights predicted from neighbours.

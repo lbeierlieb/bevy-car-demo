@@ -385,10 +385,13 @@ come up through it). The game draws them as a slab with
 parapets (which cars collide with), and its ground query has levels: something at
 height y stands on the highest surface at most a metre above it, so cars on a deck
 stay on it and roads under it pass beneath. The surface has a crown
-(2.5 % on paved roads, 3 % on tracks), and the terrain is cut and filled to it: 8 cm
-under the road and a metre of shoulder, then sloping at 0.6 to the natural ground.
-In the game, a road's surface (blended where roads overlap, so junctions have no
-steps) is both what is drawn and what the tires drive on.
+(2.5 % on paved roads, 3 % on tracks), and the terrain is cut and filled to it: level
+with the road's edge over a metre of shoulder (between two roads, sloping from one's
+edge to the other's), then sloping at 0.6 to the natural ground. In the game, a road's
+surface (blended where roads overlap, so junctions have no steps) is both what is
+drawn and what the tires drive on, and the ground is cut out under the roads and
+joined to their edges vertex for vertex, so there's no gap under a road's edge and no
+terrain coming up through it.
 
 Roads have small bumps on top (`src/relief.rs`), as uneven as their `smoothness` tag
 says: `excellent`, `good` (ISO 8608 class A), `intermediate` (B), `bad` (C),
