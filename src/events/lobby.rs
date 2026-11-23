@@ -18,6 +18,7 @@ use super::round::{Action, Game, Phase, Play, Round};
 use super::{EventKind, Events};
 use crate::car::{ActiveCar, Car, CarSetup, Held, ResetRule};
 use crate::chassis::CHASSIS;
+use crate::menu::kit::{self, Panel, Place};
 use crate::menu::nav::MenuInput;
 use crate::net::protocol::PlayerId;
 use crate::net::{Connection, GhostPlayers, Status, Touching, WantsGhost};
@@ -143,7 +144,7 @@ pub(super) fn elapsed(connection: &Connection, state: &EventState, start: f64, n
 }
 
 /// Out of the round we're in (told the server; we don't wait for its answer).
-pub(super) fn leave(connection: &mut Connection, state: &mut EventState) {
+pub fn leave(connection: &mut Connection, state: &mut EventState) {
     if let Some(round) = connection.round.take() {
         connection.act(Action::Leave);
         state.left = Some(usize::from(round.event));
@@ -438,55 +439,44 @@ fn window(
             let mut settings = hunt;
             let mut wanted = None;
             let mut leaving = false;
-            egui::Window::new(format!("{} ({})", event.name, event.kind.title()))
-                .id(egui::Id::new("event"))
-                .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 40.0))
-                .collapsible(false)
-                .resizable(false)
+            let title = format!("{} ({})", event.name, event.kind.title());
+            Panel::new("event", &title)
+                .place(Place::Right)
+                .width(440.0)
+                .back(Some("Leave"))
                 .show(ctx, |ui| {
                     if let Some(last) = last {
-                        ui.label(RichText::new(last.text()).strong().size(16.0));
-                        ui.separator();
+                        kit::section(ui, &last.text());
                     }
-                    ui.label(hunt.catch.rule());
-                    ui.add_space(4.0);
-                    egui::Grid::new("event players")
-                        .num_columns(3)
-                        .show(ui, |ui| {
-                            for &id in &round.players {
-                                ui.label(name(id));
-                                ui.label(if id == round.host { "Hunted" } else { "Hunter" });
-                                if we_are_hunted && id != you {
-                                    if ui.button("Make hunted").clicked() {
-                                        wanted = Some(Action::Host(id));
-                                    }
-                                } else {
-                                    ui.label("");
-                                }
-                                ui.end_row();
-                            }
-                        });
-                    ui.separator();
-                    ui.add_enabled_ui(we_are_hunted, |ui| {
-                        egui::Grid::new("event settings")
-                            .num_columns(2)
-                            .show(ui, |ui| settings_grid(ui, &mut settings));
-                    });
                     if !we_are_hunted {
-                        ui.small(format!("{hunted_name} sets these."));
-                    }
-                    ui.separator();
-                    if !we_are_hunted {
-                        ui.label(format!("Waiting for {hunted_name} to start the hunt."));
+                        kit::note(ui, &format!("Waiting for {hunted_name} to start the hunt."));
                     } else if round.players.len() < 2 {
-                        ui.label("Waiting for a hunter: anyone stopping on the marker joins.");
-                    } else if ui.button("Start the hunt").clicked() {
+                        kit::note(
+                            ui,
+                            "Waiting for a hunter: anyone stopping on the marker joins.",
+                        );
+                    } else if kit::button(ui, "Start the hunt").clicked() {
                         wanted = Some(Action::Start);
                     }
-                    leaving = ui
-                        .button("Leave (Esc)")
-                        .on_hover_text("Or drive off (Space releases the parking brake)")
-                        .clicked();
+                    leaving = kit::button(ui, "Leave").clicked();
+                    kit::note(ui, hunt.catch.rule());
+                    kit::section(ui, "Players");
+                    for &id in &round.players {
+                        let role = if id == round.host { "hunted" } else { "hunter" };
+                        if we_are_hunted && id != you {
+                            let label = format!("{}: make them the hunted", name(id));
+                            if kit::button_with(ui, &label, role).clicked() {
+                                wanted = Some(Action::Host(id));
+                            }
+                        } else {
+                            kit::info(ui, &name(id), role);
+                        }
+                    }
+                    kit::section(ui, "Rules");
+                    ui.add_enabled_ui(we_are_hunted, |ui| hunt_settings(ui, &mut settings));
+                    if !we_are_hunted {
+                        kit::note(ui, &format!("{hunted_name} sets these."));
+                    }
                 });
             if settings != hunt {
                 // Shown at once, not only once the server has it.
@@ -598,39 +588,34 @@ fn nearest_hunter(
 }
 
 /// The hunted's settings, a row each.
-fn settings_grid(ui: &mut egui::Ui, settings: &mut super::hunt::Settings) {
+fn hunt_settings(ui: &mut egui::Ui, settings: &mut super::hunt::Settings) {
     use super::hunt::{DURATION, HEAD_START};
-    ui.label("Head start");
-    ui.add(egui::Slider::new(&mut settings.head_start, HEAD_START.0..=HEAD_START.1).suffix(" s"));
-    ui.end_row();
-    ui.label("Time to get away");
-    let mut minutes = settings.duration / 60;
-    ui.add(egui::Slider::new(&mut minutes, DURATION.0 / 60..=DURATION.1 / 60).suffix(" min"));
-    settings.duration = minutes * 60;
-    ui.end_row();
-    ui.label("Traffic");
-    ui.checkbox(&mut settings.traffic, "");
-    ui.end_row();
-    ui.label("Hunters can reset (R)");
-    ui.checkbox(&mut settings.hunters_reset, "")
-        .on_hover_text("A helicopter carries a hunter's car back to the road: it takes a while");
-    ui.end_row();
-    ui.label("The hunters");
-    egui::ComboBox::from_id_salt("hunt catch")
-        .selected_text(settings.catch.title())
-        .show_ui(ui, |ui| {
-            for catch in Catch::ALL {
-                ui.selectable_value(&mut settings.catch, catch, catch.title());
-            }
-        });
-    ui.end_row();
-    ui.label("Cars");
-    egui::ComboBox::from_id_salt("hunt cars")
-        .selected_text(settings.cars.title())
-        .show_ui(ui, |ui| {
-            for cars in Cars::ALL {
-                ui.selectable_value(&mut settings.cars, cars, cars.title());
-            }
-        });
-    ui.end_row();
+    let mut head_start = f32::from(settings.head_start);
+    let range = f32::from(HEAD_START.0)..=f32::from(HEAD_START.1);
+    kit::slider(ui, "Head start", &mut head_start, range, 1.0, |v| {
+        format!("{v:.0} s")
+    });
+    settings.head_start = head_start as _;
+    let mut minutes = f32::from(settings.duration / 60);
+    let range = f32::from(DURATION.0 / 60)..=f32::from(DURATION.1 / 60);
+    kit::slider(ui, "Time to get away", &mut minutes, range, 1.0, |v| {
+        format!("{v:.0} min")
+    });
+    settings.duration = minutes as u16 * 60;
+    kit::toggle(ui, "Traffic", &mut settings.traffic);
+    kit::toggle(ui, "Hunters can reset (R)", &mut settings.hunters_reset);
+    kit::note(
+        ui,
+        "A helicopter carries a hunter's car back to the road: it takes a while.",
+    );
+    kit::pick(
+        ui,
+        "The hunters",
+        &mut settings.catch,
+        &Catch::ALL,
+        |catch| catch.title().to_string(),
+    );
+    kit::pick(ui, "Cars", &mut settings.cars, &Cars::ALL, |cars| {
+        cars.title().to_string()
+    });
 }

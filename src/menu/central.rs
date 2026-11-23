@@ -208,6 +208,7 @@ struct Online<'w> {
     connection: Option<ResMut<'w, Connection>>,
     start: Option<ResMut<'w, crate::online::Menu>>,
     intro: Option<ResMut<'w, crate::help::Intro>>,
+    event: Option<ResMut<'w, crate::events::lobby::EventState>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -349,6 +350,27 @@ fn main(
     ] {
         if kit::submenu(ui, screen.title()).clicked() {
             go = Some(screen);
+        }
+    }
+    // In an event's round under way: starting a time trial again, or leaving.
+    if let (Some(connection), Some(state)) = (&mut online.connection, &mut online.event)
+        && let Some(round) = connection.round.clone().filter(|round| round.running())
+    {
+        use crate::events::round::{Action as RoundAction, Game};
+        kit::section(ui, round.game.title());
+        let trial = matches!(round.game, Game::Trial(_));
+        if trial && kit::button(ui, "Start the time trial again").clicked() {
+            connection.act(RoundAction::Restart);
+            menu.close();
+        }
+        let leave = match round.game {
+            Game::Trial(_) => "Stop the time trial",
+            Game::Race(_) => "Leave the race",
+            Game::Hunt(_) => "Leave the hunt",
+        };
+        if kit::button(ui, leave).clicked() {
+            crate::events::lobby::leave(connection, state);
+            menu.close();
         }
     }
     let joined = online

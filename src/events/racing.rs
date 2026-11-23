@@ -16,6 +16,7 @@ use super::{EventKind, Events};
 use crate::audio::effects::{Call, Effects};
 use crate::car::{ActiveCar, Car};
 use crate::map::{MapLine, MapLines, MapMark, MapMarks};
+use crate::menu::kit::{self, Panel, Place};
 use crate::net::Connection;
 use crate::terrain::Terrain;
 
@@ -359,46 +360,36 @@ fn choose(
         .count();
     let mut action = None;
     let mut leaving = false;
-    egui::Window::new(&event.name)
-        .id(egui::Id::new("race choice"))
-        .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 40.0))
-        .collapsible(false)
-        .resizable(false)
+    Panel::new("race choice", &event.name)
+        .place(Place::Right)
+        .width(440.0)
+        .back(Some("Leave"))
         .show(ctx, |ui| {
-            egui::Grid::new("race routes")
-                .num_columns(3)
-                .show(ui, |ui| {
-                    for route in &event.routes {
-                        ui.label(&route.name);
-                        ui.label(route.kind());
-                        ui.label(format!("{:.1} km", route.length() / 1000.0));
-                        ui.end_row();
-                    }
-                });
-            ui.separator();
-            if ui
-                .button("Time trial")
-                .on_hover_text("On your own, against the clock")
-                .clicked()
-            {
+            if kit::button_with(ui, "Time trial", "on your own").clicked() {
                 action = Some(Action::Trial(i as u16));
             }
-            let race = if racing > 0 {
-                format!("Race ({racing} here)")
+            let here = if racing > 0 {
+                format!("{racing} here")
             } else {
-                "Race (open a lobby)".into()
+                "open a lobby".into()
             };
-            if ui
-                .button(race)
-                .on_hover_text("Against other players: whoever opens the lobby sets the race")
-                .clicked()
-            {
+            if kit::button_with(ui, "Race", &here).clicked() {
                 action = Some(Action::Enter(i as u16));
             }
-            leaving = ui
-                .button("Leave (Esc)")
-                .on_hover_text("Or drive off (Space releases the parking brake)")
-                .clicked();
+            leaving = kit::button(ui, "Leave").clicked();
+            kit::note(
+                ui,
+                "A time trial is against the clock; in a race, whoever opens the lobby sets \
+                 the race.",
+            );
+            kit::section(ui, "Routes");
+            for route in &event.routes {
+                kit::info(
+                    ui,
+                    &route.name,
+                    &format!("{}, {:.1} km", route.kind(), route.length() / 1000.0),
+                );
+            }
         });
     if let Some(action) = action {
         state.asked = time.elapsed_secs_f64();
@@ -450,79 +441,64 @@ fn window(
             let mut action = None;
             let mut leaving = false;
             let title = format!("{} ({})", event.name, round.game.title());
-            egui::Window::new(title)
-                .id(egui::Id::new("event"))
-                .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 40.0))
-                .collapsible(false)
-                .resizable(false)
+            Panel::new("event", &title)
+                .place(Place::Right)
+                .width(460.0)
+                .back(Some("Leave"))
                 .show(ctx, |ui| {
+                    if trial {
+                        if kit::button(ui, "Start").clicked() {
+                            action = Some(Action::Start);
+                        }
+                    } else if !host {
+                        kit::note(
+                            ui,
+                            &format!("Waiting for {} to start the race.", name(round.host)),
+                        );
+                    } else if round.players.len() < 2 {
+                        kit::note(
+                            ui,
+                            "Waiting for another racer: anyone stopping on the marker can join.",
+                        );
+                    } else if kit::button(ui, "Start the race").clicked() {
+                        action = Some(Action::Start);
+                    }
+                    leaving = kit::button(ui, "Leave").clicked();
                     if let Some(Outcome::Race(results)) = last {
                         results_table(ui, results);
-                        ui.separator();
                     }
                     if !trial {
-                        egui::Grid::new("racers").num_columns(2).show(ui, |ui| {
-                            for &id in &round.players {
-                                ui.label(name(id));
-                                if id == round.host {
-                                    ui.label("Sets the race");
-                                } else if host {
-                                    if ui.button("Let them set it").clicked() {
-                                        action = Some(Action::Host(id));
-                                    }
-                                } else {
-                                    ui.label("");
+                        kit::section(ui, "Racers");
+                        for &id in &round.players {
+                            if id == round.host {
+                                kit::info(ui, &name(id), "sets the race");
+                            } else if host {
+                                let label = format!("{}: let them set it", name(id));
+                                if kit::button(ui, &label).clicked() {
+                                    action = Some(Action::Host(id));
                                 }
-                                ui.end_row();
+                            } else {
+                                kit::info(ui, &name(id), "");
                             }
-                        });
-                        ui.separator();
+                        }
                     }
+                    kit::section(ui, "The race");
                     ui.add_enabled_ui(host, |ui| {
-                        egui::Grid::new("race settings")
-                            .num_columns(2)
-                            .show(ui, |ui| settings_grid(ui, &mut wanted, &event, trial));
+                        race_settings(ui, &mut wanted, &event, trial);
                     });
                     if !host {
-                        ui.small(format!("{} sets these.", name(round.host)));
+                        kit::note(ui, &format!("{} sets these.", name(round.host)));
                     }
                     if !round.best.is_empty() {
-                        ui.separator();
                         let what = match event.routes.get(usize::from(settings.route)) {
                             Some(route) if route.looped => "Best laps",
                             _ => "Best times",
                         };
-                        ui.label(RichText::new(format!("{what} (time trials)")).strong());
-                        egui::Grid::new("best").num_columns(3).show(ui, |ui| {
-                            for (i, best) in round.best.iter().enumerate() {
-                                ui.label(format!("{}.", i + 1));
-                                ui.label(&best.name);
-                                ui.label(clock(best.time));
-                                ui.end_row();
-                            }
-                        });
-                    }
-                    ui.separator();
-                    if trial {
-                        if ui.button("Start").clicked() {
-                            action = Some(Action::Start);
+                        kit::section(ui, &format!("{what} (time trials)"));
+                        for (i, best) in round.best.iter().enumerate() {
+                            kit::info(ui, &format!("{}. {}", i + 1, best.name), &clock(best.time));
                         }
-                    } else if !host {
-                        ui.label(format!(
-                            "Waiting for {} to start the race.",
-                            name(round.host)
-                        ));
-                    } else if round.players.len() < 2 {
-                        ui.label(
-                            "Waiting for another racer: anyone stopping on the marker can join.",
-                        );
-                    } else if ui.button("Start the race").clicked() {
-                        action = Some(Action::Start);
                     }
-                    leaving = ui
-                        .button("Leave (Esc)")
-                        .on_hover_text("Or drive off (Space releases the parking brake)")
-                        .clicked();
                 });
             if wanted != settings {
                 let game = if trial {
@@ -793,80 +769,78 @@ fn results_table(ui: &mut egui::Ui, results: &Results) {
     } else {
         ""
     };
-    ui.label(
-        RichText::new(format!("{}{direction}", results.route))
-            .strong()
-            .size(16.0),
-    );
-    egui::Grid::new("results").num_columns(4).show(ui, |ui| {
-        ui.label("");
-        ui.label("");
-        ui.label("Time");
-        ui.label("Best lap");
-        ui.end_row();
-        for (i, entry) in results.entries.iter().enumerate() {
-            ui.label(format!("{}.", i + 1));
-            ui.label(&entry.name);
-            ui.label(match entry.time {
-                Some(time) => clock(time),
-                None if entry.left => "Left".into(),
-                None => "Didn't finish".into(),
-            });
-            ui.label(entry.best_lap.map(clock).unwrap_or_default());
-            ui.end_row();
-        }
-    });
+    kit::section(ui, &format!("{}{direction}", results.route));
+    for (i, entry) in results.entries.iter().enumerate() {
+        let time = match entry.time {
+            Some(time) => clock(time),
+            None if entry.left => "Left".into(),
+            None => "Didn't finish".into(),
+        };
+        let best = entry
+            .best_lap
+            .map(|lap| format!("   best lap {}", clock(lap)))
+            .unwrap_or_default();
+        kit::info(
+            ui,
+            &format!("{}. {}", i + 1, entry.name),
+            &format!("{time}{best}"),
+        );
+    }
 }
 
 /// The settings, a row each.
-fn settings_grid(
+fn race_settings(
     ui: &mut egui::Ui,
     settings: &mut race::Settings,
     event: &super::Event,
     trial: bool,
 ) {
-    ui.label("Route");
+    let routes: Vec<u8> = (0..event.routes.len() as u8).collect();
+    kit::pick(ui, "Route", &mut settings.route, &routes, |i| {
+        event
+            .routes
+            .get(usize::from(i))
+            .map_or(String::new(), |route| {
+                format!(
+                    "{} ({}, {:.1} km)",
+                    route.name,
+                    route.kind().to_lowercase(),
+                    route.length() / 1000.0
+                )
+            })
+    });
+    kit::pick(
+        ui,
+        "Direction",
+        &mut settings.reverse,
+        &[false, true],
+        |reverse| if reverse { "Reverse" } else { "Normal" }.to_string(),
+    );
     let route = event.routes.get(usize::from(settings.route));
-    let shown = route.map_or(String::new(), |route| {
-        format!(
-            "{} ({}, {:.1} km)",
-            route.name,
-            route.kind().to_lowercase(),
-            route.length() / 1000.0
-        )
-    });
-    egui::ComboBox::from_id_salt("race route")
-        .selected_text(shown)
-        .show_ui(ui, |ui| {
-            for (i, route) in event.routes.iter().enumerate() {
-                let label = format!("{} ({})", route.name, route.kind().to_lowercase());
-                ui.selectable_value(&mut settings.route, i as u8, label);
-            }
-        });
-    ui.end_row();
-    ui.label("Direction");
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut settings.reverse, false, "Normal");
-        ui.radio_value(&mut settings.reverse, true, "Reverse");
-    });
-    ui.end_row();
     if route.is_some_and(|route| route.looped) {
-        ui.label("Laps");
-        ui.add(egui::Slider::new(&mut settings.laps, LAPS.0..=LAPS.1));
-        ui.end_row();
-    }
-    ui.label("Traffic");
-    ui.checkbox(&mut settings.traffic, "");
-    ui.end_row();
-    if !trial {
-        ui.label("Cars collide");
-        ui.checkbox(&mut settings.collisions, "")
-            .on_hover_text("Off: the racers' cars pass through each other (drawn see-through); traffic still counts");
-        ui.end_row();
-        ui.label("Racers can reset (R)");
-        ui.checkbox(&mut settings.resets, "").on_hover_text(
-            "A helicopter carries the car back to the last gate passed: it takes a while",
+        let mut laps = f32::from(settings.laps);
+        kit::slider(
+            ui,
+            "Laps",
+            &mut laps,
+            f32::from(LAPS.0)..=f32::from(LAPS.1),
+            1.0,
+            |v| format!("{v:.0}"),
         );
-        ui.end_row();
+        settings.laps = laps as u8;
+    }
+    kit::toggle(ui, "Traffic", &mut settings.traffic);
+    if !trial {
+        kit::toggle(ui, "Cars collide", &mut settings.collisions);
+        kit::note(
+            ui,
+            "Off: the racers' cars pass through each other (drawn see-through); traffic \
+             still counts.",
+        );
+        kit::toggle(ui, "Racers can reset (R)", &mut settings.resets);
+        kit::note(
+            ui,
+            "A helicopter carries the car back to the last gate passed: it takes a while.",
+        );
     }
 }
