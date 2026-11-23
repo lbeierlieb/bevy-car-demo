@@ -33,6 +33,10 @@ impl Plugin for UiPlugin {
     }
 }
 
+/// Where `ShieldPlugin` clears the input egui has (in `PreUpdate`).
+#[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Shield;
+
 /// Keeps egui's input from the game: while egui uses the keyboard (a text field has focus,
 /// a popup is open), no key reaches the game's systems, and with `pointer`, while egui
 /// uses the pointer (it's over a window), neither do the mouse's buttons, motion and
@@ -63,6 +67,7 @@ impl Plugin for ShieldPlugin {
                     scroll.delta = Vec2::ZERO;
                 }
             })
+            .in_set(Shield)
             .after(EguiPreUpdateSet::ProcessInput),
         );
     }

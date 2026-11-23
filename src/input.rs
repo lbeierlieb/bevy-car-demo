@@ -22,13 +22,17 @@ impl Plugin for InputPlugin {
             .init_resource::<Reported>()
             .add_systems(
                 PreUpdate,
-                (unfilter_gamepads, track_reported, capture, read_wheel)
+                (unfilter_gamepads, track_reported, capture, read_wheel.in_set(ReadWheel))
                     .chain()
                     .after(bevy::input::InputSystems),
             )
             .add_systems(Last, save_changes);
     }
 }
+
+/// Where the wheel's input is read (`WheelInput`), in `PreUpdate`.
+#[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ReadWheel;
 
 /// Something the driver does, which a wheel, pedal or shifter input can be bound to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -48,10 +52,60 @@ pub enum Action {
     /// Held: the camera looks backwards.
     LookBack,
     Map,
+    /// A menu button: opening the central menu, or moving and choosing in menus.
+    Menu(Nav),
+}
+
+/// The menu buttons: open the central menu, move, choose, go back.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Nav {
+    Open,
+    Up,
+    Down,
+    Left,
+    Right,
+    Confirm,
+    Back,
+}
+
+impl Nav {
+    pub const ALL: [Nav; 7] = [
+        Nav::Open,
+        Nav::Up,
+        Nav::Down,
+        Nav::Left,
+        Nav::Right,
+        Nav::Confirm,
+        Nav::Back,
+    ];
+
+    fn key(self) -> &'static str {
+        match self {
+            Nav::Open => "menu",
+            Nav::Up => "menu_up",
+            Nav::Down => "menu_down",
+            Nav::Left => "menu_left",
+            Nav::Right => "menu_right",
+            Nav::Confirm => "menu_confirm",
+            Nav::Back => "menu_back",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Nav::Open => "Menu",
+            Nav::Up => "Menu: up",
+            Nav::Down => "Menu: down",
+            Nav::Left => "Menu: left",
+            Nav::Right => "Menu: right",
+            Nav::Confirm => "Menu: choose",
+            Nav::Back => "Menu: back",
+        }
+    }
 }
 
 impl Action {
-    pub const ALL: [Action; 19] = [
+    pub const ALL: [Action; 26] = [
         Action::Steer,
         Action::Throttle,
         Action::Brake,
@@ -71,6 +125,13 @@ impl Action {
         Action::View,
         Action::LookBack,
         Action::Map,
+        Action::Menu(Nav::Open),
+        Action::Menu(Nav::Up),
+        Action::Menu(Nav::Down),
+        Action::Menu(Nav::Left),
+        Action::Menu(Nav::Right),
+        Action::Menu(Nav::Confirm),
+        Action::Menu(Nav::Back),
     ];
 
     /// Name in the config file.
@@ -90,6 +151,7 @@ impl Action {
             Action::View => "view".into(),
             Action::LookBack => "look_back".into(),
             Action::Map => "map".into(),
+            Action::Menu(nav) => nav.key().into(),
         }
     }
 
@@ -109,6 +171,7 @@ impl Action {
             Action::View => "Camera view".into(),
             Action::LookBack => "Look back".into(),
             Action::Map => "Map".into(),
+            Action::Menu(nav) => nav.label().into(),
         }
     }
 
@@ -544,6 +607,7 @@ fn read_wheel(
     config: Res<WheelConfig>,
     base: Res<WheelBase>,
     gamepads: Gamepads,
+    menu: Option<Res<crate::menu::nav::MenuFocus>>,
     mut wheel: ResMut<WheelInput>,
 ) {
     if !config.enabled {
@@ -562,7 +626,10 @@ fn read_wheel(
         .into_iter()
         .filter(|a| button(*a) && value(*a).is_some_and(|v| v > 0.5))
         .collect();
-    let pressed = |action| held.contains(&action) && !wheel.held.contains(&action);
+    // While a menu has the focus, the buttons only work the menu (the pedals, the
+    // steering and the shifter's gates go on: a held brake must stay held).
+    let in_menu = menu.is_some_and(|menu| menu.active);
+    let pressed = |action| !in_menu && held.contains(&action) && !wheel.held.contains(&action);
     // Each gate is a button held while the lever is in it: the gear is whichever is held.
     // A shifter that isn't connected doesn't count, so Q/E and the paddles shift instead.
     let gates = (1..=6).chain([-1]);
@@ -590,12 +657,19 @@ fn read_wheel(
         ignition: pressed(Action::Ignition),
         reset: pressed(Action::Reset),
         view: pressed(Action::View),
-        look_back: held.contains(&Action::LookBack),
-        ignition_held: held.contains(&Action::Ignition),
+        look_back: !in_menu && held.contains(&Action::LookBack),
+        ignition_held: !in_menu && held.contains(&Action::Ignition),
         map: pressed(Action::Map),
         shifter,
         held,
     };
+}
+
+impl WheelInput {
+    /// Whether the wheel's button bound to this menu action is held.
+    pub fn nav_held(&self, nav: Nav) -> bool {
+        self.held.contains(&Action::Menu(nav))
+    }
 }
 
 /// Waiting for the driver to move the control to bind to an action.

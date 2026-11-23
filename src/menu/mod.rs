@@ -7,6 +7,8 @@ use bevy_egui::{EguiContexts, egui};
 
 use crate::car::SETTINGS;
 
+pub mod nav;
+
 /// The window size the UI is laid out for, in points: in a window this many pixels (or a
 /// multiple of it) one point is one pixel (or that multiple), whatever the display's
 /// scaling says. A 4K screen shows the same as a 720p one, only sharper.
@@ -28,7 +30,8 @@ pub struct LookPlugin;
 
 impl Plugin for LookPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Display::load())
+        app.add_plugins(nav::NavPlugin)
+            .insert_resource(Display::load())
             .add_systems(Update, (scale, save_display));
     }
 }
