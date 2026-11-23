@@ -1,4 +1,4 @@
-//! Help for beginners: a screen listing the controls (shown at the start, H brings it
+//! Help for beginners: a quick start with the essential keys (shown at the start, H brings it
 //! back; "back" closes it), and hints over the road when the car won't do what the
 //! driver seems to want: what's wrong, what to press, and what that does.
 
@@ -11,28 +11,18 @@ use crate::input::{Action, WheelConfig, WheelInput};
 use crate::menu::kit::{self, Panel, rank};
 use crate::menu::nav::{MenuInput, MenuSet};
 
-/// The key that brings the controls screen back.
+/// The key that brings the quick start back.
 const KEY: KeyCode = KeyCode::KeyH;
 
-/// The controls of the sandbox, keyboard first: (keys, what they do).
-pub const CONTROLS: [(&str, &str); 17] = [
-    ("Esc", "Menu: everything else is in it"),
-    ("W or Up", "Throttle"),
-    ("S or Down", "Brake"),
-    ("A D or Left Right", "Steer"),
+/// The essentials to start driving with the keyboard: (keys, what they do). The rest is
+/// in the menu (Esc), with the profile's bindings under Controls.
+pub const QUICK_START: [(&str, &str); 6] = [
+    ("W / S", "Throttle / brake"),
+    ("A / D", "Steer"),
     ("E / Q", "Shift up / down (Q in neutral, standing: reverse)"),
-    ("Space", "Parking brake on / off (on when you start)"),
-    ("I", "Hold: starter; press while running: engine off"),
-    ("R", "A helicopter carries the car back to the road"),
-    ("C", "Chase or driver's view"),
-    ("B (hold)", "Look back"),
-    ("Left-drag, scroll", "Look around, zoom"),
-    ("M", "Map"),
-    ("Stop on a marker", "Shops and events (on a server)"),
-    ("T", "Chat (on a server): Enter sends, Esc cancels"),
-    ("H", "This screen"),
-    ("2", "Telemetry"),
-    ("1 / F11", "Debug gizmos / fullscreen"),
+    ("Space", "Parking brake on / off"),
+    ("R", "Stuck? A helicopter carries the car back to the road"),
+    ("Esc", "Menu: everything else is in it"),
 ];
 
 pub struct HelpPlugin;
@@ -46,7 +36,7 @@ impl Plugin for HelpPlugin {
     }
 }
 
-/// Whether the controls screen is shown. The start menu waits for it.
+/// Whether the quick start is shown. The start menu waits for it.
 #[derive(Resource)]
 pub struct Intro {
     pub open: bool,
@@ -61,27 +51,30 @@ fn toggle(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<MenuInput>, mut int
     }
 }
 
-/// The controls screen: the keys, and what else there is.
+/// The quick start: the essential keys, and where the rest is.
 fn intro(mut contexts: EguiContexts, mut intro: ResMut<Intro>) -> Result {
     if !intro.open {
         return Ok(());
     }
     let ctx = contexts.ctx_mut()?;
-    let close = Panel::new("intro", "Controls")
+    let close = Panel::new("intro", "Quick start")
         .rank(rank::INTRO)
-        .width(620.0)
+        .width(560.0)
         .back(Some("Close"))
         .show(ctx, |ui| {
             let drive = kit::button(ui, "Let's drive").clicked();
-            for (keys, action) in CONTROLS {
+            kit::note(
+                ui,
+                "You start in neutral with the parking brake on: E for first gear, Space to \
+                 let the brake off, then W.",
+            );
+            for (keys, action) in QUICK_START {
                 kit::info(ui, action, keys);
             }
             kit::note(
                 ui,
-                "You shift gears yourself. The clutch works by itself unless you bind a \
-                 clutch pedal. A gamepad works the menus as it is (D-pad, A, B, Start); \
-                 steering wheels, pedals, shifters and gamepads are bound in the menu \
-                 (Esc), under Controls.",
+                "Wheels, pedals and gamepads are set up in the menu, under Settings, \
+                 Controls. H shows this again.",
             );
             drive
         });

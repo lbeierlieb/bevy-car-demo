@@ -98,7 +98,7 @@ fn menu(
     intro: Option<Res<Intro>>,
     mut exit: MessageWriter<AppExit>,
 ) -> Result {
-    // After the controls screen.
+    // After the quick start.
     if intro.is_some_and(|intro| intro.open) {
         return Ok(());
     }

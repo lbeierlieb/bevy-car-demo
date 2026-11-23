@@ -350,7 +350,7 @@ fn main(
     }
     kit::section(ui, "Help");
     if let Some(intro) = &mut online.intro
-        && kit::button_with(ui, "The controls", "H").clicked()
+        && kit::button_with(ui, "Quick start", "H").clicked()
     {
         intro.open = true;
         menu.close();
@@ -500,7 +500,7 @@ fn controls(ui: &mut egui::Ui, config: &mut WheelConfig) -> Option<Screen> {
     kit::section(ui, "Always");
     for (keys, what) in [
         ("Esc", "Menu"),
-        ("H", "The controls screen"),
+        ("H", "Quick start"),
         ("T", "Chat (on a server)"),
         ("1 / 2", "Gizmos / telemetry"),
         ("F11", "Fullscreen"),
