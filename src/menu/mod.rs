@@ -124,7 +124,7 @@ pub fn to_points(ctx: &egui::Context, logical: Vec2) -> egui::Pos2 {
 
 /// Ubuntu Regular for text (egui's own Ubuntu Light is too thin over the scene), Ubuntu
 /// Medium for titles and menu rows, and a style with room to aim at things.
-fn style(ctx: &egui::Context) {
+pub(crate) fn style(ctx: &egui::Context) {
     use egui::{FontData, FontDefinitions, FontFamily, FontId, TextStyle};
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(

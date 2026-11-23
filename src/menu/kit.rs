@@ -156,10 +156,16 @@ fn prompt(ui: &mut Ui, back: Option<&str>) {
     ui.label(job);
 }
 
+/// Whether the row has the focus (egui's `Response::has_focus` also wants the window to
+/// have it, which a window under Xvfb never gets; keys only come with it anyway).
+pub fn focused(ui: &Ui, response: &Response) -> bool {
+    ui.memory(|m| m.has_focus(response.id))
+}
+
 /// The common part of a row: its rect and response (focusable), its background painted.
 fn row(ui: &mut Ui, height: f32, sense: Sense) -> (Rect, Response) {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), sense);
-    let fill = if response.has_focus() {
+    let fill = if focused(ui, &response) {
         ROW_FOCUS
     } else if response.hovered() && ui.is_enabled() {
         ROW_HOVER
@@ -181,7 +187,7 @@ fn row_font() -> FontId {
 /// Keeps left and right for the focused row (they change it rather than moving the
 /// focus), and says which was pressed: -1, 0 or 1.
 fn sideways(ui: &Ui, response: &Response) -> i32 {
-    if !response.has_focus() {
+    if !focused(ui, response) {
         return 0;
     }
     ui.memory_mut(|m| {
@@ -416,4 +422,64 @@ pub fn info(ui: &mut Ui, label: &str, value: &str) {
         FontId::proportional(15.0),
         WEAK,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// Runs a pass with these keys pressed (and released), drawing `ui`.
+    fn pass(ctx: &egui::Context, keys: &[Key], ui: &dyn Fn(&mut Ui)) {
+        let mut input = egui::RawInput::default();
+        for &key in keys {
+            for pressed in [true, false] {
+                input.events.push(egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        }
+        let _ = ctx.run_ui(input, |root| {
+            Panel::new("test", "Test").show(root.ctx(), ui);
+        });
+    }
+
+    #[test]
+    fn rows_work_with_the_arrows_and_enter() {
+        let ctx = egui::Context::default();
+        super::super::style(&ctx);
+        nav::hook(&ctx);
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+        let (on, volume, clicked) = (Cell::new(true), Cell::new(1.0), Cell::new(0));
+        let draw = |ui: &mut Ui| {
+            if button(ui, "First").clicked() {
+                clicked.set(clicked.get() + 1);
+            }
+            let mut o = on.get();
+            toggle(ui, "Sound", &mut o);
+            on.set(o);
+            let mut v = volume.get();
+            slider(ui, "Volume", &mut v, 0.0..=1.0, 0.05, |v| format!("{v}"));
+            volume.set(v);
+        };
+        // The focus goes to the first row; Enter clicks it.
+        pass(&ctx, &[], &draw);
+        pass(&ctx, &[], &draw);
+        pass(&ctx, &[Key::Enter], &draw);
+        assert_eq!(clicked.get(), 1);
+        // Down to the toggle; left turns it off and doesn't move the focus.
+        pass(&ctx, &[Key::ArrowDown], &draw);
+        pass(&ctx, &[Key::ArrowLeft], &draw);
+        pass(&ctx, &[], &draw);
+        assert!(!on.get());
+        // Down to the slider; left twice steps it down.
+        pass(&ctx, &[Key::ArrowDown], &draw);
+        pass(&ctx, &[Key::ArrowLeft], &draw);
+        pass(&ctx, &[Key::ArrowLeft], &draw);
+        assert!((volume.get() - 0.9).abs() < 1e-5, "{}", volume.get());
+    }
 }

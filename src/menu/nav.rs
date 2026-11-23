@@ -164,6 +164,12 @@ fn install(mut contexts: EguiContexts, mut done: Local<bool>) -> Result {
         return Ok(());
     };
     *done = true;
+    hook(ctx);
+    Ok(())
+}
+
+/// Adds the hooks to egui's passes.
+pub(crate) fn hook(ctx: &egui::Context) {
     ctx.on_begin_pass(
         "menu focus",
         std::sync::Arc::new(|ui: &mut egui::Ui| {
@@ -213,7 +219,6 @@ fn install(mut contexts: EguiContexts, mut done: Local<bool>) -> Result {
             );
         }),
     );
-    Ok(())
 }
 
 /// Called by a menu at the start of its contents: it's a menu of this rank (the central

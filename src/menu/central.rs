@@ -543,7 +543,7 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) {
             capture.0 = Some(Capturing::new(action));
             menu.guide = None;
         }
-        if response.has_focus()
+        if kit::focused(ui, &response)
             && ui.input(|i| i.key_pressed(egui::Key::ArrowLeft))
             && listening.is_none()
         {
