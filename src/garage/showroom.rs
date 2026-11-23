@@ -14,7 +14,7 @@ use std::f32::consts::{FRAC_PI_2, PI};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Align2, Color32, FontId, RichText, Stroke};
+use bevy_egui::egui::{self, Align2, Color32, FontId, Stroke};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::{Garage, Showroom, brochure, start};
@@ -23,7 +23,8 @@ use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car, CarSetup};
 use crate::chassis::{CHASSIS, CarBuild};
 use crate::looks::{Looks, Motion};
-use crate::shops::{AtShop, ShopKind, Shops, shop_window};
+use crate::menu::kit::{self, Panel, Place};
+use crate::shops::{AtShop, SceneBack, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
 use crate::traffic::FactoryLooks;
 
@@ -185,10 +186,11 @@ fn shop(
     let mut enter = false;
     let ctx = contexts.ctx_mut()?;
     shop_window(ctx, &shops, &mut at, ShopKind::Showroom, |ui, _| {
-        ui.label("Every car as it leaves the factory, to look round and drive away in.");
-        enter = ui
-            .button(RichText::new("Into the showroom").strong())
-            .clicked();
+        enter = kit::button(ui, "Into the showroom").clicked();
+        kit::note(
+            ui,
+            "Every car as it leaves the factory, to look round and drive away in.",
+        );
     });
     let Some(marker) = marker.filter(|_| enter) else {
         return Ok(());
@@ -942,62 +944,52 @@ fn window(
     active: Res<ActiveCar>,
     mut cars: Query<(Entity, &mut Car)>,
     (mut away, mut audio): (ResMut<Away>, ResMut<EngineAudio>),
-    mut cameras: Query<(&ChaseCamera, &mut Projection)>,
+    (mut cameras, mut back): (Query<(&ChaseCamera, &mut Projection)>, ResMut<SceneBack>),
 ) -> Result {
     let Some((entity, mut car)) = super::active(&mut cars, active.0) else {
         return Ok(());
     };
     let mut shown = garage.showroom;
     let mut drive = false;
-    let mut out = false;
-    egui::Window::new("Showroom")
-        .anchor(Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
-        .collapsible(false)
-        .resizable(false)
-        .show(contexts.ctx_mut()?, |ui| {
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    for (i, chassis) in CHASSIS.iter().enumerate() {
-                        if ui
-                            .selectable_label(shown.chassis == i, chassis.name)
-                            .on_hover_text(chassis.class)
-                            .clicked()
-                        {
-                            shown = Showroom {
-                                chassis: i,
-                                engine: 0,
-                            };
-                        }
-                    }
-                });
-                ui.add_space(12.0);
-                ui.vertical(|ui| {
-                    ui.set_width(300.0);
-                    drive = brochure(ui, &mut shown);
-                });
-            });
+    let mut out = back.take();
+    let ctx = contexts.ctx_mut()?;
+    Panel::new("showroom", "Showroom")
+        .place(Place::Right)
+        .width(440.0)
+        .back(Some("Back to the car"))
+        .show(ctx, |ui| {
+            let names: Vec<String> = CHASSIS.iter().map(|c| c.name.to_string()).collect();
+            let mut chassis = shown.chassis;
+            if kit::choice(ui, "Car", &mut chassis, &names).changed() {
+                shown = Showroom { chassis, engine: 0 };
+            }
+            let engines: Vec<String> = (CHASSIS[shown.chassis].engines.iter())
+                .filter_map(|code| crate::physics::engine::parts::Parts::factory(code))
+                .map(|parts| parts.hardware().name.to_string())
+                .collect();
+            kit::choice(ui, "Engine", &mut shown.engine, &engines);
+            drive = ui
+                .add_enabled_ui(!hall.buying, |ui| kit::button(ui, "Drive it"))
+                .inner
+                .clicked();
             if hall.buying {
-                ui.label("Getting it ready…");
+                kit::note(ui, "Getting it ready…");
             } else if !garage.status.is_empty() {
-                ui.label(&garage.status);
+                kit::note(ui, &garage.status);
             }
             let words = if hall.running {
                 "Switch it off"
             } else {
                 "Start it"
             };
-            if ui.button(words).clicked() {
+            if kit::button(ui, words).clicked() {
                 hall.running = !hall.running;
             }
-            ui.label(
-                RichText::new("Drag to look round, the mouse wheel to go nearer.")
-                    .small()
-                    .weak(),
-            );
-            ui.separator();
-            out = ui
-                .button(RichText::new("Back to the car").strong())
-                .clicked();
+            brochure(ui, &shown);
+            kit::note(ui, "Drag to look round, the mouse wheel to go nearer.");
+            if kit::button(ui, "Back to the car").clicked() {
+                out = true;
+            }
         });
     if drive {
         let build = CarBuild::factory(shown.chassis);

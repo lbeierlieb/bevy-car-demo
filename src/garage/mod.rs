@@ -807,55 +807,46 @@ fn start(
 
 /// A chassis' page in the showroom: what it is, its engines and paint, and the button
 /// to drive it (true when clicked).
-fn brochure(ui: &mut egui::Ui, shown: &mut Showroom) -> bool {
+fn brochure(ui: &mut egui::Ui, shown: &Showroom) {
     let chassis = &CHASSIS[shown.chassis];
     let body = &chassis.body;
-    ui.heading(chassis.name);
-    ui.label(chassis.class);
-    ui.label(chassis.about);
-    ui.add_space(4.0);
-    ui.label(format!(
-        "Engine at the {}, {}; {}",
-        chassis.bay.place,
-        chassis.drive.name(),
-        GEARBOXES[chassis.gearbox].name.to_lowercase(),
-    ));
-    ui.label(format!(
-        "{:.2} m long, {:.2} m wide, {:.2} m tall, wheelbase {:.2} m",
-        body.length,
-        body.width,
-        body.height(),
-        chassis.wheelbase,
-    ));
-    ui.add_space(4.0);
-    ui.strong("Engine");
-    for (option, code) in chassis.engines.iter().enumerate() {
-        let Some(parts) = Parts::factory(code) else {
-            continue;
-        };
-        let name = parts.hardware().name;
-        ui.radio_value(&mut shown.engine, option, name)
-            .on_hover_text(parts.family().about);
-    }
+    kit::section(ui, chassis.class);
+    kit::note(ui, chassis.about);
     let build = CarBuild::factory(shown.chassis);
     let parts = build.factory_engine(shown.engine);
+    kit::note(ui, parts.family().about);
     let mass = chassis.mass
         + parts.family().built_mass(&parts.hardware())
         + GEARBOXES[chassis.gearbox].mass
         + 2.0 * (chassis.unsprung(0) + chassis.unsprung(1));
-    ui.label(format!("{mass:.0} kg with it"));
+    kit::info(ui, "Engine", &format!("at the {}", chassis.bay.place));
+    kit::info(ui, "Drive", chassis.drive.name());
+    kit::info(
+        ui,
+        "Gearbox",
+        &GEARBOXES[chassis.gearbox].name.to_lowercase(),
+    );
+    kit::info(ui, "Weight", &format!("{mass:.0} kg"));
+    kit::info(
+        ui,
+        "Size",
+        &format!(
+            "{:.2} × {:.2} × {:.2} m",
+            body.length,
+            body.width,
+            body.height()
+        ),
+    );
+    kit::info(ui, "Wheelbase", &format!("{:.2} m", chassis.wheelbase));
     let [front, rear] = chassis.wheels.map(|wheel| wheel.label());
-    ui.label(if front == rear {
-        format!("On {front}")
+    if front == rear {
+        kit::info(ui, "Tires", &front);
     } else {
-        format!("On {front} at the front, {rear} at the rear")
-    });
-    ui.label("(A parts shop fits any engine there's room for)");
-    ui.add_space(4.0);
-    ui.label(format!(
-        "Comes in {}. Any paint shop will change that.",
-        PAINTS[chassis.paint].0
-    ));
-    ui.add_space(8.0);
-    ui.button("Drive it").clicked()
+        kit::info(ui, "Tires", &format!("{front} / {rear}"));
+    }
+    kit::info(ui, "Paint", PAINTS[chassis.paint].0);
+    kit::note(
+        ui,
+        "A parts shop fits any engine there's room for; any paint shop changes the paint.",
+    );
 }
