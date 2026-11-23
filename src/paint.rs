@@ -83,6 +83,10 @@ struct Booth {
     eye: Option<Vec3>,
     /// The paint picked in the window (in `PAINTS`).
     picked: usize,
+    /// In the colour picker: the paint picked before it opened (back to it on cancel).
+    choosing: Option<usize>,
+    /// The colour row, to give the focus back to when the picker closes.
+    colour_row: Option<bevy_egui::egui::Id>,
     spray: Option<Spray>,
 }
 
@@ -886,8 +890,8 @@ fn look(
     }
 }
 
-/// The booth's window, on the right: the paints as swatches, spraying the picked one; and
-/// back to the car.
+/// The booth's window, on the right: the colour (a picker screen of swatches), spraying
+/// the picked one, and back to the car.
 #[allow(clippy::too_many_arguments)]
 fn window(
     mut commands: Commands,
@@ -905,12 +909,58 @@ fn window(
     let now = car.setup.build.paint;
     let mut out = back.take();
     let ctx = contexts.ctx_mut()?;
+    let back_does = if booth.choosing.is_some() {
+        "Cancel"
+    } else {
+        "Back to the car"
+    };
     Panel::new("paint booth", "Paint booth")
         .place(Place::Right)
         .width(420.0)
-        .back(Some("Back to the car"))
+        .back(Some(back_does))
         .show(ctx, |ui| {
+            let colors: Vec<(&str, Color32)> = PAINTS[..SHOP_PAINTS]
+                .iter()
+                .map(|(name, [r, g, b])| {
+                    let color =
+                        Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+                    (*name, color)
+                })
+                .collect();
+            if let Some(before) = booth.choosing {
+                // The picker: the arrows pick (the booth shows it), choose keeps it, back
+                // goes back to what was picked before.
+                kit::note(
+                    ui,
+                    "The arrows pick a colour, choose keeps it, back keeps the one before.",
+                );
+                let grid = kit::swatches(ui, &colors, 5, &mut booth.picked);
+                kit::info(ui, "Picked", PAINTS[booth.picked].0);
+                let keep = grid.clicked();
+                let cancel = std::mem::take(&mut out) || kit::button(ui, "Cancel").clicked();
+                if keep || cancel {
+                    if cancel {
+                        booth.picked = before;
+                    }
+                    booth.choosing = None;
+                    if let Some(row) = booth.colour_row {
+                        ui.memory_mut(|m| m.request_focus(row));
+                    }
+                }
+                return;
+            }
             let spraying = booth.spray;
+            let colour = ui
+                .add_enabled_ui(spraying.is_none(), |ui| {
+                    kit::submenu_with(ui, "Colour", PAINTS[booth.picked].0)
+                })
+                .inner;
+            booth.colour_row = Some(colour.id);
+            if colour.clicked() {
+                booth.choosing = Some(booth.picked);
+                // The grid takes the focus (the menu gives it to its first widget).
+                ui.memory_mut(|m| m.surrender_focus(colour.id));
+            }
             match spraying {
                 Some(coat) => {
                     let words = if coat.time < THICKEST {
@@ -935,18 +985,6 @@ fn window(
                     }
                 }
             }
-            let colors: Vec<(&str, Color32)> = PAINTS[..SHOP_PAINTS]
-                .iter()
-                .map(|(name, [r, g, b])| {
-                    let color =
-                        Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
-                    (*name, color)
-                })
-                .collect();
-            ui.add_enabled_ui(spraying.is_none(), |ui| {
-                kit::swatches(ui, &colors, 5, &mut booth.picked);
-            });
-            kit::info(ui, "Picked", PAINTS[booth.picked].0);
             kit::info(ui, "Now", PAINTS[now].0);
             kit::note(ui, "Drag to look round, the mouse wheel to go nearer.");
             if kit::button(ui, "Back to the car").clicked() {

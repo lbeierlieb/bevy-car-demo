@@ -225,6 +225,12 @@ pub fn button(ui: &mut Ui, label: &str) -> Response {
 }
 
 pub fn button_with(ui: &mut Ui, label: &str, detail: &str) -> Response {
+    labelled(ui, label, detail, 14.0)
+}
+
+/// A clickable row with `label` on the left and `detail` weaker on the right, `inset`
+/// from the edge.
+fn labelled(ui: &mut Ui, label: &str, detail: &str, inset: f32) -> Response {
     let (rect, response) = row(ui, ROW, Sense::click());
     let painter = ui.painter();
     let y = rect.center().y;
@@ -237,7 +243,7 @@ pub fn button_with(ui: &mut Ui, label: &str, detail: &str) -> Response {
     );
     if !detail.is_empty() {
         painter.text(
-            pos2(rect.right() - 14.0, y),
+            pos2(rect.right() - inset, y),
             Align2::RIGHT_CENTER,
             detail,
             FontId::proportional(15.0),
@@ -249,7 +255,12 @@ pub fn button_with(ui: &mut Ui, label: &str, detail: &str) -> Response {
 
 /// A row that goes on to another screen (a chevron on the right).
 pub fn submenu(ui: &mut Ui, label: &str) -> Response {
-    let response = button(ui, label);
+    submenu_with(ui, label, "")
+}
+
+/// `submenu` showing what's set there (left of the chevron).
+pub fn submenu_with(ui: &mut Ui, label: &str, value: &str) -> Response {
+    let response = labelled(ui, label, value, 34.0);
     let r = response.rect;
     let c = pos2(r.right() - 18.0, r.center().y);
     ui.painter().add(egui::Shape::line(
@@ -433,20 +444,20 @@ pub fn slider(
 }
 
 /// Colour swatches in rows of `per_row`, the picked one ringed in white. One widget for
-/// the focus: the arrows move the pick (up from the top row and down from the bottom one
-/// leave it), a click picks. Returns whether the pick changed.
+/// the focus, meant for a picker screen of its own: the arrows move the pick and stay in
+/// it, a click picks. Changed when the pick changed.
 pub fn swatches(
     ui: &mut Ui,
     colors: &[(&str, Color32)],
     per_row: usize,
     picked: &mut usize,
-) -> bool {
+) -> Response {
     let gap = 8.0;
     let rows = colors.len().div_ceil(per_row);
     let width = (ui.available_width() - gap * (per_row as f32 - 1.0)) / per_row as f32;
     let height = 40.0;
     let size = vec2(ui.available_width(), rows as f32 * (height + gap) - gap);
-    let (rect, response) = allocate(ui, size, Sense::click());
+    let (rect, mut response) = allocate(ui, size, Sense::click());
     let cell = |i: usize| {
         let (r, c) = (i / per_row, i % per_row);
         Rect::from_min_size(
@@ -481,19 +492,11 @@ pub fn swatches(
         if right && c + 1 < per_row && *picked + 1 < colors.len() {
             *picked += 1;
         }
-        if up {
-            if r == 0 {
-                ui.memory_mut(|m| m.move_focus(egui::FocusDirection::Up));
-            } else {
-                *picked -= per_row;
-            }
+        if up && r > 0 {
+            *picked -= per_row;
         }
-        if down {
-            if r + 1 >= rows || *picked + per_row >= colors.len() {
-                ui.memory_mut(|m| m.move_focus(egui::FocusDirection::Down));
-            } else {
-                *picked += per_row;
-            }
+        if down && r + 1 < rows && *picked + per_row < colors.len() {
+            *picked += per_row;
         }
     }
     if response.clicked()
@@ -520,7 +523,10 @@ pub fn swatches(
     {
         response.clone().on_hover_text(colors[i].0);
     }
-    *picked != old
+    if *picked != old {
+        response.mark_changed();
+    }
+    response
 }
 
 /// A row with a bar filling up and what's going on.
