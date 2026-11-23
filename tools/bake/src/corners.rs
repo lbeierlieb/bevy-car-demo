@@ -19,9 +19,6 @@ fn radius(width: f64) -> f64 {
 }
 /// A road's direction leaving a junction is taken to a point this far along it (m).
 const AIM: f64 = 5.0;
-/// The corner reaches this far in under each road's edge, so no seam opens between them
-/// where the road bends (m).
-const OVERLAP: f64 = 0.3;
 /// Corners only between roads meeting at angles between these (radians): sharper ones
 /// would need a long arc, flatter ones have nothing to fill.
 const SHARPEST: f64 = 25.0 * std::f64::consts::PI / 180.0;
@@ -29,8 +26,9 @@ const FLATTEST: f64 = 160.0 * std::f64::consts::PI / 180.0;
 /// Arc points at most this far apart in angle (radians).
 const ARC_STEP: f64 = 10.0 * std::f64::consts::PI / 180.0;
 
-/// A filled corner: a fan around its first point, the corner of the two edges (pulled in
-/// under the roads by `OVERLAP`), through the arc. Points are (x, z, height).
+/// A filled corner: a fan around its first point, the junction's node, out along one
+/// road's centreline, across it to the arc, round the arc and back in along the other
+/// road's centreline (see `corner`). Points are (x, z, height).
 pub struct Corner {
     pub kind: RoadKind,
     pub points: Vec<(f64, f64, f64)>,
@@ -151,11 +149,7 @@ pub fn corners(roads: &[Road], outlines: &[&[Point]]) -> Vec<Corner> {
             }
             let wanted = radius((2.0 * a.half).min(2.0 * b.half));
             for shrink in [1.0, 0.6, 0.35] {
-                if let Some(corner) = corner(roads, a, b, theta, wanted * shrink)
-                    && !corner.points.iter().any(|&(x, z, _)| {
-                        outlines.iter().any(|o| crate::terrain::inside(o, (x, z)))
-                    })
-                {
+                if let Some(corner) = corner(roads, a, b, wanted * shrink, outlines) {
                     corners.push(corner);
                     break;
                 }
@@ -165,48 +159,148 @@ pub fn corners(roads: &[Road], outlines: &[&[Point]]) -> Vec<Corner> {
     corners
 }
 
-/// The corner between arm `a` and the next arm `b` counterclockwise (`theta` apart), of
-/// radius `wanted` or as much as the roads' lengths allow; `None` if too small.
-fn corner(roads: &[Road], a: &Arm, b: &Arm, theta: f64, wanted: f64) -> Option<Corner> {
+/// A point of an arm's centreline, from the node out: where it is, the way across to
+/// the arm's left (unit), half the road's width and the centreline's height there.
+#[derive(Clone, Copy)]
+struct Station {
+    at: Point,
+    left: Point,
+    half: f64,
+    height: f64,
+}
+
+impl Station {
+    fn lerp(&self, other: &Station, t: f64) -> Station {
+        let mix = |a: f64, b: f64| a + (b - a) * t;
+        let left = (
+            mix(self.left.0, other.left.0),
+            mix(self.left.1, other.left.1),
+        );
+        let length = left.0.hypot(left.1).max(1e-9);
+        Station {
+            at: (mix(self.at.0, other.at.0), mix(self.at.1, other.at.1)),
+            left: (left.0 / length, left.1 / length),
+            half: mix(self.half, other.half),
+            height: mix(self.height, other.height),
+        }
+    }
+
+    /// The point `off` metres to the left of the centreline (negative: right).
+    fn off(&self, off: f64) -> Point {
+        (self.at.0 + self.left.0 * off, self.at.1 + self.left.1 * off)
+    }
+}
+
+impl Arm {
+    /// Its centreline from the node out, `most` metres at most, across as the game draws
+    /// the ribbon (square to the centreline through the points either side).
+    fn stations(&self, road: &Road, most: f64) -> Vec<Station> {
+        let (p, n) = (&road.points, road.points.len());
+        let station = |i: usize| {
+            let (a, b) = (p[i.saturating_sub(1)], p[(i + 1).min(n - 1)]);
+            let (dx, dz) = (b.0 - a.0, b.1 - a.1);
+            let length = dx.hypot(dz).max(1e-9);
+            let s = self.step as f64;
+            Station {
+                at: p[i],
+                left: (-dz * s / length, dx * s / length),
+                half: road.widths[i] / 2.0,
+                height: road.heights[i],
+            }
+        };
+        let mut out = vec![station(self.at)];
+        let (mut i, mut gone) = (self.at, 0.0);
+        loop {
+            let j = i as isize + self.step;
+            if j < 0 || j as usize >= n {
+                return out;
+            }
+            let j = j as usize;
+            let d = distance(p[i], p[j]);
+            if gone + d >= most {
+                let t = ((most - gone) / d.max(1e-9)).clamp(0.0, 1.0);
+                out.push(station(i).lerp(&station(j), t));
+                return out;
+            }
+            out.push(station(j));
+            gone += d;
+            i = j;
+        }
+    }
+}
+
+/// Where segment `a`–`b` crosses `c`–`d`: how far along the first (0 to 1).
+fn crossing(a: Point, b: Point, c: Point, d: Point) -> Option<f64> {
+    let (r, s) = ((b.0 - a.0, b.1 - a.1), (d.0 - c.0, d.1 - c.1));
+    let det = r.0 * s.1 - r.1 * s.0;
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let (qx, qz) = (c.0 - a.0, c.1 - a.1);
+    let t = (qx * s.1 - qz * s.0) / det;
+    let u = (qx * r.1 - qz * r.0) / det;
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some(t)
+}
+
+/// The corner between arm `a` and the next arm `b` counterclockwise, of radius `r`;
+/// `None` if it doesn't fit within most of the arms' lengths or its arc reaches into a
+/// building (`outlines`). Built on
+/// the roads' edges as drawn, curves and all: the arc's centre is where the edges moved
+/// out by the radius cross, its ends where it touches them. The outline goes from the
+/// node out along `a`'s centreline, across to the arc's end on its edge, round the arc,
+/// and back in along `b`'s, so all of the corner but what lies between the edges and
+/// the arc is under the roads (and cut away with them).
+fn corner(roads: &[Road], a: &Arm, b: &Arm, r: f64, outlines: &[&[Point]]) -> Option<Corner> {
     let (ra, rb) = (&roads[a.road], &roads[b.road]);
-    let node = ra.points[a.at];
-    let (sin, cos) = theta.sin_cos();
-    let (da, db) = (a.direction, b.direction);
-    // Towards the space between them: left of `a`, right of `b`.
-    let pa = (-da.1, da.0);
-    let pb = (db.1, -db.0);
-    // How far along each arm the edges' corner is, and the arc's tangent points for
-    // radius r: linear in r.
-    let along_a = |r: f64| (b.half + a.half * cos + r * (1.0 + cos)) / sin;
-    let along_b = |r: f64| (a.half + b.half * cos + r * (1.0 + cos)) / sin;
-    if along_a(0.0) < 0.0 || along_b(0.0) < 0.0 {
+    // Far enough for the widest, sharpest corner, but most of each arm at most.
+    let reach = |arm: &Arm| (0.8 * arm.length).min(80.0);
+    let (sa, sb) = (a.stations(ra, reach(a)), b.stations(rb, reach(b)));
+    if sa.len() < 2 || sb.len() < 2 {
         return None;
     }
-    // At most most of each arm's length.
-    let most = |length: f64, half: f64, other: f64| {
-        (0.8 * length * sin - other - half * cos) / (1.0 + cos)
+    // The edges moved out by `r` (left of `a`, right of `b`): where they first cross,
+    // by the stations' place along `a` and `b`.
+    let centre = |r: f64| -> Option<((usize, f64), (usize, f64))> {
+        let mut best: Option<((usize, f64), (usize, f64))> = None;
+        for i in 0..sa.len() - 1 {
+            let (p, q) = (sa[i].off(sa[i].half + r), sa[i + 1].off(sa[i + 1].half + r));
+            for j in 0..sb.len() - 1 {
+                let (u, v) = (
+                    sb[j].off(-sb[j].half - r),
+                    sb[j + 1].off(-sb[j + 1].half - r),
+                );
+                let (Some(t), Some(s)) = (crossing(p, q, u, v), crossing(u, v, p, q)) else {
+                    continue;
+                };
+                if best.is_none_or(|((bi, bt), _)| (i as f64 + t) < bi as f64 + bt) {
+                    best = Some(((i, t), (j, s)));
+                }
+            }
+            if best.is_some() {
+                break;
+            }
+        }
+        best
     };
-    let r = wanted
-        .min(most(a.length, a.half, b.half))
-        .min(most(b.length, b.half, a.half));
-    if r < 0.5 {
-        return None;
-    }
-    let at = |d: Point, p: Point, s: f64, off: f64| {
-        (node.0 + d.0 * s + p.0 * off, node.1 + d.1 * s + p.1 * off)
+    let ((i, t), (j, s)) = centre(r)?;
+    let (at_a, at_b) = (sa[i].lerp(&sa[i + 1], t), sb[j].lerp(&sb[j + 1], s));
+    let c = at_a.off(at_a.half + r);
+    let (ta, tb) = (at_a.off(at_a.half), at_b.off(-at_b.half));
+    let mut outline = vec![sa[0].at];
+    // The centrelines a few metres apart: close enough to stay under the roads.
+    let thin = |stations: &[Station], last: usize| -> Vec<Point> {
+        (1..=last)
+            .filter(|k| k % 3 == 0)
+            .map(|k| stations[k].at)
+            .collect()
     };
-    let (ua, ub) = (along_a(r), along_b(r));
-    let ta = at(da, pa, ua, a.half);
-    let tb = at(db, pb, ub, b.half);
-    let centre = at(da, pa, ua, a.half + r);
-    // The corner of the two edges pulled in under the roads.
-    let inner = |half: f64, other: f64| (other + half * cos) / sin;
-    let (ha, hb) = (a.half - OVERLAP, b.half - OVERLAP);
-    let e = at(da, pa, inner(ha, hb), ha);
-    let mut outline = vec![e, at(da, pa, ua, ha), ta];
+    outline.extend(thin(&sa, i));
+    outline.push(at_a.at);
+    outline.push(ta);
+    let (ca, cb) = (distance(c, ta), distance(c, tb));
     let (start, end) = (
-        (ta.1 - centre.1).atan2(ta.0 - centre.0),
-        (tb.1 - centre.1).atan2(tb.0 - centre.0),
+        (ta.1 - c.1).atan2(ta.0 - c.0),
+        (tb.1 - c.1).atan2(tb.0 - c.0),
     );
     let mut sweep = end - start;
     while sweep > std::f64::consts::PI {
@@ -216,26 +310,46 @@ fn corner(roads: &[Road], a: &Arm, b: &Arm, theta: f64, wanted: f64) -> Option<C
         sweep += std::f64::consts::TAU;
     }
     let steps = (sweep.abs() / ARC_STEP).ceil().max(2.0) as usize;
-    for s in 1..steps {
-        let angle = start + sweep * s as f64 / steps as f64;
-        outline.push((centre.0 + r * angle.cos(), centre.1 + r * angle.sin()));
+    for k in 1..steps {
+        let f = k as f64 / steps as f64;
+        let (angle, radius) = (start + sweep * f, ca + (cb - ca) * f);
+        outline.push((c.0 + radius * angle.cos(), c.1 + radius * angle.sin()));
     }
     outline.push(tb);
-    outline.push(at(db, pb, ub, hb));
-    // Heights: each road's edge height where the point is along it, weighted by how near
-    // the point is to that road's edge.
+    let arc = &outline[outline.len() - steps - 1..];
+    if arc
+        .iter()
+        .any(|&p| outlines.iter().any(|o| crate::terrain::inside(o, p)))
+    {
+        return None;
+    }
+    outline.push(at_b.at);
+    let mut back = thin(&sb, j);
+    back.reverse();
+    outline.extend(back);
+    // Heights: each road's surface at the point nearest along its arm, weighted by how
+    // near the point is to that road (on it, its own).
+    let surface = |stations: &[Station], crown: f64, p: Point| -> (f64, f64) {
+        let mut best = (f64::INFINITY, 0.0);
+        for w in stations.windows(2) {
+            let (a, b) = (w[0].at, w[1].at);
+            let (dx, dz) = (b.0 - a.0, b.1 - a.1);
+            let len2 = (dx * dx + dz * dz).max(1e-12);
+            let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dz) / len2).clamp(0.0, 1.0);
+            let on = w[0].lerp(&w[1], t);
+            let off = distance(on.at, p);
+            let beyond = (off - on.half).max(0.0);
+            if beyond < best.0 || (beyond == 0.0 && best.0 == 0.0) {
+                best = (beyond, on.height - crown * off.min(on.half));
+            }
+        }
+        best
+    };
     let height = |p: Point| {
-        let side = |arm: &Arm, road: &Road, d: Point, q: Point| {
-            let rel = (p.0 - node.0, p.1 - node.1);
-            let s = (rel.0 * d.0 + rel.1 * d.1).max(0.0);
-            let off = (rel.0 * q.0 + rel.1 * q.1 - arm.half).abs();
-            let (_, centre) = arm.along(road, s);
-            let edge = centre - road.crown() * arm.half;
-            (edge, 1.0 / (off + 0.1))
-        };
-        let (h1, w1) = side(a, ra, da, pa);
-        let (h2, w2) = side(b, rb, db, pb);
-        (h1 * w1 + h2 * w2) / (w1 + w2)
+        let (da, ha) = surface(&sa, ra.crown(), p);
+        let (db, hb) = surface(&sb, rb.crown(), p);
+        let (wa, wb) = (1.0 / (da + 0.05).powi(2), 1.0 / (db + 0.05).powi(2));
+        (ha * wa + hb * wb) / (wa + wb)
     };
     let kind = if rank(ra.kind) >= rank(rb.kind) {
         ra.kind
@@ -341,8 +455,18 @@ mod tests {
             // Asphalt, the better of the two; the street's radius (5 m) fits.
             assert!(corner.kind == RoadKind::Asphalt);
             let (e, rest) = corner.points.split_first().unwrap();
-            // The edges' corner pulled in under the roads, at (±(2 - 0.3), 3 - 0.3).
-            assert!((e.0.abs() - 1.7).abs() < 1e-9 && (e.1 - 2.7).abs() < 1e-9);
+            // From the node, out along the main road's centreline to (±7, 0).
+            assert!(e.0.abs() < 1e-9 && e.1.abs() < 1e-9);
+            let x = rest
+                .iter()
+                .map(|p| p.0)
+                .find(|x| x.abs() > 1e-9)
+                .unwrap()
+                .signum();
+            assert!(
+                rest.iter()
+                    .any(|p| (p.0 - x * 7.0).abs() < 1e-9 && p.1.abs() < 1e-9)
+            );
             // The arc runs from 5 m along the main road's edge to 5 m up the side road's.
             assert!(
                 rest.iter()
@@ -355,9 +479,51 @@ mod tests {
             // All at the roads' height less the crown at their edges.
             assert!(corner.points.iter().all(|p| (p.2 - 10.0).abs() < 0.1));
             // The middle of the arc is inside, the corner's centre beyond the arc isn't.
-            let x = e.0.signum();
             assert!(corner.height_at((x * 2.5, 3.5)).is_some());
             assert!(corner.height_at((x * 7.0, 8.0)).is_none());
+        }
+    }
+
+    #[test]
+    fn a_corner_on_a_curved_road_touches_its_edge() {
+        // A 6 m road bending round a 30 m circle, a 4 m one leaving it outwards (+z) from
+        // the middle of the bend, both level.
+        let bend: Vec<(i64, Point)> = (-20..=20)
+            .map(|k| {
+                let a = k as f64 * 0.04;
+                (100 + k, (30.0 * a.sin(), 30.0 - 30.0 * a.cos()))
+            })
+            .collect();
+        let mut main = Road::new(RoadKind::Asphalt, 6.0, false, &bend);
+        let mut side = Road::new(
+            RoadKind::Asphalt,
+            4.0,
+            false,
+            &[(100, (0.0, 0.0)), (200, (0.0, -40.0))],
+        );
+        main.heights = vec![10.0; main.points.len()];
+        side.heights = vec![10.0; side.points.len()];
+        let corners = corners(&[main, side], &[]);
+        assert_eq!(corners.len(), 2);
+        let off_main = |p: (f64, f64, f64)| (30.0 - (p.0).hypot(p.1 - 30.0)).abs();
+        for corner in &corners {
+            // Every arc point is off both roads, the arc's ends on their edges.
+            let arc: Vec<_> = corner
+                .points
+                .iter()
+                .copied()
+                .filter(|&p| off_main(p) > 3.0 - 0.01 && p.0.abs() > 2.0 - 0.01)
+                .collect();
+            assert!(arc.len() >= 3, "{:?}", corner.points);
+            let on_main = arc
+                .iter()
+                .map(|&p| (off_main(p) - 3.0).abs())
+                .fold(9.0, f64::min);
+            let on_side = arc
+                .iter()
+                .map(|&p| (p.0.abs() - 2.0).abs())
+                .fold(9.0, f64::min);
+            assert!(on_main < 0.01 && on_side < 0.01, "{on_main} {on_side}");
         }
     }
 }

@@ -437,24 +437,39 @@ impl RoadRibbons {
                     }
                 }
             }
-            for &k in &self.corners[c] {
-                let corner = &terrain.corners[k];
-                let (a, b) = corner
-                    .points
-                    .iter()
-                    .fold((Vec2::MAX, Vec2::MIN), |(a, b), v| {
-                        (a.min(v.xz()), b.max(v.xz()))
-                    });
-                if !overlaps(a, b) {
+        }
+        // The corners, once all the ribbons are in: their outlines but where they lie
+        // under a ribbon (out of sight, and along a road's centreline where the corners
+        // either side of it would overlap, which the triangulation can't take).
+        let near = (cz.saturating_sub(1)..=(cz + 1).min(rows - 1)).flat_map(|z| {
+            (cx.saturating_sub(1)..=(cx + 1).min(per_side - 1)).map(move |x| z * per_side + x)
+        });
+        let mut corners: Vec<usize> = near.flat_map(|c| self.corners[c].iter().copied()).collect();
+        corners.sort_unstable();
+        corners.dedup();
+        for k in corners {
+            let corner = &terrain.corners[k];
+            let (a, b) = corner
+                .points
+                .iter()
+                .fold((Vec2::MAX, Vec2::MIN), |(a, b), v| {
+                    (a.min(v.xz()), b.max(v.xz()))
+                });
+            if !overlaps(a, b) {
+                continue;
+            }
+            let part = Part::Corner(k);
+            for tri in corner.fan() {
+                cover.piece(tri, part);
+            }
+            // Decided the same in every chunk, or a border could be cut in one and not
+            // in the next.
+            let under = |p: Vec3| terrain.under_road(p.xz(), 0.05);
+            for w in corner.outline().windows(2) {
+                if under(w[0]) && under(w[1]) && under((w[0] + w[1]) / 2.0) {
                     continue;
                 }
-                let part = Part::Corner(k);
-                for tri in corner.fan() {
-                    cover.piece(tri, part);
-                }
-                for w in corner.outline().windows(2) {
-                    cover.outline(w[0], w[1], part);
-                }
+                cover.outline(w[0], w[1], part);
             }
         }
         cover
@@ -615,7 +630,12 @@ mod tests {
 
     /// Points of a chunk covered by neither the ground nor a road (looked down on), every
     /// `step` metres.
-    fn holes(terrain: &Terrain, ribbons: &RoadRibbons, centre: Vec2, step: f32) -> Vec<Vec2> {
+    pub(super) fn holes(
+        terrain: &Terrain,
+        ribbons: &RoadRibbons,
+        centre: Vec2,
+        step: f32,
+    ) -> Vec<Vec2> {
         let per_side = terrain.chunks_x();
         let middle = terrain.chunk_at(centre);
         let (mx, mz) = (middle % per_side, middle / per_side);
@@ -701,7 +721,11 @@ mod tests {
     /// Low rays over a block of chunks, every way: none may pass under the drawn
     /// surfaces (a slit between two of them, or a hole) before it's well under the
     /// ground. Returns where they did.
-    fn rays_through(terrain: &Terrain, ribbons: &RoadRibbons, centre: Vec2) -> Vec<(Vec3, Vec3)> {
+    pub(super) fn rays_through(
+        terrain: &Terrain,
+        ribbons: &RoadRibbons,
+        centre: Vec2,
+    ) -> Vec<(Vec3, Vec3)> {
         let per_side = terrain.chunks_x();
         let middle = terrain.chunk_at(centre);
         let mut tris: Vec<[Vec3; 3]> = Vec::new();
@@ -765,35 +789,42 @@ mod tests {
                 for k in 0..16 {
                     let a = k as f32 / 16.0 * std::f32::consts::TAU + 0.1;
                     let dir = Vec3::new(a.cos(), -0.12, a.sin()).normalize();
-                    stamps += 1;
-                    let mut best = f32::INFINITY;
-                    let mut t = 0.0;
-                    // Until the ray is well under the ground (or the drawn surface hit).
-                    while t < 40.0 && t < best {
-                        let p = eye + dir * t;
-                        if p.y < terrain.sample(p.x, p.z).0 - 0.5 {
-                            break;
-                        }
-                        for c in [-0.3f32, 0.3]
-                            .into_iter()
-                            .flat_map(|dx| {
-                                [-0.3f32, 0.3].map(|dz| cell(p.xz() + Vec2::new(dx, dz)))
-                            })
-                            .flatten()
-                        {
-                            for &q in &bins[c] {
-                                if stamp[q as usize] != stamps {
-                                    stamp[q as usize] = stamps;
-                                    if let Some(d) = hit(eye, dir, tris[q as usize]) {
-                                        best = best.min(d);
+                    // Whether a ray from `eye` gets under everything drawn.
+                    let mut passes = |eye: Vec3| {
+                        stamps += 1;
+                        let mut best = f32::INFINITY;
+                        let mut t = 0.0;
+                        // Until the ray is well under the ground (or the drawn surface hit).
+                        while t < 40.0 && t < best {
+                            let p = eye + dir * t;
+                            if p.y < terrain.sample(p.x, p.z).0 - 0.5 {
+                                break;
+                            }
+                            for c in [-0.3f32, 0.3]
+                                .into_iter()
+                                .flat_map(|dx| {
+                                    [-0.3f32, 0.3].map(|dz| cell(p.xz() + Vec2::new(dx, dz)))
+                                })
+                                .flatten()
+                            {
+                                for &q in &bins[c] {
+                                    if stamp[q as usize] != stamps {
+                                        stamp[q as usize] = stamps;
+                                        if let Some(d) = hit(eye, dir, tris[q as usize]) {
+                                            best = best.min(d);
+                                        }
                                     }
                                 }
                             }
+                            t += 0.25;
                         }
-                        t += 0.25;
-                    }
-                    let end = eye + dir * t;
-                    if best.is_infinite() && t < 40.0 && cell(end.xz()).is_some() {
+                        let end = eye + dir * t;
+                        best.is_infinite() && t < 40.0 && cell(end.xz()).is_some()
+                    };
+                    // A slit under a centimetre high doesn't count: where two overlapping
+                    // roads' edges cross a few millimetres apart in height, the ground
+                    // between can only meet one of them.
+                    if passes(eye) && passes(eye + Vec3::Y * 0.01) {
                         through.push((eye, dir));
                     }
                 }

@@ -716,6 +716,25 @@ impl Terrain {
 
     /// `ground`, and the height of the roads on the ground there (blended), if any cover
     /// it.
+    /// Whether `p` is on a road on the ground (not a bridge or waterway), at least
+    /// `margin` in from its edge.
+    fn under_road(&self, p: Vec2, margin: f32) -> bool {
+        self.road_grid.near(p).iter().any(|&(r, i)| {
+            let (r, i) = (r as usize, i as usize);
+            let Some(road) = self.roads.get(r) else {
+                return false;
+            };
+            if road.bridge || road.kind == RoadKind::Water {
+                return false;
+            }
+            let (a, b) = (road.points[i], road.points[i + 1]);
+            let length = a.distance(b).max(1e-6);
+            let t = ((p - a).dot(b - a) / (length * length)).clamp(0.0, 1.0);
+            let off = a.lerp(b, t).distance(p);
+            off + margin <= road.width_at(road.along[i] + t * length) / 2.0
+        })
+    }
+
     fn ground_and_roads(&self, x: f32, z: f32, y: f32) -> (Ground, Option<f32>) {
         let p = Vec2::new(x, z);
         // Per road covering it: (road, weight, height, slope as d height / d (x, z)).
@@ -813,11 +832,11 @@ impl Terrain {
     }
 
     /// Divides the corners' spokes (`CORNER_LATTICE` apart) and sets their heights to
-    /// follow the roads where they meet them: a point on a road is on its surface
-    /// as the ribbons are drawn (blended where roads overlap), one off the roads blends
-    /// the nearest road edge's height and the baked corner's by how near each of the
-    /// edge and the arc is. Baked from each road's own surface, a corner could otherwise
-    /// sit well under or over the ribbons where roads at different heights overlap.
+    /// follow the roads: a point on a road is on its surface as the ribbons are drawn
+    /// (blended where roads overlap), one off the roads blends the surfaces at the near
+    /// roads' edges, weighted by how near each edge is. So a corner meets every road
+    /// at its edge's height and runs smoothly between them; the ground beyond its arc
+    /// joins it there (`cut`).
     fn settle_corners(&mut self) {
         // Natively spread over the cores (a fifth of a second on one); the web has one.
         #[cfg(not(target_arch = "wasm32"))]
@@ -890,25 +909,14 @@ impl Terrain {
         }
         near.sort_unstable();
         near.dedup();
-        let arc = &corner.points[1..];
-        let to_arc = |p: Vec2| {
-            arc.windows(2)
-                .map(|w| {
-                    let (a, b) = (w[0].xz(), w[1].xz());
-                    let t =
-                        ((p - a).dot(b - a) / (b - a).length_squared().max(1e-9)).clamp(0.0, 1.0);
-                    a.lerp(b, t).distance(p)
-                })
-                .fold(f32::INFINITY, f32::min)
-        };
         let roads_at = |p: Vec2| self.ground_and_roads(p.x, p.y, f32::NEG_INFINITY).1;
         let height = |p: Vec3| -> f32 {
             let q = p.xz();
             if let Some(h) = roads_at(q) {
                 return h;
             }
-            // The nearest road edge: its distance, and a point just inside it.
-            let mut edge: Option<(f32, Vec2)> = None;
+            // Per road near: how far its edge is, and a point just inside it there.
+            let mut edges: Vec<(usize, f32, Vec2)> = Vec::new();
             for &(r, i) in &near {
                 let road = &self.roads[r];
                 let (a, b) = (road.points[i], road.points[i + 1]);
@@ -917,21 +925,27 @@ impl Terrain {
                 let centre = a.lerp(b, t);
                 let off = centre.distance(q);
                 let half = road.width_at(road.along[i] + t * length) / 2.0;
-                let beyond = off - half;
-                if edge.is_none_or(|(d, _)| beyond < d) {
-                    let inside = centre + (q - centre).normalize_or_zero() * (half - 0.05).max(0.0);
-                    edge = Some((beyond.max(0.0), inside));
+                let beyond = (off - half).max(0.0);
+                let inside = centre + (q - centre).normalize_or_zero() * (half - 0.05).max(0.0);
+                match edges.iter_mut().find(|e| e.0 == r) {
+                    Some(e) if beyond < e.1 => *e = (r, beyond, inside),
+                    Some(_) => {}
+                    None => edges.push((r, beyond, inside)),
                 }
             }
-            let Some((d_road, inside)) = edge else {
-                return p.y;
-            };
-            let Some(h_road) = roads_at(inside) else {
-                return p.y;
-            };
-            let d_arc = to_arc(q);
-            let f = d_arc / (d_arc + d_road).max(1e-6);
-            f * h_road + (1.0 - f) * p.y
+            // Their surfaces there, each weighted by how near: smooth between the roads,
+            // and each one's own at its edge. (Those much farther than the nearest count
+            // for next to nothing.)
+            let nearest = edges.iter().map(|e| e.1).fold(f32::INFINITY, f32::min);
+            let (mut sum, mut weights) = (0.0, 0.0);
+            for (_, beyond, inside) in edges.into_iter().filter(|e| e.1 < nearest + 8.0) {
+                if let Some(h) = roads_at(inside) {
+                    let w = 1.0 / (beyond + 0.05).powi(2);
+                    sum += w * h;
+                    weights += w;
+                }
+            }
+            if weights > 0.0 { sum / weights } else { p.y }
         };
         // The first point is every spoke's first.
         let middle = height(e);
