@@ -388,7 +388,9 @@ stay on it and roads under it pass beneath. The surface has a crown
 (2.5 % on paved roads, 3 % on tracks), and the terrain is cut and filled to it: level
 with the road's edge over a metre of shoulder (between two roads, sloping from one's
 edge to the other's), then sloping at 0.6 to the natural ground. In the game, a road's
-surface (blended where roads overlap, so junctions have no steps) is both what is
+surface (blended where roads overlap, and roads meeting at a junction also over 2 m
+past their edges, so where two roads at different grades part their edges meet at one
+height: junctions have no steps) is both what is
 drawn and what the tires drive on, and the ground is cut out under the roads and
 joined to their edges vertex for vertex, so there's no gap under a road's edge and no
 terrain coming up through it. At junctions the inside of each turn between two roads

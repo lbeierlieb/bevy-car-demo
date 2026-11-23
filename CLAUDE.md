@@ -1077,7 +1077,12 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
 3. Roads as their own geometry (done): bake `roads.rs` (spline centrelines 1 m apart,
    crown, terrain cut and filled, carved under bridge decks) and `profile.rs` (network
    least squares, block SOR over chains of roads running on into each other). Game:
-   `Terrain::ground(x, z, y)` blends overlapping roads (weights fade at road ends) and
+   `Terrain::ground(x, z, y)` blends overlapping roads (weights fade at road ends;
+   roads sharing a point, `Road::meets`, also out to `JOIN_REACH` (2 m) past their edges,
+   each weighted by its margin + 2 m times how near both edges are, since 2026-11-23: at
+   a Y the edges parted up to 35 cm apart in height, a step and a hole the user found at
+   (−2644.4, −2216.4); the bake's profile is too stiff for ties at the tips to fix it,
+   tried) and
    has levels (a deck carries what's within a metre below its surface); `sample` is the
    level beneath any bridge, `land` the bare terrain. Bridges are drawn as slab and
    parapets; parapets are obstacles. Width changes (asked for by the user, 2026-11-22;
@@ -1143,10 +1148,8 @@ as `action='delete'`). Tags we add go into the map file and `KEEP` in
    a tie (`Problem::ties`: weighted terms with a target, solved like the bends) pulls
    the two surfaces (crowns included) together; road ribbon triangles steeper than 26°
    went from 352 m² to 44 m² (waterways on steep banks aside).
-   Not done: junction middles as one mesh (the overlapping ribbons show seams; a side
-   road's ribbon end sticking out past a main road's edge stays at its own height, a
-   steep sliver where they differ, e.g. a 32 cm drop at (−2644.3, −2216.3)), tunnels,
-   piers.
+   Not done: junction middles as one mesh (the overlapping ribbons' facets show faint
+   shading seams), tunnels, piers.
 4. Road condition (done): `relief.rs`, OSM `smoothness` to ISO 8608 roughness (waves
    0.5–20 m), features from `traffic_calming=bump|hump|table` and `hazard=pothole`
    nodes. The baked file is zlib-compressed, heights predicted from neighbours.

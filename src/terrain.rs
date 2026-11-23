@@ -34,6 +34,10 @@ const CORNER_LATTICE: f32 = 1.5;
 /// edge the point is, fading out over this distance towards the road's ends (m), so the
 /// surface stays continuous where a side road's crown meets a main road's camber.
 const ROAD_FADE: f32 = 3.0;
+/// Roads meeting at a junction also blend into each other out to this far beyond their
+/// edges (m): where two roads leaving a junction at different grades part, their edges
+/// meet at one height instead of a step, and the surface warps between them over this.
+const JOIN_REACH: f32 = 2.0;
 /// A surface carries something at most this far below it (m): a car on a bridge is on the
 /// deck, one under it on the road below.
 const LEVEL_REACH: f32 = 1.0;
@@ -184,6 +188,9 @@ pub struct Road {
     /// meets another road's end at an angle (halfway between the two), so no wedge opens
     /// between them on the outside of the bend.
     joins: [Option<Vec2>; 2],
+    /// The other roads on the ground it shares a point with (sorted): they blend into each
+    /// other near where they meet (`JOIN_REACH`).
+    meets: Vec<u32>,
     /// The surface falls this much per metre from the middle to the edges.
     pub crown: f32,
     /// Centreline in the xz plane (x east, z south), about a metre apart.
@@ -499,6 +506,7 @@ impl Terrain {
                     bridge,
                     ends,
                     joins: [None; 2],
+                    meets: Vec::new(),
                     crown,
                     points,
                     heights,
@@ -510,6 +518,7 @@ impl Terrain {
             })
             .collect();
         join_ends(&mut roads);
+        find_meetings(&mut roads);
         for _ in 0..r.u32() {
             let road = r.u32() as usize;
             let kind = Feature::kind_from_byte(r.take(1)[0]);
@@ -619,6 +628,7 @@ impl Terrain {
             bridge: false,
             ends: [(6.0, 0.0); 2],
             joins: [None; 2],
+            meets: Vec::new(),
             crown: 0.025,
             heights: vec![0.1; points.len()],
             points,
@@ -737,8 +747,10 @@ impl Terrain {
 
     fn ground_and_roads(&self, x: f32, z: f32, y: f32) -> (Ground, Option<f32>) {
         let p = Vec2::new(x, z);
-        // Per road covering it: (road, weight, height, slope as d height / d (x, z)).
-        let mut covering: [(usize, f32, f32, Vec2); 8] = [(usize::MAX, 0.0, 0.0, Vec2::ZERO); 8];
+        // Per road covering it or within `JOIN_REACH` of it: (road, how far inside its
+        // edge, fade towards its ends, height, slope as d height / d (x, z)).
+        let mut near: [(usize, f32, f32, f32, Vec2); 12] =
+            [(usize::MAX, 0.0, 0.0, 0.0, Vec2::ZERO); 12];
         let mut count = 0;
         let mut water = false;
         let mut corner = None;
@@ -762,32 +774,58 @@ impl Terrain {
             let off = a.lerp(b, t).distance(p);
             let s = road.along[i] + t * length;
             let margin = road.width_at(s) / 2.0 - off;
-            if margin < 0.0 {
+            if margin <= -JOIN_REACH || (margin < 0.0 && road.meets.is_empty()) {
                 continue;
             }
             if road.kind == RoadKind::Water {
-                water = true;
+                water |= margin >= 0.0;
                 continue;
             }
             let to_end = s.min(road.along[road.along.len() - 1] - s);
-            let weight = margin.max(1e-3) * (to_end / ROAD_FADE).clamp(0.02, 1.0);
+            let fade = (to_end / ROAD_FADE).clamp(0.02, 1.0);
             let side = along.perp();
             let right = (p - a).dot(side);
             let rise = (road.heights[i + 1] - road.heights[i]) / length;
-            let (bump, tilt) = road.relief(s, right, margin);
+            let (bump, tilt) = road.relief(s, right, margin.max(0.0));
             let height = road.heights[i] + rise * t * length - road.crown * off + bump;
             let slope = along * (rise + tilt.x) + side * (tilt.y - road.crown * right.signum());
-            // One entry per road: the segment it covers the point best with.
-            match covering[..count].iter_mut().find(|c| c.0 == r) {
-                Some(entry) if entry.1 >= weight => {}
-                Some(entry) => *entry = (r, weight, height, slope),
-                None if count < 8 => {
-                    covering[count] = (r, weight, height, slope);
+            // One entry per road: the segment it reaches furthest over the point with.
+            match near[..count].iter_mut().find(|c| c.0 == r) {
+                Some(entry) if entry.1 >= margin => {}
+                Some(entry) => *entry = (r, margin, fade, height, slope),
+                None if count < 12 => {
+                    near[count] = (r, margin, fade, height, slope);
                     count += 1;
                 }
                 None => {}
             }
         }
+        let near = &near[..count];
+        // Each road's weight: how far inside its edge; near a road it meets, as if both
+        // edges were `JOIN_REACH` further out, each scaled by how near the other's and
+        // its own edge are (so at the point where the two edges part, they're even).
+        let mut covering: [(usize, f32, f32, Vec2); 12] = [(usize::MAX, 0.0, 0.0, Vec2::ZERO); 12];
+        let mut count = 0;
+        for &(r, margin, fade, height, slope) in near {
+            let road = &self.roads[r];
+            let nearness = |margin: f32| smoothstep((margin + JOIN_REACH) / JOIN_REACH);
+            let joined = near
+                .iter()
+                .filter(|o| road.meets.binary_search(&(o.0 as u32)).is_ok())
+                .map(|o| nearness(o.1))
+                .fold(0.0, f32::max);
+            let own = if margin >= 0.0 { margin.max(1e-3) } else { 0.0 };
+            let weight = own.max(joined * nearness(margin) * (margin + JOIN_REACH)) * fade;
+            if weight > 0.0 {
+                covering[count] = (r, weight, height, slope);
+                count += 1;
+            }
+        }
+        // On a road only where one covers the point.
+        let on = |bridges: bool| {
+            near.iter()
+                .any(|c| c.1 >= 0.0 && self.roads[c.0].bridge == bridges)
+        };
         let covering = &covering[..count];
         // The roads on the ground, and the bridges, each blended among themselves (or all
         // together: `None`).
@@ -806,7 +844,7 @@ impl Terrain {
                 surface: self.roads[main.0].kind.surface(),
             })
         };
-        let roads = blend(Some(false));
+        let roads = blend(Some(false)).filter(|_| on(false));
         let below = roads.or(corner).unwrap_or_else(|| {
             let (height, normal) = self.land(x, z);
             let surface = if water {
@@ -820,7 +858,7 @@ impl Terrain {
                 surface,
             }
         });
-        let ground = match blend(Some(true)) {
+        let ground = match blend(Some(true)).filter(|_| on(true)) {
             // Level with the roads on the ground (where they meet a bridge's end): one.
             Some(deck) if (deck.height - below.height).abs() < LEVEL_REACH / 2.0 => {
                 blend(None).unwrap()
@@ -1163,7 +1201,7 @@ impl RoadGrid {
         let mut cells: Vec<Vec<(u32, u32)>> = vec![Vec::new(); cells_x * cells_z];
         for (r, road) in roads.iter().enumerate() {
             for (i, pair) in road.points.windows(2).enumerate() {
-                let reach = Vec2::splat(road.widest() / 2.0);
+                let reach = Vec2::splat(road.widest() / 2.0 + JOIN_REACH);
                 let (lo, hi) = (pair[0].min(pair[1]) - reach, pair[0].max(pair[1]) + reach);
                 let ((x0, z0), (x1, z1)) = (grid.cell(lo), grid.cell(hi));
                 for cz in z0..=z1 {
@@ -1366,6 +1404,37 @@ impl<'a> Strip<'a> {
             Vec3::new(p.x, ground + road.kind.lift(), p.y)
         })
         .collect()
+    }
+}
+
+/// 0 below 0, 1 above 1, smoothly between.
+fn smoothstep(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Sets each road's `meets`: the roads on the ground (not bridges or waterways) it shares
+/// a point with (a junction).
+fn find_meetings(roads: &mut [Road]) {
+    let on_ground = |road: &Road| !road.bridge && road.kind != RoadKind::Water;
+    let mut at: std::collections::HashMap<IVec2, Vec<u32>> = Default::default();
+    for (r, road) in roads.iter().enumerate().filter(|(_, road)| on_ground(road)) {
+        for &p in &road.points {
+            at.entry((p * 100.0).round().as_ivec2())
+                .or_default()
+                .push(r as u32);
+        }
+    }
+    let mut meets = vec![Vec::new(); roads.len()];
+    for there in at.values().filter(|there| there.len() > 1) {
+        for &a in there {
+            meets[a as usize].extend(there.iter().filter(|&&b| b != a));
+        }
+    }
+    for (road, mut meets) in roads.iter_mut().zip(meets) {
+        meets.sort_unstable();
+        meets.dedup();
+        road.meets = meets;
     }
 }
 
