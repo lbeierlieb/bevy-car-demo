@@ -918,7 +918,7 @@ fn sign(
             at,
             Align2::LEFT_TOP,
             words,
-            FontId::proportional(height),
+            FontId::proportional(crate::menu::scene_text(height)),
             color,
         );
     };

@@ -813,7 +813,13 @@ fn display(
             return;
         };
         let height = at.distance(below);
-        painter.text(at, align, words, FontId::monospace(height), color);
+        painter.text(
+            at,
+            align,
+            words,
+            FontId::monospace(crate::menu::scene_text(height)),
+            color,
+        );
     };
     let dim = LCD_INK.gamma_multiply(0.6);
     let (name, octane, _) = GRADES[station.grade];

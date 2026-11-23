@@ -665,7 +665,7 @@ fn screen(
         Stroke::new(1.0, Color32::from_rgb(40, 60, 70)),
     ));
     let h = rect.height();
-    let font = |size: f32| FontId::monospace(size * h);
+    let font = |size: f32| FontId::monospace(crate::menu::scene_text(size * h));
     let ink = SCREEN_INK;
     let dim = ink.gamma_multiply(0.55);
     let left = rect.left() + 0.05 * rect.width();

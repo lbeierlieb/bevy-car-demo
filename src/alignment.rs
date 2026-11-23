@@ -826,7 +826,7 @@ fn screen(
     ));
     let (w, h) = (rect.width(), rect.height());
     let at = |x: f32, y: f32| rect.min + egui::vec2(x * w, y * h);
-    let font = |size: f32| FontId::monospace(size * h);
+    let font = |size: f32| FontId::monospace(crate::menu::scene_text(size * h));
     let dim = SCREEN_INK.gamma_multiply(0.55);
     painter.text(
         at(0.03, 0.03),
@@ -909,7 +909,7 @@ fn screen(
 /// A reading: its name and value, and a bar with the spec's band in the middle and a
 /// needle at the value.
 fn gauge(painter: &egui::Painter, rect: egui::Rect, reading: &Reading, h: f32) {
-    let font = |size: f32| FontId::monospace(size * h);
+    let font = |size: f32| FontId::monospace(crate::menu::scene_text(size * h));
     let color = if reading.in_spec() { IN_SPEC } else { OFF_SPEC };
     let d = reading.decimals;
     painter.text(

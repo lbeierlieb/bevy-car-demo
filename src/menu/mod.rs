@@ -122,6 +122,15 @@ pub fn to_points(ctx: &egui::Context, logical: Vec2) -> egui::Pos2 {
     egui::pos2(p.x, p.y)
 }
 
+/// A size for text painted onto something in the scene (a screen, a pump's display, a
+/// sign), which changes as the camera moves: rounded to 12 steps an octave. egui keeps
+/// glyphs per exact size, so a new size every frame (dragging or zooming a shop's camera)
+/// fills its font atlas, which it then throws away and builds again, the whole font
+/// texture going to the GPU anew each time (suspected in the egui flicker in shops).
+pub fn scene_text(size: f32) -> f32 {
+    2f32.powf((size.max(1.0).log2() * 12.0).round() / 12.0)
+}
+
 /// Ubuntu Regular for text (egui's own Ubuntu Light is too thin over the scene), Ubuntu
 /// Medium for titles and menu rows, and a style with room to aim at things.
 pub(crate) fn style(ctx: &egui::Context) {
