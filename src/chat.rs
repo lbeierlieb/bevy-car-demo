@@ -44,12 +44,20 @@ fn chatting(connection: Option<&Connection>) -> bool {
     connection.is_some_and(|c| c.chat_on && matches!(c.status, Status::Joined { .. }))
 }
 
+/// T opens it, also while a menu has the focus (a lobby is where people chat), though
+/// not while some other text field is being typed in. The window's key events, since a
+/// menu with the focus keeps the keys from the game.
 fn open(
-    keys: Res<ButtonInput<KeyCode>>,
+    mut keys: MessageReader<bevy::input::keyboard::KeyboardInput>,
+    focus: Option<Res<crate::menu::nav::MenuFocus>>,
     connection: Option<Res<Connection>>,
     mut writing: ResMut<Writing>,
 ) {
-    if keys.just_pressed(KeyCode::KeyT) && chatting(connection.as_deref()) && !writing.open {
+    let typing = focus.is_some_and(|focus| focus.text);
+    let t = keys
+        .read()
+        .any(|key| key.key_code == KeyCode::KeyT && key.state.is_pressed() && !key.repeat);
+    if t && !typing && chatting(connection.as_deref()) && !writing.open {
         writing.open = true;
         writing.focus = true;
     }

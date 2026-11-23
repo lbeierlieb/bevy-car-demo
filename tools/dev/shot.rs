@@ -82,6 +82,7 @@ fn taps(
             "Escape" => (KeyCode::Escape, Key::Escape),
             "Space" => (KeyCode::Space, Key::Space),
             "Tab" => (KeyCode::Tab, Key::Tab),
+            "KeyT" => (KeyCode::KeyT, Key::Character("t".into())),
             other => panic!("TAPS: unknown key {other}"),
         };
         for t in 0..times {
