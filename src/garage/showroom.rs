@@ -878,12 +878,13 @@ fn sign(
         return Ok(());
     }
     // A point on the board, from its top left (0, 0) to its bottom right (1, 1).
+    let ctx = contexts.ctx_mut()?;
     let project = |u: f32, v: f32| {
         let at = middle + right * (u - 0.5) * SIGN_SIZE.x - up * (v - 0.5) * SIGN_SIZE.y;
         camera
             .world_to_viewport(eye, at)
             .ok()
-            .map(|p| egui::pos2(p.x, p.y))
+            .map(|p| crate::menu::to_points(ctx, p))
     };
     let Some(corners) = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
         .into_iter()
@@ -892,7 +893,6 @@ fn sign(
     else {
         return Ok(());
     };
-    let ctx = contexts.ctx_mut()?;
     let painter = ctx.layer_painter(egui::LayerId::background());
     painter.add(egui::Shape::convex_polygon(
         corners,

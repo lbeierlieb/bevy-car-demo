@@ -25,7 +25,11 @@ pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((EguiPlugin::default(), ShieldPlugin { pointer: true }));
+        app.add_plugins((
+            EguiPlugin::default(),
+            ShieldPlugin { pointer: true },
+            crate::menu::LookPlugin,
+        ));
     }
 }
 

@@ -27,6 +27,7 @@ pub mod hud;
 pub mod input;
 pub mod looks;
 pub mod map;
+pub mod menu;
 pub mod name_tags;
 pub mod net;
 pub mod obstacles;

@@ -808,16 +808,16 @@ fn screen(
     // Where the screen's corners are in the window.
     let s = bay.screen;
     let half = SCREEN_SIZE / 2.0;
+    let ctx = contexts.ctx_mut()?;
     let mut corners = Vec::new();
     for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
         let at = s.translation + s.right() * x * half.x + s.up() * y * half.y;
         let Ok(p) = camera.world_to_viewport(eye, at) else {
             return Ok(());
         };
-        corners.push(egui::pos2(p.x, p.y));
+        corners.push(crate::menu::to_points(ctx, p));
     }
     let rect = egui::Rect::from_points(&corners);
-    let ctx = contexts.ctx_mut()?;
     let painter = ctx.layer_painter(egui::LayerId::background());
     painter.add(egui::Shape::convex_polygon(
         corners,

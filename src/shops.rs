@@ -460,7 +460,7 @@ pub fn float_label(
     let text = format!("{name}\n{title}  {distance:.0} m");
     let galley = painter.layout_no_wrap(text, FontId::proportional(14.0), Color32::WHITE);
     let rect = Align2::CENTER_BOTTOM
-        .anchor_size(egui::pos2(screen.x, screen.y), galley.size())
+        .anchor_size(crate::menu::to_points(painter.ctx(), screen), galley.size())
         .expand(5.0);
     painter.rect_filled(rect, 4.0, Color32::from_black_alpha(170));
     painter.rect_stroke(
