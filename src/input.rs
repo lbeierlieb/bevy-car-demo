@@ -929,7 +929,16 @@ fn read_wheel(
     menu: Option<Res<crate::menu::nav::MenuFocus>>,
     mut wheel: ResMut<WheelInput>,
 ) {
-    let value = |action| action_value(&config, &gamepads, action);
+    // While a menu has the focus, keys and buttons only work the menu: nothing of theirs
+    // reaches the driving, not even a pedal bound to a key. Axes go on (a held brake
+    // pedal must stay held, a wheel keeps steering), and so do the shifter's gates (where
+    // the lever is).
+    let in_menu = menu.is_some_and(|menu| menu.active);
+    let value = |action| {
+        value_of(&config, &gamepads, action, |b| {
+            !in_menu || b.input.is_axis()
+        })
+    };
     let axis = |action| value_of(&config, &gamepads, action, |b| b.input.is_axis());
     // The axis covers the base's range, which may be wider than the game's.
     let angle = axis(Action::Steer).map(|axis| axis * base.range(&config) / 2.0);
@@ -941,9 +950,6 @@ fn read_wheel(
         .into_iter()
         .filter(|&a| value_of(&config, &gamepads, a, |b| button(a, b)).is_some_and(|v| v > 0.5))
         .collect();
-    // While a menu has the focus, the buttons only work the menu (the pedals, the
-    // steering and the shifter's gates go on: a held brake must stay held).
-    let in_menu = menu.is_some_and(|menu| menu.active);
     let pressed = |action| !in_menu && held.contains(&action) && !wheel.held.contains(&action);
     let down = |action| !in_menu && held.contains(&action);
     // Each gate is a button held while the lever is in it: the gear is whichever is held.
@@ -1238,6 +1244,15 @@ mod tests {
         let wheel = world.resource::<WheelInput>();
         assert_eq!((wheel.throttle, wheel.steer_keys), (Some(1.0), 1.0));
         assert_eq!(wheel.brake, Some(0.0));
+        // While a menu has the focus, no key reaches the driving.
+        world.insert_resource(crate::menu::nav::MenuFocus {
+            active: true,
+            text: false,
+        });
+        world.run_system_once(read_wheel).unwrap();
+        let wheel = world.resource::<WheelInput>();
+        assert_eq!((wheel.throttle, wheel.steer_keys), (None, 0.0));
+        world.remove_resource::<crate::menu::nav::MenuFocus>();
         world.resource_mut::<WheelConfig>().active = 3;
         world.run_system_once(read_wheel).unwrap();
         let wheel = world.resource::<WheelInput>();
