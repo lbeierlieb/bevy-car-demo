@@ -34,8 +34,6 @@ use crate::workshop::{self, Work};
 mod bay;
 mod showroom;
 
-const WARNING: egui::Color32 = egui::Color32::from_rgb(255, 170, 60);
-
 pub struct GaragePlugin;
 
 impl Plugin for GaragePlugin {
@@ -200,171 +198,119 @@ fn take_draft(garage: &mut Garage, car: &Car) {
     garage.status.clear();
 }
 
-/// The parts shop's window (in the workshop, `bay`): what's fitted to the car and its
-/// engine, its condition and repairs. True when "Build" was clicked.
+/// The parts shop's window (in the workshop, `bay`): building what's picked, what's
+/// fitted to the car and its engine, its condition and repairs. True when "Build" was
+/// chosen.
 fn parts_shop(ui: &mut egui::Ui, garage: &mut Garage, car: &mut Car) -> bool {
     if garage.car != Some(car.index) {
         take_draft(garage, car);
     }
-    let mut build_now = false;
-    egui::ScrollArea::vertical()
-        .max_height(ui.ctx().content_rect().height() - 140.0)
-        .show(ui, |ui| {
-            car_parts(ui, &mut garage.draft.0);
-            wheel_parts(ui, &mut garage.draft.0, &mut garage.same_wheels);
-            ui.separator();
-            engine(ui, garage);
-            build_now = build(ui, garage, car);
-            condition(ui, car);
-            ui.separator();
-            egui::CollapsingHeader::new("Engine parts")
-                .default_open(true)
-                .show(ui, |ui| parts(ui, garage));
-        });
+    let build_now = build(ui, garage, car);
+    car_parts(ui, &mut garage.draft.0);
+    wheel_parts(ui, &mut garage.draft.0, &mut garage.same_wheels);
+    engine(ui, garage);
+    parts(ui, garage);
+    condition(ui, car);
     build_now
 }
 
 /// What's fitted to the chassis.
 fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
     let chassis = draft.chassis();
-    ui.horizontal(|ui| {
-        ui.strong(format!(
-            "{} ({})",
-            chassis.name,
-            chassis.class.to_lowercase()
-        ));
-        ui.label("Another car: at a car dealer");
+    kit::section(
+        ui,
+        &format!("{} ({})", chassis.name, chassis.class.to_lowercase()),
+    );
+    let gearboxes: Vec<usize> = chassis.gearboxes().collect();
+    kit::pick(ui, "Gearbox", &mut draft.gearbox, &gearboxes, |g| {
+        GEARBOXES[g].name.to_string()
     });
-    let combo = |ui: &mut egui::Ui, id: &str, chosen: &mut usize, names: &[&str]| {
-        egui::ComboBox::from_id_salt(id)
-            .width(220.0)
-            .selected_text(names[*chosen])
-            .show_ui(ui, |ui| {
-                for (i, name) in names.iter().enumerate() {
-                    ui.selectable_value(chosen, i, *name);
-                }
-            });
-    };
-    egui::Grid::new("car").num_columns(2).show(ui, |ui| {
-        ui.label("Gearbox")
-            .on_hover_text("Any gearbox made for the chassis' layout");
-        egui::ComboBox::from_id_salt("gearbox")
-            .width(220.0)
-            .selected_text(GEARBOXES[draft.gearbox].name)
-            .show_ui(ui, |ui| {
-                for gearbox in chassis.gearboxes() {
-                    ui.selectable_value(&mut draft.gearbox, gearbox, GEARBOXES[gearbox].name);
-                }
-            });
-        ui.end_row();
-        ui.label("Clutch").on_hover_text(
-            "An engine with more torque than the clutch passes makes it slip: the revs run \
-             away from the wheels",
-        );
-        let passes = |clutch: usize| {
-            let (name, more) = CLUTCHES[clutch];
-            let torque = GEARBOXES[draft.gearbox].clutch_torque * more;
-            format!("{name} ({torque:.0} N·m)")
-        };
-        egui::ComboBox::from_id_salt("clutch")
-            .width(220.0)
-            .selected_text(passes(draft.clutch))
-            .show_ui(ui, |ui| {
-                for clutch in 0..CLUTCHES.len() {
-                    ui.selectable_value(&mut draft.clutch, clutch, passes(clutch));
-                }
-            });
-        ui.end_row();
-        ui.label("Final drive")
-            .on_hover_text("Shorter (a higher number) pulls harder and tops out sooner");
-        ui.add(
-            egui::Slider::new(&mut draft.final_drive, 2.5..=5.5)
-                .step_by(0.05)
-                .suffix(":1"),
-        );
-        ui.end_row();
-        ui.label("Differentials")
-            .on_hover_text("Open differentials let a wheel without grip spin away the torque");
-        ui.checkbox(&mut draft.limited_slip, "Limited-slip");
-        ui.end_row();
-        ui.label("Suspension").on_hover_text(
-            "Stiffer springs and dampers, aligned to more negative camber, and more room to set \
-             it",
-        );
-        let mut kit = draft.suspension;
-        combo(ui, "suspension", &mut kit, &SUSPENSIONS.map(|kit| kit.0));
-        if kit != draft.suspension {
-            draft.set_suspension(kit);
-        }
-        ui.end_row();
-        for (axle, place) in ["Front", "Rear"].into_iter().enumerate() {
-            ui.label(format!("{place} anti-roll bar")).on_hover_text(
-                "A stiffer bar rolls the body less and moves more of the load across this \
-                 axle in a corner: stiffer at the front makes the car push wider, at the \
-                 rear makes it turn in more and step out sooner",
-            );
-            let bars = &chassis.bars[axle];
-            let factory = |bar: usize| {
-                let label = bars.label(bar);
-                if bar == bars.factory {
-                    format!("{label}, factory")
-                } else {
-                    label
-                }
-            };
-            egui::ComboBox::from_id_salt(("bar", axle))
-                .width(220.0)
-                .selected_text(factory(draft.bars[axle]))
-                .show_ui(ui, |ui| {
-                    for bar in 0..bars.sizes.len() {
-                        ui.selectable_value(&mut draft.bars[axle], bar, factory(bar));
-                    }
-                });
-            ui.end_row();
-        }
+    let gearbox = draft.gearbox;
+    let clutches: Vec<usize> = (0..CLUTCHES.len()).collect();
+    kit::pick(ui, "Clutch", &mut draft.clutch, &clutches, |clutch| {
+        let (name, more) = CLUTCHES[clutch];
+        let torque = GEARBOXES[gearbox].clutch_torque * more;
+        format!("{name} ({torque:.0} N·m)")
     });
+    kit::slider(
+        ui,
+        "Final drive",
+        &mut draft.final_drive,
+        2.5..=5.5,
+        0.05,
+        |v| format!("{v:.2}:1"),
+    );
+    kit::toggle(ui, "Limited-slip differentials", &mut draft.limited_slip);
+    let mut suspension = draft.suspension;
+    let kits: Vec<usize> = (0..SUSPENSIONS.len()).collect();
+    if kit::pick(ui, "Suspension", &mut suspension, &kits, |k| {
+        SUSPENSIONS[k].0.to_string()
+    }) {
+        draft.set_suspension(suspension);
+    }
+    for (axle, place) in ["Front anti-roll bar", "Rear anti-roll bar"]
+        .into_iter()
+        .enumerate()
+    {
+        let bars = &chassis.bars[axle];
+        let sizes: Vec<usize> = (0..bars.sizes.len()).collect();
+        kit::pick(ui, place, &mut draft.bars[axle], &sizes, |bar| {
+            let label = bars.label(bar);
+            if bar == bars.factory {
+                format!("{label}, factory")
+            } else {
+                label
+            }
+        });
+    }
+    kit::note(
+        ui,
+        "An engine with more torque than the clutch passes makes it slip. A shorter final \
+         drive (a higher number) pulls harder and tops out sooner. Open differentials let a \
+         wheel without grip spin the torque away. Stiffer suspension kits come aligned to \
+         more negative camber. A stiffer bar at the front makes the car push wider, at the \
+         rear turn in more and step out sooner. Another car: at a car dealer.",
+    );
 }
 
 /// The rims and tires on each axle, or the same all round.
 fn wheel_parts(ui: &mut egui::Ui, draft: &mut CarBuild, same: &mut bool) {
-    ui.horizontal(|ui| {
-        ui.strong("Wheels");
-        ui.checkbox(same, "Same front and rear");
-    });
+    kit::section(ui, "Wheels");
+    kit::toggle(ui, "Same front and rear", same);
     if *same {
         draft.wheels[1] = draft.wheels[0];
     }
     let axles: &[usize] = if *same { &[0] } else { &[0, 1] };
-    egui::Grid::new("wheels").num_columns(2).show(ui, |ui| {
-        for &axle in axles {
-            let wheel = &mut draft.wheels[axle];
-            ui.label(if *same {
-                "All round"
-            } else {
-                ["Front", "Rear"][axle]
-            });
-            wheel_picker(ui, axle, wheel);
-            ui.end_row();
-            ui.label("");
-            ui.label(format!(
-                "{}: {:.0} mm across, {:.1} kg a wheel",
+    for &axle in axles {
+        let wheel = &mut draft.wheels[axle];
+        let place = if *same {
+            "All round"
+        } else {
+            ["Front", "Rear"][axle]
+        };
+        kit::info(
+            ui,
+            place,
+            &format!(
+                "{}: {:.0} mm across, {:.1} kg",
                 wheel.tire.label(),
                 2000.0 * wheel.tire.radius(),
                 wheel.mass()
-            ))
-            .on_hover_text(
-                "Wider tires grip more but weigh more and roll heavier; bigger wheels spin up \
-                 slower, and taller tires gear the car longer",
-            );
-            ui.end_row();
-        }
-    });
+            ),
+        );
+        wheel_picker(ui, wheel);
+    }
     if *same {
         draft.wheels[1] = draft.wheels[0];
     }
     if let Some(why) = draft.wheel_misfit() {
-        ui.colored_label(WARNING, why);
+        kit::warning(ui, &why);
     }
+    kit::note(
+        ui,
+        "Wider tires grip more but weigh more and roll heavier; bigger wheels spin up \
+         slower, and taller tires gear the car longer.",
+    );
 }
 
 /// Each tire's load with the car standing (N), front and rear.
@@ -444,134 +390,117 @@ pub fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, setup: &CarSetup) {
 
 /// Rim diameter and width, tire width and sidewall, and compound. Another rim diameter or
 /// tire width keeps the outside diameter as near as it goes, on a rim that suits the tire.
-fn wheel_picker(ui: &mut egui::Ui, axle: usize, wheel: &mut Wheel) {
-    fn pick<T: Copy + PartialEq>(
-        ui: &mut egui::Ui,
-        id: (&str, usize),
-        chosen: &mut T,
-        options: impl Iterator<Item = T>,
-        label: impl Fn(T) -> String,
-    ) -> bool {
-        let before = *chosen;
-        egui::ComboBox::from_id_salt(id)
-            .width(52.0)
-            .selected_text(label(*chosen))
-            .show_ui(ui, |ui| {
-                for option in options {
-                    ui.selectable_value(chosen, option, label(option));
-                }
-            });
-        *chosen != before
-    }
+fn wheel_picker(ui: &mut egui::Ui, wheel: &mut Wheel) {
     let diameter = 2.0 * wheel.tire.radius();
     let resize = |wheel: &mut Wheel| {
         wheel.tire = TireSize::nearest(wheel.tire.width, wheel.rim.diameter, diameter);
         wheel.rim.width = wheel.tire.rim_width_near(wheel.rim.width);
     };
-    ui.horizontal(|ui| {
-        let rims = wheels::RIM_DIAMETERS;
-        if pick(ui, ("rim", axle), &mut wheel.rim.diameter, rims, |d| {
-            format!("{d}\"")
-        }) {
-            resize(wheel);
-        }
-        ui.label("×");
-        let widths = wheels::RIM_WIDTHS.step_by(wheels::RIM_WIDTH_STEP);
-        pick(ui, ("rim width", axle), &mut wheel.rim.width, widths, |w| {
-            format!("{:.1}\"", f32::from(w) / 10.0)
-        });
-        let widths = wheels::TIRE_WIDTHS.step_by(wheels::TIRE_WIDTH_STEP);
-        if pick(ui, ("tire", axle), &mut wheel.tire.width, widths, |w| {
-            w.to_string()
-        }) {
-            resize(wheel);
-        }
-        ui.label("/");
-        let aspects = wheels::ASPECTS.step_by(wheels::ASPECT_STEP);
-        pick(ui, ("aspect", axle), &mut wheel.tire.aspect, aspects, |a| {
-            a.to_string()
-        });
-        let compounds = 0..COMPOUNDS.len();
-        pick(
-            ui,
-            ("compound", axle),
-            &mut wheel.compound,
-            compounds,
-            |c| COMPOUNDS[c].name.to_string(),
-        );
-    })
-    .response
-    .on_hover_text(COMPOUNDS[wheel.compound].about);
+    let rims: Vec<_> = wheels::RIM_DIAMETERS.collect();
+    if kit::pick(ui, "Rim diameter", &mut wheel.rim.diameter, &rims, |d| {
+        format!("{d}\"")
+    }) {
+        resize(wheel);
+    }
+    let widths: Vec<_> = wheels::RIM_WIDTHS.step_by(wheels::RIM_WIDTH_STEP).collect();
+    kit::pick(ui, "Rim width", &mut wheel.rim.width, &widths, |w| {
+        format!("{:.1}\"", f32::from(w) / 10.0)
+    });
+    let widths: Vec<_> = wheels::TIRE_WIDTHS
+        .step_by(wheels::TIRE_WIDTH_STEP)
+        .collect();
+    if kit::pick(ui, "Tire width", &mut wheel.tire.width, &widths, |w| {
+        format!("{w} mm")
+    }) {
+        resize(wheel);
+    }
+    let aspects: Vec<_> = wheels::ASPECTS.step_by(wheels::ASPECT_STEP).collect();
+    kit::pick(ui, "Sidewall", &mut wheel.tire.aspect, &aspects, |a| {
+        format!("{a} %")
+    });
+    let compounds: Vec<usize> = (0..COMPOUNDS.len()).collect();
+    kit::pick(ui, "Compound", &mut wheel.compound, &compounds, |c| {
+        COMPOUNDS[c].name.to_string()
+    });
+    kit::note(ui, COMPOUNDS[wheel.compound].about);
 }
 
 /// Which engine: any that fits the chassis' bay.
 fn engine(ui: &mut egui::Ui, garage: &mut Garage) {
     let (build, draft) = &mut garage.draft;
     let chassis = build.chassis();
-    ui.horizontal(|ui| {
-        ui.label("Engine:").on_hover_text(draft.family().about);
-        let name = |version: &Version| format!("{} {}", version.code, version.name);
-        let current = &draft.family().versions[draft.version];
-        egui::ComboBox::from_id_salt("engine")
-            .width(220.0)
-            .height(500.0)
-            .selected_text(name(current))
-            .show_ui(ui, |ui| {
-                for (f, family) in FAMILIES.iter().enumerate() {
-                    let fit = chassis.fit(f);
-                    for (v, version) in family.versions.iter().enumerate() {
-                        let chosen = (draft.family, draft.version) == (f, v);
-                        let label = egui::Button::selectable(chosen, name(version));
-                        match &fit {
-                            Ok(_) => {
-                                let pick = ui.add(label).on_hover_text(family.about);
-                                // As the factory builds it, in this car.
-                                if let (true, Ok(parts)) =
-                                    (pick.clicked(), build.install(Version::parts(f, v)))
-                                {
-                                    *draft = parts;
-                                }
-                            }
-                            Err(misfit) => {
-                                ui.add_enabled(false, label)
-                                    .on_disabled_hover_text(&misfit.0);
-                            }
-                        }
-                    }
-                }
-            });
-        if ui.button("Factory parts").clicked()
-            && let Ok(parts) = build.install(Version::parts(draft.family, draft.version))
-        {
-            *draft = parts;
-        }
-    });
+    kit::section(ui, "Engine");
+    // Every version that fits, as the factory builds it in this car.
+    let fitting: Vec<(usize, usize)> = FAMILIES
+        .iter()
+        .enumerate()
+        .filter(|(f, _)| chassis.fit(*f).is_ok())
+        .flat_map(|(f, family)| (0..family.versions.len()).map(move |v| (f, v)))
+        .collect();
+    let mut chosen = (draft.family, draft.version);
+    let name = |(f, v): (usize, usize)| {
+        let version = &FAMILIES[f].versions[v];
+        format!("{} {}", version.code, version.name)
+    };
+    if kit::pick(ui, "Engine", &mut chosen, &fitting, name)
+        && let Ok(parts) = build.install(Version::parts(chosen.0, chosen.1))
+    {
+        *draft = parts;
+    }
+    if kit::button(ui, "Factory parts for it").clicked()
+        && let Ok(parts) = build.install(Version::parts(draft.family, draft.version))
+    {
+        *draft = parts;
+    }
     let family = draft.family();
-    ui.label(format!(
-        "{} bay: {:.0} × {:.0} × {:.0} cm",
-        chassis.bay.place,
-        chassis.bay.length * 100.0,
-        chassis.bay.width * 100.0,
-        chassis.bay.height * 100.0,
-    ))
-    .on_hover_text("Along the car, across it, and up: what fits in is all that limits a swap");
+    kit::note(ui, family.about);
+    kit::info(
+        ui,
+        &format!("{} bay", chassis.bay.place),
+        &format!(
+            "{:.0} × {:.0} × {:.0} cm",
+            chassis.bay.length * 100.0,
+            chassis.bay.width * 100.0,
+            chassis.bay.height * 100.0,
+        ),
+    );
+    let others = FAMILIES.len()
+        - (0..FAMILIES.len())
+            .filter(|&f| chassis.fit(f).is_ok())
+            .count();
+    if others > 0 {
+        kit::note(
+            ui,
+            &format!(
+                "{others} engine families don't fit in the {}: the bay's room is all that \
+                 limits a swap.",
+                chassis.name
+            ),
+        );
+    }
     match chassis.fit(draft.family) {
         Ok(fit) => {
             if fit.swap {
-                ui.label(format!(
-                    "The {} needs a swap subframe in the {}.",
-                    family.name, chassis.name
-                ));
+                kit::note(
+                    ui,
+                    &format!(
+                        "The {} needs a swap subframe in the {}.",
+                        family.name, chassis.name
+                    ),
+                );
             }
             if needs_adapter(build.gearbox, draft.family) {
-                ui.label(format!(
-                    "The {} gearbox needs an adapter plate for it.",
-                    GEARBOXES[build.gearbox].name
-                ));
+                kit::note(
+                    ui,
+                    &format!(
+                        "The {} gearbox needs an adapter plate for it.",
+                        GEARBOXES[build.gearbox].name
+                    ),
+                );
             }
         }
         Err(misfit) => {
-            ui.colored_label(WARNING, format!("The {} is {}.", family.name, misfit.0));
+            kit::warning(ui, &format!("The {} is {}.", family.name, misfit.0));
         }
     }
 }
@@ -579,133 +508,115 @@ fn engine(ui: &mut egui::Ui, garage: &mut Garage) {
 /// The engine's parts to choose from, a row per slot.
 fn parts(ui: &mut egui::Ui, garage: &mut Garage) {
     let draft = &mut garage.draft.1;
-    egui::Grid::new("parts").num_columns(2).show(ui, |ui| {
-        for (i, slot) in SLOTS.iter().enumerate() {
-            ui.label(slot.name).on_hover_text(slot.about);
-            let enabled = i != INTERCOOLER || draft.has_turbo();
-            let labels: Vec<String> = (0..slot.parts.len())
-                .map(|part| draft.label(i, part))
-                .collect();
-            let chosen = &mut draft.chosen[i];
-            ui.add_enabled_ui(enabled, |ui| {
-                egui::ComboBox::from_id_salt(slot.name)
-                    .width(220.0)
-                    .selected_text(&labels[*chosen])
-                    .show_ui(ui, |ui| {
-                        for (j, label) in labels.iter().enumerate() {
-                            ui.selectable_value(chosen, j, label);
-                        }
-                    });
-            });
-            ui.end_row();
-            if i == HEADERS && draft.header_room.is_finite() {
-                ui.label("");
-                ui.label(format!(
-                    "(room for {:.0} mm primaries around this engine)",
+    kit::section(ui, "Engine parts");
+    for (i, slot) in SLOTS.iter().enumerate() {
+        let enabled = i != INTERCOOLER || draft.has_turbo();
+        let labels: Vec<String> = (0..slot.parts.len())
+            .map(|part| draft.label(i, part))
+            .collect();
+        let chosen = &mut draft.chosen[i];
+        ui.add_enabled_ui(enabled, |ui| {
+            kit::choice(ui, slot.name, chosen, &labels);
+        });
+        if i == HEADERS && draft.header_room.is_finite() {
+            kit::note(
+                ui,
+                &format!(
+                    "Room for {:.0} mm primaries around this engine: longer ones are made \
+                     shorter.",
                     draft.header_room * 1e3
-                ))
-                .on_hover_text(
-                    "Longer primaries than fit beside the engine in this car are made \
-                     shorter",
-                );
-                ui.end_row();
-            }
+                ),
+            );
         }
-        ui.label("ECU").on_hover_text(
-            "Stock: fuel, spark, rev limiter and idle. Programmable: also switches cams and \
-             drives the cam phasers",
-        );
-        egui::ComboBox::from_id_salt("ecu")
-            .width(220.0)
-            .selected_text(draft.ecu.name())
-            .show_ui(ui, |ui| {
-                for model in EcuModel::ALL {
-                    ui.selectable_value(&mut draft.ecu, model, model.name());
-                }
-            });
-        ui.end_row();
+    }
+    kit::pick(ui, "ECU", &mut draft.ecu, &EcuModel::ALL, |model| {
+        model.name().to_string()
     });
+    kit::note(
+        ui,
+        "Stock ECU: fuel, spark, rev limiter and idle. Programmable: also switches cams and \
+         drives the cam phasers.",
+    );
 }
 
-/// What the parts make, and the button to build it: true when it was clicked.
+/// What the parts make, and building it: true when "Build" was chosen.
 fn build(ui: &mut egui::Ui, garage: &mut Garage, car: &Car) -> bool {
     let (draft, parts) = &garage.draft;
     let hardware = parts.hardware();
     let current = &car.setup.engine.build;
     let rebake = maps::fingerprint(&hardware) != maps::fingerprint(&current.hardware);
-    ui.label(format!(
-        "{}: {:.0} cm³, {:.1}:1, redline {:.0} rpm",
-        hardware.name,
-        hardware.displacement() * 1e6,
-        hardware.compression_ratio,
-        hardware.redline(),
-    ))
-    .on_hover_text("Where the valves would soon float, or the rods' load near its limit");
-    let family = parts.family();
-    ui.label(format!(
-        "{}: {}, {:.0} × {:.0} × {:.0} cm, {:.0} kg",
-        family.name,
-        family.layout.name(),
-        family.length * 100.0,
-        family.width * 100.0,
-        family.height * 100.0,
-        family.built_mass(&hardware),
-    ))
-    .on_hover_text("Length along the crank, width and height: what it takes to fit it");
     let new_engine = *parts != car.setup.engine.parts;
     let changed = new_engine || *draft != car.setup.build;
-    ui.label(if !changed {
-        "This is the car as it's built."
-    } else if !new_engine {
-        "The engine stays as it is."
-    } else if rebake && maps::is_stock(&hardware) {
-        "A factory engine: it fits right away."
-    } else if rebake {
-        "The cylinder side changes: its maps need baking (a few seconds), unless it was \
-         built before."
+    let mut build_now = false;
+    if let Some(progress) = garage.job.as_ref().map(|job| job.work.progress()) {
+        kit::progress(ui, "Baking the maps…", progress);
+        if kit::button(ui, "Cancel").clicked() {
+            garage.job.take().expect("a job").work.cancel();
+            garage.status = "Cancelled.".to_string();
+        }
     } else {
-        "Only bolt-on parts change: it fits right away."
-    });
+        let fits = garage.draft.0.wheel_misfit().is_none();
+        build_now = ui
+            .add_enabled_ui(changed && fits, |ui| kit::button(ui, "Build it"))
+            .inner
+            .clicked();
+        let revert = ui
+            .add_enabled_ui(changed, |ui| kit::button(ui, "Back to how it is"))
+            .inner
+            .clicked();
+        if revert {
+            garage.draft = (car.setup.build.clone(), car.setup.engine.parts.clone());
+        }
+    }
+    kit::note(
+        ui,
+        if !changed {
+            "This is the car as it's built."
+        } else if !new_engine {
+            "The engine stays as it is."
+        } else if rebake && maps::is_stock(&hardware) {
+            "A factory engine: it fits right away."
+        } else if rebake {
+            "The cylinder side changes: its maps need baking (a few seconds), unless it was \
+             built before."
+        } else {
+            "Only bolt-on parts change: it fits right away."
+        },
+    );
+    if !garage.status.is_empty() {
+        kit::note(ui, &garage.status);
+    }
+    kit::toggle(ui, "Factory tune for the new parts", &mut garage.retune);
+    let (_, parts) = &garage.draft;
     if hardware.has_cam_control() && !parts.ecu.cam_control() {
-        ui.colored_label(
-            WARNING,
+        kit::warning(
+            ui,
             "The stock ECU can't drive the switching cam or the phasers: they stay on the \
              mild profile, at rest.",
         );
     }
-    ui.checkbox(&mut garage.retune, "Factory tune for the new parts")
-        .on_hover_text("Otherwise the ECU keeps its tune, made for the old parts");
-
-    let mut build_now = false;
-    if let Some(progress) = garage.job.as_ref().map(|job| job.work.progress()) {
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::ProgressBar::new(progress)
-                    .desired_width(200.0)
-                    .text("Baking the maps…"),
-            );
-            if ui.button("Cancel").clicked() {
-                garage.job.take().expect("a job").work.cancel();
-                garage.status = "Cancelled.".to_string();
-            }
-        });
-    } else {
-        ui.horizontal(|ui| {
-            let fits = garage.draft.0.wheel_misfit().is_none();
-            build_now = ui
-                .add_enabled(changed && fits, egui::Button::new("Build"))
-                .clicked();
-            if ui
-                .add_enabled(changed, egui::Button::new("Revert"))
-                .clicked()
-            {
-                garage.draft = (car.setup.build.clone(), car.setup.engine.parts.clone());
-            }
-        });
-    }
-    if !garage.status.is_empty() {
-        ui.label(&garage.status);
-    }
+    kit::info(
+        ui,
+        &hardware.name,
+        &format!(
+            "{:.0} cm³, {:.1}:1, redline {:.0}",
+            hardware.displacement() * 1e6,
+            hardware.compression_ratio,
+            hardware.redline(),
+        ),
+    );
+    let family = parts.family();
+    kit::info(
+        ui,
+        family.layout.name(),
+        &format!(
+            "{:.0} × {:.0} × {:.0} cm, {:.0} kg",
+            family.length * 100.0,
+            family.width * 100.0,
+            family.height * 100.0,
+            family.built_mass(&hardware),
+        ),
+    );
     build_now
 }
 
@@ -713,27 +624,29 @@ fn build(ui: &mut egui::Ui, garage: &mut Garage, car: &Car) -> bool {
 fn condition(ui: &mut egui::Ui, car: &mut Car) {
     let cylinders = car.setup.engine.build.hardware.cylinders as usize;
     let damage = &car.drivetrain.engine.damage;
-    ui.horizontal(|ui| {
-        ui.label("Condition:");
-        let worn: Vec<String> = damage
-            .parts(cylinders)
-            .into_iter()
-            .filter(|(_, wear)| *wear >= 0.005)
-            .take(4)
-            .map(|(name, wear)| format!("{name} {:.0} %", wear * 100.0))
-            .collect();
-        ui.label(if worn.is_empty() {
-            "like new".to_string()
+    kit::section(ui, "Condition");
+    let worn: Vec<String> = damage
+        .parts(cylinders)
+        .into_iter()
+        .filter(|(_, wear)| *wear >= 0.005)
+        .take(4)
+        .map(|(name, wear)| format!("{name} {:.0} %", wear * 100.0))
+        .collect();
+    kit::note(
+        ui,
+        &if worn.is_empty() {
+            "The engine is like new.".to_string()
         } else {
-            worn.join(", ")
-        });
-    });
+            format!("Worn: {}", worn.join(", "))
+        },
+    );
     for failure in damage.failures(cylinders) {
-        ui.colored_label(egui::Color32::from_rgb(255, 90, 70), failure);
+        kit::warning(ui, &failure);
     }
-    let repair = egui::Button::new("Repair");
+    let broken = damage.worst(cylinders) > 0.0;
     if ui
-        .add_enabled(damage.worst(cylinders) > 0.0, repair)
+        .add_enabled_ui(broken, |ui| kit::button(ui, "Repair the engine"))
+        .inner
         .clicked()
     {
         car.drivetrain.engine.damage = Default::default();
@@ -741,18 +654,12 @@ fn condition(ui: &mut egui::Ui, car: &mut Car) {
     let worn = (car.corners.iter())
         .map(|corner| corner.tread.wear())
         .fold(0.0, f32::max);
-    ui.horizontal(|ui| {
-        ui.label(format!("Tires: worn {:.0} % at most", worn * 100.0));
-        if ui
-            .button("New tires")
-            .on_hover_text("The same tires, new and cold")
-            .clicked()
-        {
-            for corner in &mut car.corners {
-                corner.tread = Tread::default();
-            }
+    let tires = format!("worn {:.0} %", worn * 100.0);
+    if kit::button_with(ui, "New tires (the same, new and cold)", &tires).clicked() {
+        for corner in &mut car.corners {
+            corner.tread = Tread::default();
         }
-    });
+    }
 }
 
 /// Builds the draft: right away if the engine's maps are at hand (the car's own, the

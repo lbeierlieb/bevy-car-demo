@@ -144,6 +144,8 @@ struct Scopes {
     this: Vec<(u8, egui::LayerId)>,
     /// The widget that had the focus in the last pass.
     focused: Option<egui::Id>,
+    /// The focus moved since the last pass: scroll to it.
+    scroll: bool,
     /// The device last used: no ring while it's the mouse.
     device: Device,
 }
@@ -155,6 +157,37 @@ pub fn device(ctx: &egui::Context) -> Device {
 
 fn scopes_id() -> egui::Id {
     egui::Id::new("menu scopes")
+}
+
+/// Changes what the callbacks keep.
+fn scopes_mut(ctx: &egui::Context) -> ScopesGuard<'_> {
+    let scopes = ctx.data_mut(|d| d.get_temp(scopes_id()).unwrap_or_default());
+    ScopesGuard { ctx, scopes }
+}
+
+struct ScopesGuard<'a> {
+    ctx: &'a egui::Context,
+    scopes: Scopes,
+}
+
+impl std::ops::Deref for ScopesGuard<'_> {
+    type Target = Scopes;
+    fn deref(&self) -> &Scopes {
+        &self.scopes
+    }
+}
+
+impl std::ops::DerefMut for ScopesGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Scopes {
+        &mut self.scopes
+    }
+}
+
+impl Drop for ScopesGuard<'_> {
+    fn drop(&mut self) {
+        let scopes = std::mem::take(&mut self.scopes);
+        self.ctx.data_mut(|d| d.insert_temp(scopes_id(), scopes));
+    }
 }
 
 /// Hooks into egui's passes: each pass starts by scrolling a newly focused widget into
@@ -180,11 +213,8 @@ pub(crate) fn hook(ctx: &egui::Context) {
             let focused = ctx.memory(|m| m.focused());
             let mut scopes: Scopes = ctx.data_mut(|d| d.get_temp(scopes_id()).unwrap_or_default());
             scopes.last = std::mem::take(&mut scopes.this);
-            if focused != scopes.focused
-                && let Some(response) = focused.and_then(|id| ctx.read_response(id))
-            {
-                response.scroll_to_me(None);
-            }
+            // A newly focused widget is scrolled into view by its menu (`claim`).
+            scopes.scroll = focused != scopes.focused;
             scopes.focused = focused;
             ctx.data_mut(|d| d.insert_temp(scopes_id(), scopes));
         }),
@@ -214,6 +244,11 @@ pub(crate) fn hook(ctx: &egui::Context) {
                 egui::Order::Tooltip,
                 egui::Id::new("focus ring"),
             ));
+            // Only what's in view of it (a row half scrolled out of its list).
+            if !response.interact_rect.is_positive() {
+                return;
+            }
+            let painter = painter.with_clip_rect(response.interact_rect.expand(6.0));
             painter.rect_stroke(
                 response.rect.expand(2.5),
                 7.0,
@@ -240,9 +275,8 @@ pub fn claim(ui: &egui::Ui, rank: u8) {
         return;
     }
     let focused = ctx.memory(|m| m.focused());
-    let here = focused
-        .and_then(|id| ctx.read_response(id))
-        .is_some_and(|r| r.layer_id == layer);
+    let response = focused.and_then(|id| ctx.read_response(id));
+    let here = response.as_ref().is_some_and(|r| r.layer_id == layer);
     if here || (focused.is_some() && ctx.text_edit_focused()) {
         return;
     }
@@ -252,6 +286,22 @@ pub fn claim(ui: &egui::Ui, rank: u8) {
         }
         m.move_focus(egui::FocusDirection::Next);
     });
+}
+
+/// Called at the start of a menu's scrolling list: a widget in it that got the focus since
+/// the last pass is scrolled into view (a scroll area only takes what's asked inside it).
+pub fn follow_focus(ui: &egui::Ui) {
+    let ctx = ui.ctx();
+    let layer = ui.layer_id();
+    let Some(response) = ctx
+        .memory(|m| m.focused())
+        .and_then(|id| ctx.read_response(id))
+    else {
+        return;
+    };
+    if response.layer_id == layer && std::mem::take(&mut scopes_mut(ctx).scroll) {
+        response.scroll_to_me(None);
+    }
 }
 
 /// Whether a menu holds the focus and whether it's a text field, from the last pass.

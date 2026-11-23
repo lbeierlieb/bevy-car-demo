@@ -117,6 +117,7 @@ impl<'a> Panel<'a> {
                             .max_height(most_height - 32.0 - TITLE - 16.0 - prompt_height)
                             .auto_shrink([false, true])
                             .show(ui, |ui| {
+                                nav::follow_focus(ui);
                                 ui.spacing_mut().item_spacing.y = 6.0;
                                 contents(ui)
                             })
@@ -314,6 +315,33 @@ pub fn choice(ui: &mut Ui, label: &str, index: &mut usize, options: &[String]) -
     arrow(painter, pos2(text_left - 12.0, y), -1.0, *index > 0);
     arrow(painter, pos2(right - 4.0, y), 1.0, *index + 1 < count);
     response
+}
+
+/// `choice` over any values: `options` in order, each named by `name`. Returns whether
+/// the value changed.
+pub fn pick<T: Copy + PartialEq>(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut T,
+    options: &[T],
+    name: impl Fn(T) -> String,
+) -> bool {
+    let names: Vec<String> = options.iter().map(|&o| name(o)).collect();
+    let mut index = options.iter().position(|o| o == value).unwrap_or(0);
+    let changed = choice(ui, label, &mut index, &names).changed();
+    if changed && let Some(&new) = options.get(index) {
+        *value = new;
+    }
+    changed
+}
+
+/// A line of warning, in red.
+pub fn warning(ui: &mut Ui, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(14.0)
+            .color(Color32::from_rgb(255, 110, 90)),
+    );
 }
 
 /// A small triangle pointing left (-1) or right (1), dimmed when it can't go further.

@@ -12,7 +12,6 @@ use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, FRAC_PI_6};
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Align2, RichText};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::{Garage, parts_shop, start, take_draft};
@@ -20,9 +19,10 @@ use crate::audio::{EngineAudio, EngineRun};
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car};
 use crate::looks::{Looks, Motion};
+use crate::menu::kit::{self, Panel, Place};
 use crate::physics::engine::families::Layout;
 use crate::physics::engine::parts::Parts;
-use crate::shops::{AtShop, ShopKind, Shops, shop_window};
+use crate::shops::{AtShop, SceneBack, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
 use crate::wheels::Wheel;
 
@@ -275,11 +275,12 @@ fn shop(
     let mut enter = false;
     let ctx = contexts.ctx_mut()?;
     shop_window(ctx, &shops, &mut at, ShopKind::Parts, |ui, _| {
-        ui.label(
+        enter = kit::button(ui, "Onto the lift").clicked();
+        kit::note(
+            ui,
             "A workshop with a two-post lift: engines and their parts, gearboxes, \
              suspension, rims and tires; repairs.",
         );
-        enter = ui.button(RichText::new("Onto the lift").strong()).clicked();
     });
     let Some(marker) = marker.filter(|_| enter) else {
         return Ok(());
@@ -1121,31 +1122,28 @@ fn window(
     active: Res<ActiveCar>,
     mut cars: Query<(Entity, &mut Car)>,
     (mut away, mut audio): (ResMut<Away>, ResMut<EngineAudio>),
-    mut cameras: Query<(&ChaseCamera, &mut Projection)>,
+    (mut cameras, mut back): (Query<(&ChaseCamera, &mut Projection)>, ResMut<SceneBack>),
 ) -> Result {
     let Some((entity, mut car)) = super::active(&mut cars, active.0) else {
         return Ok(());
     };
-    let mut out = false;
+    let mut out = back.take();
     let mut build_now = false;
-    egui::Window::new("Parts shop")
-        .anchor(Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
-        .collapsible(false)
-        .resizable(false)
-        .show(contexts.ctx_mut()?, |ui| {
+    let ctx = contexts.ctx_mut()?;
+    Panel::new("parts shop", "Parts shop")
+        .place(Place::Right)
+        .width(470.0)
+        .back(Some("Back to the car"))
+        .show(ctx, |ui| {
+            if kit::button(ui, "Back to the car").clicked() {
+                out = true;
+            }
             build_now = parts_shop(ui, &mut garage, &mut car);
-            ui.label(
-                RichText::new(
-                    "The engine picked stands in front of the car, the tires in the rack. \
-                     Drag to look round, the mouse wheel to go nearer.",
-                )
-                .small()
-                .weak(),
+            kit::note(
+                ui,
+                "The engine picked stands in front of the car, the tires in the rack. Drag \
+                 to look round, the mouse wheel to go nearer.",
             );
-            ui.separator();
-            out = ui
-                .button(RichText::new("Back to the car").strong())
-                .clicked();
         });
     if build_now {
         start(&mut commands, &terrain, &mut garage, entity, &mut car);
