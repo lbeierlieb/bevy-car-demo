@@ -45,6 +45,9 @@ pub struct Problem {
     pub chains: Vec<Vec<usize>>,
     /// Heights that must be exactly so: (height, value).
     pub pins: Vec<(usize, f64)>,
+    /// Heights tied to a mix of others: (heights, coefficients, weight, target), costing
+    /// weight × (coefficients · heights − target)².
+    pub ties: Vec<([usize; 3], [f64; 3], f64, f64)>,
 }
 
 impl Problem {
@@ -65,22 +68,24 @@ impl Problem {
             pinned[i] = Some(value);
             x[i] = value;
         }
-        // Each bend as coefficients on its heights and a weight.
-        let bends: Vec<([usize; 3], [f64; 3], f64)> = self
+        // Each bend as coefficients on its heights, a weight and a target (none), and the
+        // ties after them.
+        let bends: Vec<([usize; 3], [f64; 3], f64, f64)> = self
             .bends
             .iter()
             .map(|&(v, [da, db], stiffness)| {
                 let (da, db) = (da.max(MIN_SPACING), db.max(MIN_SPACING));
                 let (a, c) = (1.0 / da, 1.0 / db);
-                (v, [a, -(a + c), c], stiffness * 2.0 / (da + db))
+                (v, [a, -(a + c), c], stiffness * 2.0 / (da + db), 0.0)
             })
+            .chain(self.ties.iter().copied())
             .collect();
         let mut data_of = vec![Vec::new(); n];
         for (t, &(i, _, _)) in self.data.iter().enumerate() {
             data_of[i].push(t);
         }
         let mut bends_of = vec![Vec::new(); n];
-        for (t, (v, _, _)) in bends.iter().enumerate() {
+        for (t, (v, _, _, _)) in bends.iter().enumerate() {
             for &i in v {
                 if !bends_of[i].contains(&t) {
                     bends_of[i].push(t);
@@ -127,12 +132,13 @@ impl Problem {
                                 continue;
                             }
                             stamp[t] = stamps;
-                            let (v, c, k) = bends[t];
+                            let (v, c, k, target) = bends[t];
                             for p in 0..3 {
                                 let lp = local[v[p]];
                                 if lp == usize::MAX {
                                     continue;
                                 }
+                                rhs[lp] += k * c[p] * target;
                                 for q in 0..3 {
                                     let lq = local[v[q]];
                                     let value = k * c[p] * c[q];
@@ -197,7 +203,7 @@ impl Problem {
     /// roads overlap). `local` must be all `usize::MAX`, and is left so.
     fn banded_chains(
         &self,
-        bends: &[([usize; 3], [f64; 3], f64)],
+        bends: &[([usize; 3], [f64; 3], f64, f64)],
         bends_of: &[Vec<usize>],
         local: &mut [usize],
     ) -> Vec<Vec<usize>> {

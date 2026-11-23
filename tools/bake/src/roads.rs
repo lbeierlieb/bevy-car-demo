@@ -25,6 +25,12 @@ const UNDER_DECK: f64 = 1.05;
 const UNDER_DECK_REACH: f64 = 0.8;
 /// Weight of the lidar on a bridge, where it shows the ground under the deck.
 const BRIDGE_TRUST: f64 = 1e-4;
+/// A road's point this far inside another road on the ground (m) is tied to its surface
+/// (`tie_overlaps`)...
+const TIE_INSIDE: f64 = 0.25;
+/// ...with this weight per metre (shared by the five places across), against the
+/// lidar's 1 (heavy: they're one surface).
+const TIE: f64 = 30.0;
 /// Where a road runs on into a wider one, it widens to it over this many metres per metre
 /// of difference (each edge moving out 1 in 16)...
 const TAPER_PER_METRE: f64 = 8.0;
@@ -536,6 +542,7 @@ pub fn profiles(roads: &mut [Road], pins: &HashMap<i64, f64>, lidar: impl Fn(Poi
         }
         problem.chains.push(chain);
     }
+    tie_overlaps(roads, &vars, &mut problem);
     let heights = problem.solve();
     for (road, ids) in roads.iter_mut().zip(&vars) {
         road.heights = if road.drivable() {
@@ -544,6 +551,97 @@ pub fn profiles(roads: &mut [Road], pins: &HashMap<i64, f64>, lidar: impl Fn(Poi
             Vec::new()
         };
     }
+}
+
+/// Where a road's surface lies well inside another road on the ground (where they meet,
+/// cross or run alongside, mapped as touching or not), it's tied to that road's surface
+/// there: the game draws overlapping roads as one, blended, and two at different heights
+/// folded steeply. Looked at five places across each point (the edges overlap a road
+/// alongside first), one tie per place and other road, from its nearest segment.
+fn tie_overlaps(roads: &[Road], vars: &[Vec<usize>], problem: &mut Problem) {
+    const CELL: f64 = 8.0;
+    let cell = |(x, z): Point| ((x / CELL).floor() as i32, (z / CELL).floor() as i32);
+    let on_ground = |r: &Road| r.drivable() && !r.bridge;
+    // Segments by the cells they reach into.
+    let mut cells: HashMap<(i32, i32), Vec<(usize, usize)>> = HashMap::new();
+    for (r, road) in roads.iter().enumerate().filter(|(_, r)| on_ground(r)) {
+        for (i, w) in road.points.windows(2).enumerate() {
+            let half = road.widths[i].max(road.widths[i + 1]) / 2.0;
+            let lo = cell((w[0].0.min(w[1].0) - half, w[0].1.min(w[1].1) - half));
+            let hi = cell((w[0].0.max(w[1].0) + half, w[0].1.max(w[1].1) + half));
+            for cx in lo.0..=hi.0 {
+                for cz in lo.1..=hi.1 {
+                    cells.entry((cx, cz)).or_default().push((r, i));
+                }
+            }
+        }
+    }
+    let before = problem.ties.len();
+    for (a, road) in roads.iter().enumerate().filter(|(_, r)| on_ground(r)) {
+        let gaps: Vec<f64> = road
+            .points
+            .windows(2)
+            .map(|w| distance(w[0], w[1]))
+            .collect();
+        for (i, &centre) in road.points.iter().enumerate() {
+            let length =
+                (gaps.get(i.wrapping_sub(1)).unwrap_or(&0.0) + gaps.get(i).unwrap_or(&0.0)) / 2.0;
+            let (tx, tz) = tangent(&road.points, i);
+            let half = road.widths[i] / 2.0;
+            // Across the road: its edges overlap a road alongside before its middle does.
+            for share in [-0.95, -0.5, 0.0, 0.5, 0.95] {
+                let side = share * half;
+                let p = (centre.0 - tz * side, centre.1 + tx * side);
+                // Per other road: (how far inside its edge, segment, along it, off its
+                // centre).
+                let mut best: Vec<(usize, f64, usize, f64, f64)> = Vec::new();
+                for &(b, j) in cells.get(&cell(p)).into_iter().flatten() {
+                    if b == a {
+                        continue;
+                    }
+                    let other = &roads[b];
+                    let (q0, q1) = (other.points[j], other.points[j + 1]);
+                    let (dx, dz) = (q1.0 - q0.0, q1.1 - q0.1);
+                    let len2 = dx * dx + dz * dz;
+                    if len2 < 1e-12 {
+                        continue;
+                    }
+                    let t = ((p.0 - q0.0) * dx + (p.1 - q0.1) * dz) / len2;
+                    if !(0.0..=1.0).contains(&t) {
+                        continue;
+                    }
+                    let off = (p.0 - q0.0 - dx * t).hypot(p.1 - q0.1 - dz * t);
+                    let reach =
+                        (other.widths[j] + (other.widths[j + 1] - other.widths[j]) * t) / 2.0;
+                    let inside = reach - off;
+                    let shared = [vars[b][j], vars[b][j + 1]].contains(&vars[a][i]);
+                    if inside < TIE_INSIDE || shared {
+                        continue;
+                    }
+                    match best.iter_mut().find(|e| e.0 == b) {
+                        Some(e) if e.1 >= inside => {}
+                        Some(e) => *e = (b, inside, j, t, off),
+                        None => best.push((b, inside, j, t, off)),
+                    }
+                }
+                for (b, _, j, t, off) in best {
+                    let other = &roads[b];
+                    // Our surface there (our centre less our crown's fall) = the other's
+                    // (its centre between the two points, less its crown's fall).
+                    problem.ties.push((
+                        [vars[a][i], vars[b][j], vars[b][j + 1]],
+                        [1.0, -(1.0 - t), -t],
+                        TIE * length.max(0.5) / 5.0,
+                        road.crown() * side.abs() - other.crown() * off,
+                    ));
+                }
+            }
+        }
+    }
+    eprintln!(
+        "{} places on roads tied to roads they overlap",
+        problem.ties.len() - before
+    );
 }
 
 /// The terrain grid: vertices `cell` apart, `cells_x` × `cells_z` cells, centred on the
@@ -724,6 +822,31 @@ mod tests {
 
     fn road(width: f64, from: (i64, Point), to: (i64, Point)) -> Road {
         Road::new(RoadKind::Asphalt, width, false, &[from, to])
+    }
+
+    #[test]
+    fn roads_alongside_each_other_meet_where_they_overlap() {
+        // Two 4 m roads 3 m apart, not connected, overlapping by a metre; the lidar is a
+        // metre higher under the second.
+        let line = |z: f64, first: i64| -> Vec<(i64, Point)> {
+            (0..=10)
+                .map(|k| (first + k, (k as f64 * 10.0, z)))
+                .collect()
+        };
+        let mut roads = vec![
+            Road::new(RoadKind::Asphalt, 4.0, false, &line(0.0, 1)),
+            Road::new(RoadKind::Asphalt, 4.0, false, &line(3.0, 100)),
+        ];
+        profiles(&mut roads, &HashMap::new(), |(_, z)| {
+            if z > 1.5 { 11.0 } else { 10.0 }
+        });
+        // In the middle of the overlap, 1.5 m off each centreline, the two surfaces.
+        let surface = |road: &Road| {
+            let i = road.points.len() / 2;
+            road.heights[i] - road.crown() * 1.5
+        };
+        let (a, b) = (surface(&roads[0]), surface(&roads[1]));
+        assert!((a - b).abs() < 0.05, "{a} against {b}");
     }
 
     #[test]
