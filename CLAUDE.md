@@ -20,7 +20,7 @@ repo, so everything worth knowing between sessions belongs here.
 The game is a library (`src/lib.rs`) and apps, each the list of plugins it adds: the
 **sandbox** (`src/main.rs`: the shared `CorePlugin` (`WorldPlugin` (terrain, obstacles,
 simulation, traffic: all the server has too), scenery, input, driving, visuals, camera,
-HUD, map, sound, egui), help (controls screen, hints), stock coupé, R reset,
+HUD, map, sound, egui), help (quick start, hints), stock coupé, R reset,
 gizmos, 2 telemetry, the central menu (Esc), shops (online), F11 fullscreen in all apps). The career was removed for the multiplayer work (see
 "Multiplayer"). Keep it that way: no mode flags; something only one app has is a plugin
 of its own (e.g. `car::ResetPlugin`, `ui::PanelPlugin`), and
@@ -47,8 +47,10 @@ the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars)
 ## Beginner help (agreed with the user, 2026-11-20)
 
 Made to be easy to pick up: `help.rs` (`HelpPlugin`, sandbox). At every start a
-controls screen (`egui::Modal`; a click anywhere or Esc closes it, H reopens it; the
-start menu waits for it) lists the keyboard controls; the telemetry panel (2) is hidden by default. Hints over the road say what's wrong, what to press and what
+quick start (a `kit::Panel`, rank 40; Esc or "Let's drive" closes it, H reopens it; the
+start menu waits for it; made a quick start at the user's wish, 2026-11-23) has only the
+essentials: how to drive off (neutral, parking brake on: E, Space, W), W/S, A/D, E/Q,
+Space, R and Esc (`QUICK_START`); the rest is in the menu; the telemetry panel (2) is hidden by default. Hints over the road say what's wrong, what to press and what
 that does: gas with the parking brake on, reverse asked for while rolling
 (`car::ReverseRefused`, a message from `drive`), on the rev limiter in first gear (only
 there, at the user's wish, 2026-11-22), and
@@ -89,9 +91,14 @@ As built (`src/menu/`):
   focused widget from inside their scroll area (`follow_focus`: a scroll area ignores
   targets set before it); the ring is drawn at the end of the pass, clipped to what's in
   view, not while the mouse is in use. While a menu has the focus, `ShieldPlugin` keeps
-  keys from the game (egui wants the keyboard) and `read_wheel` drops wheel button
-  presses (pedals, steering and gates go on). "Back" and the menu button are taken in
-  order (`MenuSet`: Top = central menu and controls screen, Windows = shops, scenes,
+  keys from the game (egui wants the keyboard) and `read_wheel` (which runs before the
+  shield) takes nothing from keys or pad/wheel buttons, pedal actions included (a key
+  bound to throttle revved the engine in the menu, 2026-11-23); axes and the shifter's
+  gates go on. Text fields are `kit::text_field` (asked for by the user, 2026-11-23):
+  a row the arrows pass over; choose starts typing, Enter keeps it, Esc (the field takes
+  Esc itself: egui would drop the focus and `claim` give it to the first row) throws it
+  away, the focus back on the row; a pad's or wheel's back while typing is Esc. "Back" and the menu button are taken in
+  order (`MenuSet`: Top = central menu and quick start, Windows = shops, scenes,
   lobbies, the map, Open = a back nobody took opens the central menu).
 - `kit.rs`: `Panel` (title, scrolling contents, prompt line naming the device's buttons;
   `Place::Center` or `Right`), rows: `button`, `button_with`, `submenu`, `toggle`,
@@ -104,8 +111,8 @@ As built (`src/menu/`):
   (reset, map, camera: pressed for the driver through `input::MenuPresses` as the
   wheel's next frame), Settings (Driving aids (+ traffic alone), Controls, Sound
   (`audio::SoundSettings`: on/off, volume, `sound.cfg`), Display (UI size, fullscreen)),
-  an event round's restart/leave, online players/leave or join, help and credits, quit,
-  and "Back to driving" at the bottom. No engine or parking brake rows, no fullscreen on
+  an event round's restart/leave, online players/leave or join, help and credits, quit
+  ("Back to driving" removed at the user's wish, 2026-11-23: the prompt line says how). No engine or parking brake rows, no fullscreen on
   Main (the user: not wanted there). Controls: the profile in use (a choice), its name,
   its bindings (with a guided setup of the menu buttons, fill with the keyboard's
   defaults, clear), force feedback, the fixed keys. Going into a screen starts at its
@@ -114,8 +121,9 @@ As built (`src/menu/`):
   its widget is drawn).
 - **Control profiles** (asked for by the user, 2026-11-23; `input.rs`): keys are
   bindings like pad inputs (`Input::Key`/`Input::Pad`); `WheelConfig::profiles` (4) and
-  `active`; the first is `Profile::keyboard()` (WASD and arrows, Space, Q/E, I, R, C, B,
-  M), the others start empty ("set one up for a gamepad, one for a wheel"); each action
+  `active`; the first is `Profile::keyboard()` (WASD (no arrows since 2026-11-23, at the
+  user's wish: they're the menus'; a `wheel.cfg` without `keys 2` has them taken out of
+  the first profile), Space, Q/E, I, R, C, B, M), the others start empty ("set one up for a gamepad, one for a wheel"); each action
   up to `PER_ACTION` (2) inputs, binding a third drops the oldest, an input belongs to one
   action per profile. Only the profile in use drives (`read_wheel` turns all of it into
   `WheelInput`; `drive`, the camera, reset and the map read only that). Steering by keys
@@ -207,7 +215,7 @@ of a village road: `EDITCAM="-2986,-1954,45,0,-70"`, the road at (1000, 381). Sa
 or baking in a shot writes the real map and terrain files: `git checkout map assets`.
 `PLACE="x,z,frame"` puts the driven car on the road nearest that map point (joined, at frame 150 or later, or the join moves it: e.g. by a shop, `JOIN=127.0.0.1 NAME=Anna PLACE="-1476,-1180,150"`, 220 frames). Give a shot
 its own config dir (`XDG_CONFIG_HOME=<scratch>/cfg`) for fresh settings. The start menu
-is closed in shots unless `MENU=1`, the controls screen before it unless `INTRO=1`; `JOIN=127.0.0.1 NAME=Anna` joins a server at once.
+is closed in shots unless `MENU=1`, the quick start before it unless `INTRO=1`; `JOIN=127.0.0.1 NAME=Anna` joins a server at once.
 Two players: start the server (`target/sandbox/release-dev/server`, throwaway
 certificate, in the background with `nohup`), then two shots with `CAR_SIM_INSECURE=1`
 and their own config dirs, the second started a few seconds after the first, more

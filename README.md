@@ -225,13 +225,15 @@ also has the packages alone: `nix build .#server` and `nix build .#web`.
 
 ## Controls (sandbox)
 
-The game starts with a screen listing the controls (Esc or "Let's drive" closes it, H
-brings it back). **Esc** (or a gamepad's Start, or a wheel button bound to it) opens the
+The game starts with a quick start: the few keys needed to drive off (Esc or "Let's
+drive" closes it, H brings it back). **Esc** (or a gamepad's Start, or a wheel button bound to it) opens the
 menu: in-game actions (resetting the car, the map, the camera), settings (driving aids,
 controls with four switchable profiles of bindings, force feedback, sound, display), the
 players online, help. Every menu and shop works with the arrows, Enter and Esc, a gamepad's
 D-pad (or left stick), A and B, or a wheel's buttons bound to the menu, as well as with
-the mouse. Menus and text grow with the window, whatever the display's scaling (the menu
+the mouse; while a menu has the focus, no key or button reaches the car (pedals and a
+wheel's steering do). A text field is a row like any other: choose starts typing, Enter
+keeps it, Esc throws it away. Menus and text grow with the window, whatever the display's scaling (the menu
 has a size setting on top). When
 the car won't do what you seem to want, a hint over the road says why and what to
 press: giving gas with the parking brake on or in neutral, asking for reverse while
@@ -239,16 +241,18 @@ rolling, bouncing off the rev limiter in first gear, a stalled or wrecked engine
 empty tank, or a few seconds of gas without moving (stuck: R).
 
 The keys below are the keyboard profile's defaults (Esc, H, T, 1, 2 and F11 are fixed).
+The arrows don't drive (they work the menus and the map); bind them in a profile if you
+like.
 
 | Key | Action |
 | --- | --- |
-| W / S, arrows | Throttle; brake |
+| W / S | Throttle; brake |
 | Q / E | Shift down / up (R, N, 1 and up; reverse only at a standstill) |
 | I | Start the engine after a stall (only with a clutch pedal) |
 | A / D | Steer |
 | Space | Parking brake on/off (cars start with it on) |
 | R | Call the rescue helicopter: it lifts the car and sets it down on the nearest road (in its lane), as it is (fuel, tires and wear stay); about 10 s near a road |
-| H | The controls screen |
+| H | The quick start |
 | Esc | The menu (everything else is in it) |
 | 1 / 2 | Toggle gizmos (with the car's map coordinates) / telemetry panel |
 | F11 | Fullscreen (the browser's on the web; all F keys go to the browser there) |
@@ -357,7 +361,7 @@ tire grip force, cyan for roll centres.
 | `src/visuals.rs` | Bodies, wheels and suspension posed from the simulation |
 | `src/debug.rs`, `src/ui.rs`, `src/camera.rs` | Gizmos, telemetry panel, chase and driver cameras |
 | `src/hud.rs` | Speed, gear and rev counter HUD |
-| `src/help.rs` | The controls screen and the hints for beginners |
+| `src/help.rs` | The quick start and the hints for beginners |
 | `src/menu/` | The menus' scale, fonts and look (`kit.rs`), working them with any device (`nav.rs`), and the central menu (`central.rs`) |
 | `src/map.rs` | Map of the whole area with roads, houses and the cars |
 | `src/cockpit.rs` | Interior for the driver's view: dashboard, steering wheel, gauges |
