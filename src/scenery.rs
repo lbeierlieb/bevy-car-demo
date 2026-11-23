@@ -3,6 +3,7 @@
 //! ground, road ribbons, and objects (houses, trees and fences).
 
 use bevy::light::NotShadowCaster;
+use bevy::platform::time::Instant;
 use bevy::prelude::*;
 
 use crate::buildings::Buildings;
@@ -16,8 +17,10 @@ const LOAD_DISTANCE: f32 = 560.0;
 /// Loaded chunks are dropped beyond this, a little further out so they don't flicker
 /// in and out at the edge.
 const UNLOAD_DISTANCE: f32 = 660.0;
-/// Chunks built per frame once the first view is loaded.
-const BUILDS_PER_FRAME: usize = 6;
+/// Once the first view is loaded, chunks are built each frame until this much time has
+/// gone (s), at least one: a chunk in a village with its roads cut out of the ground
+/// takes about 3.5 ms natively, one in the fields a fraction of that.
+const BUILD_BUDGET: f32 = 0.004;
 
 pub struct SceneryPlugin;
 
@@ -124,16 +127,15 @@ fn stream(
         .filter(|&(_, d)| d < LOAD_DISTANCE)
         .collect();
     wanted.sort_by(|a, b| a.1.total_cmp(&b.1));
-    // Load the whole first view at once, then a few chunks per frame, nearest first.
+    // Load the whole first view at once, then nearest first within the frame's budget.
     let first_view = scenery.loaded.iter().all(Option::is_none);
-    let budget = if first_view {
-        usize::MAX
-    } else {
-        BUILDS_PER_FRAME
-    };
-    for (index, _) in wanted.into_iter().take(budget) {
+    let start = Instant::now();
+    for (index, _) in wanted {
         let entities = build_chunk(&mut commands, &terrain, &scenery, &mut meshes, index);
         scenery.loaded[index] = Some(entities);
+        if !first_view && start.elapsed().as_secs_f32() > BUILD_BUDGET {
+            break;
+        }
     }
 }
 
