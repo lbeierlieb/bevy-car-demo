@@ -1,7 +1,7 @@
 //! Roads as their own geometry: centrelines smoothed through the mapped points, heights
 //! along them (`profile.rs`), a crown across, and the terrain cut and filled to meet them.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::Point;
 use crate::corners::Corner;
@@ -267,7 +267,7 @@ impl Road {
 /// doesn't step out. Sets `ends` and `widths`.
 pub fn taper(roads: &mut [Road]) {
     // Per mapped node: the road ends there, and whether a road passes through it.
-    let mut at: HashMap<i64, (Vec<(usize, usize)>, bool)> = HashMap::new();
+    let mut at: BTreeMap<i64, (Vec<(usize, usize)>, bool)> = BTreeMap::new();
     for (r, road) in roads.iter().enumerate() {
         if !road.drivable() {
             continue;
@@ -436,7 +436,7 @@ pub fn profiles(roads: &mut [Road], pins: &HashMap<i64, f64>, lidar: impl Fn(Poi
         length: f64,
         stiffness: f64,
     }
-    let mut arms: HashMap<usize, Vec<Arm>> = HashMap::new();
+    let mut arms: BTreeMap<usize, Vec<Arm>> = BTreeMap::new();
     for (r, (road, ids)) in roads.iter().zip(&vars).enumerate() {
         if !road.drivable() {
             continue;

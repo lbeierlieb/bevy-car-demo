@@ -2,7 +2,7 @@
 //! junction, the inside of the turn is filled out to an arc tangent to both edges, so
 //! the corner isn't a square notch with the terrain showing in it.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::Point;
 use crate::roads::{Grid, Road, RoadKind};
@@ -94,7 +94,8 @@ fn rank(kind: RoadKind) -> u8 {
 /// junctions with a bridge), each one shrunk or dropped where it would reach into a
 /// building (`outlines`).
 pub fn corners(roads: &[Road], outlines: &[&[Point]]) -> Vec<Corner> {
-    let mut arms: HashMap<i64, Vec<Arm>> = HashMap::new();
+    // By node, in order: the same map always bakes to the same file.
+    let mut arms: BTreeMap<i64, Vec<Arm>> = BTreeMap::new();
     let mut bridged: Vec<i64> = Vec::new();
     for (r, road) in roads.iter().enumerate().filter(|(_, r)| r.drivable()) {
         let p = &road.points;
