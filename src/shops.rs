@@ -15,6 +15,7 @@ use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car, CarSetup};
 use crate::chassis::CarBuild;
 use crate::map::{MapLegend, MapMark, MapMarks};
+use crate::menu::kit::{self, Panel, Place};
 use crate::menu::nav::{MenuInput, MenuSet};
 use crate::net::wire::{Reader, Wire};
 use crate::net::{Connection, Status, WantsGhost};
@@ -185,7 +186,11 @@ impl Plugin for ShopsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Shops>()
             .init_resource::<AtShop>()
-            .add_systems(Update, (place, arrive.in_set(MenuSet::Windows)).chain())
+            .init_resource::<SceneBack>()
+            .add_systems(
+                Update,
+                (place, (scene_back, arrive).chain().in_set(MenuSet::Windows)).chain(),
+            )
             .add_systems(EguiPrimaryContextPass, labels);
     }
 }
@@ -269,24 +274,42 @@ pub fn shop_window(
         return false;
     }
     let came_in = std::mem::take(&mut at.came_in[kind as usize]);
-    let mut leave = false;
-    egui::Window::new(format!("{} ({})", placed.shop.name, kind.title()))
-        .id(egui::Id::new("shop"))
-        .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 40.0))
-        .collapsible(false)
-        .resizable(false)
+    let title = format!("{} ({})", placed.shop.name, kind.title());
+    let leave = Panel::new("shop", &title)
+        .place(Place::Right)
+        .width(420.0)
+        .back(Some("Leave"))
         .show(ctx, |ui| {
             contents(ui, came_in);
-            ui.separator();
-            leave = ui
-                .button("Leave (Esc)")
-                .on_hover_text("Or drive off the marker (Space releases the parking brake)")
-                .clicked();
+            ui.add_space(4.0);
+            let leave = kit::button(ui, "Leave").clicked();
+            kit::note(ui, "Or leave and drive off the marker.");
+            leave
         });
     if leave {
         at.leave();
     }
     true
+}
+
+/// "Back" while in a shop's scene (the pump, a lift, the booth, the showroom, the dyno's
+/// room): the scene's window takes it (`take`) and goes back to the car.
+#[derive(Resource, Default)]
+pub struct SceneBack(bool);
+
+impl SceneBack {
+    pub fn take(&mut self) -> bool {
+        std::mem::take(&mut self.0)
+    }
+}
+
+fn scene_back(
+    at: Res<AtShop>,
+    away: Res<Away>,
+    mut input: ResMut<MenuInput>,
+    mut back: ResMut<SceneBack>,
+) {
+    back.0 = away.0 && at.shop.is_some() && input.take_back();
 }
 
 /// `car` rebuilt as `build`, where it is (if that changed anything).

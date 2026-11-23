@@ -10,7 +10,7 @@
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Align2, Color32, FontId, RichText, Stroke};
+use bevy_egui::egui::{self, Align2, Color32, FontId, Stroke};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::audio::{EngineAudio, EngineRun};
@@ -18,7 +18,8 @@ use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car, CarSetup};
 use crate::chassis::PAINTS;
 use crate::looks::{Looks, Motion};
-use crate::shops::{AtShop, ShopKind, Shops, shop_window};
+use crate::menu::kit::{self, Panel, Place};
+use crate::shops::{AtShop, SceneBack, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
 
 /// The grades: name, research octane number, and the colour of the nozzle's grip.
@@ -166,10 +167,8 @@ fn shop(
     let mut enter = false;
     let ctx = contexts.ctx_mut()?;
     shop_window(ctx, &shops, &mut at, ShopKind::Gas, |ui, _| {
-        ui.label(tank_line(car));
-        enter = ui
-            .button(RichText::new("Up to the pump").strong())
-            .clicked();
+        enter = kit::button(ui, "Up to the pump").clicked();
+        kit::note(ui, &tank_line(car));
     });
     let Some(marker) = marker.filter(|_| enter) else {
         return Ok(());
@@ -911,7 +910,7 @@ fn window(
     active: Res<ActiveCar>,
     cars: Query<&Car>,
     (mut away, mut audio): (ResMut<Away>, ResMut<EngineAudio>),
-    mut cameras: Query<(&ChaseCamera, &mut Projection)>,
+    (mut cameras, mut back): (Query<(&ChaseCamera, &mut Projection)>, ResMut<SceneBack>),
 ) -> Result {
     let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return Ok(());
@@ -919,68 +918,74 @@ fn window(
     let (litres, tank) = (car.fuel.litres(), car.setup.tank.litres);
     let octane = car.fuel.octane();
     let room = (tank - litres).max(0.0);
-    let mut out = false;
-    egui::Window::new("Pump")
-        .anchor(Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
-        .collapsible(false)
-        .resizable(false)
-        .show(contexts.ctx_mut()?, |ui| {
-            ui.label(tank_line(car)).on_hover_text(
-                "Grades mix by volume. Higher octane resists knock: the factory tunes are \
-                 for 95; more spark advance or boost may want more, and lower knocks.",
-            );
+    let mut out = back.take();
+    let ctx = contexts.ctx_mut()?;
+    Panel::new("pump", "Pump")
+        .place(Place::Right)
+        .width(400.0)
+        .back(Some("Back to the car"))
+        .show(ctx, |ui| {
+            kit::note(ui, &tank_line(car));
             let pumping = station.pumping.is_some();
-            ui.add_enabled_ui(!pumping, |ui| {
-                ui.horizontal(|ui| {
-                    for (i, (name, ..)) in GRADES.iter().enumerate() {
-                        ui.selectable_value(&mut station.grade, i, *name);
-                    }
-                });
-                ui.add(egui::Slider::new(&mut station.litres, 1.0..=tank.max(1.0)).suffix(" L"));
-            });
             let grade = GRADES[station.grade].1;
             let mixed = |added: f32| {
                 let added = added.min(room);
                 (litres * octane + added * grade) / (litres + added).max(1e-6)
             };
-            ui.horizontal(|ui| {
-                if pumping {
-                    if ui.button(RichText::new("Stop").strong()).clicked() {
-                        station.pumping = None;
-                    }
-                    return;
+            if pumping {
+                if kit::button(ui, "Stop").clicked() {
+                    station.pumping = None;
                 }
+            } else {
                 let some = station.litres.min(room);
                 let start = |station: &mut Station, goal: f32| {
                     (station.pumping, station.pumped) = (Some(goal), 0.0);
                 };
-                if ui
-                    .add_enabled(some > 0.05, egui::Button::new(format!("Pump {some:.1} L")))
-                    .on_hover_text(format!("Then {:.1} octane", mixed(some)))
-                    .clicked()
-                {
-                    start(&mut station, some);
-                }
-                if ui
-                    .add_enabled(
-                        room > 0.05,
-                        egui::Button::new(format!("Fill up ({room:.1} L)")),
-                    )
-                    .on_hover_text(format!("Then {:.1} octane", mixed(room)))
-                    .clicked()
-                {
+                let fill = ui
+                    .add_enabled_ui(room > 0.05, |ui| {
+                        kit::button_with(
+                            ui,
+                            &format!("Fill up ({room:.1} L)"),
+                            &format!("then {:.1} octane", mixed(room)),
+                        )
+                    })
+                    .inner;
+                if fill.clicked() {
                     start(&mut station, room);
                 }
+                let pump = ui
+                    .add_enabled_ui(some > 0.05, |ui| {
+                        kit::button_with(
+                            ui,
+                            &format!("Pump {some:.1} L"),
+                            &format!("then {:.1} octane", mixed(some)),
+                        )
+                    })
+                    .inner;
+                if pump.clicked() {
+                    start(&mut station, some);
+                }
+            }
+            ui.add_enabled_ui(!pumping, |ui| {
+                let names: Vec<String> = GRADES.iter().map(|(name, ..)| name.to_string()).collect();
+                kit::choice(ui, "Grade", &mut station.grade, &names);
+                kit::slider(
+                    ui,
+                    "Litres",
+                    &mut station.litres,
+                    1.0..=tank.max(1.0),
+                    1.0,
+                    |v| format!("{v:.0} L"),
+                );
             });
-            ui.label(
-                RichText::new("Drag to look round, the mouse wheel to go nearer.")
-                    .small()
-                    .weak(),
+            kit::note(
+                ui,
+                "Grades mix by volume. Higher octane resists knock: the factory tunes are \
+                 for 95; more spark advance or boost may want more, and lower knocks.",
             );
-            ui.separator();
-            out = ui
-                .button(RichText::new("Back to the car").strong())
-                .clicked();
+            if kit::button(ui, "Back to the car").clicked() {
+                out = true;
+            }
         });
     if out {
         leave(
