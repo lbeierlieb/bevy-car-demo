@@ -54,6 +54,12 @@ impl Plugin for MapPlugin {
             .add_message::<MapClicked>()
             .add_systems(Update, toggle.in_set(crate::menu::nav::MenuSet::Windows))
             .add_systems(
+                PreUpdate,
+                take_arrows
+                    .after(bevy::input::InputSystems)
+                    .before(crate::input::ReadWheel),
+            )
+            .add_systems(
                 EguiPrimaryContextPass,
                 (
                     prepare.run_if(|view: Res<MapView>| view.layers.is_none()),
@@ -136,6 +142,8 @@ pub struct MapView {
     ground: Option<GroundImage>,
     /// Built from startup (see `prepare`).
     layers: Option<Layers>,
+    /// The arrow keys held (x right, y down), taken from the game while it's open.
+    arrows: Vec2,
 }
 
 impl Default for MapView {
@@ -148,6 +156,7 @@ impl Default for MapView {
             scale: 0.0,
             ground: None,
             layers: None,
+            arrows: Vec2::ZERO,
         }
     }
 }
@@ -263,7 +272,13 @@ fn toggle(
             Some(input) => input.take_back(),
             None => keys.just_pressed(KeyCode::Escape),
         };
-    if !(keys.just_pressed(view.key) || wheel.is_some_and(|w| w.map) || close) {
+    // In the driving apps, the map's binding in the profile in use; else (the editor) its
+    // key.
+    let pressed = match &wheel {
+        Some(wheel) => wheel.map,
+        None => keys.just_pressed(view.key),
+    };
+    if !(pressed || close) {
         return;
     }
     view.open = !view.open;
@@ -275,6 +290,26 @@ fn toggle(
         view.center = car.body.position.xz();
     } else if let Ok(camera) = camera.single() {
         view.center = camera.translation().xz();
+    }
+}
+
+/// While the map is open, the arrow keys move it: it takes them before the driving reads
+/// the keys, so they don't steer the car (whatever else is bound still drives).
+fn take_arrows(mut view: ResMut<MapView>, mut keys: ResMut<ButtonInput<KeyCode>>) {
+    view.arrows = Vec2::ZERO;
+    if !view.open {
+        return;
+    }
+    for (key, direction) in [
+        (KeyCode::ArrowUp, Vec2::NEG_Y),
+        (KeyCode::ArrowDown, Vec2::Y),
+        (KeyCode::ArrowLeft, Vec2::NEG_X),
+        (KeyCode::ArrowRight, Vec2::X),
+    ] {
+        if keys.pressed(key) {
+            view.arrows += direction;
+        }
+        keys.reset(key);
     }
 }
 
@@ -337,10 +372,12 @@ fn draw(
                     view.center = under - offset * view.scale;
                 }
             }
-            // A pad's stick or D-pad (or the wheel's menu buttons) moves, its triggers
-            // zoom, choose zooms in a step (from the closest back to the whole map); + and
-            // - zoom too.
+            // The arrow keys, a pad's stick or D-pad (or the wheel's menu buttons) move, its
+            // triggers zoom, choose zooms in a step (from the closest back to the whole
+            // map); + and - zoom too.
             let dt = time.delta_secs().min(0.1);
+            let arrows = view.arrows.clamp_length_max(1.0);
+            view.center += arrows * PAN * screen.height() * view.scale * dt;
             if let Some(nav) = &nav {
                 view.center += nav.pad_held * PAN * screen.height() * view.scale * dt;
                 view.scale *= (-nav.zoom * ZOOM_RATE * dt).exp();
@@ -507,7 +544,7 @@ fn draw(
                     format!("Menu buttons: move    Choose: zoom    {key} / Back: close")
                 }
                 _ => format!(
-                    "Drag: move    Scroll or + -: zoom    {click}{key} / Esc: close{pointer}"
+                    "Drag or arrows: move    Scroll or + -: zoom    {click}{key} / Esc: close{pointer}"
                 ),
             };
             label(

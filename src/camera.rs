@@ -77,16 +77,12 @@ impl ChaseCamera {
     }
 }
 
-fn switch_view(
-    keys: Res<ButtonInput<KeyCode>>,
-    wheel: Res<WheelInput>,
-    mut cameras: Query<(&mut ChaseCamera, &mut Projection)>,
-) {
-    let back = keys.pressed(KeyCode::KeyB) || wheel.look_back;
+fn switch_view(wheel: Res<WheelInput>, mut cameras: Query<(&mut ChaseCamera, &mut Projection)>) {
+    let back = wheel.look_back;
     for (mut camera, _) in &mut cameras {
         camera.back = back;
     }
-    if !keys.just_pressed(KeyCode::KeyC) && !wheel.view {
+    if !wheel.view {
         return;
     }
     for (mut camera, mut projection) in &mut cameras {

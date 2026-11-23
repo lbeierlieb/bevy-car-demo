@@ -225,7 +225,7 @@ fn force_feedback(
     }
     let focused = windows.iter().any(|window| window.focused);
     let car = cars.iter().find(|car| car.index == active.0);
-    if !focused || !config.enabled || car.is_none_or(|car| car.index != ffb.car) {
+    if !focused || car.is_none_or(|car| car.index != ffb.car) {
         ffb.fade = 0.0;
         ffb.car = active.0;
     } else {

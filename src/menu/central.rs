@@ -6,7 +6,6 @@
 
 use bevy::app::AppExit;
 use bevy::ecs::system::SystemParam;
-use bevy::input::gamepad::GamepadInput;
 use bevy::prelude::*;
 use bevy::window::{MonitorSelection, WindowMode};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
@@ -18,7 +17,7 @@ use crate::audio::SoundSettings;
 use crate::car::{ActiveCar, Away, Car, DriverAids, ResetRule};
 use crate::heli::rescue::Rescue;
 use crate::input::{
-    Action, Capture, Capturing, Gamepads, MenuPresses, Nav, WheelConfig, action_value,
+    Action, Capture, Capturing, Gamepads, MenuPresses, Nav, Profile, WheelConfig, action_value,
 };
 use crate::net::{Connection, Status};
 use crate::traffic::{MOST_CARS, Source, Traffic};
@@ -44,6 +43,8 @@ impl Plugin for CentralMenuPlugin {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Screen {
     Main,
+    Actions,
+    Settings,
     Aids,
     Controls,
     Bindings,
@@ -57,9 +58,11 @@ impl Screen {
     fn title(self) -> &'static str {
         match self {
             Screen::Main => "Menu",
+            Screen::Actions => "In-game actions",
+            Screen::Settings => "Settings",
             Screen::Aids => "Driving aids",
             Screen::Controls => "Controls",
-            Screen::Bindings => "Wheel, pedals and gamepad",
+            Screen::Bindings => "Bindings",
             Screen::ForceFeedback => "Force feedback",
             Screen::Sound => "Sound",
             Screen::Display => "Display",
@@ -77,6 +80,8 @@ pub struct CentralMenu {
     refocus: Option<egui::Id>,
     /// Going through the menu buttons one by one to bind them: which is next.
     guide: Option<usize>,
+    /// "Clear every binding" was chosen once: the next time clears.
+    clearing: bool,
 }
 
 impl CentralMenu {
@@ -247,18 +252,22 @@ fn show(
         .width(width)
         .back(Some(back))
         .show(ctx, |ui| match screen {
-            Screen::Main => {
-                go = main(
-                    ui,
-                    &mut menu,
-                    &mut driving,
-                    &mut online,
-                    &mut windows,
-                    &mut exit,
-                );
+            Screen::Main => go = main(ui, &mut menu, &mut online, &mut exit),
+            Screen::Actions => actions(ui, &mut menu, &mut driving, &wheel.config),
+            Screen::Settings => {
+                for screen in [
+                    Screen::Aids,
+                    Screen::Controls,
+                    Screen::Sound,
+                    Screen::Display,
+                ] {
+                    if kit::submenu(ui, screen.title()).clicked() {
+                        go = Some(screen);
+                    }
+                }
             }
             Screen::Aids => aids(ui, &mut settings),
-            Screen::Controls => go = controls(ui),
+            Screen::Controls => go = controls(ui, &mut wheel.config),
             Screen::Bindings => bindings(ui, &mut menu, &mut wheel),
             Screen::ForceFeedback => force_feedback(ui, &mut wheel),
             Screen::Sound => sound(ui, &mut settings),
@@ -271,83 +280,25 @@ fn show(
         });
     if let Some(next) = go {
         menu.push(next, focused);
+        // The new screen starts at its first row (rows on different screens can share
+        // egui's ids, which would keep the focus where it was).
+        if let Some(id) = focused {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
     }
     Ok(())
 }
 
-/// The main screen: actions first, then the screens.
+/// The main screen: the in-game actions and settings, an event's round, online, help,
+/// and back to driving at the bottom.
 fn main(
     ui: &mut egui::Ui,
     menu: &mut CentralMenu,
-    driving: &mut Driving,
     online: &mut Online,
-    windows: &mut Query<&mut Window>,
     exit: &mut MessageWriter<AppExit>,
 ) -> Option<Screen> {
-    let car = driving
-        .cars
-        .iter()
-        .find(|car| car.index == driving.active.0);
-    if kit::button(ui, "Back to driving").clicked() {
-        menu.close();
-    }
-    let can_reset = car.is_some()
-        && !driving.away.0
-        && driving.rescue.as_ref().is_none_or(|r| !r.busy())
-        && driving
-            .rule
-            .as_deref()
-            .is_some_and(|rule| *rule != ResetRule::Never);
-    let reset = ui
-        .add_enabled_ui(can_reset, |ui| {
-            kit::button_with(ui, "Reset the car (helicopter)", "R")
-        })
-        .inner;
-    if reset.clicked() {
-        driving.presses.press(Action::Reset);
-        menu.close();
-    }
-    if kit::button_with(ui, "Map", "M").clicked() {
-        driving.presses.press(Action::Map);
-        menu.close();
-    }
-    if kit::button_with(ui, "Chase or driver's view", "C").clicked() {
-        driving.presses.press(Action::View);
-        menu.close();
-    }
-    if let Some(car) = car {
-        let running = car.drivetrain.running;
-        let (label, key) = if running {
-            ("Switch the engine off", "I")
-        } else {
-            ("Start the engine", "hold I")
-        };
-        if kit::button_with(ui, label, key).clicked() {
-            if running {
-                driving.presses.press(Action::Ignition);
-            } else {
-                driving.presses.crank(2.0);
-            }
-            menu.close();
-        }
-        let label = if car.parking_brake {
-            "Release the parking brake"
-        } else {
-            "Pull the parking brake"
-        };
-        if kit::button_with(ui, label, "Space").clicked() {
-            driving.presses.press(Action::Handbrake);
-            menu.close();
-        }
-    }
     let mut go = None;
-    kit::section(ui, "Settings");
-    for screen in [
-        Screen::Aids,
-        Screen::Controls,
-        Screen::Sound,
-        Screen::Display,
-    ] {
+    for screen in [Screen::Actions, Screen::Settings] {
         if kit::submenu(ui, screen.title()).clicked() {
             go = Some(screen);
         }
@@ -409,15 +360,61 @@ fn main(
         "Map: Gerach to Rattelsdorf and Baunach, Bavaria. Map data © OpenStreetMap \
          contributors (ODbL). Elevation: DGM1 © Bayerische Vermessungsverwaltung (CC BY 4.0).",
     );
-    if !cfg!(target_arch = "wasm32") {
-        if kit::button_with(ui, "Fullscreen", "F11").clicked() {
-            toggle_fullscreen(windows);
-        }
-        if kit::button(ui, "Quit").clicked() {
-            exit.write(AppExit::Success);
-        }
+    ui.add_space(8.0);
+    if !cfg!(target_arch = "wasm32") && kit::button(ui, "Quit").clicked() {
+        exit.write(AppExit::Success);
+    }
+    if kit::button(ui, "Back to driving").clicked() {
+        menu.close();
     }
     go
+}
+
+/// What the profile in use has bound to an action, for a row's right side.
+fn bound(config: &WheelConfig, action: Action) -> String {
+    let names: Vec<String> = config
+        .profile()
+        .bindings_of(action)
+        .map(|b| b.label())
+        .collect();
+    names.join(", ")
+}
+
+/// Things to do while driving, also for a controller without the buttons: reset, the
+/// map, the camera.
+fn actions(ui: &mut egui::Ui, menu: &mut CentralMenu, driving: &mut Driving, config: &WheelConfig) {
+    let car = driving
+        .cars
+        .iter()
+        .find(|car| car.index == driving.active.0);
+    let can_reset = car.is_some()
+        && !driving.away.0
+        && driving.rescue.as_ref().is_none_or(|r| !r.busy())
+        && driving
+            .rule
+            .as_deref()
+            .is_some_and(|rule| *rule != ResetRule::Never);
+    let reset = ui
+        .add_enabled_ui(can_reset, |ui| {
+            kit::button_with(
+                ui,
+                "Reset the car (helicopter)",
+                &bound(config, Action::Reset),
+            )
+        })
+        .inner;
+    if reset.clicked() {
+        driving.presses.press(Action::Reset);
+        menu.close();
+    }
+    if kit::button_with(ui, "Map", &bound(config, Action::Map)).clicked() {
+        driving.presses.press(Action::Map);
+        menu.close();
+    }
+    if kit::button_with(ui, "Chase or driver's view", &bound(config, Action::View)).clicked() {
+        driving.presses.press(Action::View);
+        menu.close();
+    }
 }
 
 fn toggle_fullscreen(windows: &mut Query<&mut Window>) {
@@ -468,38 +465,55 @@ fn aids(ui: &mut egui::Ui, settings: &mut Settings) {
     }
 }
 
-/// The keys, and the screens for the wheel and force feedback.
-fn controls(ui: &mut egui::Ui) -> Option<Screen> {
+/// The profile in use (and its name), its bindings, force feedback, and the keys that
+/// are always the same.
+fn controls(ui: &mut egui::Ui, config: &mut WheelConfig) -> Option<Screen> {
     let mut go = None;
-    if kit::submenu(ui, Screen::Bindings.title()).clicked() {
+    let names: Vec<String> = config.profiles.iter().map(|p| p.name.clone()).collect();
+    let mut active = config.active;
+    if kit::choice(ui, "Profile in use", &mut active, &names).changed() {
+        config.active = active;
+    }
+    let label = format!("Bindings of \"{}\"", config.profile().name);
+    if kit::submenu(ui, &label).clicked() {
         go = Some(Screen::Bindings);
     }
     if kit::submenu(ui, Screen::ForceFeedback.title()).clicked() {
         go = Some(Screen::ForceFeedback);
     }
-    kit::section(ui, "Keyboard");
-    for (keys, action) in crate::help::CONTROLS {
-        kit::info(ui, action, keys);
-    }
-    kit::section(ui, "Gamepad");
     kit::note(
         ui,
-        "In the menus: the D-pad or left stick moves, A chooses, B goes back, Start opens \
-         this menu. To drive with a gamepad, bind its sticks and buttons under \"Wheel, \
-         pedals and gamepad\".",
+        "Four profiles to switch between: the first is the keyboard's, the others start \
+         empty, say one for a gamepad and one for a wheel. Only the one in use drives.",
+    );
+    kit::section(ui, "The profile's name");
+    let mut name = config.profile().name.clone();
+    ui.add(
+        egui::TextEdit::singleline(&mut name)
+            .desired_width(f32::INFINITY)
+            .font(egui::FontId::proportional(16.0))
+            .margin(egui::vec2(12.0, 8.0)),
+    );
+    if name != config.profile().name && !name.trim().is_empty() {
+        config.profile_mut().name = name.replace(['\n', '\r'], " ");
+    }
+    kit::section(ui, "Always");
+    for (keys, what) in [
+        ("Esc", "Menu"),
+        ("H", "The controls screen"),
+        ("T", "Chat (on a server)"),
+        ("1 / 2", "Gizmos / telemetry"),
+        ("F11", "Fullscreen"),
+        ("Left-drag, scroll", "Look around, zoom"),
+    ] {
+        kit::info(ui, what, keys);
+    }
+    kit::note(
+        ui,
+        "A gamepad works the menus as it is: the D-pad or left stick moves, A chooses, B \
+         goes back, Start opens this menu.",
     );
     go
-}
-
-/// A gamepad input's name for people.
-fn input_label(input: GamepadInput) -> String {
-    use bevy::input::gamepad::{GamepadAxis, GamepadButton};
-    match input {
-        GamepadInput::Button(GamepadButton::Other(n)) => format!("button {n}"),
-        GamepadInput::Axis(GamepadAxis::Other(n)) => format!("axis {n}"),
-        GamepadInput::Button(button) => format!("{button:?}"),
-        GamepadInput::Axis(axis) => format!("{axis:?}"),
-    }
 }
 
 fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) {
@@ -510,33 +524,35 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) {
         base,
         ..
     } = wheel;
-    let mut enabled = config.enabled;
-    if kit::toggle(ui, "Use wheel, pedals and gamepad", &mut enabled).changed() {
-        config.enabled = enabled;
-    }
     let names = gamepads.names();
     if names.is_empty() {
-        kit::note(ui, "Nothing connected.");
+        kit::note(ui, "No wheel or gamepad connected.");
     } else {
         kit::note(ui, &format!("Connected: {}", names.join(", ")));
     }
+    kit::note(
+        ui,
+        "Choose a row, then press the key or move the control (up to two each). Left clears \
+         a row; back cancels.",
+    );
     if kit::button(ui, "Set up the menu buttons, one by one").clicked() {
         capture.0 = None;
         menu.guide = Some(0);
     }
-    kit::note(
-        ui,
-        "Choose a row, then move the control to bind it. Left clears a row; back cancels.",
-    );
     let listening = capture.0.as_ref().map(|c| c.action);
     let mut section = "";
     for action in Action::ALL {
         let group = match action {
-            Action::Steer | Action::Throttle | Action::Brake | Action::Clutch => "Driving",
+            Action::Steer
+            | Action::SteerLeft
+            | Action::SteerRight
+            | Action::Throttle
+            | Action::Brake
+            | Action::Clutch => "Driving",
             Action::Handbrake | Action::ShiftUp | Action::ShiftDown | Action::Gate(_) => {
                 "Brake and gears"
             }
-            Action::Menu(_) => "Menus",
+            Action::Menu(_) => "Menus (the keyboard's arrows, Enter and Esc always work)",
             _ => "Other",
         };
         if group != section {
@@ -547,22 +563,21 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) {
             match action {
                 Action::Steer => "turn the wheel left…".to_string(),
                 Action::Gate(_) => "move the lever into the gate…".to_string(),
-                _ if action.analog() => "press fully, then release…".to_string(),
-                _ => "press the button…".to_string(),
+                _ if action.analog() => "press it fully, then release…".to_string(),
+                _ => "press it…".to_string(),
             }
         } else {
-            match config.binding(action) {
-                Some(binding) => {
-                    let value = action_value(config, gamepads, action);
-                    let shown = match value {
-                        Some(v) if action == Action::Steer => format!("  {:+.0} %", v * 100.0),
-                        Some(v) if action.analog() => format!("  {:.0} %", v * 100.0),
-                        Some(v) if v > 0.5 => "  ●".to_string(),
-                        _ => String::new(),
-                    };
-                    format!("{}{shown}", input_label(binding.input))
-                }
-                None => "—".to_string(),
+            let names = bound(config, action);
+            if names.is_empty() {
+                "—".to_string()
+            } else {
+                let shown = match action_value(config, gamepads, action) {
+                    Some(v) if action == Action::Steer => format!("  {:+.0} %", v * 100.0),
+                    Some(v) if action.analog() && v > 0.0 => format!("  {:.0} %", v * 100.0),
+                    Some(v) if v > 0.5 => "  ●".to_string(),
+                    _ => String::new(),
+                };
+                format!("{names}{shown}")
             }
         };
         let response = kit::button_with(ui, &action.label(), &detail);
@@ -576,6 +591,21 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) {
         {
             config.unbind(action);
         }
+    }
+    kit::section(ui, "The whole profile");
+    if kit::button(ui, "Fill it with the keyboard's defaults").clicked() {
+        config.profile_mut().bindings = Profile::keyboard().bindings;
+    }
+    let clear = if menu.clearing {
+        "Really clear every binding?"
+    } else {
+        "Clear every binding"
+    };
+    if kit::button(ui, clear).clicked() {
+        if menu.clearing {
+            config.profile_mut().bindings.clear();
+        }
+        menu.clearing ^= true;
     }
     kit::section(ui, "Wheel");
     kit::slider(

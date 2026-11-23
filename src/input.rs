@@ -1,6 +1,9 @@
-//! Steering wheel, pedals and shifter through Bevy's gamepad input. Every control is bound
-//! to one input on one device (by name); the bindings and wheel settings are saved to a
-//! small text file, so they only have to be set up once.
+//! The driver's controls: keys, and steering wheel, pedals, shifter and gamepads through
+//! Bevy's gamepad input. Bindings are kept in four profiles to switch between (the first
+//! is the keyboard's defaults, the others start empty: say one for a gamepad, one for a
+//! wheel); each control takes up to two inputs (a key, or an input on a device by name).
+//! The profiles and the wheel's settings are saved to a small text file, so they only
+//! have to be set up once.
 
 use bevy::ecs::system::SystemParam;
 use bevy::input::gamepad::{
@@ -19,6 +22,7 @@ impl Plugin for InputPlugin {
         app.insert_resource(WheelConfig::load())
             .init_resource::<WheelInput>()
             .init_resource::<Capture>()
+            .init_resource::<JustBound>()
             .init_resource::<MenuPresses>()
             .init_resource::<Reported>()
             .add_systems(
@@ -30,7 +34,9 @@ impl Plugin for InputPlugin {
                     (read_wheel, press_from_menus).chain().in_set(ReadWheel),
                 )
                     .chain()
-                    .after(bevy::input::InputSystems),
+                    .after(bevy::input::InputSystems)
+                    // Before a menu with the focus takes the keys away.
+                    .before(crate::ui::Shield),
             )
             .add_systems(Last, save_changes);
     }
@@ -43,7 +49,11 @@ pub struct ReadWheel;
 /// Something the driver does, which a wheel, pedal or shifter input can be bound to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
+    /// Steering by an axis (a wheel, a stick): straight to the front wheels.
     Steer,
+    /// Steering by keys or buttons: the front wheels turn towards full lock at a rate.
+    SteerLeft,
+    SteerRight,
     Throttle,
     Brake,
     Clutch,
@@ -111,8 +121,10 @@ impl Nav {
 }
 
 impl Action {
-    pub const ALL: [Action; 26] = [
+    pub const ALL: [Action; 28] = [
         Action::Steer,
+        Action::SteerLeft,
+        Action::SteerRight,
         Action::Throttle,
         Action::Brake,
         Action::Clutch,
@@ -144,6 +156,8 @@ impl Action {
     fn key(self) -> String {
         match self {
             Action::Steer => "steer".into(),
+            Action::SteerLeft => "steer_left".into(),
+            Action::SteerRight => "steer_right".into(),
             Action::Throttle => "throttle".into(),
             Action::Brake => "brake".into(),
             Action::Clutch => "clutch".into(),
@@ -163,7 +177,9 @@ impl Action {
 
     pub fn label(self) -> String {
         match self {
-            Action::Steer => "Steering".into(),
+            Action::Steer => "Steering (wheel or stick)".into(),
+            Action::SteerLeft => "Steer left".into(),
+            Action::SteerRight => "Steer right".into(),
             Action::Throttle => "Throttle".into(),
             Action::Brake => "Brake".into(),
             Action::Clutch => "Clutch".into(),
@@ -190,11 +206,27 @@ impl Action {
     }
 }
 
+/// What a binding reads: an input of a gamepad (a wheel, pedals, a shifter, a pad), or a
+/// key.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Input {
+    Pad(GamepadInput),
+    Key(KeyCode),
+}
+
+impl Input {
+    /// An axis (steering, a pedal, a lever), rather than a button or key.
+    pub fn is_axis(self) -> bool {
+        matches!(self, Input::Pad(GamepadInput::Axis(_)))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Binding {
-    /// The gamepad's name, as reported by the system (without padding spaces).
+    /// The gamepad's name, as reported by the system (without padding spaces); empty for a
+    /// key.
     pub device: String,
-    pub input: GamepadInput,
+    pub input: Input,
     /// Raw value at rest and fully applied. Pedals map linearly from one to the other,
     /// whichever way round they are; for steering, `full` is the value turned left (only its
     /// direction counts: the whole axis is the base's rotation range).
@@ -203,6 +235,20 @@ pub struct Binding {
 }
 
 impl Binding {
+    pub fn key(code: KeyCode) -> Self {
+        Self {
+            device: String::new(),
+            input: Input::Key(code),
+            rest: 0.0,
+            full: 1.0,
+        }
+    }
+
+    /// Its name for people: "W", "Up", "button 3", "LeftStickX".
+    pub fn label(&self) -> String {
+        input_label(self.input)
+    }
+
     /// Whether this binding is for the device with this name. Some devices pad their names
     /// with spaces, which the config file doesn't keep.
     pub fn is_on(&self, device: &str) -> bool {
@@ -231,9 +277,9 @@ const STORAGE_KEY: &str = "car-sim-wheel";
 /// Wheel bindings and settings.
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct WheelConfig {
-    /// Whether the bound controls are read at all (off: keyboard only).
-    pub enabled: bool,
-    pub bindings: Vec<(Action, Binding)>,
+    /// The profiles (`PROFILES` of them), and which is in use.
+    pub profiles: Vec<Profile>,
+    pub active: usize,
     /// Steering wheel rotation lock to lock (degrees). Full steering lock of the car's front
     /// wheels is at either end. The wheel base is set to this range where the game can;
     /// otherwise force feedback holds the wheel at either end (soft lock).
@@ -255,8 +301,8 @@ pub struct WheelConfig {
 impl Default for WheelConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            bindings: Vec::new(),
+            profiles: Profile::defaults(),
+            active: 0,
             range: 540.0,
             base_range: None,
             deadzone: 0.02,
@@ -268,25 +314,106 @@ impl Default for WheelConfig {
     }
 }
 
-impl WheelConfig {
-    pub fn binding(&self, action: Action) -> Option<&Binding> {
+/// How many profiles there are, and how many inputs a control takes in one.
+pub const PROFILES: usize = 4;
+pub const PER_ACTION: usize = 2;
+
+/// A set of bindings with a name.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Profile {
+    pub name: String,
+    pub bindings: Vec<(Action, Binding)>,
+}
+
+impl Profile {
+    /// The keyboard's defaults.
+    pub fn keyboard() -> Self {
+        use KeyCode::*;
+        let keys = [
+            (Action::Throttle, KeyW),
+            (Action::Throttle, ArrowUp),
+            (Action::Brake, KeyS),
+            (Action::Brake, ArrowDown),
+            (Action::SteerLeft, KeyA),
+            (Action::SteerLeft, ArrowLeft),
+            (Action::SteerRight, KeyD),
+            (Action::SteerRight, ArrowRight),
+            (Action::Handbrake, Space),
+            (Action::ShiftUp, KeyE),
+            (Action::ShiftDown, KeyQ),
+            (Action::Ignition, KeyI),
+            (Action::Reset, KeyR),
+            (Action::View, KeyC),
+            (Action::LookBack, KeyB),
+            (Action::Map, KeyM),
+        ];
+        Self {
+            name: "Keyboard".into(),
+            bindings: keys
+                .into_iter()
+                .map(|(action, key)| (action, Binding::key(key)))
+                .collect(),
+        }
+    }
+
+    /// The keyboard's, then empty ones.
+    pub fn defaults() -> Vec<Self> {
+        let mut profiles = vec![Self::keyboard()];
+        profiles.extend((2..=PROFILES).map(|n| Self {
+            name: format!("Profile {n}"),
+            bindings: Vec::new(),
+        }));
+        profiles
+    }
+
+    /// The inputs bound to an action, in the order they were bound.
+    pub fn bindings_of(&self, action: Action) -> impl Iterator<Item = &Binding> {
         self.bindings
             .iter()
-            .find(|(a, _)| *a == action)
+            .filter(move |(a, _)| *a == action)
             .map(|(_, binding)| binding)
     }
 
-    /// Binds an input to an action, taking it away from any other action.
+    /// Adds an input to an action, taking it away from any other action; past
+    /// `PER_ACTION` inputs, the oldest goes.
     pub fn bind(&mut self, action: Action, binding: Binding) {
-        self.unbind(action);
-        self.bindings.retain(|(_, b)| {
-            (b.device.as_str(), b.input) != (binding.device.as_str(), binding.input)
-        });
+        self.bindings
+            .retain(|(_, b)| (b.device.trim(), b.input) != (binding.device.trim(), binding.input));
+        if self.bindings_of(action).count() >= PER_ACTION
+            && let Some(oldest) = self.bindings.iter().position(|(a, _)| *a == action)
+        {
+            self.bindings.remove(oldest);
+        }
         self.bindings.push((action, binding));
     }
 
     pub fn unbind(&mut self, action: Action) {
         self.bindings.retain(|(a, _)| *a != action);
+    }
+}
+
+impl WheelConfig {
+    /// The profile in use.
+    pub fn profile(&self) -> &Profile {
+        &self.profiles[self.active.min(self.profiles.len() - 1)]
+    }
+
+    pub fn profile_mut(&mut self) -> &mut Profile {
+        let active = self.active.min(self.profiles.len() - 1);
+        &mut self.profiles[active]
+    }
+
+    /// The first input bound to an action in the profile in use.
+    pub fn binding(&self, action: Action) -> Option<&Binding> {
+        self.profile().bindings_of(action).next()
+    }
+
+    pub fn bind(&mut self, action: Action, binding: Binding) {
+        self.profile_mut().bind(action, binding);
+    }
+
+    pub fn unbind(&mut self, action: Action) {
+        self.profile_mut().unbind(action);
     }
 
     /// Half the rotation range: the steering wheel angle at full lock (radians).
@@ -296,43 +423,54 @@ impl WheelConfig {
 
     fn to_text(&self) -> String {
         let mut text = format!(
-            "# car-sim wheel settings\nenabled {}\nrange {}\ndeadzone {}\nffb_gain {}\nffb_road {}\nffb_enabled {}\nffb_invert {}\n",
-            self.enabled,
+            "# car-sim wheel settings\nrange {}\ndeadzone {}\nffb_gain {}\nffb_road {}\nffb_enabled {}\nffb_invert {}\nactive {}\n",
             self.range,
             self.deadzone,
             self.ffb_gain,
             self.ffb_road,
             self.ffb_enabled,
-            self.ffb_invert
+            self.ffb_invert,
+            self.active,
         );
         if let Some(base_range) = self.base_range {
             text += &format!("base_range {base_range}\n");
         }
-        // Bindings: action, input, rest and full values, and the device name (may contain
-        // spaces, so it's last).
-        for (action, b) in &self.bindings {
-            text += &format!(
-                "bind {} {} {} {} {}\n",
-                action.key(),
-                input_name(b.input),
-                b.rest,
-                b.full,
-                b.device
-            );
+        // Each profile, then its bindings: action, input, rest and full values, and the
+        // device name (may contain spaces, so it's last).
+        for (i, profile) in self.profiles.iter().enumerate() {
+            text += &format!("profile {i} {}\n", profile.name);
+            for (action, b) in &profile.bindings {
+                text += &format!(
+                    "bind {} {} {} {} {}\n",
+                    action.key(),
+                    input_name(b.input),
+                    b.rest,
+                    b.full,
+                    b.device
+                );
+            }
         }
         text
     }
 
-    /// Reads settings written by `to_text`; unknown or broken lines are skipped.
+    /// Reads settings written by `to_text`; unknown or broken lines are skipped. A file
+    /// from before the profiles has its bindings put in the second profile ("Wheel"),
+    /// which is then in use; the first gets the keyboard's defaults.
     fn from_text(text: &str) -> Self {
         let mut config = Self::default();
+        let mut profiles: Option<Vec<Profile>> = None;
+        let mut current = 0;
+        let mut old = Profile {
+            name: "Wheel".into(),
+            bindings: Vec::new(),
+        };
+        let mut active = None;
         for line in text.lines() {
             let mut words = line.split_whitespace();
             let (Some(key), Some(value)) = (words.next(), words.next()) else {
                 continue;
             };
             match key {
-                "enabled" => config.enabled = value.parse().unwrap_or(config.enabled),
                 "range" => config.range = value.parse().unwrap_or(config.range),
                 "base_range" => config.base_range = value.parse().ok().or(config.base_range),
                 "deadzone" => config.deadzone = value.parse().unwrap_or(config.deadzone),
@@ -340,6 +478,25 @@ impl WheelConfig {
                 "ffb_road" => config.ffb_road = value.parse().unwrap_or(config.ffb_road),
                 "ffb_enabled" => config.ffb_enabled = value.parse().unwrap_or(config.ffb_enabled),
                 "ffb_invert" => config.ffb_invert = value.parse().unwrap_or(config.ffb_invert),
+                "active" => active = value.parse::<usize>().ok().filter(|&a| a < PROFILES),
+                "profile" => {
+                    let Some(i) = value.parse::<usize>().ok().filter(|&i| i < PROFILES) else {
+                        continue;
+                    };
+                    let list = profiles.get_or_insert_with(|| {
+                        (1..=PROFILES)
+                            .map(|n| Profile {
+                                name: format!("Profile {n}"),
+                                bindings: Vec::new(),
+                            })
+                            .collect()
+                    });
+                    let name = words.collect::<Vec<_>>().join(" ");
+                    if !name.is_empty() {
+                        list[i].name = name;
+                    }
+                    current = i;
+                }
                 "bind" => {
                     let action = Action::ALL.into_iter().find(|a| a.key() == value);
                     let input = words.next().and_then(parse_input);
@@ -349,19 +506,31 @@ impl WheelConfig {
                     if let (Some(action), Some(input), Some(rest), Some(full)) =
                         (action, input, rest, full)
                     {
-                        config.bind(
-                            action,
-                            Binding {
-                                device,
-                                input,
-                                rest,
-                                full,
-                            },
-                        );
+                        let binding = Binding {
+                            device,
+                            input,
+                            rest,
+                            full,
+                        };
+                        match &mut profiles {
+                            Some(list) => list[current].bind(action, binding),
+                            None => old.bind(action, binding),
+                        }
                     }
                 }
                 _ => {}
             }
+        }
+        match profiles {
+            Some(list) => {
+                config.profiles = list;
+                config.active = active.unwrap_or(0);
+            }
+            None if !old.bindings.is_empty() => {
+                config.profiles[1] = old;
+                config.active = 1;
+            }
+            None => {}
         }
         config
     }
@@ -451,39 +620,151 @@ const BUTTONS: [GamepadButton; 19] = [
     GamepadButton::DPadRight,
 ];
 
-/// "axis:LeftStickX", "button:Other(300)" and so on.
-pub fn input_name(input: GamepadInput) -> String {
+/// The keys a control can be bound to (Escape is the menu's).
+/// Not H, T, 1 and 2: they're the help's, the chat's, the gizmos' and the telemetry's.
+const KEYS: [KeyCode; 78] = {
+    use KeyCode::*;
+    [
+        KeyA,
+        KeyB,
+        KeyC,
+        KeyD,
+        KeyE,
+        KeyF,
+        KeyG,
+        KeyI,
+        KeyJ,
+        KeyK,
+        KeyL,
+        KeyM,
+        KeyN,
+        KeyO,
+        KeyP,
+        KeyQ,
+        KeyR,
+        KeyS,
+        KeyU,
+        KeyV,
+        KeyW,
+        KeyX,
+        KeyY,
+        KeyZ,
+        Digit0,
+        Digit3,
+        Digit4,
+        Digit5,
+        Digit6,
+        Digit7,
+        Digit8,
+        Digit9,
+        ArrowUp,
+        ArrowDown,
+        ArrowLeft,
+        ArrowRight,
+        Space,
+        Enter,
+        Tab,
+        Backspace,
+        ShiftLeft,
+        ShiftRight,
+        ControlLeft,
+        ControlRight,
+        AltLeft,
+        AltRight,
+        F1,
+        F2,
+        F3,
+        F4,
+        F5,
+        F6,
+        F7,
+        F8,
+        F9,
+        F10,
+        F12,
+        Numpad0,
+        Numpad1,
+        Numpad2,
+        Numpad3,
+        Numpad4,
+        Numpad5,
+        Numpad6,
+        Numpad7,
+        Numpad8,
+        Numpad9,
+        NumpadAdd,
+        NumpadSubtract,
+        NumpadEnter,
+        Comma,
+        Period,
+        Slash,
+        Semicolon,
+        Minus,
+        Equal,
+        Home,
+        End,
+    ]
+};
+
+/// "key:KeyW", "axis:LeftStickX", "button:Other(300)" and so on.
+pub fn input_name(input: Input) -> String {
     match input {
-        GamepadInput::Axis(axis) => format!("axis:{axis:?}"),
-        GamepadInput::Button(button) => format!("button:{button:?}"),
+        Input::Key(key) => format!("key:{key:?}"),
+        Input::Pad(GamepadInput::Axis(axis)) => format!("axis:{axis:?}"),
+        Input::Pad(GamepadInput::Button(button)) => format!("button:{button:?}"),
     }
 }
 
-fn parse_input(name: &str) -> Option<GamepadInput> {
+/// An input's name for people: "W", "Up", "button 3", "LeftStickX".
+pub fn input_label(input: Input) -> String {
+    match input {
+        Input::Key(key) => {
+            let name = format!("{key:?}");
+            let name = name
+                .strip_prefix("Key")
+                .or_else(|| name.strip_prefix("Digit"))
+                .or_else(|| name.strip_prefix("Arrow"))
+                .unwrap_or(&name);
+            name.to_string()
+        }
+        Input::Pad(GamepadInput::Button(GamepadButton::Other(n))) => format!("button {n}"),
+        Input::Pad(GamepadInput::Axis(GamepadAxis::Other(n))) => format!("axis {n}"),
+        Input::Pad(GamepadInput::Button(button)) => format!("{button:?}"),
+        Input::Pad(GamepadInput::Axis(axis)) => format!("{axis:?}"),
+    }
+}
+
+fn parse_input(name: &str) -> Option<Input> {
     let (kind, which) = name.split_once(':')?;
     let other = which
         .strip_prefix("Other(")
         .and_then(|w| w.strip_suffix(')'))
         .and_then(|code| code.parse().ok());
     match kind {
+        "key" => KEYS
+            .into_iter()
+            .find(|k| format!("{k:?}") == which)
+            .map(Input::Key),
         "axis" => other
             .map(GamepadAxis::Other)
             .or_else(|| AXES.into_iter().find(|a| format!("{a:?}") == which))
-            .map(GamepadInput::Axis),
+            .map(|axis| Input::Pad(GamepadInput::Axis(axis))),
         "button" => other
             .map(GamepadButton::Other)
             .or_else(|| BUTTONS.into_iter().find(|b| format!("{b:?}") == which))
-            .map(GamepadInput::Button),
+            .map(|button| Input::Pad(GamepadInput::Button(button))),
         _ => None,
     }
 }
 
-/// What the wheel, pedals and shifter ask for this frame. Unbound or disconnected controls
-/// are `None`, so the keyboard stays in charge of them.
+/// What the driver's controls ask for this frame, from the profile in use. Unbound or
+/// disconnected axes are `None`.
 #[derive(Resource, Default, Debug)]
 pub struct WheelInput {
-    /// Steering from -1 (right) to 1 (left) over the rotation range.
+    /// Steering by an axis from -1 (right) to 1 (left) over the rotation range.
     pub steer: Option<f32>,
+    /// Steering by keys or buttons: -1 (right), 0 or 1 (left), to turn towards.
+    pub steer_keys: f32,
     /// Steering wheel angle from the centre (degrees, positive left). Past half the
     /// rotation range when the base turns farther than that.
     pub angle: Option<f32>,
@@ -554,6 +835,7 @@ fn track_reported(
 pub struct Gamepads<'w, 's> {
     gamepads: Query<'w, 's, (Entity, &'static Name, &'static Gamepad)>,
     reported: Res<'w, Reported>,
+    keys: Res<'w, ButtonInput<KeyCode>>,
 }
 
 impl Gamepads<'_, '_> {
@@ -581,32 +863,63 @@ impl Gamepads<'_, '_> {
             })
     }
 
-    /// Whether a device with the binding's name is connected.
+    /// Whether a device with the binding's name is connected (the keyboard always is).
     fn connected(&self, binding: &Binding) -> bool {
-        self.gamepads.iter().any(|(_, name, _)| binding.is_on(name))
+        match binding.input {
+            Input::Key(_) => true,
+            Input::Pad(_) => self.gamepads.iter().any(|(_, name, _)| binding.is_on(name)),
+        }
     }
 
     /// Raw value of a bound input: from the first device with that name that has reported
     /// it (some wheel bases register a second, silent device under the same name).
     fn raw(&self, binding: &Binding) -> Option<f32> {
+        let input = match binding.input {
+            Input::Key(key) => return Some(f32::from(u8::from(self.keys.pressed(key)))),
+            Input::Pad(input) => input,
+        };
         self.gamepads
             .iter()
             .filter(|(entity, name, _)| {
-                binding.is_on(name) && self.reported.0.contains(&(*entity, binding.input))
+                binding.is_on(name) && self.reported.0.contains(&(*entity, input))
             })
-            .find_map(|(_, _, gamepad)| gamepad.get_unclamped(binding.input))
+            .find_map(|(_, _, gamepad)| gamepad.get_unclamped(input))
     }
 }
 
-/// An action's value: steering from -1 to 1, pedals 0 to 1, buttons 0 or 1.
-pub fn action_value(config: &WheelConfig, gamepads: &Gamepads, action: Action) -> Option<f32> {
-    let binding = config.binding(action)?;
+/// A binding's value: steering from -1 to 1, pedals 0 to 1, buttons and keys 0 or 1.
+fn binding_value(
+    config: &WheelConfig,
+    gamepads: &Gamepads,
+    action: Action,
+    binding: &Binding,
+) -> Option<f32> {
     let raw = gamepads.raw(binding)?;
     Some(match action {
         Action::Steer => binding.steer(raw),
         _ if action.analog() => binding.travel(raw, config.deadzone),
         _ => binding.travel(raw, 0.0),
     })
+}
+
+/// An action's value in the profile in use, the most of its inputs that pass `which`.
+fn value_of(
+    config: &WheelConfig,
+    gamepads: &Gamepads,
+    action: Action,
+    which: impl Fn(&Binding) -> bool,
+) -> Option<f32> {
+    config
+        .profile()
+        .bindings_of(action)
+        .filter(|b| which(b))
+        .filter_map(|b| binding_value(config, gamepads, action, b))
+        .reduce(|a, b| if b.abs() > a.abs() { b } else { a })
+}
+
+/// An action's value: steering from -1 to 1, pedals 0 to 1, buttons and keys 0 or 1.
+pub fn action_value(config: &WheelConfig, gamepads: &Gamepads, action: Action) -> Option<f32> {
+    value_of(config, gamepads, action, |_| true)
 }
 
 fn read_wheel(
@@ -616,33 +929,29 @@ fn read_wheel(
     menu: Option<Res<crate::menu::nav::MenuFocus>>,
     mut wheel: ResMut<WheelInput>,
 ) {
-    if !config.enabled {
-        *wheel = WheelInput::default();
-        return;
-    }
     let value = |action| action_value(&config, &gamepads, action);
+    let axis = |action| value_of(&config, &gamepads, action, |b| b.input.is_axis());
     // The axis covers the base's range, which may be wider than the game's.
-    let angle = value(Action::Steer).map(|axis| axis * base.range(&config) / 2.0);
-    // A handbrake bound to a button toggles the parking brake, so it counts as a button.
-    let handbrake_button = config
-        .binding(Action::Handbrake)
-        .is_some_and(|binding| matches!(binding.input, GamepadInput::Button(_)));
-    let button = |a: Action| !a.analog() || (a == Action::Handbrake && handbrake_button);
+    let angle = axis(Action::Steer).map(|axis| axis * base.range(&config) / 2.0);
+    // A handbrake bound to a button or key toggles the parking brake; to an axis, it's a
+    // lever.
+    let button =
+        |a: Action, b: &Binding| !a.analog() || (a == Action::Handbrake && !b.input.is_axis());
     let held: Vec<Action> = Action::ALL
         .into_iter()
-        .filter(|a| button(*a) && value(*a).is_some_and(|v| v > 0.5))
+        .filter(|&a| value_of(&config, &gamepads, a, |b| button(a, b)).is_some_and(|v| v > 0.5))
         .collect();
     // While a menu has the focus, the buttons only work the menu (the pedals, the
     // steering and the shifter's gates go on: a held brake must stay held).
     let in_menu = menu.is_some_and(|menu| menu.active);
     let pressed = |action| !in_menu && held.contains(&action) && !wheel.held.contains(&action);
+    let down = |action| !in_menu && held.contains(&action);
     // Each gate is a button held while the lever is in it: the gear is whichever is held.
-    // A shifter that isn't connected doesn't count, so Q/E and the paddles shift instead.
+    // A shifter that isn't connected doesn't count, so the shift buttons work instead.
     let gates = (1..=6).chain([-1]);
     let shifter_bound = gates.clone().any(|gear| {
-        config
-            .binding(Action::Gate(gear))
-            .is_some_and(|binding| gamepads.connected(binding))
+        (config.profile().bindings_of(Action::Gate(gear)))
+            .any(|binding| gamepads.connected(binding))
     });
     let shifter = shifter_bound.then(|| {
         gates
@@ -650,21 +959,24 @@ fn read_wheel(
             .find(|&gear| held.contains(&Action::Gate(gear)))
             .unwrap_or(0)
     });
+    let steer_keys = f32::from(u8::from(down(Action::SteerLeft)))
+        - f32::from(u8::from(down(Action::SteerRight)));
     *wheel = WheelInput {
         steer: angle.map(|angle| (angle / (config.range / 2.0)).clamp(-1.0, 1.0)),
+        steer_keys,
         angle,
         throttle: value(Action::Throttle),
         brake: value(Action::Brake),
         clutch: value(Action::Clutch),
-        handbrake: value(Action::Handbrake).filter(|_| !handbrake_button),
+        handbrake: axis(Action::Handbrake),
         handbrake_toggle: pressed(Action::Handbrake),
         shift_up: pressed(Action::ShiftUp),
         shift_down: pressed(Action::ShiftDown),
         ignition: pressed(Action::Ignition),
         reset: pressed(Action::Reset),
         view: pressed(Action::View),
-        look_back: !in_menu && held.contains(&Action::LookBack),
-        ignition_held: !in_menu && held.contains(&Action::Ignition),
+        look_back: down(Action::LookBack),
+        ignition_held: down(Action::Ignition),
         map: pressed(Action::Map),
         shifter,
         held,
@@ -726,6 +1038,10 @@ impl WheelInput {
 #[derive(Resource, Default)]
 pub struct Capture(pub Option<Capturing>);
 
+/// Something was bound this frame (the key that did it isn't also the menu's).
+#[derive(Resource, Default)]
+pub struct JustBound(pub bool);
+
 pub struct Capturing {
     pub action: Action,
     /// Each input's value when it was first reported during the capture: where it rests.
@@ -747,20 +1063,32 @@ impl Capturing {
 /// Steering binds to the first axis turned well away from its starting value, buttons and
 /// shifter gates to the first button pressed, and pedals to the first axis pushed through
 /// most of its travel, once it's released again.
-fn capture(mut capture: ResMut<Capture>, mut config: ResMut<WheelConfig>, gamepads: Gamepads) {
+fn capture(
+    mut capture: ResMut<Capture>,
+    mut config: ResMut<WheelConfig>,
+    gamepads: Gamepads,
+    mut just: ResMut<JustBound>,
+) {
+    just.0 = false;
     let Some(capturing) = &mut capture.0 else {
         return;
     };
     let action = capturing.action;
     let binding = |name: &Name, input, rest, full| Binding {
         device: name.trim().to_string(),
-        input,
+        input: Input::Pad(input),
         rest,
         full,
     };
     let mut found = None;
+    // Any control but steering by an axis takes a key.
+    if action != Action::Steer
+        && let Some(&key) = gamepads.keys.get_just_pressed().find(|k| KEYS.contains(k))
+    {
+        found = Some(Binding::key(key));
+    }
     // A handbrake can be a lever (an axis) or a button.
-    if !action.analog() || action == Action::Handbrake {
+    if found.is_none() && (!action.analog() || action == Action::Handbrake) {
         for (_, name, gamepad) in &gamepads.gamepads {
             if let Some(&button) = gamepad.digital().get_just_pressed().next() {
                 found = Some(binding(name, GamepadInput::Button(button), 0.0, 1.0));
@@ -805,6 +1133,7 @@ fn capture(mut capture: ResMut<Capture>, mut config: ResMut<WheelConfig>, gamepa
     if let Some(binding) = found {
         config.bind(action, binding);
         capture.0 = None;
+        just.0 = true;
     }
 }
 
@@ -826,46 +1155,98 @@ fn save_changes(config: Res<WheelConfig>, time: Res<Time>, mut pending: Local<Op
 mod tests {
     use super::*;
 
+    fn pad(input: GamepadInput, rest: f32, full: f32) -> Binding {
+        Binding {
+            device: "FANATEC CSL DD".into(),
+            input: Input::Pad(input),
+            rest,
+            full,
+        }
+    }
+
     #[test]
     fn config_round_trips_through_text() {
         let mut config = WheelConfig {
-            enabled: false,
             range: 720.0,
             base_range: Some(2520.0),
             ffb_gain: 0.35,
             ffb_road: 4.0,
             ffb_invert: true,
+            active: 2,
             ..default()
         };
+        config.profiles[2].name = "Wheel and pedals".into();
         config.bind(
             Action::Steer,
-            Binding {
-                device: "FANATEC CSL DD".into(),
-                input: GamepadInput::Axis(GamepadAxis::LeftStickX),
-                rest: 0.0,
-                full: -0.4,
-            },
+            pad(GamepadInput::Axis(GamepadAxis::LeftStickX), 0.0, -0.4),
         );
         config.bind(
             Action::Gate(-1),
-            Binding {
-                device: "FANATEC CSL DD".into(),
-                input: GamepadInput::Button(GamepadButton::Other(300)),
-                rest: 0.0,
-                full: 1.0,
-            },
+            pad(GamepadInput::Button(GamepadButton::Other(300)), 0.0, 1.0),
         );
+        config.bind(Action::Reset, Binding::key(KeyCode::F5));
         assert_eq!(WheelConfig::from_text(&config.to_text()), config);
     }
 
     #[test]
+    fn a_file_from_before_the_profiles_becomes_the_second() {
+        let old = "enabled true\nrange 900\nbind steer axis:LeftStickX 0 -0.4 Fanatec Wheel\n";
+        let config = WheelConfig::from_text(old);
+        assert_eq!(config.range, 900.0);
+        assert_eq!(config.active, 1);
+        assert_eq!(config.profiles[0], Profile::keyboard());
+        assert_eq!(config.profiles[1].name, "Wheel");
+        assert!(
+            config
+                .binding(Action::Steer)
+                .is_some_and(|b| b.is_on("Fanatec Wheel"))
+        );
+    }
+
+    #[test]
+    fn a_control_takes_two_inputs_and_an_input_one_control() {
+        let mut profile = Profile::default();
+        let keys = [KeyCode::KeyW, KeyCode::ArrowUp, KeyCode::KeyK];
+        for key in keys {
+            profile.bind(Action::Throttle, Binding::key(key));
+        }
+        let bound: Vec<_> = profile
+            .bindings_of(Action::Throttle)
+            .map(|b| b.input)
+            .collect();
+        assert_eq!(
+            bound,
+            [Input::Key(KeyCode::ArrowUp), Input::Key(KeyCode::KeyK)]
+        );
+        profile.bind(Action::Brake, Binding::key(KeyCode::KeyK));
+        assert_eq!(profile.bindings_of(Action::Throttle).count(), 1);
+    }
+
+    #[test]
+    fn the_keyboard_profile_drives_and_an_empty_one_doesnt() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.insert_resource(WheelConfig::default());
+        world.init_resource::<WheelBase>();
+        world.init_resource::<Reported>();
+        world.init_resource::<WheelInput>();
+        let mut keys = ButtonInput::<KeyCode>::default();
+        keys.press(KeyCode::KeyW);
+        keys.press(KeyCode::KeyA);
+        world.insert_resource(keys);
+        world.run_system_once(read_wheel).unwrap();
+        let wheel = world.resource::<WheelInput>();
+        assert_eq!((wheel.throttle, wheel.steer_keys), (Some(1.0), 1.0));
+        assert_eq!(wheel.brake, Some(0.0));
+        world.resource_mut::<WheelConfig>().active = 3;
+        world.run_system_once(read_wheel).unwrap();
+        let wheel = world.resource::<WheelInput>();
+        assert_eq!((wheel.throttle, wheel.steer_keys), (None, 0.0));
+    }
+
+    #[test]
     fn pedals_map_either_way_round() {
-        let pedal = |rest, full| Binding {
-            device: String::new(),
-            input: GamepadInput::Axis(GamepadAxis::Other(2)),
-            rest,
-            full,
-        };
+        let pedal = |rest, full| pad(GamepadInput::Axis(GamepadAxis::Other(2)), rest, full);
         // Resting at -1 and pressed at 1, or inverted: half way is half travel either way.
         assert!((pedal(-1.0, 1.0).travel(0.0, 0.0) - 0.5).abs() < 1e-6);
         assert!((pedal(1.0, -1.0).travel(0.0, 0.0) - 0.5).abs() < 1e-6);
@@ -882,18 +1263,14 @@ mod tests {
         let mut config = WheelConfig::default();
         config.bind(
             Action::Gate(1),
-            Binding {
-                device: "Fanatec FANATEC Wheel".into(),
-                input: GamepadInput::Button(GamepadButton::Other(300)),
-                rest: 0.0,
-                full: 1.0,
-            },
+            pad(GamepadInput::Button(GamepadButton::Other(300)), 0.0, 1.0),
         );
         let mut world = World::new();
         world.insert_resource(config);
         world.init_resource::<WheelBase>();
         world.init_resource::<Reported>();
         world.init_resource::<WheelInput>();
+        world.init_resource::<ButtonInput<KeyCode>>();
         world.run_system_once(read_wheel).unwrap();
         assert_eq!(world.resource::<WheelInput>().shifter, None);
     }
@@ -901,12 +1278,8 @@ mod tests {
     #[test]
     fn device_names_match_without_padding() {
         let mut config = WheelConfig::default();
-        let binding = Binding {
-            device: "Fanatec FANATEC Wheel    ".into(),
-            input: GamepadInput::Axis(GamepadAxis::LeftStickX),
-            rest: 0.0,
-            full: 1.0,
-        };
+        let mut binding = pad(GamepadInput::Axis(GamepadAxis::LeftStickX), 0.0, 1.0);
+        binding.device = "Fanatec FANATEC Wheel    ".into();
         config.bind(Action::Steer, binding);
         let loaded = WheelConfig::from_text(&config.to_text());
         assert!(

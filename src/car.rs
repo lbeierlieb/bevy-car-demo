@@ -659,7 +659,6 @@ pub enum ResetRule {
 /// Keyboard and wheel to controls for the active car; any other car holds all brakes. Q/E
 /// (or the paddles, or an H-shifter) change gear, I starts a stalled engine.
 pub fn drive(
-    keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<WheelInput>,
     time: Res<Time>,
     (active, away, held, rescued): (Res<ActiveCar>, Res<Away>, Res<Held>, Res<Rescued>),
@@ -667,11 +666,10 @@ pub fn drive(
     mut cars: Query<&mut Car>,
     (mut refused, mut switching_off): (MessageWriter<ReverseRefused>, Local<bool>),
 ) {
-    let pressed = |a, b| keys.pressed(a) || keys.pressed(b);
     // The ignition button: held, it runs the starter; pressed with the engine running, it
     // switches it off (and holding on after that doesn't crank).
-    let ignition = keys.pressed(KeyCode::KeyI) || wheel.ignition_held;
-    let ignition_pressed = keys.just_pressed(KeyCode::KeyI) || wheel.ignition;
+    let ignition = wheel.ignition_held;
+    let ignition_pressed = wheel.ignition;
     if !ignition {
         *switching_off = false;
     }
@@ -689,10 +687,7 @@ pub fn drive(
         car.traction_control = aids.traction_control;
         car.abs = aids.abs;
         let speed = car.forward_speed();
-        let forward = pressed(KeyCode::KeyW, KeyCode::ArrowUp);
-        let back = pressed(KeyCode::KeyS, KeyCode::ArrowDown);
-        let steer_target = pressed(KeyCode::KeyA, KeyCode::ArrowLeft) as i32 as f32
-            - pressed(KeyCode::KeyD, KeyCode::ArrowRight) as i32 as f32;
+        let steer_target = wheel.steer_keys;
 
         let Car {
             setup,
@@ -709,9 +704,7 @@ pub fn drive(
         }
         drivetrain.starter = ignition && !*switching_off;
         let gear = drivetrain.selected_gear();
-        let shift = keys.just_pressed(KeyCode::KeyE) as i8 - keys.just_pressed(KeyCode::KeyQ) as i8
-            + wheel.shift_up as i8
-            - wheel.shift_down as i8;
+        let shift = wheel.shift_up as i8 - wheel.shift_down as i8;
         let shares = setup.engine.drive.shares();
         let wheel_omega = (0..4).map(|i| shares[i] * corners[i].omega).sum();
         if let Some(gate) = wheel.shifter {
@@ -730,13 +723,12 @@ pub fn drive(
         if wants_reverse && drivetrain.selected_gear() >= 0 && speed.abs() >= REVERSE_SPEED {
             refused.write(ReverseRefused);
         }
-        // The pedals add to the keys.
-        let go = (forward as u8 as f32).max(wheel.throttle.unwrap_or(0.0));
-        let stop = (back as u8 as f32).max(wheel.brake.unwrap_or(0.0));
+        let go = wheel.throttle.unwrap_or(0.0);
+        let stop = wheel.brake.unwrap_or(0.0);
         (c.throttle, c.brake) = if go > 0.0 { (go, stop) } else { (0.0, stop) };
         // Space and a handbrake button pull the parking brake on or release it; a lever
         // works directly, on top of it.
-        if keys.just_pressed(KeyCode::Space) || wheel.handbrake_toggle {
+        if wheel.handbrake_toggle {
             *parking_brake ^= true;
         }
         c.handbrake = (*parking_brake as u8 as f32).max(wheel.handbrake.unwrap_or(0.0));
@@ -765,7 +757,6 @@ pub fn drive(
 }
 
 fn reset_car(
-    keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<WheelInput>,
     active: Res<ActiveCar>,
     terrain: Res<Terrain>,
@@ -773,7 +764,7 @@ fn reset_car(
     (away, rule): (Res<Away>, Res<ResetRule>),
     mut rescue: ResMut<Rescue>,
 ) {
-    if (keys.just_pressed(KeyCode::KeyR) || wheel.reset) && !away.0 && !rescue.busy() {
+    if wheel.reset && !away.0 && !rescue.busy() {
         for (entity, car) in cars.iter().filter(|(_, car)| car.index == active.0) {
             match *rule {
                 ResetRule::Road => {

@@ -15,7 +15,9 @@ use bevy::input::mouse::{AccumulatedMouseMotion, MouseButton};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiInput, EguiPreUpdateSet, PrimaryEguiContext, egui};
 
-use crate::input::{Action, Capture, Nav, WheelConfig, WheelInput};
+use bevy::input::gamepad::GamepadInput;
+
+use crate::input::{Action, Capture, Input, JustBound, Nav, WheelConfig, WheelInput};
 
 /// A held direction repeats after this long, then this often (s).
 const REPEAT_DELAY: f32 = 0.4;
@@ -277,7 +279,11 @@ pub fn claim(ui: &egui::Ui, rank: u8) {
     let focused = ctx.memory(|m| m.focused());
     let response = focused.and_then(|id| ctx.read_response(id));
     let here = response.as_ref().is_some_and(|r| r.layer_id == layer);
-    if here || (focused.is_some() && ctx.text_edit_focused()) {
+    // A widget not drawn yet (asked for the focus, as coming back to a screen asks for
+    // the row gone into) keeps it: if it doesn't turn up, egui drops the focus at the
+    // end of the pass and the next claim hands it on.
+    let unknown = focused.is_some() && response.is_none();
+    if here || unknown || (focused.is_some() && ctx.text_edit_focused()) {
         return;
     }
     ctx.memory_mut(|m| {
@@ -360,16 +366,18 @@ fn read(
     if motion.delta.length_squared() > 4.0 || mouse.get_just_pressed().next().is_some() {
         device = Some(Device::Mouse);
     }
-    // Pads, while nothing is being bound: their standard buttons, unless the driving has
-    // them.
+    // Pads, while nothing is being bound: their standard buttons, in a menu always, else
+    // unless the profile in use drives with them (B mustn't open the menu while it's the
+    // handbrake).
     let capturing = capture.0.is_some();
+    let profile = config.profile();
     for (name, pad) in pads.iter().filter(|_| !capturing) {
         let bound = |button: GamepadButton| {
-            config.enabled
-                && config.bindings.iter().any(|(action, b)| {
+            !focus.active
+                && profile.bindings.iter().any(|(action, b)| {
                     !matches!(action, Action::Menu(_))
                         && b.is_on(name)
-                        && b.input == bevy::input::gamepad::GamepadInput::Button(button)
+                        && b.input == Input::Pad(GamepadInput::Button(button))
                 })
         };
         let pressed = |button| pad.digital().just_pressed(button) && !bound(button);
@@ -388,14 +396,14 @@ fn read(
             pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0),
             -pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0),
         );
-        let sticks_bound = config.enabled
-            && config.bindings.iter().any(|(_, b)| {
+        let sticks_bound = !focus.active
+            && profile.bindings.iter().any(|(_, b)| {
                 b.is_on(name)
                     && matches!(
                         b.input,
-                        bevy::input::gamepad::GamepadInput::Axis(
+                        Input::Pad(GamepadInput::Axis(
                             GamepadAxis::LeftStickX | GamepadAxis::LeftStickY
-                        )
+                        ))
                     )
             });
         if !sticks_bound && left.length() > 0.2 {
@@ -489,10 +497,13 @@ fn read(
 /// keyboard's own go there anyway); whether to ring the focus follows the device.
 fn hand_to_egui(
     input: Res<MenuInput>,
+    (capture, just): (Res<Capture>, Res<JustBound>),
     mut contexts: EguiContexts,
     mut egui_input: Query<&mut EguiInput, With<PrimaryEguiContext>>,
 ) -> Result {
-    let ctx = contexts.ctx_mut()?;
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return Ok(());
+    };
     ctx.data_mut(|d| {
         let scopes = d.get_temp_mut_or_default::<Scopes>(scopes_id());
         scopes.device = input.device;
@@ -500,6 +511,14 @@ fn hand_to_egui(
     let Ok(mut egui_input) = egui_input.single_mut() else {
         return Ok(());
     };
+    // A key being bound is the binding's, not the menu's (Enter would choose the row and
+    // start binding again).
+    if capture.0.is_some() || just.0 {
+        egui_input
+            .events
+            .retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_)));
+        return Ok(());
+    }
     let arrows = [
         egui::Key::ArrowUp,
         egui::Key::ArrowDown,

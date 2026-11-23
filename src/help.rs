@@ -237,13 +237,18 @@ fn hints(
 /// What a hint says: what's wrong, and what to press and what that does. Keys are in
 /// [brackets], shown highlighted.
 fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (String, String) {
-    let bound = |action| config.enabled && config.binding(action).is_some();
-    // A key, or the key and the wheel's button bound to the same.
-    let key = |key: &str, action| {
-        if bound(action) {
-            format!("[{key}] (or its button on the wheel)")
+    // What the profile in use has bound to an action: "[I]", "[E] or [button 4]".
+    let key = |_default: &str, action| {
+        let names: Vec<String> = (config.profile().bindings_of(action))
+            .map(|b| format!("[{}]", b.label()))
+            .collect();
+        if names.is_empty() {
+            format!(
+                "its control (none bound in \"{}\": Controls, in the menu)",
+                config.profile().name
+            )
         } else {
-            format!("[{key}]")
+            names.join(" or ")
         }
     };
     let shifter = wheel.shifter.is_some();
@@ -279,23 +284,21 @@ fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (S
             format!(
                 "It holds the car still however much gas you give. Press {} to release \
                  it, and again to hold the car when you've stopped.",
-                if wheel.handbrake.is_some() {
-                    "[Space]".to_string()
-                } else {
-                    key("Space", Action::Handbrake)
-                }
+                key("Space", Action::Handbrake)
             ),
         ),
         Hint::Reverse => (
             "Reverse only goes in at a standstill".into(),
             if shifter {
-                "Brake to a stop with [S] (or the brake pedal), then move the shifter into \
-                 reverse."
-                    .into()
+                format!(
+                    "Brake to a stop with {}, then move the shifter into reverse.",
+                    key("S", Action::Brake)
+                )
             } else {
                 format!(
-                    "Brake to a stop with [S], then press {} in neutral to shift into \
+                    "Brake to a stop with {}, then press {} in neutral to shift into \
                      reverse (R). {} shifts back up into neutral and first.",
+                    key("S", Action::Brake),
                     key("Q", Action::ShiftDown),
                     key("E", Action::ShiftUp)
                 )
