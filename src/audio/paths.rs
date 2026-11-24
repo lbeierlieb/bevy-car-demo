@@ -9,12 +9,17 @@
 //! Inside, the body passes the lows and keeps out the highs (a little leaks through the
 //! glass and the seals), the cabin booms at its length's, width's and height's
 //! resonances, sound reflects off the glass and the panels within a few milliseconds,
-//! and both ears hear much the same. Switching views crossfades between the two.
+//! and both ears hear much the same. Switching views crossfades between the two. Each
+//! car's cabin is its own (`CabinShape`): its size sets the booming, how well it's
+//! insulated and how near the engine sits how much comes through and how bright; an
+//! open car is mostly heard as from outside.
 
 use bevy::math::Vec3;
 use std::f32::consts::TAU;
+use std::sync::atomic::AtomicU32;
 
-use super::{Resonator, SAMPLE_RATE};
+use super::{Resonator, SAMPLE_RATE, read, store};
+use crate::chassis::Chassis;
 
 /// Height of the tailpipe above the road (m), and how high above the road a car's
 /// reference point is (its sound is placed there).
@@ -27,11 +32,24 @@ const ROAD_LOSS: f32 = 6000.0;
 /// Longest way round via the road (samples): a listener far above the car close by.
 const GROUND_LINE: usize = 512;
 /// The body's transmission: what's left above this (Hz) falls away steeply (two poles),
-/// and the share of the whole sound leaking in regardless.
-const TRANSMISSION: f32 = 450.0;
-const LEAK: f32 = 0.15;
-/// The cabin's resonances: frequency (Hz), Q and gain.
-const MODES: [(f32, f32, f32); 3] = [(72.0, 5.0, 0.8), (118.0, 6.0, 0.5), (155.0, 6.0, 0.35)];
+/// and the share of the whole sound leaking in regardless; with no insulation and with
+/// the most (`Chassis::insulation`), the engine `ENGINE_NEAR` (m) from the driver's eyes.
+/// Nearer, more comes through and brighter (with the nearness; the cutoff with its square
+/// root), within `NEARNESS`.
+const TRANSMISSION: (f32, f32) = (700.0, 350.0);
+const LEAK: (f32, f32) = (0.3, 0.08);
+const ENGINE_NEAR: f32 = 1.5;
+const NEARNESS: (f32, f32) = (0.5, 2.0);
+/// The cabin's resonances, lowest first: Q and gain. Their frequencies are those of
+/// waves fitting the cabin's length, width and height (the cabin outline's run times
+/// `CABIN_RUN`, the body's width times `CABIN_WIDTH`, the roof over the floor less
+/// `CABIN_FLOOR`).
+const MODES: [(f32, f32); 3] = [(5.0, 0.8), (6.0, 0.5), (6.0, 0.35)];
+const CABIN_RUN: f32 = 0.8;
+const CABIN_WIDTH: f32 = 0.85;
+const CABIN_FLOOR: f32 = 0.15;
+/// How much of the cabin's sound an open car has.
+const OPEN: f32 = 0.35;
 /// Early reflections off the glass and panels: when (s) and how strong, per ear.
 const REFLECTIONS: [[(f32, f32); 4]; 2] = [
     [
@@ -55,6 +73,95 @@ const WIDTH: f32 = 0.35;
 const INSIDE_LEVEL: f32 = 0.8;
 /// How long switching views takes (s), along an S-curve.
 const CROSSFADE: f32 = 0.3;
+
+/// What a car's cabin does to sound.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct CabinShape {
+    /// The resonances (Hz), lowest first.
+    pub modes: [f32; 3],
+    /// The body's transmission cutoff (Hz) and the share leaking through regardless.
+    pub transmission: f32,
+    pub leak: f32,
+    /// 1 closed, `OPEN` without a roof.
+    pub enclosed: f32,
+}
+
+impl CabinShape {
+    /// A hatchback's, for tests and before there's a car.
+    pub const DEFAULT: Self = Self {
+        modes: [72.0, 118.0, 155.0],
+        transmission: 450.0,
+        leak: 0.15,
+        enclosed: 1.0,
+    };
+
+    pub(super) fn of(chassis: &Chassis) -> Self {
+        let body = &chassis.body;
+        let closed = body.cabin.len() > 2;
+        let (run, roof) = match (body.cabin.first(), body.cabin.last()) {
+            (Some(first), Some(last)) => (
+                CABIN_RUN * (last[0] - first[0]),
+                body.cabin.iter().map(|p| p[1]).fold(0.0, f32::max),
+            ),
+            _ => (CABIN_RUN * chassis.wheelbase, chassis.eye[1] + 0.2),
+        };
+        let height = (roof - body.floor - CABIN_FLOOR).max(0.6);
+        let mut modes =
+            [run.max(1.0), CABIN_WIDTH * body.width, height].map(|size| SOUND_SPEED / (2.0 * size));
+        modes.sort_by(f32::total_cmp);
+        let engine = body.front_overhang + chassis.bay.engine_at;
+        let distance = (engine - chassis.eye[0]).abs().max(0.3);
+        let nearness = (ENGINE_NEAR / distance).clamp(NEARNESS.0, NEARNESS.1);
+        let insulation = chassis.insulation.clamp(0.0, 1.0);
+        Self {
+            modes,
+            transmission: (TRANSMISSION.0 + (TRANSMISSION.1 - TRANSMISSION.0) * insulation)
+                * nearness.sqrt(),
+            leak: (LEAK.0 + (LEAK.1 - LEAK.0) * insulation) * nearness,
+            enclosed: if closed { 1.0 } else { OPEN },
+        }
+    }
+}
+
+/// Where everything is heard from, shared by every synth: from the driver's seat or
+/// outside, and the cabin of the car driven.
+pub(super) struct Listener {
+    inside: AtomicU32,
+    shape: [AtomicU32; 6],
+}
+
+impl Default for Listener {
+    fn default() -> Self {
+        let listener = Self {
+            inside: AtomicU32::default(),
+            shape: Default::default(),
+        };
+        listener.set(false, CabinShape::DEFAULT);
+        listener
+    }
+}
+
+impl Listener {
+    pub(super) fn set(&self, inside: bool, shape: CabinShape) {
+        store(&self.inside, if inside { 1.0 } else { 0.0 });
+        let [a, b, c] = shape.modes;
+        let values = [a, b, c, shape.transmission, shape.leak, shape.enclosed];
+        for (atomic, value) in self.shape.iter().zip(values) {
+            store(atomic, value);
+        }
+    }
+
+    pub(super) fn get(&self) -> (f32, CabinShape) {
+        let [a, b, c, transmission, leak, enclosed] = self.shape.each_ref().map(read);
+        let shape = CabinShape {
+            modes: [a, b, c].map(|m| m.clamp(20.0, 1000.0)),
+            transmission: transmission.clamp(50.0, 5000.0),
+            leak: leak.clamp(0.0, 1.0),
+            enclosed: enclosed.clamp(0.0, 1.0),
+        };
+        (read(&self.inside), shape)
+    }
+}
 
 /// Keeps a sample within -1 to 1, unchanged below 0.8 and bending smoothly towards 1 above.
 pub(super) fn limit(x: f32) -> f32 {
@@ -151,37 +258,58 @@ struct Ear {
 /// What the cabin does to a stereo sound, crossfaded in and out as the view changes.
 pub(super) struct Cabin {
     ears: [Ear; 2],
+    /// The resonances the modes are tuned to.
+    tuned: [f32; 3],
     /// 0 outside, 1 inside, moving steadily over `CROSSFADE`; heard along an S-curve.
     inside: f32,
 }
 
 impl Cabin {
     pub(super) fn new() -> Self {
-        let mut modes = [Resonator::default(); 3];
-        for (mode, &(frequency, q, _)) in modes.iter_mut().zip(&MODES) {
-            mode.tune(frequency, q);
-        }
         let ear = Ear {
             transmitted: [0.0; 2],
-            modes,
+            modes: [Resonator::default(); 3],
             line: Line::new(),
         };
-        Self {
+        let mut cabin = Self {
             ears: [ear; 2],
+            tuned: [0.0; 3],
             inside: 0.0,
+        };
+        cabin.tune(CabinShape::DEFAULT.modes);
+        cabin
+    }
+
+    fn tune(&mut self, modes: [f32; 3]) {
+        if modes == self.tuned {
+            return;
+        }
+        self.tuned = modes;
+        for ear in &mut self.ears {
+            for (mode, (&frequency, &(q, _))) in ear.modes.iter_mut().zip(modes.iter().zip(&MODES))
+            {
+                mode.tune(frequency, q);
+            }
         }
     }
 
-    /// The sound `(left, right)` as heard inside to the share `inside` asks for (0 or 1;
-    /// it crossfades).
-    pub(super) fn process(&mut self, (left, right): (f32, f32), inside: f32) -> (f32, f32) {
+    /// The sound `(left, right)` as heard inside `shape`'s cabin to the share `inside`
+    /// asks for (0 or 1; it crossfades).
+    pub(super) fn process(
+        &mut self,
+        (left, right): (f32, f32),
+        inside: f32,
+        shape: &CabinShape,
+    ) -> (f32, f32) {
         let rate = SAMPLE_RATE as f32;
         let step = 1.0 / (CROSSFADE * rate);
-        self.inside += (inside.clamp(0.0, 1.0) - self.inside).clamp(-step, step);
-        if self.inside < 1e-4 && inside <= 0.0 {
+        let target = inside.clamp(0.0, 1.0) * shape.enclosed;
+        self.inside += (target - self.inside).clamp(-step, step);
+        if self.inside < 1e-4 && target <= 0.0 {
             return (left, right);
         }
-        let share = 1.0 - (-TAU * TRANSMISSION / rate).exp();
+        self.tune(shape.modes);
+        let share = 1.0 - (-TAU * shape.transmission / rate).exp();
         let mut heard = [0.0; 2];
         for ((ear, x), (out, reflections)) in self
             .ears
@@ -191,9 +319,9 @@ impl Cabin {
         {
             ear.transmitted[0] += share * (x - ear.transmitted[0]);
             ear.transmitted[1] += share * (ear.transmitted[0] - ear.transmitted[1]);
-            let through = ear.transmitted[1] + LEAK * x;
+            let through = ear.transmitted[1] + shape.leak * x;
             let mut boom = 0.0;
-            for (mode, &(_, _, gain)) in ear.modes.iter_mut().zip(&MODES) {
+            for (mode, &(_, gain)) in ear.modes.iter_mut().zip(&MODES) {
                 boom += gain * mode.process(through);
             }
             let direct = through + boom;
@@ -237,7 +365,7 @@ mod tests {
         let n = SAMPLE_RATE as usize;
         for i in 0..2 * n {
             let x = (TAU * frequency * i as f32 / rate).sin();
-            let (left, right) = cabin.process((x, x), 1.0);
+            let (left, right) = cabin.process((x, x), 1.0, &CabinShape::DEFAULT);
             if i >= n {
                 sum += left * left + right * right;
             }
@@ -255,11 +383,41 @@ mod tests {
     }
 
     #[test]
+    fn every_cabin_is_its_own() {
+        use crate::chassis::CHASSIS;
+        let shape = |name: &str| CabinShape::of(CHASSIS.iter().find(|c| c.name == name).unwrap());
+        for chassis in &CHASSIS {
+            let cabin = CabinShape::of(chassis);
+            assert!(cabin.modes.is_sorted(), "{}", chassis.name);
+            assert!(
+                cabin.modes.iter().all(|m| (40.0..300.0).contains(m)),
+                "{} {cabin:?}",
+                chassis.name
+            );
+            assert!(
+                cabin.leak > 0.0 && cabin.leak < 0.7,
+                "{} {cabin:?}",
+                chassis.name
+            );
+        }
+        // A van booms lower than a city car.
+        assert!(shape("Carrow").modes[0] < shape("Minim").modes[0]);
+        // A saloon keeps out more than a stripped rally car.
+        assert!(shape("Halden").leak < 0.5 * shape("Skarn").leak);
+        // The engine right behind the driver comes through brighter than one up front.
+        assert!(shape("Calder").transmission > shape("Harrow").transmission);
+        // Without a roof, it's mostly heard as from outside.
+        assert_eq!(shape("Linnet").enclosed, OPEN);
+        assert_eq!(shape("Wisp").enclosed, OPEN);
+        assert_eq!(shape("Halden").enclosed, 1.0);
+    }
+
+    #[test]
     fn outside_the_cabin_changes_nothing() {
         let mut cabin = Cabin::new();
         for i in 0..1000 {
             let x = (i as f32 * 0.1).sin();
-            assert_eq!(cabin.process((x, -x), 0.0), (x, -x));
+            assert_eq!(cabin.process((x, -x), 0.0, &CabinShape::DEFAULT), (x, -x));
         }
     }
 }

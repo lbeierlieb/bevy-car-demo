@@ -394,7 +394,8 @@ fn save_sound(sound: Res<SoundSettings>) {
 
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
-        app.add_audio_source::<EngineSynth>()
+        app.insert_resource(Listening(Arc::new(paths::Listener::default())))
+            .add_audio_source::<EngineSynth>()
             .insert_resource(SoundSettings::load())
             .add_systems(Startup, start_engine)
             .add_systems(
@@ -425,10 +426,10 @@ struct Targets {
     /// Where another car is heard from: the pan (-1 left to 1 right), the low-pass's
     /// cutoff (Hz; 0 for our own car: stereo, unfiltered) and the Doppler factor.
     place: [AtomicU32; 3],
-    /// Heard from the driver's seat (1) or outside (0), and how much later the road's
-    /// reflection arrives (s; 0 for none).
-    inside: AtomicU32,
+    /// How much later the road's reflection arrives (s; 0 for none).
     ground: AtomicU32,
+    /// Where it's all heard from (shared by every synth in the game).
+    listener: Arc<paths::Listener>,
 }
 
 fn store(atomic: &AtomicU32, value: f32) {
@@ -447,13 +448,20 @@ impl Targets {
         targets
     }
 
-    fn set_heard(&self, inside: bool, ground: f32) {
-        store(&self.inside, if inside { 1.0 } else { 0.0 });
+    /// Targets heard by `listener`.
+    fn heard_by(listener: Arc<paths::Listener>) -> Self {
+        Self {
+            listener,
+            ..Self::new()
+        }
+    }
+
+    fn set_ground(&self, ground: f32) {
         store(&self.ground, ground);
     }
 
-    fn heard(&self) -> (f32, f32) {
-        (read(&self.inside), read(&self.ground))
+    fn ground(&self) -> f32 {
+        read(&self.ground)
     }
 
     fn set_place(&self, pan: f32, cutoff: f32, doppler: f32) {
@@ -809,9 +817,9 @@ impl EngineVoice {
 
     /// Advances by one sample, returning the left and right outputs.
     fn frame(&mut self) -> (f32, f32) {
-        let (inside, _) = self.targets.heard();
+        let (inside, shape) = self.targets.listener.get();
         let outside = self.engine();
-        let (left, right) = self.cabin.process(outside, inside);
+        let (left, right) = self.cabin.process(outside, inside, &shape);
         (paths::limit(left), paths::limit(right))
     }
 
@@ -925,7 +933,7 @@ impl EngineVoice {
         }
         let left = self.noise();
         let right = self.noise();
-        let (_, ground) = self.targets.heard();
+        let ground = self.targets.ground();
         let left = self.banks[0].next(left, &shape);
         let right = self.banks[1].next(right, &shape);
         let left = self.grounds[0].process(left, ground);
@@ -1050,8 +1058,16 @@ struct Voice {
     until: f64,
 }
 
-fn start_engine(mut commands: Commands, mut synths: ResMut<Assets<EngineSynth>>) {
-    let targets = Arc::new(Targets::new());
+/// Where every synth is heard from.
+#[derive(Resource)]
+struct Listening(Arc<paths::Listener>);
+
+fn start_engine(
+    mut commands: Commands,
+    mut synths: ResMut<Assets<EngineSynth>>,
+    listening: Res<Listening>,
+) {
+    let targets = Arc::new(Targets::heard_by(listening.0.clone()));
     commands.spawn(AudioPlayer(synths.add(EngineSynth {
         targets: targets.clone(),
     })));
@@ -1073,6 +1089,7 @@ fn update_engine(
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     chase: Query<&ChaseCamera>,
     engine: Res<EngineAudio>,
+    listening: Res<Listening>,
 ) {
     let Some((_, looks, motion, transform)) = cars.iter().find(|(car, ..)| car.index == active.0)
     else {
@@ -1088,9 +1105,11 @@ fn update_engine(
     let inside = inside(&chase);
     let ground = match cameras.single() {
         Ok(camera) if !inside => paths::ground_delay(transform.translation(), camera.translation()),
-        _ => engine.targets.heard().1,
+        _ => engine.targets.ground(),
     };
-    engine.targets.set_heard(inside, ground);
+    engine.targets.set_ground(ground);
+    let cabin = paths::CabinShape::of(looks.build.chassis());
+    listening.0.set(inside, cabin);
 }
 
 /// How loud another car's engine is at `distance`, its low-pass's cutoff, and the Doppler
@@ -1113,7 +1132,7 @@ fn hear_others(
     sound: Res<SoundSettings>,
     mut synths: ResMut<Assets<EngineSynth>>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
-    chase: Query<&ChaseCamera>,
+    listening: Res<Listening>,
     cars: Query<(Entity, &GlobalTransform, &Looks, &Motion), Without<Car>>,
     mut voices: Query<(Entity, &mut Voice)>,
 ) {
@@ -1124,7 +1143,6 @@ fn hear_others(
     };
     let ear = camera.translation();
     let right = camera.right();
-    let inside = inside(&chase);
 
     // Who's heard: the nearest within hearing, those already heard a little further.
     let mut heard = Vec::new();
@@ -1176,15 +1194,15 @@ fn hear_others(
                 .hear(&looks.engine, &motion.engine, master * volume);
             voice.targets.set_place(pan, cutoff, doppler);
             let ground = paths::ground_delay(transform.translation(), ear);
-            voice.targets.set_heard(inside, ground);
+            voice.targets.set_ground(ground);
             continue;
         }
         // Newly heard: a voice of its own, set up before it starts.
         let (volume, cutoff, doppler) = placed(distance, 0.0);
-        let targets = Arc::new(Targets::new());
+        let targets = Arc::new(Targets::heard_by(listening.0.clone()));
         targets.hear(&looks.engine, &motion.engine, master * volume);
         targets.set_place(pan, cutoff, doppler);
-        targets.set_heard(inside, paths::ground_delay(transform.translation(), ear));
+        targets.set_ground(paths::ground_delay(transform.translation(), ear));
         commands.spawn((
             Voice {
                 targets: targets.clone(),
@@ -1310,9 +1328,15 @@ mod tests {
                 // seat.
                 let per_tick = (TICK * SAMPLE_RATE as f32) as usize;
                 let chase = paths::ground_delay(Vec3::ZERO, Vec3::new(0.0, 2.5, 9.0));
+                // Inside the first car the factory puts this engine in.
+                let cabin = crate::chassis::CHASSIS
+                    .iter()
+                    .find(|chassis| chassis.engines.contains(&version.code))
+                    .map_or(paths::CabinShape::DEFAULT, paths::CabinShape::of);
                 let mut heard = [false, true].map(|inside| {
                     let targets = Arc::new(Targets::new());
-                    targets.set_heard(inside, chase);
+                    targets.set_ground(chase);
+                    targets.listener.set(inside, cabin);
                     let mut voice = EngineVoice::new(targets.clone());
                     let mut frames = Vec::new();
                     for (length, at) in &program {
@@ -1336,7 +1360,8 @@ mod tests {
                     let t = tick as f32 * TICK;
                     let (rpm, load) = if t < 3.0 { (IDLE, 0.12) } else { (2500.0, 0.3) };
                     targets.hear(&character, &run(rpm, load), 1.0);
-                    targets.set_heard((t / 0.75) as usize % 2 == 1, chase);
+                    targets.set_ground(chase);
+                    targets.listener.set((t / 0.75) as usize % 2 == 1, cabin);
                     switching.extend((0..per_tick).map(|_| voice.frame()));
                 }
                 write_wav(
@@ -1364,7 +1389,7 @@ mod tests {
                     targets.hear(&character, &run(rpm, load), volume);
                     targets.set_place(pan(place(t), right), cutoff, doppler);
                     // Ears 1.7 m above the road.
-                    targets.set_heard(false, paths::ground_delay(place(t), Vec3::Y * 1.2));
+                    targets.set_ground(paths::ground_delay(place(t), Vec3::Y * 1.2));
                     frames.extend((0..per_tick).map(|_| voice.frame()));
                 }
 

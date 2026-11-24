@@ -1514,8 +1514,14 @@ pressure-dependent delay (skipped samples lost the pulse's peak: −2–3 dB in 
 a car passes), scaled so the lows keep their level; from the driver's view (`ChaseCamera::
 driver`) every car sound but the race's trumpet goes through `Cabin` (body transmission
 two-pole at 450 Hz plus a 15 % leak, three cabin modes 72/118/155 Hz, four early
-reflections per ear, narrow stereo), crossfading over 0.3 s on an S-curve (our road reflection keeps its delay inside: dropping it clicked; the render writes `<code>-switch.wav`). Same cabin for every car
-(not per chassis yet), synthetic (no recorded IR). The render writes `<code>-inside.wav`
+reflections per ear, narrow stereo), crossfading over 0.3 s on an S-curve (our road reflection keeps its delay inside: dropping it clicked; the render writes `<code>-switch.wav`). Each car its own cabin
+(`CabinShape::of`, asked for by the user, 2026-11-24): modes from the cabin outline's run,
+the body's width and the roof over the floor; how much comes through and how bright from
+`Chassis::insulation` (a constant per body, 0 stripped or open to 1 the saloon) and the
+engine's distance from the eyes (the mid-engined cars and the V12 supercar brightest);
+open cars (cabin outline of two points or none) get a third of the cabin. One
+`paths::Listener` (inside or not, the cabin) shared by every synth (`Listening`
+resource). Synthetic (no recorded IR). The render writes `<code>-inside.wav`
 too. Idle is ~4 dB louder inside (the boom), a V12's pull 5 dB quieter (its energy is
 where the body blocks). Measured from the renders with numpy (order levels over the pull, envelope
 modulation at half orders); the user judges by ear. Not done: displacement in the level

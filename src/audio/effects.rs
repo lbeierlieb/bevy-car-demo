@@ -211,8 +211,8 @@ struct Cues {
     starter: [AtomicU32; 3],
     /// Master volume (0 muted).
     volume: AtomicU32,
-    /// Heard from the driver's seat (1) or outside (0).
-    inside: AtomicU32,
+    /// Where it's heard from (shared with the engines).
+    listener: Arc<super::paths::Listener>,
 }
 
 impl Cues {
@@ -290,8 +290,15 @@ pub(super) fn build(app: &mut App) {
         );
 }
 
-fn start(mut commands: Commands, mut synths: ResMut<Assets<EffectsSynth>>) {
-    let cues = Arc::new(Cues::default());
+fn start(
+    mut commands: Commands,
+    mut synths: ResMut<Assets<EffectsSynth>>,
+    listening: Res<super::Listening>,
+) {
+    let cues = Arc::new(Cues {
+        listener: listening.0.clone(),
+        ..default()
+    });
     store(&cues.volume, 1.0);
     commands.spawn(AudioPlayer(synths.add(EffectsSynth { cues: cues.clone() })));
     commands.insert_resource(Effects { cues });
@@ -378,7 +385,6 @@ fn cue(
     rescued: Res<Rescued>,
     mut cars: Query<(&mut Car, &GlobalTransform)>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
-    chase: Query<&crate::camera::ChaseCamera>,
     mut refused: MessageReader<ReverseRefused>,
     (mut burst, mut crashes): (Local<f32>, Local<Crashes>),
 ) {
@@ -386,8 +392,6 @@ fn cue(
     let dt = time.delta_secs();
     let quiet = sound.master() == 0.0 || engine.hushed;
     store(&cues.volume, sound.master());
-    let inside = chase.iter().any(crate::camera::ChaseCamera::driver);
-    store(&cues.inside, if inside { 1.0 } else { 0.0 });
     *burst = (*burst - dt).max(0.0);
     if refused.read().count() > 0 {
         *burst = GRIND_BURST;
@@ -1046,7 +1050,8 @@ impl EffectsVoice {
         // The car's own sounds through the cabin from the driver's seat; the trumpet is
         // the race's, heard as it is.
         let car = (left + grind + starter, right + grind + starter);
-        let (left, right) = self.cabin.process(car, read(&self.cues.inside));
+        let (inside, shape) = self.cues.listener.get();
+        let (left, right) = self.cabin.process(car, inside, &shape);
         let volume = self.volume;
         (
             (volume * (left + brass)).tanh(),
