@@ -1499,7 +1499,15 @@ Listening to the engines offline (2026-11-24, for reworking the engine sound):
 (the remote-car path: mono, low-pass, pan, Doppler). Raw levels, the same program
 every time, so renders before and after a change can be compared. First render: nothing
 clips, and the V8s (RMS 0.155) are quieter than the 1-litre three (0.19): nothing in
-the level grows with displacement.
+the level grows with displacement. Since then (with the user listening): the pulse
+lasts a crank angle (20° up, 70° down), each cylinder has a fixed strength and lateness
+(`CYLINDERS`: the lope), and the pulse runs through three pipes as delay lines (`Tube`:
+header, front pipe, tailpipe; inverted reflections from the muffling, losses above
+`PIPE_LOSS`) before the old broad resonances, so harmonics swell and fade 4–7 dB over a
+pull (was ~2). Measured from the renders with numpy (order levels over the pull, envelope
+modulation at half orders); the user judges by ear. Not done: displacement in the level
+(needs it in `EngineCharacter`: protocol bump), the road reflection outside, the cabin
+inside, the whistle (now ~34 dB under the exhaust at 4000 rpm) never tuned.
 
 The engine sound goes through bevy_audio, which can't set the output buffer size. An
 attempt to open the output with rodio/cpal directly (fixed 4096-frame buffer against

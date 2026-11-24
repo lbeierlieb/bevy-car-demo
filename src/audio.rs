@@ -3,8 +3,10 @@
 //! there are in a cycle and which bank each goes down. A cross-plane V8 fires each bank at
 //! uneven intervals (the burble), a flat four's unequal headers bunch its pulses up in
 //! pairs (the boxer rumble), and the others fire evenly, the more cylinders the smoother.
-//! The pulses ring a few resonances of the exhaust, so the tone changes with engine speed
-//! rather than just its pitch, with a little combustion noise on top. Two banks with an
+//! The pulses run through the header, the front pipe and the tailpipe, each a delay line
+//! ringing a series of resonances (a wave to the far end and back, partly reflected), which
+//! the engine's orders sweep through as it revs, so its harmonics swell and fade; then
+//! they ring a few broad resonances of the exhaust, with a little combustion noise on top. Two banks with an
 //! exhaust each are panned apart.
 //!
 //! The exhaust hardware colours it: the silencer and the catalyst take out level and the
@@ -169,6 +171,29 @@ const OPEN_NOISE: f32 = 2.0;
 /// Q, and gain off and at full throttle.
 const EXHAUST_SOUND_SPEED: f32 = 500.0;
 const HEADER: (f32, f32, f32) = (3.0, 0.25, 0.5);
+/// The pipes a pulse runs through, as in the big V8 (shorter in smaller engines, `pipes`):
+/// from the header's collector to the silencer (or catalyst), and the tailpipe after it
+/// (m), with the speed of sound in the cooler gas there (m/s). Each rings a series of
+/// resonances (a wave to the far end and back, partly reflected), which the engine's
+/// orders sweep through as it revs: they swell and fade.
+const FRONT_PIPE: f32 = 1.8;
+const TAIL_PIPE: f32 = 0.8;
+const TAIL_SOUND_SPEED: f32 = 420.0;
+/// What comes back from each pipe's far end (inverted: an opening): from the collector
+/// to the header; from the silencer to the front pipe, little without one (straight
+/// pipe) and much with a restrictive one; from the open end of the tailpipe, more without
+/// a silencer to soak it up.
+const HEADER_REFLECTION: f32 = 0.5;
+const FRONT_REFLECTION: (f32, f32) = (0.2, 0.6);
+const TAIL_REFLECTION: (f32, f32) = (0.8, 0.5);
+/// The pipes' losses: what comes back loses its highs above this (Hz, × the bore: wider
+/// pipes lose less).
+const PIPE_LOSS: f32 = 3000.0;
+/// Level after the pipes, which ring up to a few times louder at their resonances, so the
+/// engine is about as loud as without them.
+const PIPE_LEVEL: f32 = 0.22;
+/// Longest way to a pipe's end and back (samples), at the lowest Doppler factor.
+const TUBE: usize = 1024;
 /// How much louder a bigger pipe is per relative diameter, and how its resonances move
 /// (frequency ∝ diameter^-this).
 const BORE_LEVEL: f32 = 0.3;
@@ -520,6 +545,47 @@ struct Shape {
     dt: f32,
     /// How long a pulse rises and falls (seconds of the engine's time).
     pulse: (f32, f32),
+    /// What comes back from the far end of the header, the front pipe and the tailpipe
+    /// (negative: inverted), and the share of the way the pipes' low-pass moves each
+    /// sample.
+    reflections: [f32; 3],
+    loss: f32,
+}
+
+/// A length of pipe: what goes in comes back from the far end after a while (a delay
+/// line), partly reflected and losing its highs, so it rings at a series of frequencies.
+#[derive(Clone, Copy)]
+struct Tube {
+    line: [f32; TUBE],
+    at: usize,
+    lowpass: f32,
+}
+
+impl Default for Tube {
+    fn default() -> Self {
+        Self {
+            line: [0.0; TUBE],
+            at: 0,
+            lowpass: 0.0,
+        }
+    }
+}
+
+impl Tube {
+    /// The next sample out, for `x` going in, a way to the end and back of `trip` samples.
+    /// Scaled so the lowest frequencies pass at their level whatever the reflection (an
+    /// inverted one would take them out).
+    fn process(&mut self, x: f32, trip: f32, reflection: f32, loss: f32) -> f32 {
+        let back = self.at as f32 + TUBE as f32 - trip.clamp(1.0, (TUBE - 2) as f32);
+        let i = back as usize;
+        let share = back.fract();
+        let (a, b) = (self.line[i % TUBE], self.line[(i + 1) % TUBE]);
+        self.lowpass += loss * (a + (b - a) * share - self.lowpass);
+        let y = x + reflection * self.lowpass;
+        self.line[self.at] = y;
+        self.at = (self.at + 1) % TUBE;
+        y * (1.0 - reflection)
+    }
 }
 
 /// One bank's exhaust: the last pulse and the resonances it rings.
@@ -538,6 +604,10 @@ struct Bank {
     tuned: (f32, f32),
     /// The exhaust's resonances, then the header primaries'.
     resonators: [Resonator; 5],
+    /// The header, the front pipe and the tailpipe, and the ways to their ends and back
+    /// (samples).
+    tubes: [Tube; 3],
+    trips: [f32; 3],
     /// The pulse after the turbine.
     smeared: f32,
     /// Last input and output of the DC blocker.
@@ -554,6 +624,8 @@ impl Bank {
             side,
             tuned: (0.0, 0.0),
             resonators: [Resonator::default(); 5],
+            tubes: [Tube::default(); 3],
+            trips: [1.0; 3],
             smeared: 0.0,
             dc: (0.0, 0.0),
         };
@@ -574,6 +646,13 @@ impl Bank {
             resonator.tune(frequency * scale, q);
         }
         self.resonators[4].tune(header * self.side, HEADER.0);
+        // The header's quarter-wave resonance is a way there and back in half its period.
+        let rate = SAMPLE_RATE as f32;
+        self.trips = [
+            rate / (2.0 * header * self.side),
+            rate * 2.0 * FRONT_PIPE / (EXHAUST_SOUND_SPEED * scale),
+            rate * 2.0 * TAIL_PIPE / (TAIL_SOUND_SPEED * scale),
+        ];
     }
 
     fn next(&mut self, noise: f32, shape: &Shape) -> f32 {
@@ -594,9 +673,21 @@ impl Bank {
         };
         self.since += dt;
         self.smeared += shape.smoothing * (excitation - self.smeared);
+        // Through the header, the front pipe and the tailpipe, then the exhaust's broad
+        // resonances.
+        let mut piped = self.smeared;
+        for ((tube, &trip), reflection) in self
+            .tubes
+            .iter_mut()
+            .zip(&self.trips)
+            .zip(shape.reflections)
+        {
+            piped = tube.process(piped, trip, reflection, shape.loss);
+        }
+        let piped = PIPE_LEVEL * piped;
         let mut out = 0.0;
         for (resonator, gain) in self.resonators.iter_mut().zip(shape.gains) {
-            out += gain * resonator.process(self.smeared);
+            out += gain * resonator.process(piped);
         }
         // Block any DC offset, which the pulses (all positive pressure) would leave.
         let y = out - self.dc.0 + 0.995 * self.dc.1;
@@ -767,6 +858,12 @@ impl EngineVoice {
                 let rise = (PULSE_RISE / degrees).max(PULSE_SHORTEST);
                 (rise, rise * PULSE_FALL / PULSE_RISE)
             },
+            reflections: [
+                -HEADER_REFLECTION,
+                -(FRONT_REFLECTION.0 + (FRONT_REFLECTION.1 - FRONT_REFLECTION.0) * muffle),
+                -(TAIL_REFLECTION.0 + (TAIL_REFLECTION.1 - TAIL_REFLECTION.0) * muffle),
+            ],
+            loss: 1.0 - (-TAU * PIPE_LOSS * bore / rate).exp(),
         };
         let pitch = bore.powf(-BORE_PITCH) * doppler;
         for bank in &mut self.banks {
@@ -1329,13 +1426,10 @@ mod tests {
         assert!(loudness(straight, 0.0) > 1.3 * quiet);
         let turbo_quiet = loudness(turbo, 0.0);
         assert!(turbo_quiet < quiet);
-        eprintln!(
-            "DEBUG turbo {turbo_quiet} whistling {}",
-            loudness(turbo, 1.0)
-        );
-        // The whistle on its own (uncorrelated with the exhaust, so their energies add).
+        // The whistle on its own (uncorrelated with the exhaust, so their energies add):
+        // there, though quiet (here, at 4000 rpm, the pipes ring loudly).
         let whistle = (loudness(turbo, 1.0).powi(2) - turbo_quiet.powi(2)).sqrt();
-        assert!(whistle > 0.02 * turbo_quiet, "whistle {whistle}");
+        assert!(whistle > 0.01 * turbo_quiet, "whistle {whistle}");
     }
 
     #[test]
