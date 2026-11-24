@@ -48,6 +48,7 @@ pub mod shops;
 pub mod sim;
 pub mod sky;
 pub mod snapshot;
+pub mod spec;
 pub mod storage;
 pub mod terrain;
 pub mod traffic;
