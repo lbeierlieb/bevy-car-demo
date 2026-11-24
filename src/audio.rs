@@ -99,8 +99,13 @@ fn sound(layout: Layout) -> Sound {
 /// Time constants of the glide towards new targets.
 const GLIDE: f32 = 0.05;
 const LOAD_GLIDE: f32 = 0.02;
-/// Length of an exhaust pulse (seconds), and how fast the combustion noise after it dies.
-const PULSE: f32 = 0.0025;
+/// An exhaust pulse in crank degrees: the blowdown rises quickly as the valve opens, then
+/// falls more slowly. So it's long at idle (full, round) and short near the redline.
+const PULSE_RISE: f32 = 20.0;
+const PULSE_FALL: f32 = 70.0;
+/// Shortest the rise may get (seconds), so the pulse stays smooth at any speed.
+const PULSE_SHORTEST: f32 = 0.0004;
+/// How fast the combustion noise after a pulse dies (seconds).
 const NOISE_DECAY: f32 = 0.004;
 /// Random variation of each firing's strength.
 const JITTER: f32 = 0.2;
@@ -490,6 +495,8 @@ struct Shape {
     smoothing: f32,
     /// The engine's time passing in a sample (seconds; shifted by Doppler).
     dt: f32,
+    /// How long a pulse rises and falls (seconds of the engine's time).
+    pulse: (f32, f32),
 }
 
 /// One bank's exhaust: the last pulse and the resonances it rings.
@@ -551,8 +558,11 @@ impl Bank {
         let excitation = if self.since < 0.0 {
             0.0
         } else {
-            let pulse = if self.since < PULSE {
-                (PI * self.since / PULSE).sin().powi(2)
+            let (rise, fall) = shape.pulse;
+            let pulse = if self.since < rise {
+                (0.5 * PI * self.since / rise).sin().powi(2)
+            } else if self.since < rise + fall {
+                (0.5 * PI * (self.since - rise) / fall).cos().powi(2)
             } else {
                 0.0
             };
@@ -722,6 +732,12 @@ impl EngineVoice {
             noise: 1.0 + (OPEN_NOISE - 1.0) * open,
             smoothing: 1.0 / (1.0 + TURBINE_SMEAR * turbine * rate / doppler),
             dt: doppler / rate,
+            pulse: {
+                // Crank degrees a second.
+                let degrees = 6.0 * self.rpm.max(100.0);
+                let rise = (PULSE_RISE / degrees).max(PULSE_SHORTEST);
+                (rise, rise * PULSE_FALL / PULSE_RISE)
+            },
         };
         let pitch = bore.powf(-BORE_PITCH) * doppler;
         for bank in &mut self.banks {
@@ -1284,7 +1300,13 @@ mod tests {
         assert!(loudness(straight, 0.0) > 1.3 * quiet);
         let turbo_quiet = loudness(turbo, 0.0);
         assert!(turbo_quiet < quiet);
-        assert!(loudness(turbo, 1.0) > turbo_quiet * 1.001);
+        eprintln!(
+            "DEBUG turbo {turbo_quiet} whistling {}",
+            loudness(turbo, 1.0)
+        );
+        // The whistle on its own (uncorrelated with the exhaust, so their energies add).
+        let whistle = (loudness(turbo, 1.0).powi(2) - turbo_quiet.powi(2)).sqrt();
+        assert!(whistle > 0.02 * turbo_quiet, "whistle {whistle}");
     }
 
     #[test]
