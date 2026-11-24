@@ -40,6 +40,7 @@ pub mod physics;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod race_editor;
 pub mod relief;
+pub mod rumble;
 pub mod scenery;
 pub mod shops;
 pub mod sim;
@@ -128,7 +129,7 @@ impl Plugin for CorePlugin {
         .add_plugins((
             (WorldPlugin, scenery::SceneryPlugin),
             input::InputPlugin,
-            wheel_base::WheelBasePlugin,
+            (wheel_base::WheelBasePlugin, rumble::RumblePlugin),
             car::CarPlugin,
             looks::LooksPlugin,
             net::ClientPlugin,

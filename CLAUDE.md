@@ -854,6 +854,13 @@ and plays force feedback, both through hid-fanatecff on Linux.
   while driving, no toggle, the handbrake only brakes while held; **any gas releases
   it**, whatever the gear or clutch. Holding it until the car stops doesn't park it.
 
+- Gamepad rumble on crashes (asked for by the user, 2026-11-24: only without settings):
+  `rumble.rs`, bevy's `GamepadRumbleRequest` (bevy_gilrs plays it), on the gamepads the
+  profile in use binds, never the force feedback wheel; the crash rule is the crash
+  sound's (`effects::CrashGate`; read in `Update`, before `effects::cue` clears the
+  knocks); not while away, held or rescued; native only. Strengths are a first guess
+  (`WEAK`, `LENGTH`), never felt here.
+
 ### Still to check on the real wheel
 
 - "Test: push left" in the menu (Controls, Force feedback): turn on "Reverse direction" if it pushes right (the sign

@@ -324,7 +324,7 @@ fn grind(difference: f32) -> (f32, f32) {
 }
 
 /// The strength of a crash (0..1) for a knock (m/s), if it's one.
-fn crash(knock: f32) -> Option<f32> {
+pub fn crash(knock: f32) -> Option<f32> {
     (knock >= CRASH_FROM).then(|| ((knock - CRASH_FROM) / (CRASH_FULL - CRASH_FROM)).min(1.0))
 }
 
@@ -337,9 +337,28 @@ fn scrape(knocks: f32, speed: f32) -> f32 {
 /// knocks a second, smoothed.
 #[derive(Default)]
 struct Crashes {
+    gate: CrashGate,
+    knocks: f32,
+}
+
+/// Picks the crashes out of the knocks: not again within `CRASH_GAP` unless harder
+/// (heard here, felt by `rumble`).
+#[derive(Default)]
+pub struct CrashGate {
     since: f32,
     last: f32,
-    knocks: f32,
+}
+
+impl CrashGate {
+    /// A crash's strength (0..1), if the car was knocked into one this frame (`knock`
+    /// m/s, `dt` s since the last).
+    pub fn hit(&mut self, knock: f32, dt: f32) -> Option<f32> {
+        self.since += dt;
+        let strength = crash(knock).filter(|&s| self.since > CRASH_GAP || s > self.last)?;
+        self.since = 0.0;
+        self.last = strength;
+        Some(strength)
+    }
 }
 
 /// What the driven car's tires, gearbox and body do, heard from the camera.
@@ -442,13 +461,8 @@ fn cue(
     // A crash when the body is knocked hard (not again within a moment unless harder),
     // scraping while it keeps being knocked on the move.
     let body = pan(transform.translation() - ear, right) * 0.6;
-    crashes.since += dt;
-    if let Some(strength) = crash(knock)
-        && (crashes.since > CRASH_GAP || strength > crashes.last)
-    {
+    if let Some(strength) = crashes.gate.hit(knock, dt) {
         cues.crash(strength);
-        crashes.since = 0.0;
-        crashes.last = strength;
     }
     if dt > 0.0 {
         let share = (dt / SCRAPE_GLIDE).min(1.0);
@@ -1141,6 +1155,13 @@ mod tests {
         assert_eq!(crash(0.5), None);
         assert!(crash(3.0).unwrap() < GLASS_FROM);
         assert_eq!(crash(30.0), Some(1.0));
+        // Not again within a moment, unless harder.
+        let mut gate = CrashGate::default();
+        assert_eq!(gate.hit(0.5, 0.1), None);
+        assert!(gate.hit(5.0, 0.1).is_some());
+        assert_eq!(gate.hit(4.0, 0.05), None);
+        assert!(gate.hit(8.0, 0.05).is_some());
+        assert!(gate.hit(2.0, CRASH_GAP + 0.01).is_some());
         // Scraping needs both pushing and moving.
         assert_eq!(scrape(20.0, 0.0), 0.0);
         assert_eq!(scrape(0.0, 20.0), 0.0);
