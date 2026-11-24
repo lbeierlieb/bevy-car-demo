@@ -216,11 +216,13 @@ fn apply_controls(car: &mut Car, dt: f32) {
 
     let engine = &setup.engine;
     let shares = engine.drive.shares();
-    // Traction control eases the throttle while a driven wheel spins.
+    // Traction control eases the throttle while a driven wheel spins the way the gear
+    // drives it (the slip ratio is positive spinning forwards, negative backwards).
+    let way = if drivetrain.gear < 0 { -1.0 } else { 1.0 };
     let slip = (0..4)
         .filter(|&i| shares[i] > 0.0)
         .filter_map(|i| corners[i].contact)
-        .map(|contact| contact.tire.slip_ratio)
+        .map(|contact| way * contact.tire.slip_ratio)
         .fold(0.0, f32::max);
     let off = (slip - TRACTION_SLIP) / TRACTION_SLIP;
     let rate = if off > 0.0 {
@@ -517,6 +519,37 @@ mod tests {
             "wheels at {wheels} m/s, car at {spinning}"
         );
         assert!(speed > spinning + 2.0, "{speed} against {spinning} m/s");
+    }
+
+    #[test]
+    fn traction_control_works_in_reverse() {
+        let terrain = Terrain::flat();
+        // The muscle car with the 6.2 V8, floored in reverse.
+        let launch = |traction_control: bool| {
+            let mut car = Car::spawn_at(0, CarSetup::factory(6, 1), &terrain, 0.0, 400.0, 0.0);
+            car.warm_tires();
+            car.traction_control = traction_control;
+            car.drivetrain.shift_to(&car.setup.engine, -1);
+            run(&mut car, &terrain, 1.0);
+            car.controls = Controls {
+                throttle: 1.0,
+                ..default()
+            };
+            run(&mut car, &terrain, 1.5);
+            let radius = car.setup.rear.tire.radius;
+            let wheels = (car.corners[2].omega + car.corners[3].omega) / 2.0 * radius;
+            (-car.forward_speed(), -wheels)
+        };
+        let (speed, wheels) = launch(true);
+        assert!(
+            speed > 0.0 && wheels < 1.25 * speed,
+            "wheels at {wheels} m/s, car at {speed}"
+        );
+        let (spinning, wheels) = launch(false);
+        assert!(
+            wheels > 1.5 * spinning,
+            "wheels at {wheels} m/s, car at {spinning}"
+        );
     }
 
     #[test]
