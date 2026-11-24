@@ -102,11 +102,14 @@ fn sound(layout: Layout) -> Sound {
 const GLIDE: f32 = 0.05;
 const LOAD_GLIDE: f32 = 0.02;
 /// An exhaust pulse in crank degrees: the blowdown rises quickly as the valve opens, then
-/// falls more slowly. So it's long at idle (full, round) and short near the redline.
+/// falls more slowly. So it's long at idle (full, round) and short near the redline. The
+/// rise is a sharp front at full throttle, the flow through the opening valve choked by
+/// the cylinder's pressure, and that front is what carries the upper harmonics.
 const PULSE_RISE: f32 = 20.0;
+const PULSE_SHARP: f32 = 4.0;
 const PULSE_FALL: f32 = 70.0;
-/// Shortest the rise may get (seconds), so the pulse stays smooth at any speed.
-const PULSE_SHORTEST: f32 = 0.0004;
+/// Shortest the rise may get (seconds), a few samples.
+const PULSE_SHORTEST: f32 = 0.00012;
 /// How fast the combustion noise after a pulse dies (seconds).
 const NOISE_DECAY: f32 = 0.004;
 /// Random variation of each firing's strength, from cycle to cycle: most at idle, where
@@ -187,8 +190,13 @@ const HEADER_REFLECTION: f32 = 0.5;
 const FRONT_REFLECTION: (f32, f32) = (0.2, 0.6);
 const TAIL_REFLECTION: (f32, f32) = (0.8, 0.5);
 /// The pipes' losses: what comes back loses its highs above this (Hz, × the bore: wider
-/// pipes lose less).
-const PIPE_LOSS: f32 = 3000.0;
+/// pipes lose less), fully muffled and open (a silencer's packing soaks up the highs).
+const PIPE_LOSS: (f32, f32) = (3000.0, 6000.0);
+/// What leaves the tailpipe above `BRIGHT_SPLIT` (Hz) besides the broad resonances, fully
+/// muffled and open, off throttle and at full throttle: the rasp the silencer takes out.
+const BRIGHT_SPLIT: f32 = 1000.0;
+const BRIGHT: (f32, f32) = (0.4, 1.0);
+const BRIGHT_IDLE: f32 = 0.5;
 /// Level after the pipes, which ring up to a few times louder at their resonances, so the
 /// engine is about as loud as without them.
 const PIPE_LEVEL: f32 = 0.22;
@@ -550,6 +558,10 @@ struct Shape {
     /// sample.
     reflections: [f32; 3],
     loss: f32,
+    /// Gain of what's above `BRIGHT_SPLIT`, and the share of the way the low-pass that
+    /// splits it off moves each sample.
+    bright: f32,
+    split: f32,
 }
 
 /// A length of pipe: what goes in comes back from the far end after a while (a delay
@@ -572,15 +584,20 @@ impl Default for Tube {
 }
 
 impl Tube {
+    /// What went in `lag` samples ago (between samples).
+    fn read(&self, lag: f32) -> f32 {
+        let back = self.at as f32 + TUBE as f32 - lag.clamp(1.0, (TUBE - 2) as f32);
+        let i = back as usize;
+        let share = back.fract();
+        let (a, b) = (self.line[i % TUBE], self.line[(i + 1) % TUBE]);
+        a + (b - a) * share
+    }
+
     /// The next sample out, for `x` going in, a way to the end and back of `trip` samples.
     /// Scaled so the lowest frequencies pass at their level whatever the reflection (an
     /// inverted one would take them out).
     fn process(&mut self, x: f32, trip: f32, reflection: f32, loss: f32) -> f32 {
-        let back = self.at as f32 + TUBE as f32 - trip.clamp(1.0, (TUBE - 2) as f32);
-        let i = back as usize;
-        let share = back.fract();
-        let (a, b) = (self.line[i % TUBE], self.line[(i + 1) % TUBE]);
-        self.lowpass += loss * (a + (b - a) * share - self.lowpass);
+        self.lowpass += loss * (self.read(trip) - self.lowpass);
         let y = x + reflection * self.lowpass;
         self.line[self.at] = y;
         self.at = (self.at + 1) % TUBE;
@@ -610,6 +627,8 @@ struct Bank {
     trips: [f32; 3],
     /// The pulse after the turbine.
     smeared: f32,
+    /// What's below `BRIGHT_SPLIT` of the piped pulse.
+    below: f32,
     /// Last input and output of the DC blocker.
     dc: (f32, f32),
 }
@@ -627,6 +646,7 @@ impl Bank {
             tubes: [Tube::default(); 3],
             trips: [1.0; 3],
             smeared: 0.0,
+            below: 0.0,
             dc: (0.0, 0.0),
         };
         bank.tune(exhaust.bore.powf(-BORE_PITCH), exhaust.header);
@@ -661,8 +681,9 @@ impl Bank {
             0.0
         } else {
             let (rise, fall) = shape.pulse;
+            // The front starts at once (a kink, not easing in), and rounds over at the top.
             let pulse = if self.since < rise {
-                (0.5 * PI * self.since / rise).sin().powi(2)
+                (0.5 * PI * self.since / rise).sin()
             } else if self.since < rise + fall {
                 (0.5 * PI * (self.since - rise) / fall).cos().powi(2)
             } else {
@@ -685,7 +706,8 @@ impl Bank {
             piped = tube.process(piped, trip, reflection, shape.loss);
         }
         let piped = PIPE_LEVEL * piped;
-        let mut out = 0.0;
+        self.below += shape.split * (piped - self.below);
+        let mut out = shape.bright * (piped - self.below);
         for (resonator, gain) in self.resonators.iter_mut().zip(shape.gains) {
             out += gain * resonator.process(piped);
         }
@@ -855,15 +877,19 @@ impl EngineVoice {
             pulse: {
                 // Crank degrees a second.
                 let degrees = 6.0 * self.rpm.max(100.0);
-                let rise = (PULSE_RISE / degrees).max(PULSE_SHORTEST);
-                (rise, rise * PULSE_FALL / PULSE_RISE)
+                let rise = PULSE_RISE + (PULSE_SHARP - PULSE_RISE) * load;
+                ((rise / degrees).max(PULSE_SHORTEST), PULSE_FALL / degrees)
             },
             reflections: [
                 -HEADER_REFLECTION,
                 -(FRONT_REFLECTION.0 + (FRONT_REFLECTION.1 - FRONT_REFLECTION.0) * muffle),
                 -(TAIL_REFLECTION.0 + (TAIL_REFLECTION.1 - TAIL_REFLECTION.0) * muffle),
             ],
-            loss: 1.0 - (-TAU * PIPE_LOSS * bore / rate).exp(),
+            loss: 1.0
+                - (-TAU * (PIPE_LOSS.0 + (PIPE_LOSS.1 - PIPE_LOSS.0) * open) * bore / rate).exp(),
+            bright: (BRIGHT.0 + (BRIGHT.1 - BRIGHT.0) * open)
+                * (BRIGHT_IDLE + (1.0 - BRIGHT_IDLE) * load),
+            split: 1.0 - (-TAU * BRIGHT_SPLIT / rate).exp(),
         };
         let pitch = bore.powf(-BORE_PITCH) * doppler;
         for bank in &mut self.banks {

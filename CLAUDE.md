@@ -1504,7 +1504,11 @@ lasts a crank angle (20° up, 70° down), each cylinder has a fixed strength and
 (`CYLINDERS`: the lope), and the pulse runs through three pipes as delay lines (`Tube`:
 header, front pipe, tailpipe; inverted reflections from the muffling, losses above
 `PIPE_LOSS`) before the old broad resonances, so harmonics swell and fade 4–7 dB over a
-pull (was ~2). Measured from the renders with numpy (order levels over the pull, envelope
+pull (was ~2). Upper harmonics: the pulse's front sharpens with load (20° to 4°, starting
+with a kink), and what's above 1 kHz bypasses the broad resonances (`BRIGHT`, set by the
+muffling; the stock exhaust counts as ~0.89 muffled): the V8 falls ~4–6 dB per octave of
+orders at 5000 rpm (was ~10). Tried and dropped: steepening in the header as a
+pressure-dependent delay (skipped samples lost the pulse's peak: −2–3 dB in the pull). Measured from the renders with numpy (order levels over the pull, envelope
 modulation at half orders); the user judges by ear. Not done: displacement in the level
 (needs it in `EngineCharacter`: protocol bump), the road reflection outside, the cabin
 inside, the whistle (now ~34 dB under the exhaust at 4000 rpm) never tuned.
