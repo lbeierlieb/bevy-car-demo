@@ -472,7 +472,7 @@ markers, map marks: `MapMarks`/`MapLegend` are keyed by owner now), `hunt.rs` (r
 only the realms it manages; one lobby per event, a round over merges into the waiting
 one), `lobby.rs` (client: `arrive` asks to enter when stopped on a marker, drive 8 m or
 Esc leaves; `follow` places the car at `online::lane_spots` near the marker by slot,
-lends via despawn/spawn and keeps our `Car` in `EventState::lent`, sets `car::Held` and
+lends via despawn/spawn and keeps our `Car` in `EventState::lent`, sets `Car::hold` and
 `car::ResetRule`; `window`: lobby window and the bar at the top). Protocol 7:
 `ToClient::Events`, `Round(Option<Round>)`, `Busy`, `ToServer::Event(Action)`; protocol 8
 added `Settings::catch`, `Ending::Tagged`, `Action::Touched`. Times are
@@ -513,7 +513,7 @@ user:
   passed, right half of the road; time trials never reset, "Start again"
   (`Action::Restart`) instead). Player cars only, for now.
 - Running (`race.rs`: `Course` = a route with laps): each racer on their grid spot by
-  slot (R before any gate goes back there), held (`car::Held`) for `COUNTDOWN` (5 s),
+  slot (R before any gate goes back there), held (`Car::hold`) for `COUNTDOWN` (5 s),
   the parking brake off, in neutral (put in gear during the countdown; agreed with the
   user, 2026-11-22); the clock runs from the green light. Gates
   (`race::checkpoint_gates`): at each checkpoint's mark, facing the line's way in and
@@ -684,9 +684,13 @@ Built (phases 0, 1, 2 and the start of 3):
   1.5 × speed × its age) from the server's car is refused (acknowledged, so the client
   takes up the server's state); a car built anew (`set_spec`) goes where the old one
   was or where the server put it (`Shadow::anchor`)
-  (`a_players_game_cant_move_their_car_but_the_server_can`). Still the client's word
-  (trusted): the car's condition and build (shops' changes, lent cars' builds), holds,
-  ghosts, the parking brake at markers.
+  (`a_players_game_cant_move_their_car_but_the_server_can`). **Holds** (protocol 23):
+  `Car::hold` (s left, in the snapshot, counted down in `Car::drive`, kept by `place` and
+  `rebuilt`; a placement can't shorten it) replaces `DriverInput::held`; set where the car
+  is put at a round's start (`Spot::hold` = `Round::hold`), so the release is predicted
+  exactly. The `Held` resource is only the round clock's view (rumble, tests). Still the
+  client's word (trusted): the car's condition and build (shops' changes, lent cars'
+  builds), ghosts, the parking brake at markers.
 - Not done: hunt tags from the server's contacts (clients still send `Touched`), the rest
   of phase 3 (placements are trusted: a modified client can teleport), checking a
   client's inputs (rates, ranges are clamped by the encoding).

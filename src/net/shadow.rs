@@ -127,11 +127,30 @@ pub struct Shadow {
     /// How many times the server moved the car (`put`).
     moved: u32,
     /// Where a car without a state yet goes when it gets one, if it's elsewhere: where the
-    /// server put it (or the car it replaces was), facing which way, and whether parked.
-    anchor: Option<(Vec2, f32, bool)>,
+    /// server put it (or the car it replaces was).
+    anchor: Option<Spot>,
     /// What R does with the car (the player's round's rules).
     pub rule: ResetRule,
     report: Report,
+}
+
+/// Where the server puts a car: at rest at `at` (map x, z) facing `yaw`, with the
+/// parking brake on if `parked` (else off: on a race's grid), held still for `hold` (s).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spot {
+    pub at: Vec2,
+    pub yaw: f32,
+    pub parked: bool,
+    pub hold: f32,
+}
+
+impl Spot {
+    /// Puts `car` there, as it was otherwise.
+    fn put(&self, car: &mut Car, terrain: &Terrain) {
+        car.place(terrain, self.at, self.yaw);
+        car.parking_brake = self.parked;
+        car.hold = self.hold;
+    }
 }
 
 /// How the copy followed the player's car lately.
@@ -162,8 +181,12 @@ impl Shadow {
         }
         // The new car goes where the old one is.
         if let Some(car) = &self.car {
-            let at = (car.body.position.xz(), heading(car.body.rotation));
-            self.anchor = Some((at.0, at.1, car.parking_brake));
+            self.anchor = Some(Spot {
+                at: car.body.position.xz(),
+                yaw: heading(car.body.rotation),
+                parked: car.parking_brake,
+                hold: car.hold,
+            });
         }
         self.car = None;
         self.built = None;
@@ -254,14 +277,12 @@ impl Shadow {
         self.yours.take()
     }
 
-    /// Moves the car: at rest at `p` (map x, z) facing `yaw`, as it was otherwise, with
-    /// the parking brake on if `parked` (else off: on a race's grid). A car without a state
-    /// yet goes there when it gets one.
-    pub fn put(&mut self, terrain: &Terrain, p: Vec2, yaw: f32, parked: bool) {
+    /// Moves the car to `spot`, as it was otherwise. A car without a state yet goes there
+    /// when it gets one.
+    pub fn put(&mut self, terrain: &Terrain, spot: Spot) {
         match &mut self.car {
             Some(car) => {
-                car.place(terrain, p, yaw);
-                car.parking_brake = parked;
+                spot.put(car, terrain);
                 self.moved = self.moved.wrapping_add(1);
                 self.ours.clear();
                 self.yours = Some(Yours {
@@ -271,7 +292,7 @@ impl Shadow {
                     state: snapshot::save(car),
                 });
             }
-            None => self.anchor = Some((p, yaw, parked)),
+            None => self.anchor = Some(spot),
         }
     }
 
@@ -390,6 +411,7 @@ impl Shadow {
             return;
         };
         let was = (!fresh).then(|| car.clone());
+        let anchor = if fresh { self.anchor } else { None };
         if !snapshot::load(&mut car, &state) {
             // Not a state of this car (from before it changed).
             if fresh {
@@ -411,12 +433,15 @@ impl Shadow {
                 self.car = Some(was);
                 return;
             }
-        } else if let Some((p, yaw, parked)) = self.anchor.take()
-            && car.body.position.xz().distance(p) > REACH
-        {
+            // Nor let it go early.
+            car.hold = if was.hold > 0.0 { was.hold + age } else { 0.0 };
+        } else if let Some(spot) = self.anchor.take() {
+            // Held as the server says.
+            car.hold = spot.hold;
+        }
+        if let Some(spot) = anchor.filter(|spot| car.body.position.xz().distance(spot.at) > REACH) {
             // Where the server has it.
-            car.place(terrain, p, yaw);
-            car.parking_brake = parked;
+            spot.put(&mut car, terrain);
             self.moved = self.moved.wrapping_add(1);
             moved = true;
         }

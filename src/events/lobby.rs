@@ -319,11 +319,13 @@ pub(super) fn follow(
                 let mut lent = Car::spawn_at(car.index, setup, &terrain, p.x, p.y, yaw);
                 lent.drivetrain.neutral();
                 lent.keep_settings(&car);
+                lent.hold = round.hold(you);
                 state.lent = Some(car.clone());
                 commands.entity(entity).despawn();
                 commands.spawn((Transform::from_translation(lent.body.position), lent));
             } else {
                 car.place(&terrain, p, yaw);
+                car.hold = round.hold(you);
                 // On a grid, held for the countdown: off at the green light.
                 if round.game.race().is_some() {
                     car.parking_brake = false;

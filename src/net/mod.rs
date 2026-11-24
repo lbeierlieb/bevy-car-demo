@@ -375,7 +375,13 @@ mod tests {
         let terrain = Terrain::flat();
         let mut peers = server.world_mut().query::<&mut super::server::Peer>();
         let mut peer = peers.single_mut(server.world_mut()).unwrap();
-        peer.shadow.put(&terrain, Vec2::new(30.0, 0.0), 0.0, true);
+        let spot = super::shadow::Spot {
+            at: Vec2::new(30.0, 0.0),
+            yaw: 0.0,
+            parked: true,
+            hold: 0.0,
+        };
+        peer.shadow.put(&terrain, spot);
         run(&mut [&mut server, &mut anna], 30);
         let ours = car(&mut anna).body.position.xz();
         assert!(
@@ -389,10 +395,43 @@ mod tests {
             there.distance(Vec2::new(30.0, 0.0)) < 0.5,
             "on the server at {there}"
         );
-        let (_, compared) = (anna.world())
+        let (corrected, compared) = (anna.world())
             .resource::<super::predict::Prediction>()
             .corrections();
         assert!(compared > 3);
+        // Put back, held for 2 s: floored, she stays put until then, as predicted.
+        let mut peers = server.world_mut().query::<&mut super::server::Peer>();
+        let mut peer = peers.single_mut(server.world_mut()).unwrap();
+        let spot = super::shadow::Spot {
+            at: Vec2::ZERO,
+            yaw: 0.0,
+            parked: false,
+            hold: 2.0,
+        };
+        peer.shadow.put(&terrain, spot);
+        anna.world_mut()
+            .resource_mut::<crate::input::WheelInput>()
+            .throttle = Some(1.0);
+        run(&mut [&mut server, &mut anna], 30);
+        let shift = |anna: &mut App, on: bool| {
+            anna.world_mut()
+                .resource_mut::<crate::input::WheelInput>()
+                .shift_up = on;
+        };
+        shift(&mut anna, true);
+        run(&mut [&mut server, &mut anna], 1);
+        shift(&mut anna, false);
+        run(&mut [&mut server, &mut anna], 59);
+        let ours = car(&mut anna).body.position.xz();
+        assert!(ours.length() < 0.3, "held, yet at {ours}");
+        assert!(car(&mut anna).hold > 0.0);
+        run(&mut [&mut server, &mut anna], 90);
+        let ours = car(&mut anna).body.position.xz();
+        assert!(ours.length() > 1.0, "still at {ours}");
+        let (again, _) = (anna.world())
+            .resource::<super::predict::Prediction>()
+            .corrections();
+        assert_eq!(again, corrected + 1, "only the move: the hold predicted");
     }
 
     #[test]

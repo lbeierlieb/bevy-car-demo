@@ -24,7 +24,7 @@ use super::link::{Link, Listener};
 use super::protocol::{
     CarId, CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, clean_chat,
 };
-use super::shadow::{BakedMaps, Shadow, Tick};
+use super::shadow::{BakedMaps, Shadow, Spot, Tick};
 use super::wire::{decode, encode};
 use super::{ClockOffset, NEAR, RATES, SEND_RATE};
 use crate::events::Event;
@@ -340,8 +340,14 @@ fn receive(
                     // Their car starts where their game puts it, by the spawn.
                     let spot = (network.as_deref())
                         .and_then(|network| join_spot(&terrain, network, &server.spawn, id));
-                    if let Some((p, yaw)) = spot {
-                        peer.shadow.put(&terrain, p, yaw, true);
+                    if let Some((at, yaw)) = spot {
+                        let spot = Spot {
+                            at,
+                            yaw,
+                            parked: true,
+                            hold: 0.0,
+                        };
+                        peer.shadow.put(&terrain, spot);
                     }
                     peer.tell(&ToClient::Welcome {
                         you: id,

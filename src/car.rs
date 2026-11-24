@@ -348,6 +348,10 @@ pub struct Car {
     pub switching_off: bool,
     /// The rescue helicopter coming for the car, carrying it or flying off.
     pub rescue: Rescue,
+    /// How long the car is held still yet (s): at an event's start, set where it's put
+    /// (a hunter for the head start, racers for the countdown). The brakes are on whatever
+    /// the driver does (the engine still revs).
+    pub hold: f32,
 }
 
 impl Car {
@@ -392,6 +396,7 @@ impl Car {
             parking_brake: true,
             switching_off: false,
             rescue: Rescue::default(),
+            hold: 0.0,
         }
         .with_fuel_load()
     }
@@ -441,9 +446,10 @@ impl Car {
         for (corner, old) in placed.corners.iter_mut().zip(&self.corners) {
             corner.tread = old.tread;
         }
-        // A rescue under way lets go.
+        // A rescue under way lets go; a hold goes on.
         placed.rescue = self.rescue.clone();
         placed.rescue.let_go();
+        placed.hold = self.hold;
         *self = placed;
     }
 
@@ -477,6 +483,7 @@ impl Car {
         car.fuel.fit(&car.setup.tank);
         car.load_fuel();
         car.rescue = self.rescue.clone();
+        car.hold = self.hold;
         car
     }
 
@@ -537,6 +544,7 @@ impl crate::snapshot::Snapshot for Car {
         self.parking_brake.save(out);
         self.switching_off.save(out);
         self.rescue.save(out);
+        self.hold.save(out);
     }
 
     fn load(&mut self, r: &mut crate::net::wire::Reader) -> Option<()> {
@@ -553,6 +561,7 @@ impl crate::snapshot::Snapshot for Car {
         self.parking_brake.load(r)?;
         self.switching_off.load(r)?;
         self.rescue.load(r)?;
+        self.hold.load(r)?;
         // What another build's state could hold that this one hasn't got.
         if !self.drivetrain.fits(&self.setup.engine) {
             return None;
@@ -693,8 +702,8 @@ pub struct ReverseRefused;
 #[derive(Resource, Default)]
 pub struct Away(pub bool);
 
-/// The active car is held at the start (a hunter during a car hunt's head start): its
-/// brakes are on whatever the driver does (the engine still revs).
+/// The active car is held at the start (a hunter during a car hunt's head start), as the
+/// round's clock says (what holds it is `Car::hold`).
 #[derive(Resource, Default)]
 pub struct Held(pub bool);
 
@@ -748,8 +757,6 @@ pub struct DriverInput {
     pub reset: bool,
     /// Nobody's at the wheel (away in a shop's room): all brakes, nothing else.
     pub away: bool,
-    /// Held at the start: the brakes are on whatever the driver does.
-    pub held: bool,
     /// The driver's aids (`DriverAids`).
     pub traction_control: bool,
     pub abs: bool,
@@ -776,7 +783,6 @@ impl DriverInput {
             ignition_held: wheel.ignition_held,
             reset: presses.reset,
             away: false,
-            held: false,
             traction_control: true,
             abs: true,
         };
@@ -813,12 +819,11 @@ impl Wire for DriverInput {
             self.ignition,
             self.ignition_held,
             self.away,
-            self.held,
+            self.reset,
             self.steer_keys > 0.0,
             self.steer_keys < 0.0,
             self.traction_control,
             self.abs,
-            self.reset,
         ];
         let flags = (bits.iter().enumerate()).fold(0u16, |f, (i, &b)| f | (u16::from(b) << i));
         flags.put(out);
@@ -880,10 +885,9 @@ impl Wire for DriverInput {
             ignition: bit(6),
             ignition_held: bit(7),
             away: bit(8),
-            held: bit(9),
             traction_control: bit(12),
             abs: bit(13),
-            reset: bit(14),
+            reset: bit(9),
         })
     }
 }
@@ -919,13 +923,12 @@ fn gather_presses(wheel: Res<WheelInput>, mut presses: ResMut<Presses>) {
 pub fn take_input(
     wheel: Res<WheelInput>,
     mut presses: ResMut<Presses>,
-    (away, held): (Res<Away>, Res<Held>),
+    away: Res<Away>,
     aids: Res<DriverAids>,
     mut input: ResMut<StepInput>,
 ) {
     let mut taken = DriverInput::take(&wheel, &mut presses);
     taken.away = away.0;
-    taken.held = held.0;
     taken.traction_control = aids.traction_control;
     taken.abs = aids.abs;
     input.step = input.step.wrapping_add(1);
@@ -989,6 +992,8 @@ impl Car {
     pub fn drive(&mut self, input: &DriverInput, dt: f32) -> bool {
         self.traction_control = input.traction_control;
         self.abs = input.abs;
+        let held = self.hold > 0.0;
+        self.hold = (self.hold - dt).max(0.0);
         if input.away {
             self.rescue.let_go();
         }
@@ -1054,7 +1059,7 @@ impl Car {
         );
         // A lever works directly, on top of it.
         c.handbrake = pull.max(input.handbrake.unwrap_or(0.0));
-        if input.held {
+        if held {
             c.brake = 1.0;
             c.handbrake = 1.0;
         }
@@ -1257,7 +1262,6 @@ mod tests {
             ignition_held: true,
             reset: true,
             away: false,
-            held: true,
             traction_control: false,
             abs: true,
         };

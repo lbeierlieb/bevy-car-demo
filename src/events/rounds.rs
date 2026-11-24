@@ -16,6 +16,7 @@ use crate::heli::{Chase, HeliPose};
 use crate::net::protocol::CarId;
 use crate::net::protocol::{CarState, PlayerId, ToClient};
 use crate::net::server::{Peer, Server};
+use crate::net::shadow::Spot;
 use crate::terrain::Terrain;
 use crate::traffic::network::Network;
 use crate::traffic::{Realm, Traffic};
@@ -598,10 +599,15 @@ pub fn run_rounds(
                     let spot = (at(event)).and_then(|at| {
                         start_spot(&live.round, course, &terrain, network, at, peer.id)
                     });
-                    if let Some((p, yaw)) = spot {
-                        // On a race's grid, the countdown holds the car.
-                        let parked = live.round.game.race().is_none();
-                        peer.shadow.put(&terrain, p, yaw, parked);
+                    if let Some((at, yaw)) = spot {
+                        let spot = Spot {
+                            at,
+                            yaw,
+                            // On a race's grid, the countdown holds the car.
+                            parked: live.round.game.race().is_none(),
+                            hold: live.round.hold(peer.id),
+                        };
+                        peer.shadow.put(&terrain, spot);
                     }
                 }
             }
@@ -612,8 +618,14 @@ pub fn run_rounds(
                         (live.round.event, live.round.slot(peer.id))
                     });
                     if let Some(at) = at(event) {
-                        let (p, yaw) = marker_spot(&terrain, network, at, slot);
-                        peer.shadow.put(&terrain, p, yaw, true);
+                        let (at, yaw) = marker_spot(&terrain, network, at, slot);
+                        let spot = Spot {
+                            at,
+                            yaw,
+                            parked: true,
+                            hold: 0.0,
+                        };
+                        peer.shadow.put(&terrain, spot);
                     }
                 }
             }

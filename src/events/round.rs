@@ -143,6 +143,16 @@ impl Round {
         }
     }
 
+    /// How long `player`'s car is held when the round starts (s): a hunter for the head
+    /// start, racers for the countdown.
+    pub fn hold(&self, player: PlayerId) -> f32 {
+        match &self.game {
+            Game::Hunt(settings) if self.host != player => f32::from(settings.head_start),
+            Game::Hunt(_) => 0.0,
+            Game::Race(_) | Game::Trial(_) => race::COUNTDOWN as f32,
+        }
+    }
+
     /// How a race or time trial under way stands.
     pub fn standing(&self) -> Option<&race::Standing> {
         match &self.phase {
