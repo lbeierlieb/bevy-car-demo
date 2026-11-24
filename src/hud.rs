@@ -8,7 +8,8 @@ use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Shape, Stroke, pos2, vec2};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
-use crate::car::{ActiveCar, Car};
+use crate::car::{ActiveCar, Car, Rescued};
+use crate::menu::MEDIUM;
 use crate::physics::engine::damage::COOLANT_LIMIT;
 use crate::physics::tire::{AMBIENT, Compound, RIBS};
 
@@ -29,7 +30,7 @@ pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(EguiPrimaryContextPass, hud);
+        app.add_systems(EguiPrimaryContextPass, (hud, rescue_warning));
     }
 }
 
@@ -61,6 +62,45 @@ impl Needles {
         self.fuel += (fuel - self.fuel) * (1.0 - (-dt / FUEL_LAG).exp());
         self.coolant += (coolant - self.coolant) * (1.0 - (-dt / COOLANT_LAG).exp());
     }
+}
+
+/// While the rescue helicopter has the car (`car::Rescued`: from the call until it's set
+/// down), a warning in the upper middle of the screen, its border pulsing.
+fn rescue_warning(
+    mut contexts: EguiContexts,
+    rescued: Option<Res<Rescued>>,
+    time: Res<Time>,
+) -> Result {
+    if !rescued.is_some_and(|rescued| rescued.0) {
+        return Ok(());
+    }
+    let pulse = 0.5 + 0.5 * (time.elapsed_secs() * 5.0).sin();
+    let border = Color32::from_rgb(255, (150.0 + 70.0 * pulse) as u8, 30);
+    egui::Area::new(egui::Id::new("rescue warning"))
+        .anchor(Align2::CENTER_TOP, vec2(0.0, 150.0))
+        .interactable(false)
+        .show(contexts.ctx_mut()?, |ui| {
+            egui::Frame::new()
+                .fill(Color32::from_rgba_premultiplied(150, 20, 15, 225))
+                .stroke(Stroke::new(3.0 + 2.0 * pulse, border))
+                .corner_radius(8.0)
+                .inner_margin(egui::Margin::symmetric(24, 14))
+                .show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new("⚠ You are being rescued ⚠")
+                                .font(FontId::new(30.0, egui::FontFamily::Name(MEDIUM.into())))
+                                .color(Color32::WHITE),
+                        );
+                        ui.label(
+                            egui::RichText::new("Please do not resist!")
+                                .font(FontId::new(22.0, egui::FontFamily::Name(MEDIUM.into())))
+                                .color(Color32::from_rgb(255, 225, 120)),
+                        );
+                    });
+                });
+        });
+    Ok(())
 }
 
 fn hud(

@@ -570,7 +570,8 @@ anywhere; `Chase`, the hunt's flight) and `rescue.rs`.
   Runs in `FixedPostUpdate` after the simulation, overwriting the car's body (wheels hang,
   engine runs). `car::Rescued` while it's coming/carrying: input ignored (brakes), neutral (whatever the
   H-shifter says) and the parking brake on from the call, also once set down, R off,
-  online a ghost (`haunt`). Lets go if the car is moved by something else (> 2 m), gone,
+  online a ghost (`haunt`). Meanwhile a warning in the upper middle, "⚠ You are being rescued ⚠ / Please
+  do not resist!" (`hud::rescue_warning`, asked for by the user, 2026-11-24). Lets go if the car is moved by something else (> 2 m), gone,
   or away. Its pose goes in `CarState::heli` (stamped like the state; protocol 10), so the
   others draw it, the cable to the car's roof when `hooked`. No sound yet.
 - **Hunt helicopter**: the server flies a `Chase` per running round in `run_rounds` over
