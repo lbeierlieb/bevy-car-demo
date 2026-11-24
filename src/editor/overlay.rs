@@ -97,7 +97,7 @@ fn drape(terrain: &Terrain, points: &[Vec2]) -> Vec<Vec3> {
 
 /// Where a ray from the camera meets the ground (distance and point), up to 3 km out:
 /// steps that grow with the distance (a pixel there is bigger), then halving.
-fn ground_hit(terrain: &Terrain, origin: Vec3, dir: Vec3) -> Option<(f32, Vec3)> {
+pub fn ground_hit(terrain: &Terrain, origin: Vec3, dir: Vec3) -> Option<(f32, Vec3)> {
     let above = |t: f32| {
         let p = origin + dir * t;
         p.y - terrain.sample(p.x, p.z).0

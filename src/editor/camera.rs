@@ -127,7 +127,9 @@ fn fly(
         camera.yaw -= motion.delta.x * LOOK;
         camera.pitch = (camera.pitch - motion.delta.y * LOOK).clamp(-1.55, 1.55);
     }
-    if !over_ui && scroll.delta.y != 0.0 {
+    // Shift with the wheel is the race editor's (turning a grid spot).
+    let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    if !over_ui && !shift && scroll.delta.y != 0.0 {
         let step = scroll.delta.y.signum() as isize;
         camera.speed = (camera.speed as isize + step).clamp(0, SPEEDS.len() as isize - 1) as usize;
     }

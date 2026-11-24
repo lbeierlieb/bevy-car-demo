@@ -75,7 +75,7 @@ pub fn order_grid(grid: &mut [GridSpot], first: Vec2) {
 /// A route of a race event: as the server's list has it (`grid`, `checkpoints`) and along
 /// the roads (`line`, with the road's width at each point; a loop's last point is its
 /// first; `marks`, each checkpoint's place in the line).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Route {
     pub name: String,
     /// Round and round (laps), or from one end to the other.

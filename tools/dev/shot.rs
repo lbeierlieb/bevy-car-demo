@@ -731,6 +731,8 @@ fn edit_keys(mut frame: Local<u32>, mut keys: ResMut<ButtonInput<KeyCode>>) {
         "Escape" => KeyCode::Escape,
         "Delete" => KeyCode::Delete,
         "Backspace" => KeyCode::Backspace,
+        "KeyC" => KeyCode::KeyC,
+        "KeyG" => KeyCode::KeyG,
         "KeyX" => KeyCode::KeyX,
         "KeyZ" => KeyCode::KeyZ,
         "KeyY" => KeyCode::KeyY,

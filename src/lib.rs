@@ -1,7 +1,8 @@
 //! The game's library, shared by its apps: the sandbox (`main.rs`: every car and part
-//! free, with the developer tools) and the map editor (`bin/editor.rs`, native only, no
-//! cars). Each app is the plugins it adds; `CorePlugin` is what a driving app has: the
-//! world, driving a car, and seeing and hearing it.
+//! free, with the developer tools), the map editor (`bin/editor.rs`) and the race editor
+//! (`bin/races.rs`; both native only, no cars). Each app is the plugins it adds;
+//! `CorePlugin` is what a driving app has: the world, driving a car, and seeing and
+//! hearing it.
 
 pub mod alignment;
 pub mod audio;
@@ -35,6 +36,8 @@ pub mod online;
 pub mod osm;
 pub mod paint;
 pub mod physics;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod race_editor;
 pub mod relief;
 pub mod scenery;
 pub mod shops;
