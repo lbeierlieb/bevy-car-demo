@@ -991,6 +991,7 @@ pub fn action_value(config: &WheelConfig, gamepads: &Gamepads, action: Action) -
 fn read_wheel(
     config: Res<WheelConfig>,
     base: Res<WheelBase>,
+    ffb: Option<Res<crate::wheel_base::ForceFeedback>>,
     gamepads: Gamepads,
     menu: Option<Res<crate::menu::nav::MenuFocus>>,
     mut wheel: ResMut<WheelInput>,
@@ -1006,8 +1007,15 @@ fn read_wheel(
         })
     };
     let axis = |action| value_of(&config, &gamepads, action, |b| b.input.is_axis());
-    // The axis covers the base's range, which may be wider than the game's.
-    let angle = axis(Action::Steer).map(|axis| axis * base.range(&config) / 2.0);
+    // A wheel base's axis covers the base's range, which may be wider than the game's; any
+    // other axis (a stick) covers the game's.
+    let angle = (config.profile().bindings_of(Action::Steer))
+        .filter(|b| b.input.is_axis())
+        .filter_map(|b| {
+            let range = base.axis_range(&config, ffb.as_deref(), &b.device);
+            Some(binding_value(&config, &gamepads, Action::Steer, b)? * range / 2.0)
+        })
+        .reduce(|a, b| if b.abs() > a.abs() { b } else { a });
     // A handbrake bound to a button or key works the parking brake (and brakes while held
     // when driving); to an axis, it's a lever.
     let button =

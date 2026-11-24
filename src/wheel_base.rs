@@ -100,6 +100,29 @@ impl WheelBase {
     pub fn range(&self, config: &WheelConfig) -> f32 {
         self.actual.or(config.base_range).unwrap_or(config.range)
     }
+
+    /// The rotation range a steering axis on this device covers (degrees): the base's for
+    /// the wheel base force feedback plays on (on Linux, the device that takes a constant
+    /// force; elsewhere any, as the settings say), the game's for anything else (a pad's
+    /// stick pushed all the way is full lock).
+    pub fn axis_range(
+        &self,
+        config: &WheelConfig,
+        ffb: Option<&ForceFeedback>,
+        device: &str,
+    ) -> f32 {
+        let base = if cfg!(target_os = "linux") {
+            ffb.and_then(|ffb| ffb.device.as_deref())
+                .is_some_and(|wheel| wheel.trim() == device.trim())
+        } else {
+            true
+        };
+        if base {
+            self.range(config)
+        } else {
+            config.range
+        }
+    }
 }
 
 impl Drop for WheelBase {
@@ -454,6 +477,27 @@ mod tests {
         assert!((soft_lock(275.0, 540.0) + 0.5).abs() < 1e-6);
         assert!((soft_lock(-275.0, 540.0) - 0.5).abs() < 1e-6);
         assert_eq!(soft_lock(900.0, 540.0), -1.0);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_pads_stick_covers_the_games_range() {
+        let config = WheelConfig::default();
+        let mut base = WheelBase::default();
+        base.actual = Some(2520.0);
+        let ffb = ForceFeedback {
+            device: Some("FANATEC Wheel".into()),
+            ..default()
+        };
+        assert_eq!(
+            base.axis_range(&config, Some(&ffb), "FANATEC Wheel "),
+            2520.0
+        );
+        assert_eq!(
+            base.axis_range(&config, Some(&ffb), "Xbox Controller"),
+            540.0
+        );
+        assert_eq!(base.axis_range(&config, None, "FANATEC Wheel"), 540.0);
     }
 
     #[test]
