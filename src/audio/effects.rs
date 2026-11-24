@@ -1266,13 +1266,9 @@ mod tests {
         let path = std::env::var("EFFECTS_WAV").unwrap_or("effects.wav".into());
         let (cues, mut voice) = voice();
         let effects = Effects { cues: cues.clone() };
-        let mut samples: Vec<i16> = Vec::new();
+        let mut frames = Vec::new();
         let mut play = |voice: &mut EffectsVoice, seconds: f32| {
-            for _ in 0..(seconds * SAMPLE_RATE as f32) as usize {
-                let (left, right) = voice.frame();
-                samples.push((left * 32767.0) as i16);
-                samples.push((right * 32767.0) as i16);
-            }
+            frames.extend((0..(seconds * SAMPLE_RATE as f32) as usize).map(|_| voice.frame()));
         };
         for _ in 0..3 {
             effects.call(Call::Count);
@@ -1319,23 +1315,6 @@ mod tests {
             cues.set_starter(false, 0.0, 0.0);
             play(&mut voice, 1.0);
         }
-        let mut wav = Vec::new();
-        let data = (samples.len() * 2) as u32;
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&(36 + data).to_le_bytes());
-        wav.extend_from_slice(b"WAVEfmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&2u16.to_le_bytes());
-        wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-        wav.extend_from_slice(&(SAMPLE_RATE * 4).to_le_bytes());
-        wav.extend_from_slice(&4u16.to_le_bytes());
-        wav.extend_from_slice(&16u16.to_le_bytes());
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data.to_le_bytes());
-        for sample in samples {
-            wav.extend_from_slice(&sample.to_le_bytes());
-        }
-        std::fs::write(path, wav).unwrap();
+        crate::audio::write_wav(path, &frames);
     }
 }

@@ -984,9 +984,154 @@ fn pan(to: Vec3, right: Dir3) -> f32 {
     to.normalize_or_zero().dot(*right).clamp(-1.0, 1.0)
 }
 
+/// Writes stereo `frames` (left, right; -1 to 1, clipped) to a 16-bit WAV file at `path`,
+/// for listening to the synths outside the game.
+#[cfg(test)]
+fn write_wav(path: impl AsRef<std::path::Path>, frames: &[(f32, f32)]) {
+    let data = (frames.len() * 4) as u32;
+    let mut wav = Vec::with_capacity(44 + data as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
+    wav.extend_from_slice(&(SAMPLE_RATE * 4).to_le_bytes());
+    wav.extend_from_slice(&4u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data.to_le_bytes());
+    for &(left, right) in frames {
+        for sample in [left, right] {
+            let sample = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+            wav.extend_from_slice(&sample.to_le_bytes());
+        }
+    }
+    std::fs::write(path, wav).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Renders every factory engine (or those in `ENGINES`, codes separated by commas) to
+    /// `<ENGINE_WAV>/<code>.wav` (default `engine-wav`), through the same program, at the
+    /// level the game plays it, so files can be compared with each other and with older
+    /// renders: idle, three blips, a full-throttle pull from 2000 rpm to the redline,
+    /// lifting off back down, a light cruise, then the same engine passing at 90 km/h,
+    /// heard from 8 m beside the road.
+    #[test]
+    #[ignore]
+    fn write_engine_wavs() {
+        use crate::physics::engine::families::{FAMILIES, Version};
+        let dir = std::env::var("ENGINE_WAV").unwrap_or("engine-wav".into());
+        let only = std::env::var("ENGINES").ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        // Targets change at the game's frame rate; the synth glides between them.
+        const TICK: f32 = 1.0 / 60.0;
+        const IDLE: f32 = 850.0;
+        for (f, family) in FAMILIES.iter().enumerate() {
+            for (v, version) in family.versions.iter().enumerate() {
+                if let Some(only) = &only
+                    && !only.split(',').any(|code| code.trim() == version.code)
+                {
+                    continue;
+                }
+                let hardware = Version::parts(f, v).hardware();
+                let redline = hardware.safe_rpm(usize::MAX);
+                let character = EngineCharacter {
+                    layout: family.layout,
+                    exhaust: ExhaustSound::of(&hardware),
+                    turbo_limit: hardware.turbo.map_or(0.0, |turbo| turbo.max_speed()),
+                };
+                // A turbo spooling with engine speed and load, lagging a little.
+                let mut spool = 0.0;
+                let mut run = |rpm: f32, load: f32| {
+                    let target = (rpm / redline) * (0.3 + 0.7 * load);
+                    spool += (target - spool) * (TICK / 0.4);
+                    EngineRun {
+                        running: true,
+                        rpm,
+                        load,
+                        turbo_speed: spool * character.turbo_limit,
+                    }
+                };
+                // Engine speed and load over time (seconds since the segment began).
+                type Segment<'a> = (f32, Box<dyn Fn(f32) -> (f32, f32) + 'a>);
+                let rise = 0.6 * redline;
+                let program: Vec<Segment> = vec![
+                    (2.0, Box::new(|_| (IDLE, 0.12))),
+                    (
+                        3.0,
+                        Box::new(|t| {
+                            // A blip a second: 0.2 s on the gas, then falling back.
+                            let t = t % 1.0;
+                            if t < 0.2 {
+                                (IDLE + (rise - IDLE) * t / 0.2, 1.0)
+                            } else {
+                                let fall = ((t - 0.2) / 0.5).min(1.0);
+                                (rise + (IDLE - rise) * fall, 0.0)
+                            }
+                        }),
+                    ),
+                    (1.0, Box::new(|_| (IDLE, 0.12))),
+                    (
+                        6.0,
+                        Box::new(|t| (2000.0 + (redline - 2000.0) * t / 6.0, 1.0)),
+                    ),
+                    (
+                        3.0,
+                        Box::new(|t| (redline + (2000.0 - redline) * t / 3.0, 0.0)),
+                    ),
+                    (2.0, Box::new(|_| (2500.0, 0.3))),
+                ];
+                let targets = Arc::new(Targets::new());
+                let mut voice = EngineVoice::new(targets.clone());
+                let mut frames = Vec::new();
+                let per_tick = (TICK * SAMPLE_RATE as f32) as usize;
+                for (length, at) in &program {
+                    for tick in 0..(length / TICK) as usize {
+                        let (rpm, load) = at(tick as f32 * TICK);
+                        targets.hear(&character, &run(rpm, load), 1.0);
+                        frames.extend((0..per_tick).map(|_| voice.frame()));
+                    }
+                }
+                frames.extend((0..SAMPLE_RATE as usize / 2).map(|_| (0.0, 0.0)));
+
+                // The pass-by: in fourth at 4000 rpm and a little gas, along x past a
+                // listener 8 m from the road, facing it (their right is +x).
+                let targets = Arc::new(Targets::new());
+                let (speed, side, length) = (25.0, 8.0, 6.0);
+                let place = |t: f32| Vec3::new(-0.5 * speed * length + speed * t, 0.0, -side);
+                let right = Dir3::X;
+                let (rpm, load) = (4000.0, 0.6);
+                let distance = |t: f32| place(t).length();
+                let (volume, cutoff, doppler) = placed(distance(0.0), 0.0);
+                targets.hear(&character, &run(rpm, load), volume);
+                targets.set_place(pan(place(0.0), right), cutoff, doppler);
+                let mut voice = EngineVoice::new(targets.clone());
+                for tick in 0..(length / TICK) as usize {
+                    let t = tick as f32 * TICK;
+                    let closing = (distance(t - TICK) - distance(t)) / TICK;
+                    let (volume, cutoff, doppler) = placed(distance(t), closing);
+                    targets.hear(&character, &run(rpm, load), volume);
+                    targets.set_place(pan(place(t), right), cutoff, doppler);
+                    frames.extend((0..per_tick).map(|_| voice.frame()));
+                }
+
+                let path = std::path::Path::new(&dir).join(format!("{}.wav", version.code));
+                write_wav(&path, &frames);
+                println!(
+                    "{}: {} {} ({:?}), redline {redline} rpm",
+                    path.display(),
+                    family.name,
+                    version.name,
+                    family.layout,
+                );
+            }
+        }
+    }
 
     #[test]
     fn each_bank_of_a_cross_plane_v8_fires_unevenly() {

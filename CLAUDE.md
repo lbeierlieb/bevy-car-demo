@@ -1491,6 +1491,16 @@ clunks in and the pinion clacks out; let go or overrun, it spins down over ~0.5 
 `write_effects_wav` (ignored, `EFFECTS_WAV=path`) renders
 them all to listen to. Not done: other cars' squeal and crashes (`Motion` has no slip), tuned by ear.
 
+Listening to the engines offline (2026-11-24, for reworking the engine sound):
+`ENGINE_WAV=dir ENGINES=M50,B16 cargo test --profile release-dev write_engine_wavs --
+--ignored --nocapture` renders each factory engine (all without `ENGINES`) to
+`dir/<code>.wav` (23 s, ~2 s for all 22): idle, three blips, a full-throttle pull from
+2000 rpm to the redline, lifting off, a cruise, then a pass-by at 90 km/h from 8 m
+(the remote-car path: mono, low-pass, pan, Doppler). Raw levels, the same program
+every time, so renders before and after a change can be compared. First render: nothing
+clips, and the V8s (RMS 0.155) are quieter than the 1-litre three (0.19): nothing in
+the level grows with displacement.
+
 The engine sound goes through bevy_audio, which can't set the output buffer size. An
 attempt to open the output with rodio/cpal directly (fixed 4096-frame buffer against
 underruns) gave no sound at all in the wasm build and was dropped. If it's tried
