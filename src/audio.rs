@@ -36,7 +36,7 @@ use bevy::prelude::*;
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Car};
 use crate::looks::{Looks, Motion};
-use crate::physics::drivetrain::{Drivetrain, EngineSetup};
+use crate::physics::drivetrain::{Drivetrain, EngineSetup, firing_load};
 use crate::physics::engine::families::{Layout, relative_size};
 use crate::physics::engine::hardware::EngineHardware;
 
@@ -155,6 +155,10 @@ const RIGHT_PIPES: f32 = 1.15;
 const RIGHT_DELAY: f32 = 0.001;
 /// Share of each bank that reaches the other ear.
 const CROSSFEED: f32 = 0.5;
+/// A cylinder of this size (m³; the 2-litre four's) at full load without boost fires at
+/// strength 1. Big engines are louder by the gas they push out: this leaves them room
+/// under the limiter.
+const CYLINDER: f32 = 0.0005;
 /// Strength of a firing off throttle, relative to full throttle.
 const IDLE_STRENGTH: f32 = 0.45;
 /// Overall level before the soft limiter.
@@ -251,6 +255,8 @@ pub struct EngineCharacter {
     pub exhaust: ExhaustSound,
     /// The turbo's shaft speed limit (rad/s), 0 without a turbo.
     pub turbo_limit: f32,
+    /// Swept volume of all cylinders (m³).
+    pub displacement: f32,
 }
 
 impl EngineCharacter {
@@ -260,6 +266,7 @@ impl EngineCharacter {
             layout: setup.parts.family().layout,
             exhaust: ExhaustSound::of(hardware),
             turbo_limit: hardware.turbo.map_or(0.0, |turbo| turbo.max_speed()),
+            displacement: hardware.displacement(),
         }
     }
 }
@@ -269,8 +276,9 @@ impl EngineCharacter {
 pub struct EngineRun {
     pub running: bool,
     pub rpm: f32,
-    /// 0 to 1.
-    pub load: f32,
+    /// How full its cylinders get (see `Drivetrain::fill`): with the displacement, how
+    /// much gas each firing pushes out, which is how loud it is.
+    pub fill: f32,
     /// The turbo's shaft speed (rad/s).
     pub turbo_speed: f32,
 }
@@ -281,7 +289,7 @@ impl EngineRun {
             // Cranking, its compressions are heard (slow chugs at the starter's speed).
             running: drivetrain.running || drivetrain.cranking(),
             rpm: drivetrain.rpm,
-            load: drivetrain.load,
+            fill: drivetrain.fill,
             turbo_speed: drivetrain.engine.turbo_speed,
         }
     }
@@ -415,7 +423,9 @@ impl Plugin for AudioPlugin {
 #[derive(Default)]
 struct Targets {
     rpm: AtomicU32,
-    load: AtomicU32,
+    /// How full the cylinders get, and their swept volume (m³).
+    fill: AtomicU32,
+    displacement: AtomicU32,
     volume: AtomicU32,
     /// The engine's layout, as its place in `LAYOUTS`.
     layout: AtomicU32,
@@ -444,6 +454,10 @@ impl Targets {
     fn new() -> Self {
         let targets = Self::default();
         targets.set_exhaust(ExhaustSound::default());
+        store(
+            &targets.displacement,
+            EngineHardware::default().displacement(),
+        );
         targets.set_place(0.0, 0.0, 1.0);
         targets
     }
@@ -475,9 +489,9 @@ impl Targets {
         (pan, cutoff, doppler)
     }
 
-    fn set(&self, rpm: f32, load: f32, volume: f32) {
+    fn set(&self, rpm: f32, fill: f32, volume: f32) {
         store(&self.rpm, rpm);
-        store(&self.load, load);
+        store(&self.fill, fill);
         store(&self.volume, volume);
     }
 
@@ -517,7 +531,7 @@ impl Targets {
     }
 
     fn get(&self) -> (f32, f32, f32) {
-        (read(&self.rpm), read(&self.load), read(&self.volume))
+        (read(&self.rpm), read(&self.fill), read(&self.volume))
     }
 }
 
@@ -745,7 +759,11 @@ impl Bank {
 struct EngineVoice {
     targets: Arc<Targets>,
     rpm: f32,
+    /// How full the cylinders get (gliding), how hard that fires them (0 to 1, for the
+    /// tone), and their swept volume (m³).
+    fill: f32,
     load: f32,
+    displacement: f32,
     volume: f32,
     /// The layout the banks are set up for, and how it sounds.
     layout: Layout,
@@ -782,10 +800,13 @@ impl EngineVoice {
         let exhaust = targets.exhaust();
         // Heard from where it is from the start.
         let (pan, cutoff, doppler) = targets.place();
+        let displacement = read(&targets.displacement);
         Self {
             targets,
             rpm: 0.0,
+            fill: 0.0,
             load: 0.0,
+            displacement,
             volume: 0.0,
             layout,
             banks: banks(&sound, &exhaust),
@@ -829,9 +850,12 @@ impl EngineVoice {
         let glide = |value: &mut f32, target: f32, time: f32| {
             *value += (target - *value) / (time * rate);
         };
-        let (rpm, load, volume) = self.targets.get();
+        let (rpm, fill, volume) = self.targets.get();
         glide(&mut self.rpm, rpm.max(0.0), GLIDE);
-        glide(&mut self.load, load.clamp(0.0, 1.0), LOAD_GLIDE);
+        glide(&mut self.fill, fill.clamp(0.0, 4.0), LOAD_GLIDE);
+        self.load = firing_load(self.fill).min(1.0);
+        let displacement = read(&self.targets.displacement).clamp(1e-5, 0.02);
+        glide(&mut self.displacement, displacement, GLIDE);
         glide(&mut self.volume, volume, GLIDE);
         let exhaust = self.targets.exhaust();
         glide(
@@ -880,7 +904,12 @@ impl EngineVoice {
             let firing = self.cycle.floor() as usize % firings;
             let (own_strength, own_late) = CYLINDERS[firing % CYLINDERS.len()];
             let jitter = JITTER_IDLE + (JITTER_LOAD - JITTER_IDLE) * self.load;
-            let strength = (IDLE_STRENGTH + (1.0 - IDLE_STRENGTH) * self.load)
+            // The gas a firing pushes out: the cylinder's size, and how full it got (more
+            // on boost).
+            let cylinder = self.displacement / firings as f32 / CYLINDER;
+            let fired = firing_load(self.fill);
+            let strength = cylinder
+                * (IDLE_STRENGTH + (1.0 - IDLE_STRENGTH) * fired)
                 * (1.0 + CYLINDER_STRENGTH * own_strength)
                 * (1.0 + jitter * self.noise());
             // Seconds of the engine's time between firings.
@@ -961,7 +990,7 @@ impl EngineVoice {
         let exhaust_level = (MUFFLED_LEVEL + (OPEN_LEVEL - MUFFLED_LEVEL) * open)
             * (1.0 + BORE_LEVEL * (bore - 1.0))
             * (1.0 - (1.0 - TURBINE_LEVEL) * turbine);
-        let level = GAIN * self.volume * exhaust_level * (8.0 / firings as f32).sqrt();
+        let level = GAIN * self.volume * exhaust_level;
         let whistle = GAIN * self.volume * whistle;
         let mix = |near: f32, far: f32| (level * (near + CROSSFEED * far) + whistle).tanh();
         if self.cutoff > 0.0 {
@@ -1033,7 +1062,8 @@ impl Targets {
     /// Plays an engine that sounds like `voice` running as `run` says, at `volume`.
     fn hear(&self, voice: &EngineCharacter, run: &EngineRun, volume: f32) {
         let volume = if run.running { volume } else { 0.0 };
-        self.set(run.rpm, run.load, volume);
+        self.set(run.rpm, run.fill, volume);
+        store(&self.displacement, voice.displacement);
         self.set_layout(voice.layout);
         self.set_exhaust(voice.exhaust);
         let share = if voice.turbo_limit > 0.0 {
@@ -1282,6 +1312,7 @@ mod tests {
                     layout: family.layout,
                     exhaust: ExhaustSound::of(&hardware),
                     turbo_limit: hardware.turbo.map_or(0.0, |turbo| turbo.max_speed()),
+                    displacement: hardware.displacement(),
                 };
                 // A turbo spooling with engine speed and load, lagging a little.
                 let mut spool = 0.0;
@@ -1291,7 +1322,7 @@ mod tests {
                     EngineRun {
                         running: true,
                         rpm,
-                        load,
+                        fill: crate::physics::drivetrain::fill_for(load),
                         turbo_speed: spool * character.turbo_limit,
                     }
                 };
