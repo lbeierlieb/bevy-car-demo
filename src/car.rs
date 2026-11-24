@@ -760,11 +760,13 @@ fn take_input(
     input.0 = taken;
 }
 
-/// The step's input drives the active car; any other car holds all brakes.
+/// The step's input drives the active car, with the driver's aids; any other car holds
+/// all brakes.
 pub fn drive(
     input: Res<StepInput>,
     time: Res<Time>,
     active: Res<ActiveCar>,
+    aids: Res<DriverAids>,
     mut cars: Query<&mut Car>,
     mut refused: MessageWriter<ReverseRefused>,
 ) {
@@ -774,6 +776,8 @@ pub fn drive(
     };
     for mut car in &mut cars {
         let input = if car.index == active.0 {
+            car.traction_control = aids.traction_control;
+            car.abs = aids.abs;
             &input.0
         } else {
             &idle
