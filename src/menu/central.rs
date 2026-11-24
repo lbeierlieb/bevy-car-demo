@@ -256,7 +256,7 @@ fn show(
         .width(width)
         .back(Some(back))
         .show(ctx, |ui| match screen {
-            Screen::Main => go = main(ui, &mut menu, &mut online, &mut exit),
+            Screen::Main => go = main(ui, &mut menu, &mut online, &mut commands, &mut exit),
             Screen::Actions => actions(ui, &mut menu, &mut driving, &wheel.config),
             Screen::Settings => {
                 for screen in [
@@ -301,6 +301,7 @@ fn main(
     ui: &mut egui::Ui,
     menu: &mut CentralMenu,
     online: &mut Online,
+    commands: &mut Commands,
     exit: &mut MessageWriter<AppExit>,
 ) -> Option<Screen> {
     let mut go = None;
@@ -334,7 +335,10 @@ fn main(
         .connection
         .as_ref()
         .is_some_and(|c| matches!(c.status, Status::Joined { .. }));
-    if joined {
+    // Alone is on the game's own server: no players to list, and joining a real one
+    // leaves it.
+    let alone = online.start.as_ref().is_some_and(|start| start.alone);
+    if joined && !alone {
         kit::section(ui, "Online");
         let count = online
             .connection
@@ -344,12 +348,17 @@ fn main(
         if kit::submenu(ui, &label).clicked() {
             go = Some(Screen::Online);
         }
-    } else if online.connection.is_none()
+    } else if (online.connection.is_none() || alone)
         && !cfg!(target_arch = "wasm32")
         && let Some(start) = &mut online.start
     {
         kit::section(ui, "Online");
         if kit::button(ui, "Join a server").clicked() {
+            if let Some(connection) = &mut online.connection {
+                connection.close();
+                commands.remove_resource::<Connection>();
+            }
+            start.alone = false;
             start.open = true;
             menu.close();
         }

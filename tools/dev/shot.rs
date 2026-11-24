@@ -125,7 +125,9 @@ fn say(mut frame: Local<u32>, connection: Option<ResMut<crate::net::Connection>>
 }
 
 /// The controls screen is closed unless INTRO=1, the start menu unless MENU=1;
-/// JOIN="address" joins that server as NAME (or "Shot") at once.
+/// JOIN="address" joins that server as NAME (or "Shot") at once, else the shot plays
+/// alone (on the game's own server), unless OFFLINE=1 or LINEUP (no server at all: a
+/// join would move the car).
 fn start_online(
     mut commands: Commands,
     mut done: Local<bool>,
@@ -152,6 +154,11 @@ fn start_online(
         let link = crate::net::connect(&address);
         commands.insert_resource(crate::net::Connection::new(link, &name, &terrain));
         menu.open = false;
+    } else if std::env::var("MENU").is_err()
+        && std::env::var("OFFLINE").is_err()
+        && std::env::var("LINEUP").is_err()
+    {
+        crate::online::play_alone(&mut commands, &mut menu, &terrain);
     }
 }
 

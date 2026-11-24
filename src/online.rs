@@ -1,6 +1,7 @@
 //! Playing alone or on a server: the start menu (name, server address, "Play alone",
 //! "Join server"; on the web only the name and "Join", for the server the page came
-//! from), what's shown while joining or when it fails (the players and leaving are in
+//! from; alone is joining the game's own server, `net::local`), what's shown while
+//! joining or when it fails (the players and leaving are in
 //! the central menu), name tags (`name_tags`), and the players the
 //! server puts on the map (`MapCars`), and the chat (`chat`). Joined, the car is put in a lane near the spawn
 //! point, in a spot of its own (by player number).
@@ -33,6 +34,7 @@ impl Plugin for OnlinePlugin {
         app.add_plugins((crate::chat::ChatPlugin, NameTagPlugin))
             .insert_resource(Menu {
                 open: true,
+                alone: false,
                 settings,
             })
             .add_systems(Update, (place_on_joining, show_on_map))
@@ -44,6 +46,8 @@ impl Plugin for OnlinePlugin {
 #[derive(Resource)]
 pub struct Menu {
     pub open: bool,
+    /// Whether the server joined is the game's own (playing alone).
+    pub alone: bool,
     settings: Settings,
 }
 
@@ -52,6 +56,17 @@ impl Menu {
     pub fn name(&self) -> &str {
         &self.settings.name
     }
+}
+
+/// Plays alone: starts the game's own server and joins it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn play_alone(commands: &mut Commands, menu: &mut Menu, terrain: &Terrain) {
+    let name = menu.settings.name.trim();
+    // The name given without one.
+    let name = if name.is_empty() { "Driver" } else { name };
+    commands.insert_resource(Connection::new(net::local::start(), name, terrain));
+    menu.open = false;
+    menu.alone = true;
 }
 
 /// The player's name and the server last joined, kept between runs
@@ -112,8 +127,14 @@ fn menu(
         match connection.status.clone() {
             Status::Joined { .. } => {}
             Status::Joining => {
-                panel("Joining").show(ctx, |ui| {
-                    kit::note(ui, &format!("Joining {} …", menu.settings.address));
+                let title = if menu.alone { "Starting" } else { "Joining" };
+                panel(title).show(ctx, |ui| {
+                    let what = if menu.alone {
+                        "Starting the game …".to_string()
+                    } else {
+                        format!("Joining {} …", menu.settings.address)
+                    };
+                    kit::note(ui, &what);
                     if kit::button(ui, "Cancel").clicked() {
                         connection.close();
                         commands.remove_resource::<Connection>();
@@ -148,9 +169,7 @@ fn menu(
             .add_enabled_ui(can_join, |ui| kit::button(ui, join))
             .inner
             .clicked();
-        if !web && kit::button(ui, "Play alone").clicked() {
-            menu.open = false;
-        }
+        let alone = !web && kit::button(ui, "Play alone").clicked();
         kit::section(ui, "Your name");
         kit::text_field(ui, &mut settings.name, "", 1);
         // On the web, the page's server is joined: no address to give.
@@ -169,7 +188,14 @@ fn menu(
             let link = net::connect(&settings.address);
             commands.insert_resource(Connection::new(link, settings.name.trim(), &terrain));
             menu.open = false;
+            menu.alone = false;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if alone {
+            play_alone(&mut commands, menu, &terrain);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = alone;
     });
     Ok(())
 }
