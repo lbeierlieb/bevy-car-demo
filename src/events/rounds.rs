@@ -32,8 +32,8 @@ pub struct EventAction {
     pub action: Action,
 }
 
-/// The best times' lists: per event, route, direction and traffic.
-type BestKey = (u16, u8, bool, bool);
+/// The best times' lists: per event, route and traffic.
+type BestKey = (u16, u8, bool);
 
 /// Every round there is, lobbies and running ones.
 #[derive(Resource, Default)]
@@ -108,12 +108,7 @@ impl Live {
     /// The best times' list it shows.
     fn best_key(&self) -> Option<BestKey> {
         let settings = self.round.game.race()?;
-        Some((
-            self.round.event,
-            settings.route,
-            settings.reverse,
-            settings.traffic,
-        ))
+        Some((self.round.event, settings.route, settings.traffic))
     }
 }
 
@@ -180,6 +175,12 @@ pub fn run_rounds(
                 let Some(kind) = near(event).map(|e| e.kind) else {
                     continue;
                 };
+                // The most racers the lobby's route has grid spots for.
+                let room = |live: &Live| {
+                    let route = (live.round.game.race())
+                        .and_then(|settings| route_of(events, live.round.event, settings));
+                    route.map_or(MAX_RACERS, |route| route.spots())
+                };
                 if mine.is_some() {
                     continue;
                 }
@@ -187,7 +188,7 @@ pub fn run_rounds(
                     .find(|live| live.round.event == event && !live.round.running() && live.open());
                 match lobby {
                     Some(live)
-                        if live.round.players.len() < MAX_RACERS || kind == EventKind::Hunt =>
+                        if kind == EventKind::Hunt || live.round.players.len() < room(live) =>
                     {
                         live.round.players.push(player);
                         live.changed = true;
@@ -302,7 +303,10 @@ pub fn run_rounds(
                         else {
                             continue;
                         };
-                        live.course = Some(Course::new(route, settings.reverse, settings.laps));
+                        if live.round.players.len() > route.spots() {
+                            continue;
+                        }
+                        live.course = Some(Course::new(route, settings.laps));
                         live.seen.clear();
                         Play::Race(standing(&live.round.players, &name, now))
                     }
@@ -573,6 +577,17 @@ pub fn run_rounds(
     rounds.in_realms = realm_of.into_keys().collect();
 }
 
+/// The route a race's (or time trial's) settings pick at `event`.
+fn route_of<'a>(
+    events: &'a [Event],
+    event: u16,
+    settings: &race::Settings,
+) -> Option<&'a race::Route> {
+    (events.get(usize::from(event)))?
+        .routes
+        .get(usize::from(settings.route))
+}
+
 /// A race's standing at its start: everyone on the grid, the clock running from the green
 /// light.
 fn standing(players: &[PlayerId], name: &impl Fn(PlayerId) -> String, now: f64) -> race::Standing {
@@ -650,7 +665,7 @@ fn end_race(live: &mut Live, events: &[Event]) {
         .and_then(|event| event.routes.get(usize::from(settings.route)))
         .map(|route| route.name.clone())
         .unwrap_or_default();
-    let results = Outcome::Race(race::Results::of(standing, route, settings.reverse));
+    let results = Outcome::Race(race::Results::of(standing, route));
     info!(
         "A {} ended: {}",
         live.round.game.title().to_lowercase(),

@@ -93,8 +93,8 @@ pub struct Round {
     pub host: PlayerId,
     pub game: Game,
     pub phase: Phase,
-    /// A race's or time trial's best times on the server (this session), for its route,
-    /// direction and traffic, best first.
+    /// A race's or time trial's best times on the server (this session), for its route
+    /// and traffic, best first.
     pub best: Vec<race::Best>,
 }
 

@@ -2,8 +2,9 @@
 //! and time trials). Like the shops, the server says where they are (its own list,
 //! `--events`, e.g. `assets/events.cfg`; none without one) when a player joins; playing
 //! alone there are none. Each has a marker like a shop's, its name floating above it. A
-//! race's routes are in the list too, under it, as the points they pass through; the
-//! server finds the way along the roads between them (`resolve`) and sends the lines.
+//! race's routes are in the list too, under it (made with the race editor): grid spots and
+//! checkpoints; the server finds the way along the roads between the checkpoints
+//! (`resolve`) and sends the lines.
 
 pub mod hunt;
 pub mod lobby;
@@ -79,10 +80,23 @@ pub struct Event {
 }
 
 /// Reads a list of events: one per line, its kind, x, z and name, with `#` comments and
-/// blank lines skipped. Under a race come its routes: `route loop|sprint name`, then the
-/// points it passes through, `x z` a line. The routes' lines along the roads are left
-/// for `resolve`.
+/// blank lines skipped. Under a race come its routes (as the race editor writes them):
+/// `route loop|sprint name`, then its grid spots, `grid x z heading` a line (compass
+/// degrees), and its checkpoints, `x z` a line. The routes' lines along the roads are
+/// left for `resolve`.
 pub fn parse(text: &str) -> Result<Vec<Event>, String> {
+    read(text, false)
+}
+
+/// Reads the routes in a file the race editor wrote (or a list of events): routes need
+/// no race above them.
+pub fn read_routes(text: &str) -> Result<Vec<race::Route>, String> {
+    let events = read(text, true)?;
+    Ok(events.into_iter().flat_map(|event| event.routes).collect())
+}
+
+/// `parse`, with routes needing a race above them unless `loose`.
+fn read(text: &str, loose: bool) -> Result<Vec<Event>, String> {
     let mut events: Vec<Event> = Vec::new();
     for (n, line) in text.lines().enumerate() {
         let line = line.split('#').next().unwrap_or("").trim();
@@ -92,16 +106,38 @@ pub fn parse(text: &str) -> Result<Vec<Event>, String> {
         let wrong = |what: &str| format!("line {}: {what}: {line}", n + 1);
         let mut words = line.split_whitespace();
         let word = words.next().unwrap_or("");
-        // A route's point, under the route.
-        if let Ok(x) = word.parse::<f32>() {
-            let z = (words.next())
-                .and_then(|w| w.parse::<f32>().ok())
-                .filter(|z| z.is_finite() && x.is_finite() && words.next().is_none())
-                .ok_or_else(|| wrong("a route's point is x and z (m), nothing more"))?;
+        let numbers = |words: std::str::SplitWhitespace, count: usize, what: &str| {
+            let numbers: Vec<f32> = (words.map(|w| w.parse::<f32>()))
+                .collect::<Result<_, _>>()
+                .map_err(|_| wrong(what))?;
+            if numbers.len() != count || numbers.iter().any(|x| !x.is_finite()) {
+                return Err(wrong(what));
+            }
+            Ok(numbers)
+        };
+        // A route's checkpoint or grid spot, under the route.
+        if word.parse::<f32>().is_ok() || word == "grid" {
             let route = (events.last_mut())
                 .and_then(|event| event.routes.last_mut())
-                .ok_or_else(|| wrong("a point, but no route above it"))?;
-            route.via.push(Vec2::new(x, z));
+                .ok_or_else(|| wrong("no route above it"))?;
+            if word == "grid" {
+                let what = "a grid spot is x, z (m) and heading (compass degrees)";
+                let v = numbers(words, 3, what)?;
+                if route.grid.len() >= race::MAX_RACERS {
+                    return Err(wrong(&format!("{} grid spots at most", race::MAX_RACERS)));
+                }
+                route.grid.push(race::GridSpot {
+                    at: Vec2::new(v[0], v[1]),
+                    heading: v[2].rem_euclid(360.0),
+                });
+            } else {
+                let v = numbers(
+                    line.split_whitespace(),
+                    2,
+                    "a checkpoint is x and z (m), nothing more",
+                )?;
+                route.checkpoints.push(Vec2::new(v[0], v[1]));
+            }
             continue;
         }
         if word == "route" {
@@ -114,6 +150,18 @@ pub fn parse(text: &str) -> Result<Vec<Event>, String> {
             if name.is_empty() {
                 return Err(wrong("a route needs a name"));
             }
+            if loose
+                && events
+                    .last()
+                    .is_none_or(|event| event.kind != EventKind::Race)
+            {
+                events.push(Event {
+                    kind: EventKind::Race,
+                    name: String::new(),
+                    at: Vec2::ZERO,
+                    routes: Vec::new(),
+                });
+            }
             let event = (events.last_mut())
                 .filter(|event| event.kind == EventKind::Race)
                 .ok_or_else(|| wrong("a route, but no race above it"))?;
@@ -123,9 +171,11 @@ pub fn parse(text: &str) -> Result<Vec<Event>, String> {
             event.routes.push(race::Route {
                 name,
                 looped,
-                via: Vec::new(),
+                grid: Vec::new(),
+                checkpoints: Vec::new(),
                 line: Vec::new(),
                 widths: Vec::new(),
+                marks: Vec::new(),
             });
             continue;
         }
@@ -156,15 +206,19 @@ pub fn parse(text: &str) -> Result<Vec<Event>, String> {
     if events.len() > usize::from(u16::MAX) {
         return Err("too many events".into());
     }
-    for event in &events {
+    for event in &mut events {
         if event.kind == EventKind::Race && event.routes.is_empty() {
             return Err(format!("{}: a race needs a route", event.name));
         }
-        if let Some(route) = event.routes.iter().find(|route| route.via.len() < 2) {
-            return Err(format!(
-                "{}, {}: a route needs two points at least",
-                event.name, route.name
-            ));
+        for route in &mut event.routes {
+            let wrong = |what: &str| format!("{}, {}: {what}", event.name, route.name);
+            if route.checkpoints.len() < 2 {
+                return Err(wrong("a route needs two checkpoints at least"));
+            }
+            if route.grid.is_empty() {
+                return Err(wrong("a route needs a grid spot at least"));
+            }
+            race::order_grid(&mut route.grid, route.checkpoints[0]);
         }
     }
     Ok(events)
@@ -178,18 +232,35 @@ pub fn resolve(events: &mut [Event], terrain: &Terrain) -> Result<(), String> {
     let roads = routes::Roads::new(terrain);
     for event in events {
         for route in &mut event.routes {
-            let wrong = |e: String| format!("{}, {}: {e}", event.name, route.name);
-            let (line, widths) = roads.route(&route.via, route.looped).map_err(wrong)?;
-            route.line = line;
-            route.widths = widths;
-            let length = route.length();
-            if length < race::SHORTEST {
-                return Err(wrong(format!(
-                    "{length:.0} m long, shorter than {:.0} m",
-                    race::SHORTEST
-                )));
-            }
+            resolve_route(&roads, route)
+                .map_err(|e| format!("{}, {}: {e}", event.name, route.name))?;
         }
+    }
+    Ok(())
+}
+
+/// Finds a route along the roads (its line, widths and marks), or says what's wrong
+/// with it (also for the race editor, as the server will).
+pub fn resolve_route(roads: &routes::Roads, route: &mut race::Route) -> Result<(), String> {
+    route.line.clear();
+    route.widths.clear();
+    route.marks.clear();
+    if route.checkpoints.len() < 2 {
+        return Err("needs two checkpoints at least".into());
+    }
+    let found = roads.route(&route.checkpoints, route.looped)?;
+    route.line = found.line;
+    route.widths = found.widths;
+    route.marks = found.marks;
+    let length = route.length();
+    if length < race::SHORTEST {
+        return Err(format!(
+            "{length:.0} m long, shorter than {:.0} m",
+            race::SHORTEST
+        ));
+    }
+    if route.grid.is_empty() {
+        return Err("needs a grid spot at least".into());
     }
     Ok(())
 }
@@ -340,77 +411,107 @@ mod tests {
                 .starts_with("line 1: not a kind")
         );
         assert!(parse("race 1 2 Track").is_err(), "no route");
-        assert!(parse("hunt 1 2 Hunt\nroute loop Round\n1 2\n3 4").is_err());
+        assert!(parse("hunt 1 2 Hunt\nroute loop Round\ngrid 0 0 0\n1 2\n3 4").is_err());
         assert!(
-            parse("race 1 2 Track\nroute loop Round\n1 2").is_err(),
-            "one point"
+            parse("race 1 2 Track\nroute loop Round\ngrid 0 0 0\n1 2").is_err(),
+            "one checkpoint"
         );
-        let race = parse("race 1 2 Track\nroute loop Round the block\n1 2\n3 4 # here\n5 6\nroute sprint Up\n7 8\n9 10")
-            .unwrap()
-            .remove(0);
+        assert!(
+            parse("race 1 2 Track\nroute loop Round\n1 2\n3 4").is_err(),
+            "no grid"
+        );
+        assert!(parse("race 1 2 Track\nroute loop Round\ngrid 0 0\n1 2\n3 4").is_err());
+        let race = parse(
+            "race 1 2 Track\nroute loop Round the block\ngrid 9 9 400\ngrid 1.5 1 90\n1 2\n3 4 \
+             # here\n5 6\nroute sprint Up\ngrid 7 7 0\n7 8\n9 10",
+        )
+        .unwrap()
+        .remove(0);
         assert_eq!(race.routes.len(), 2);
-        assert_eq!(race.routes[0].name, "Round the block");
-        assert!(race.routes[0].looped && !race.routes[1].looped);
+        let round = &race.routes[0];
+        assert_eq!(round.name, "Round the block");
+        assert!(round.looped && !race.routes[1].looped);
         assert_eq!(
-            race.routes[0].via,
+            round.checkpoints,
             [
                 Vec2::new(1.0, 2.0),
                 Vec2::new(3.0, 4.0),
                 Vec2::new(5.0, 6.0)
             ]
         );
+        // Pole first (nearest the first checkpoint), headings within a turn.
+        assert_eq!(round.grid[0].at, Vec2::new(1.5, 1.0));
+        assert_eq!(round.grid[1].heading, 40.0);
         assert!(parse("hunt 1 Hunt").is_err());
         assert!(parse("hunt 1 2").is_err());
+        // What the race editor writes reads back, with no race above it.
+        let text = round.text();
+        let back = read_routes(&text).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].grid, round.grid);
+        assert_eq!(back[0].checkpoints, round.checkpoints);
+        assert!(
+            parse(&text).is_err(),
+            "the events list wants a race above it"
+        );
     }
+
+    /// A loop through Baunach (the old "Baunacher Ring"'s points), its grid before the
+    /// first checkpoint.
+    const RING: &str = "race -62 2280 Races\nroute loop Ring\n  grid 240 2552 45\n  254 2566\n  \
+                        518 2830\n  380 2970\n  150 3140\n  -100 3108\n  -250 2962\n  -100 2716\n";
 
     #[test]
     fn the_races_routes_are_found_along_the_roads() {
         let terrain = Terrain::baked();
-        let mut events = parse(LIST).unwrap();
+        let mut events = parse(RING).unwrap();
         resolve(&mut events, &terrain).unwrap();
-        let race = (events.iter())
-            .find(|event| event.kind == EventKind::Race)
-            .unwrap();
-        assert!(race.routes.len() >= 2);
-        for route in &race.routes {
-            let length = route.length();
-            println!("{}: {length:.0} m, {} points", route.name, route.line.len());
-            // The grid faces the way the route goes on from it (the sprint's first
-            // point is just round a corner: the grid was on that stub, sideways).
-            for reverse in [false, true] {
-                let course = race::Course::new(route, reverse, 1);
-                let (at, yaw) = course.grid(0, 1);
-                let (s, _) = course.nearest(at, 0.0, 100.0).unwrap();
-                let (_, ahead, _) = course.point(s + 25.0);
-                let facing = Vec2::new(-yaw.sin(), -yaw.cos());
-                assert!(
-                    facing.dot(ahead) > 0.8,
-                    "{} (reverse {reverse}) grid faces {facing}, the route goes {ahead}",
-                    route.name
-                );
-            }
-            assert!(length > race::SHORTEST, "{}", route.name);
-            // Along the roads: every point on one.
-            for &p in &route.line {
-                let (on, _, _) = terrain.paved_road_near(p).unwrap();
-                assert!(on.distance(p) < 1.0, "{} at {p}", route.name);
-            }
-            if route.looped {
-                assert_eq!(route.line.first(), route.line.last());
-            }
+        let route = &events[0].routes[0];
+        let length = route.length();
+        println!("{}: {length:.0} m, {} points", route.name, route.line.len());
+        assert!(length > race::SHORTEST);
+        // Along the roads: every point on one.
+        for &p in &route.line {
+            let (on, _, _) = terrain.paved_road_near(p).unwrap();
+            assert!(on.distance(p) < 1.0, "{} at {p}", route.name);
         }
-        // A point off the roads, or one the route turns back at, is refused.
-        let mut far = parse("race 0 0 R\nroute sprint S\n254 2566\n800 2480").unwrap();
+        assert_eq!(route.line.first(), route.line.last());
+        // Every checkpoint has its place in the line, near it, in order; a loop's first
+        // again at the end.
+        assert_eq!(route.marks.len(), route.checkpoints.len() + 1);
+        assert_eq!(route.marks[0], 0);
+        assert_eq!(
+            usize::from(*route.marks.last().unwrap()),
+            route.line.len() - 1
+        );
+        for (&mark, &p) in route.marks.iter().zip(&route.checkpoints) {
+            assert!(route.line[usize::from(mark)].distance(p) < 30.0);
+        }
+        // Its gates face the way the line goes there: forwards against the way in and the
+        // way out.
+        let course = race::Course::new(route, 1);
+        assert_eq!(course.gates.len(), route.checkpoints.len());
+        for gate in &course.gates {
+            let ahead = course.point((gate.s + 3.0) % course.length()).1;
+            let came = course.point((gate.s - 3.0).rem_euclid(course.length())).1;
+            assert!(
+                gate.forward.dot(ahead) > 0.2 && gate.forward.dot(came) > 0.2,
+                "{gate:?} in {came} out {ahead}"
+            );
+        }
+        // A checkpoint off the roads, or one the route turns back at, is refused.
+        let mut far = parse("race 0 0 R\nroute sprint S\ngrid 0 0 0\n254 2566\n800 2480").unwrap();
         assert!(
             resolve(&mut far, &terrain)
                 .unwrap_err()
                 .contains("from the nearest road")
         );
-        let mut back = parse("race 0 0 R\nroute sprint S\n254 2566\n518 2830\n254 2566").unwrap();
+        let mut back =
+            parse("race 0 0 R\nroute sprint S\ngrid 0 0 0\n254 2566\n518 2830\n254 2566").unwrap();
         assert!(
             resolve(&mut back, &terrain)
                 .unwrap_err()
-                .contains("turns back at point 2")
+                .contains("turns back at checkpoint 2")
         );
     }
 

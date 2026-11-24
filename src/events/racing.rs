@@ -1,5 +1,5 @@
 //! A player's side of races and time trials: the question on a race's marker (time trial
-//! or race), the lobby's window (route, direction, laps, traffic, contact, resets; who's
+//! or race), the lobby's window (route, laps, traffic, contact, resets; who's
 //! in; the best times; the last results), the bar at the top while it runs (countdown,
 //! lap, place, times, the next gate, wrong way), the gates on the road and the route on
 //! the map (M).
@@ -67,7 +67,67 @@ struct GateLooks {
 /// A gate's banner (its posts are its children's siblings: the gate's entity is their
 /// parent).
 #[derive(Component)]
-struct Banner;
+pub struct Banner;
+
+/// What every gate's posts are made of.
+pub struct GateParts {
+    post: Handle<Mesh>,
+    material: Handle<StandardMaterial>,
+}
+
+impl GateParts {
+    pub fn new(meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) -> Self {
+        Self {
+            post: meshes.add(Cylinder::new(POST_RADIUS, POST_HEIGHT)),
+            material: materials.add(StandardMaterial {
+                base_color: Color::srgb(0.9, 0.9, 0.9),
+                ..default()
+            }),
+        }
+    }
+}
+
+/// A gate on the road as a race shows it: two posts past the road's edges and a banner
+/// across (`Banner`, in `banner`), standing on the higher side's ground. Its entity, the
+/// posts' and banner's parent.
+pub fn spawn_gate(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    terrain: &Terrain,
+    parts: &GateParts,
+    gate: &race::Gate,
+    banner: &Handle<StandardMaterial>,
+) -> Entity {
+    let half = gate.width / 2.0 + POST_OUT;
+    let side = Vec2::new(-gate.forward.y, gate.forward.x);
+    let ground = |p: Vec2| terrain.ground(p.x, p.y, f32::INFINITY).height;
+    let (left, right) = (gate.point - side * half, gate.point + side * half);
+    let base = ground(left).max(ground(right));
+    let mesh = meshes.add(Cuboid::new(2.0 * half, BANNER, 0.1));
+    commands
+        .spawn((
+            Transform::from_xyz(gate.point.x, base, gate.point.y)
+                .with_rotation(Quat::from_rotation_y(gate.yaw())),
+            Visibility::default(),
+        ))
+        .with_children(|parent| {
+            for x in [-half, half] {
+                parent.spawn((
+                    Mesh3d(parts.post.clone()),
+                    MeshMaterial3d(parts.material.clone()),
+                    Transform::from_xyz(x, POST_HEIGHT / 2.0, 0.0),
+                ));
+            }
+            parent.spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(banner.clone()),
+                Transform::from_xyz(0.0, POST_HEIGHT - BANNER / 2.0, 0.0),
+                NotShadowCaster,
+                Banner,
+            ));
+        })
+        .id()
+}
 
 /// Our place in the race under way: the round, how far we are, the course.
 fn ours<'a>(
@@ -126,43 +186,13 @@ fn gates(
                     ]
                 })
                 .clone();
-            let post_material = materials.add(StandardMaterial {
-                base_color: Color::srgb(0.9, 0.9, 0.9),
-                ..default()
-            });
-            let post = meshes.add(Cylinder::new(POST_RADIUS, POST_HEIGHT));
+            let parts = GateParts::new(&mut meshes, &mut materials);
             let entities = (course.gates.iter())
                 .map(|gate| {
-                    let half = gate.width / 2.0 + POST_OUT;
-                    let side = Vec2::new(-gate.forward.y, gate.forward.x);
-                    let ground = |p: Vec2| terrain.ground(p.x, p.y, f32::INFINITY).height;
-                    let (left, right) = (gate.point - side * half, gate.point + side * half);
-                    let base = ground(left).max(ground(right));
-                    let yaw = gate.yaw();
-                    let banner = meshes.add(Cuboid::new(2.0 * half, BANNER, 0.1));
-                    commands
-                        .spawn((
-                            Transform::from_xyz(gate.point.x, base, gate.point.y)
-                                .with_rotation(Quat::from_rotation_y(yaw)),
-                            Visibility::Hidden,
-                        ))
-                        .with_children(|parent| {
-                            for x in [-half, half] {
-                                parent.spawn((
-                                    Mesh3d(post.clone()),
-                                    MeshMaterial3d(post_material.clone()),
-                                    Transform::from_xyz(x, POST_HEIGHT / 2.0, 0.0),
-                                ));
-                            }
-                            parent.spawn((
-                                Mesh3d(banner),
-                                MeshMaterial3d(next.clone()),
-                                Transform::from_xyz(0.0, POST_HEIGHT - BANNER / 2.0, 0.0),
-                                NotShadowCaster,
-                                Banner,
-                            ));
-                        })
-                        .id()
+                    let gate =
+                        spawn_gate(&mut commands, &mut meshes, &terrain, &parts, gate, &next);
+                    commands.entity(gate).insert(Visibility::Hidden);
+                    gate
                 })
                 .collect();
             looks.shown = Some((course.line.clone(), entities));
@@ -318,7 +348,11 @@ fn wrong_way(
                 course.next(passed - 1).s
             };
             let p = car.body.position.xz();
-            let (_, forward) = course.nearest(p, last - 50.0, next + 50.0)?;
+            let (_, forward, off) = course.nearest(p, last - 50.0, next + 50.0)?;
+            // Off the course (on the way from the grid to a loop's first checkpoint).
+            if off > 30.0 {
+                return Some(false);
+            }
             let velocity = car.body.velocity.xz();
             Some(velocity.length() > WRONG_SPEED && velocity.normalize().dot(forward) < -0.3)
         });
@@ -387,7 +421,12 @@ fn choose(
                 kit::info(
                     ui,
                     &route.name,
-                    &format!("{}, {:.1} km", route.kind(), route.length() / 1000.0),
+                    &format!(
+                        "{}, {:.1} km, {} on the grid",
+                        route.kind(),
+                        route.length() / 1000.0,
+                        route.spots()
+                    ),
                 );
             }
         });
@@ -459,6 +498,18 @@ fn window(
                         kit::note(
                             ui,
                             "Waiting for another racer: anyone stopping on the marker can join.",
+                        );
+                    } else if let Some(route) = event.routes.get(usize::from(settings.route))
+                        && round.players.len() > route.spots()
+                    {
+                        kit::warning(
+                            ui,
+                            &format!(
+                                "{} racers, but this route's grid has {} spots: pick another \
+                                 route.",
+                                round.players.len(),
+                                route.spots()
+                            ),
                         );
                     } else if kit::button(ui, "Start the race").clicked() {
                         action = Some(Action::Start);
@@ -658,12 +709,7 @@ fn race_lines(
             40.0,
         ));
     }
-    let direction = if settings.reverse {
-        ", the other way"
-    } else {
-        ""
-    };
-    lines.push(Line::new(format!("{route}{direction}"), white, 16.0));
+    lines.push(Line::new(route, white, 16.0));
     if let Some(time) = me.finished {
         let place = standing
             .order()
@@ -764,12 +810,7 @@ fn race_lines(
 
 /// The last round's results, a row each.
 fn results_table(ui: &mut egui::Ui, results: &Results) {
-    let direction = if results.reverse {
-        " (the other way)"
-    } else {
-        ""
-    };
-    kit::section(ui, &format!("{}{direction}", results.route));
+    kit::section(ui, &results.route);
     for (i, entry) in results.entries.iter().enumerate() {
         let time = match entry.time {
             Some(time) => clock(time),
@@ -802,20 +843,14 @@ fn race_settings(
             .get(usize::from(i))
             .map_or(String::new(), |route| {
                 format!(
-                    "{} ({}, {:.1} km)",
+                    "{} ({}, {:.1} km, {} on the grid)",
                     route.name,
                     route.kind().to_lowercase(),
-                    route.length() / 1000.0
+                    route.length() / 1000.0,
+                    route.spots()
                 )
             })
     });
-    kit::pick(
-        ui,
-        "Direction",
-        &mut settings.reverse,
-        &[false, true],
-        |reverse| if reverse { "Reverse" } else { "Normal" }.to_string(),
-    );
     let route = event.routes.get(usize::from(settings.route));
     if route.is_some_and(|route| route.looped) {
         let mut laps = f32::from(settings.laps);

@@ -64,8 +64,8 @@ impl Plugin for LobbyPlugin {
     }
 }
 
-/// Which course a race is on: event, route, the other way round, laps.
-type CourseKey = (u16, u8, bool, u8);
+/// Which course a race is on: event, route, laps.
+type CourseKey = (u16, u8, u8);
 
 /// Where we stand with the events.
 #[derive(Resource)]
@@ -120,11 +120,11 @@ impl EventState {
     /// The course of `round`, a race's or time trial's (made once).
     pub(super) fn course(&mut self, connection: &Connection, round: &Round) -> Option<&Course> {
         let settings = round.game.race()?;
-        let key = (round.event, settings.route, settings.reverse, settings.laps);
+        let key = (round.event, settings.route, settings.laps);
         if self.course.as_ref().is_none_or(|(k, _)| *k != key) {
             let event = connection.events.get(usize::from(round.event))?;
             let route = event.routes.get(usize::from(settings.route))?;
-            self.course = Some((key, Course::new(route, settings.reverse, settings.laps)));
+            self.course = Some((key, Course::new(route, settings.laps)));
         }
         self.course.as_ref().map(|(_, course)| course)
     }
@@ -304,8 +304,8 @@ pub(super) fn follow(
         let place = match &round.game {
             Game::Hunt(_) => spot(round),
             Game::Race(_) | Game::Trial(_) => {
-                let (slot, count) = (round.slot(you), round.players.len());
-                (state.course(&connection, round)).map(|course| course.grid(slot, count))
+                let slot = round.slot(you);
+                (state.course(&connection, round)).map(|course| course.grid(slot))
             }
         };
         if let (Some((p, yaw)), Some((entity, mut car))) = (
@@ -379,10 +379,10 @@ pub(super) fn follow(
                 let passed = (round.standing())
                     .and_then(|standing| standing.racers.iter().find(|r| r.player == you))
                     .map_or(0, |racer| usize::from(racer.gates));
-                let (slot, count) = (round.slot(you), round.players.len());
+                let slot = round.slot(you);
                 *rule = match state.course(&connection, round) {
                     Some(course) if settings.resets && !trial => {
-                        let (p, yaw) = course.reset_spot(passed, slot, count);
+                        let (p, yaw) = course.reset_spot(passed, slot);
                         ResetRule::Spot(p, yaw)
                     }
                     _ => ResetRule::Never,

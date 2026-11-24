@@ -1054,25 +1054,38 @@ mod tests {
         assert_eq!(*all[h].world().resource::<ResetRule>(), ResetRule::Road);
     }
 
-    /// A race event at the origin, with a square loop 400 m a side around it.
+    /// A race event at the origin, with a square loop 400 m a side around it: its
+    /// checkpoints in the middle of each side (the first on the north side, going east),
+    /// two grid spots just before the first.
     fn race_event() -> crate::events::Event {
-        let corners = [
-            Vec2::new(-200.0, -200.0),
+        use crate::events::race::{GridSpot, Route};
+        let line = vec![
+            Vec2::new(0.0, -200.0),
             Vec2::new(200.0, -200.0),
+            Vec2::new(200.0, 0.0),
             Vec2::new(200.0, 200.0),
+            Vec2::new(0.0, 200.0),
             Vec2::new(-200.0, 200.0),
+            Vec2::new(-200.0, 0.0),
             Vec2::new(-200.0, -200.0),
+            Vec2::new(0.0, -200.0),
         ];
+        let spot = |x: f32, z: f32| GridSpot {
+            at: Vec2::new(x, z),
+            heading: 90.0,
+        };
         crate::events::Event {
             kind: crate::events::EventKind::Race,
             name: "Races".into(),
             at: Vec2::ZERO,
-            routes: vec![crate::events::race::Route {
+            routes: vec![Route {
                 name: "Square".into(),
                 looped: true,
-                via: corners[..4].to_vec(),
-                line: corners.to_vec(),
-                widths: vec![6.0; 5],
+                grid: vec![spot(-10.0, -198.5), spot(-16.0, -201.5)],
+                checkpoints: vec![line[0], line[2], line[4], line[6]],
+                widths: vec![6.0; line.len()],
+                marks: vec![0, 2, 4, 6, 8],
+                line,
             }],
         }
     }
@@ -1164,10 +1177,10 @@ mod tests {
         assert!(running.running(), "Anna, the host, started it");
         assert_eq!(running.game, Game::Race(settings));
         // On the grid, held, the others ghosts, R to the grid.
-        let course = Course::new(&race_event().routes[0], false, 1);
+        let course = Course::new(&race_event().routes[0], 1);
         for (i, slot) in [(1, 0), (2, 1)] {
             let p = car(all[i]).body.position.xz();
-            let (spot, _) = course.grid(slot, 2);
+            let (spot, _) = course.grid(slot);
             assert!(p.distance(spot) < 0.5, "{p} isn't at {spot}");
             assert!(
                 all[i].world().resource::<Held>().0,
@@ -1265,13 +1278,13 @@ mod tests {
         assert_eq!(trial.game, Game::Trial(settings), "still a trial");
         assert_eq!(*all[1].world().resource::<ResetRule>(), ResetRule::Never);
         run(&mut all, (COUNTDOWN / FRAME) as usize + 10);
-        let course = Course::new(&race_event().routes[0], false, 1);
+        let course = Course::new(&race_event().routes[0], 1);
         drive_along(&mut all, 1, &course, 20.0, course.gates[2].s + 5.0);
         // Start again: back on the grid, held, nothing passed.
         act(all[1], Action::Restart);
         run(&mut all, 10);
         let p = car(all[1]).body.position.xz();
-        assert!(p.distance(course.grid(0, 1).0) < 0.5);
+        assert!(p.distance(course.grid(0).0) < 0.5);
         assert!(all[1].world().resource::<Held>().0);
         assert_eq!(
             round(all[1]).unwrap().standing().unwrap().racers[0].gates,

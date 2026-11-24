@@ -1,16 +1,19 @@
-//! Races and time trials: an event's routes, the course a round drives (a route one way
-//! or the other, so many laps), its checkpoints and starting grid, the host's settings,
-//! how a race stands and how it ended.
+//! Races and time trials: an event's routes, the course a round drives (a route so many
+//! laps), its gates and starting grid, the host's settings, how a race stands and how it
+//! ended.
 //!
-//! Stopping on a race's marker asks whether to drive a time trial (alone, in a round of
-//! one, in a realm of one) or race (into the lobby there: the first one in opens it and
-//! sets things). Running, everyone is put on a grid at the route's start and held for the
-//! countdown; the clock runs from the green light. The course has gates (checkpoints)
-//! along it, every `GATE_SPACING` at most; the server judges who passed which from the
-//! cars' states, in order (a gate missed has to be gone back for). A loop's lap ends at
-//! its start; a sprint ends at its far end. Once the first racer is through, the others
-//! have `FINISH_GRACE` to finish. A time trial's times go on the server's list of best
-//! times (for the session), per route, direction and traffic.
+//! A route is made in the race editor (`cargo run --bin races`): its grid spots, placed
+//! and turned by hand, and its checkpoints, each a gate. Stopping on a race's marker asks
+//! whether to drive a time trial (alone, in a round of one, in a realm of one) or race
+//! (into the lobby there: the first one in opens it and sets things). Running, everyone
+//! is put on the route's grid (pole is the spot nearest its first checkpoint) and held
+//! for the countdown; the clock runs from the green light. The server judges who passed
+//! which gate from the cars' states, in order (a gate missed has to be gone back for). A
+//! sprint's gates are its checkpoints, the last the finish; a loop's lap is its
+//! checkpoints from the second on and the first again (passing the first from the grid
+//! is the start, not a gate). Once the first racer is through, the others have
+//! `FINISH_GRACE` to finish. A time trial's times go on the server's list of best times
+//! (for the session), per route and traffic.
 
 use std::cmp::Ordering;
 
@@ -19,7 +22,7 @@ use bevy::prelude::*;
 use crate::net::protocol::PlayerId;
 use crate::net::wire::{Reader, Wire};
 
-/// The most racers in a round (the grid's length).
+/// The most racers in a round (and grid spots on a route).
 pub const MAX_RACERS: usize = 16;
 /// The countdown before the green light (s).
 pub const COUNTDOWN: f64 = 5.0;
@@ -27,48 +30,63 @@ pub const COUNTDOWN: f64 = 5.0;
 pub const FINISH_GRACE: f64 = 60.0;
 /// What the laps can be set to.
 pub const LAPS: (u8, u8) = (1, 20);
-/// Gates are at most this far apart along the course (m).
-pub const GATE_SPACING: f32 = 150.0;
 /// A gate reaches this far past the road's edge on either side (m): running wide counts.
 const GATE_REACH: f32 = 6.0;
-/// The grid: the back row this far along the course from its start, rows this far
-/// apart, side by side on roads at least `GRID_PAIRS` wide (m), else one behind the other
-/// `GRID_SINGLE` apart.
-const GRID_FRONT: f32 = 12.0;
-const GRID_ROW: f32 = 6.0;
-const GRID_PAIRS: f32 = 5.0;
-const GRID_SINGLE: f32 = 9.0;
-/// The grid starts past any turn of more than `GRID_TURN` (rad) within `GRID_STRAIGHT`
-/// (m) of where it would start: a route's first point just round a corner (on a side
-/// street, or the junction's other arm) put the front row on that stub, sideways.
-const GRID_TURN: f32 = 0.6;
-const GRID_STRAIGHT: f32 = 30.0;
-/// The first gate is past the longest grid by this (m).
-const FIRST_GATE_GAP: f32 = 40.0;
-/// A route must be this long at least (m).
+/// A route's lap (a sprint's whole way) must be this long at least (m).
 pub const SHORTEST: f32 = 500.0;
 /// A car moving further than this between two of its states didn't drive through a gate
 /// (it was put somewhere: m).
 const JUMP: f32 = 60.0;
-/// Best times kept per route, direction and traffic.
+/// Best times kept per route and traffic.
 pub const BEST_KEPT: usize = 10;
 
-/// Where the first gate is along the course (m).
-fn first_gate() -> f32 {
-    GRID_FRONT + (MAX_RACERS - 1) as f32 * GRID_SINGLE + FIRST_GATE_GAP
+/// A place on a route's grid: where a car's middle stands, and the way it faces.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridSpot {
+    pub at: Vec2,
+    /// Compass degrees (0 north, 90 east), as the server's spawn.
+    pub heading: f32,
 }
 
-/// A route of a race event: as the server's list has it (`via`, the points it passes
-/// through) and along the roads (`line`, with the road's width at each point; a loop's
-/// last point is its first).
+impl GridSpot {
+    /// The way it faces in the map frame (x east, z south).
+    pub fn forward(&self) -> Vec2 {
+        let h = self.heading.to_radians();
+        Vec2::new(h.sin(), -h.cos())
+    }
+
+    /// The yaw a car standing on it has.
+    pub fn yaw(&self) -> f32 {
+        yaw(self.forward())
+    }
+
+    /// The heading (compass degrees, 0..360) of a direction in the map frame.
+    pub fn heading_of(forward: Vec2) -> f32 {
+        forward.x.atan2(-forward.y).to_degrees().rem_euclid(360.0)
+    }
+}
+
+/// Puts `grid` in order, pole first: by distance to `first`, the route's first
+/// checkpoint.
+pub fn order_grid(grid: &mut [GridSpot], first: Vec2) {
+    grid.sort_by(|a, b| a.at.distance(first).total_cmp(&b.at.distance(first)));
+}
+
+/// A route of a race event: as the server's list has it (`grid`, `checkpoints`) and along
+/// the roads (`line`, with the road's width at each point; a loop's last point is its
+/// first; `marks`, each checkpoint's place in the line).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Route {
     pub name: String,
     /// Round and round (laps), or from one end to the other.
     pub looped: bool,
-    pub via: Vec<Vec2>,
+    /// Pole first.
+    pub grid: Vec<GridSpot>,
+    pub checkpoints: Vec<Vec2>,
     pub line: Vec<Vec2>,
     pub widths: Vec<f32>,
+    /// Each checkpoint's index in `line` (a loop's has its first again at the end).
+    pub marks: Vec<u16>,
 }
 
 impl Route {
@@ -80,6 +98,27 @@ impl Route {
     /// "Loop" or "Sprint", for people.
     pub fn kind(&self) -> &'static str {
         if self.looped { "Loop" } else { "Sprint" }
+    }
+
+    /// How many can race on it.
+    pub fn spots(&self) -> usize {
+        self.grid.len().min(MAX_RACERS)
+    }
+
+    /// The route as lines of an events file (under a `race` line).
+    pub fn text(&self) -> String {
+        let kind = if self.looped { "loop" } else { "sprint" };
+        let mut text = format!("route {kind} {}\n", self.name);
+        for spot in &self.grid {
+            text += &format!(
+                "  grid {:.1} {:.1} {:.0}\n",
+                spot.at.x, spot.at.y, spot.heading
+            );
+        }
+        for p in &self.checkpoints {
+            text += &format!("  {:.1} {:.1}\n", p.x, p.y);
+        }
+        text
     }
 }
 
@@ -120,7 +159,64 @@ fn yaw(forward: Vec2) -> f32 {
     (-forward.x).atan2(-forward.y)
 }
 
-/// A route driven one way, so many laps: its line from the start, and its gates.
+/// A gate faces the way the line goes over this far before and after it (m).
+const GATE_LOOK: f32 = 10.0;
+
+/// The gates of a route's checkpoints (all of them, in order: a loop's first at both
+/// ends of its line), each across the line at its mark, facing the way the line goes
+/// there (the way in and out over `GATE_LOOK` averaged).
+pub fn checkpoint_gates(route: &Route) -> Vec<Gate> {
+    let line = &route.line;
+    let n = line.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let mut at = vec![0.0];
+    for pair in line.windows(2) {
+        at.push(at.last().unwrap() + pair[0].distance(pair[1]));
+    }
+    let closed = route.looped && line.first() == line.last();
+    // From point `i`, the way to the first point `GATE_LOOK` away going `step` (round a
+    // closed loop), or to the last there is.
+    let look = |i: usize, step: isize| {
+        let from = line[i];
+        let mut j = i as isize;
+        let mut to = from;
+        for _ in 0..n {
+            j += step;
+            if j < 0 || j >= n as isize {
+                if !closed {
+                    break;
+                }
+                // Past the end of a loop's line is past its start (the same point).
+                j = if j < 0 { n as isize - 2 } else { 1 };
+            }
+            to = line[j as usize];
+            if to.distance(from) >= GATE_LOOK {
+                break;
+            }
+        }
+        (to - from).normalize_or_zero()
+    };
+    (route.marks.iter())
+        .map(|&mark| {
+            let i = usize::from(mark).min(n - 1);
+            let (into, out) = (-look(i, -1), look(i, 1));
+            let along = if out == Vec2::ZERO { into } else { out };
+            let forward = (into + out).normalize_or(along.normalize_or(Vec2::NEG_Y));
+            let width = route.widths[i];
+            Gate {
+                s: at[i],
+                point: line[i],
+                forward,
+                width,
+                half: width / 2.0 + GATE_REACH,
+            }
+        })
+        .collect()
+}
+
+/// A route driven so many laps: its line from its first checkpoint, its gates and grid.
 #[derive(Clone, Debug)]
 pub struct Course {
     pub looped: bool,
@@ -129,60 +225,43 @@ pub struct Course {
     pub widths: Vec<f32>,
     /// Distance along the line to each point (m).
     pub at: Vec<f32>,
-    /// One lap's gates, in order; the last is the finish (a loop's: its start).
+    /// One lap's gates, in order; the last is the finish (a loop's: its first
+    /// checkpoint's).
     pub gates: Vec<Gate>,
-    /// Where the grid's measured from, along the line (m): past a turn right at the start.
-    pub grid_start: f32,
+    /// Pole first.
+    pub grid: Vec<GridSpot>,
 }
 
 impl Course {
-    /// `route` one way (`reverse`: the other), `laps` times round if it's a loop.
-    pub fn new(route: &Route, reverse: bool, laps: u8) -> Self {
-        let (mut line, mut widths) = (route.line.clone(), route.widths.clone());
-        if reverse {
-            line.reverse();
-            widths.reverse();
-        }
+    /// `route`, `laps` times round if it's a loop.
+    pub fn new(route: &Route, laps: u8) -> Self {
         let mut at = vec![0.0];
-        for pair in line.windows(2) {
+        for pair in route.line.windows(2) {
             at.push(at.last().unwrap() + pair[0].distance(pair[1]));
         }
-        let mut course = Self {
+        let mut gates = checkpoint_gates(route);
+        if route.looped && !gates.is_empty() {
+            // The first checkpoint ends each lap (its gate at the line's end).
+            gates.remove(0);
+        }
+        Self {
             looped: route.looped,
             laps: if route.looped {
                 u16::from(laps.max(1))
             } else {
                 1
             },
-            line,
-            widths,
+            line: route.line.clone(),
+            widths: route.widths.clone(),
             at,
-            gates: Vec::new(),
-            grid_start: 0.0,
-        };
-        let length = course.length();
-        course.grid_start = course.straight_from(0.0).min(length * 0.25);
-        let first = (course.grid_start + first_gate()).min(length * 0.5);
-        let count = ((length - first) / GATE_SPACING).ceil().max(1.0) as usize;
-        course.gates = (0..=count)
-            .map(|i| {
-                let s = first + (length - first) * i as f32 / count as f32;
-                let (point, forward, width) = course.point(s);
-                Gate {
-                    s,
-                    point,
-                    forward,
-                    width,
-                    half: width / 2.0 + GATE_REACH,
-                }
-            })
-            .collect();
-        course
+            gates,
+            grid: route.grid.clone(),
+        }
     }
 
     /// One lap's length (m).
     pub fn length(&self) -> f32 {
-        *self.at.last().unwrap()
+        self.at.last().copied().unwrap_or(0.0)
     }
 
     /// The gates to pass, all laps.
@@ -212,54 +291,22 @@ impl Course {
         (self.line[i].lerp(self.line[i + 1], t), forward, width)
     }
 
-    /// Where the line runs on straight (no turn over `GRID_TURN` within `GRID_STRAIGHT`
-    /// of it) from `s` on: past the turns ahead.
-    fn straight_from(&self, mut s: f32) -> f32 {
-        let n = self.line.len();
-        let heading = |i: usize| (self.line[i + 1] - self.line[i]).normalize_or_zero();
-        // Each segment once at most, so it ends.
-        for _ in 0..n {
-            let Some(first) = (0..n - 1).find(|&i| self.at[i + 1] > s + 1e-3) else {
-                return s;
-            };
-            let along = heading(first);
-            let turned = (first + 1..n - 1)
-                .take_while(|&i| self.at[i] < s + GRID_STRAIGHT)
-                .find(|&i| heading(i).angle_to(along).abs() > GRID_TURN);
-            match turned {
-                Some(i) => s = self.at[i],
-                None => return s,
+    /// Where the racer in `slot` (0: pole) starts, and the yaw they face.
+    pub fn grid(&self, slot: usize) -> (Vec2, f32) {
+        match self.grid.get(slot).or(self.grid.last()) {
+            Some(spot) => (spot.at, spot.yaw()),
+            None => {
+                let (point, forward, _) = self.point(0.0);
+                (point, yaw(forward))
             }
         }
-        s
-    }
-
-    /// Where the racer in `slot` (0: the front) of `count` starts, and the yaw they face.
-    pub fn grid(&self, slot: usize, count: usize) -> (Vec2, f32) {
-        let (_, _, width) = self.point(self.grid_start + GRID_FRONT);
-        let pairs = width >= GRID_PAIRS;
-        let rows = |n: usize| if pairs { n / 2 } else { n };
-        let gap = if pairs { GRID_ROW } else { GRID_SINGLE };
-        // The back row at the front's place along the course, plus the rows ahead of it.
-        let behind = rows(count.max(1) - 1) - rows(slot);
-        let s = self.grid_start + GRID_FRONT + behind as f32 * gap;
-        let (point, forward, width) = self.point(s);
-        let side = if pairs {
-            let left = slot.is_multiple_of(2);
-            let offset = (width / 4.0).min(1.6);
-            if left { -offset } else { offset }
-        } else {
-            0.0
-        };
-        let right = Vec2::new(-forward.y, forward.x);
-        (point + right * side, yaw(forward))
     }
 
     /// Where a racer who passed `passed` gates is put back (R): at the last gate they
-    /// passed, in the right-hand half of the road, or on the grid at `slot` if none.
-    pub fn reset_spot(&self, passed: usize, slot: usize, count: usize) -> (Vec2, f32) {
+    /// passed, in the right-hand half of the road, or on their grid spot if none.
+    pub fn reset_spot(&self, passed: usize, slot: usize) -> (Vec2, f32) {
         if passed == 0 {
-            return self.grid(slot, count);
+            return self.grid(slot);
         }
         let gate = self.next(passed - 1);
         let right = Vec2::new(-gate.forward.y, gate.forward.x);
@@ -268,8 +315,9 @@ impl Course {
     }
 
     /// How far along one lap the point of the line nearest to `p` is, looking only within
-    /// `from..to` metres along (m), and the line's direction there.
-    pub fn nearest(&self, p: Vec2, from: f32, to: f32) -> Option<(f32, Vec2)> {
+    /// `from..to` metres along (m), the line's direction there, and how far `p` is from
+    /// it (m).
+    pub fn nearest(&self, p: Vec2, from: f32, to: f32) -> Option<(f32, Vec2, f32)> {
         (self.line.windows(2).zip(self.at.windows(2)))
             .filter(|(_, at)| at[1] >= from && at[0] <= to)
             .map(|(pair, at)| {
@@ -283,7 +331,6 @@ impl Course {
                 )
             })
             .min_by(|x, y| x.2.total_cmp(&y.2))
-            .map(|(s, forward, _)| (s, forward))
     }
 }
 
@@ -292,8 +339,6 @@ impl Course {
 pub struct Settings {
     /// Which of the event's routes.
     pub route: u8,
-    /// The other way round.
-    pub reverse: bool,
     /// How many laps, on a loop.
     pub laps: u8,
     /// Whether there's traffic (the round's own).
@@ -310,7 +355,6 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             route: 0,
-            reverse: false,
             laps: 3,
             traffic: false,
             collisions: true,
@@ -395,14 +439,13 @@ pub struct Entry {
 /// How a race or time trial ended: everyone in the order they placed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Results {
-    /// The route, as it was called, and whether it was driven the other way.
+    /// The route, as it was called.
     pub route: String,
-    pub reverse: bool,
     pub entries: Vec<Entry>,
 }
 
 impl Results {
-    pub fn of(standing: &Standing, route: String, reverse: bool) -> Self {
+    pub fn of(standing: &Standing, route: String) -> Self {
         let entries = (standing.order().into_iter())
             .map(|i| {
                 let racer = &standing.racers[i];
@@ -414,11 +457,7 @@ impl Results {
                 }
             })
             .collect();
-        Self {
-            route,
-            reverse,
-            entries,
-        }
+        Self { route, entries }
     }
 
     /// For people, in a line.
@@ -448,23 +487,46 @@ pub struct Best {
     pub time: f32,
 }
 
+impl Wire for GridSpot {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.at.put(out);
+        self.heading.put(out);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        Some(Self {
+            at: r.get()?,
+            heading: r.get()?,
+        })
+    }
+}
+
 impl Wire for Route {
     fn put(&self, out: &mut Vec<u8>) {
         self.name.put(out);
         self.looped.put(out);
-        self.via.put(out);
+        self.grid.put(out);
+        self.checkpoints.put(out);
         self.line.put(out);
         self.widths.put(out);
+        self.marks.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         let route = Self {
             name: r.get()?,
             looped: r.get()?,
-            via: r.get()?,
+            grid: r.get()?,
+            checkpoints: r.get()?,
             line: r.get()?,
             widths: r.get()?,
+            marks: r.get()?,
         };
-        (route.line.len() == route.widths.len() && (route.line.is_empty() || route.line.len() >= 2))
+        let n = route.line.len();
+        let marks_fit = (route.marks.iter()).all(|&m| usize::from(m) < n)
+            && route.marks.windows(2).all(|w| w[0] <= w[1]);
+        (route.line.len() == route.widths.len()
+            && (n == 0 || n >= 2)
+            && marks_fit
+            && route.grid.len() <= MAX_RACERS)
             .then_some(route)
     }
 }
@@ -472,7 +534,6 @@ impl Wire for Route {
 impl Wire for Settings {
     fn put(&self, out: &mut Vec<u8>) {
         self.route.put(out);
-        self.reverse.put(out);
         self.laps.put(out);
         self.traffic.put(out);
         self.collisions.put(out);
@@ -481,7 +542,6 @@ impl Wire for Settings {
     fn get(r: &mut Reader) -> Option<Self> {
         Some(Self {
             route: r.get()?,
-            reverse: r.get()?,
             laps: r.get()?,
             traffic: r.get()?,
             collisions: r.get()?,
@@ -546,13 +606,11 @@ impl Wire for Entry {
 impl Wire for Results {
     fn put(&self, out: &mut Vec<u8>) {
         self.route.put(out);
-        self.reverse.put(out);
         self.entries.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         Some(Self {
             route: r.get()?,
-            reverse: r.get()?,
             entries: r.get()?,
         })
     }
@@ -575,99 +633,103 @@ impl Wire for Best {
 mod tests {
     use super::*;
 
-    /// A square loop, 400 m a side, on a 6 m road.
+    /// A square loop, 400 m a side, on a 6 m road, its checkpoints in the middle of each
+    /// side (the first on the north side, going east), two grid spots before the first.
     pub fn square() -> Route {
-        let corners = [
-            Vec2::new(0.0, 0.0),
+        let line = vec![
+            Vec2::new(200.0, 0.0),
             Vec2::new(400.0, 0.0),
+            Vec2::new(400.0, 200.0),
             Vec2::new(400.0, 400.0),
+            Vec2::new(200.0, 400.0),
             Vec2::new(0.0, 400.0),
+            Vec2::new(0.0, 200.0),
             Vec2::new(0.0, 0.0),
+            Vec2::new(200.0, 0.0),
         ];
         Route {
             name: "Square".into(),
             looped: true,
-            via: corners[..4].to_vec(),
-            line: corners.to_vec(),
-            widths: vec![6.0; 5],
+            grid: vec![
+                GridSpot {
+                    at: Vec2::new(190.0, 1.5),
+                    heading: 90.0,
+                },
+                GridSpot {
+                    at: Vec2::new(184.0, -1.5),
+                    heading: 90.0,
+                },
+            ],
+            checkpoints: vec![line[0], line[2], line[4], line[6]],
+            widths: vec![6.0; line.len()],
+            marks: vec![0, 2, 4, 6, 8],
+            line,
         }
     }
 
     #[test]
-    fn a_course_has_gates_to_its_finish() {
-        let course = Course::new(&square(), false, 2);
+    fn a_loops_gates_are_its_checkpoints_the_first_last() {
+        let route = square();
+        let course = Course::new(&route, 2);
         assert_eq!(course.length(), 1600.0);
-        let last = course.gates.last().unwrap();
-        assert_eq!(last.s, 1600.0, "the lap ends at the start");
-        assert!(course.gates[0].s >= first_gate() - 0.01);
-        for pair in course.gates.windows(2) {
-            assert!(pair[1].s - pair[0].s <= GATE_SPACING + 0.01);
-        }
-        assert_eq!(course.total(), 2 * course.gates.len());
-        assert!(course.ends_lap(course.gates.len()));
+        let s: Vec<f32> = course.gates.iter().map(|g| g.s).collect();
+        assert_eq!(
+            s,
+            [400.0, 800.0, 1200.0, 1600.0],
+            "the lap ends at the first"
+        );
+        assert_eq!(course.gates[3].point, route.checkpoints[0]);
+        assert_eq!(course.total(), 8);
+        assert!(course.ends_lap(4) && !course.ends_lap(3));
+        // Each faces the way the road goes there: the first east, the second south.
+        assert!(course.gates[3].forward.distance(Vec2::X) < 1e-5);
+        assert!(course.gates[0].forward.distance(Vec2::Y) < 1e-5);
         // Crossed forwards only, and within its reach.
-        let gate = course.gates[1];
+        let gate = course.gates[0];
         let side = Vec2::new(-gate.forward.y, gate.forward.x);
         let (behind, ahead) = (gate.point - gate.forward, gate.point + gate.forward);
         assert!(gate.crossed(behind, ahead));
         assert!(!gate.crossed(ahead, behind));
         assert!(gate.crossed(behind + side * 8.0, ahead + side * 8.0));
         assert!(!gate.crossed(behind + side * 10.0, ahead + side * 10.0));
-        // The other way round, the same start.
-        let back = Course::new(&square(), true, 1);
-        assert_eq!(back.line[0], Vec2::ZERO);
-        assert_eq!(back.point(10.0).1, Vec2::Y, "first along the west side");
     }
 
     #[test]
-    fn the_grid_is_behind_the_front_row_and_apart() {
-        let course = Course::new(&square(), false, 1);
-        let spots: Vec<(Vec2, f32)> = (0..MAX_RACERS)
-            .map(|i| course.grid(i, MAX_RACERS))
-            .collect();
-        for (i, a) in spots.iter().enumerate() {
-            for b in &spots[i + 1..] {
-                assert!(a.0.distance(b.0) > 2.5, "{a:?} {b:?}");
-            }
-            assert!(a.0.x < course.gates[0].s, "{a:?} past the first gate");
-        }
-        // Pole ahead of the second row; facing along the road (east: yaw -90°).
-        assert!(spots[0].0.x > spots[2].0.x);
-        assert!((spots[0].1 + std::f32::consts::FRAC_PI_2).abs() < 1e-4);
-        // Whoever comes, the front row is at the front.
-        assert!((course.grid(0, 2).0.x - GRID_FRONT).abs() < 0.01);
+    fn a_sprints_gates_are_all_its_checkpoints() {
+        let mut route = square();
+        route.looped = false;
+        route.line.pop();
+        route.widths.pop();
+        route.marks.pop();
+        let course = Course::new(&route, 3);
+        assert_eq!(course.laps, 1);
+        let s: Vec<f32> = course.gates.iter().map(|g| g.s).collect();
+        assert_eq!(s, [0.0, 400.0, 800.0, 1200.0]);
+        // At an end, the gate faces along the line's end.
+        assert!(course.gates[0].forward.distance(Vec2::X) < 1e-5);
     }
 
     #[test]
-    fn the_grid_starts_past_a_turn_at_the_start() {
-        // 14 m north, then east: the route's first point just round a corner.
-        let line = vec![
-            Vec2::new(0.0, 0.0),
-            Vec2::new(0.0, -14.0),
-            Vec2::new(600.0, -14.0),
-        ];
-        let route = Route {
-            name: "Stub".into(),
-            looped: false,
-            via: vec![line[0], line[2]],
-            widths: vec![6.0; 3],
-            line,
-        };
-        let course = Course::new(&route, false, 1);
-        assert!((course.grid_start - 14.0).abs() < 1e-3);
-        for count in [1, 2, 5] {
-            for slot in 0..count {
-                let (at, yaw) = course.grid(slot, count);
-                assert!(at.x > 5.0, "{slot} of {count} at {at}");
-                assert!(
-                    (yaw + std::f32::consts::FRAC_PI_2).abs() < 1e-4,
-                    "facing east"
-                );
-                assert!(at.x < course.gates[0].point.x, "past the first gate");
-            }
-        }
-        // A route straight from its start keeps its grid where it was.
-        assert_eq!(Course::new(&square(), false, 1).grid_start, 0.0);
+    fn the_grid_is_the_routes_pole_first() {
+        let mut route = square();
+        route.grid.reverse();
+        order_grid(&mut route.grid, route.checkpoints[0]);
+        assert_eq!(
+            route.grid,
+            square().grid,
+            "pole is nearest the first checkpoint"
+        );
+        let course = Course::new(&route, 1);
+        let (pole, yaw) = course.grid(0);
+        assert_eq!(pole, Vec2::new(190.0, 1.5));
+        // East: yaw -90°.
+        assert!((yaw + std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+        assert_eq!(course.reset_spot(0, 1).0, Vec2::new(184.0, -1.5));
+        // Past a gate, R puts the car right of the road's middle there.
+        let (back, _) = course.reset_spot(1, 1);
+        assert!((back - Vec2::new(398.5, 200.0)).length() < 1e-4, "{back}");
+        let heading = GridSpot::heading_of(Vec2::new(0.0, 1.0));
+        assert!((heading - 180.0).abs() < 1e-4);
     }
 
     #[test]

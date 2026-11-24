@@ -29,6 +29,14 @@ const TURN_BACK: f32 = -0.7;
 /// The line sent is simplified to within this of the roads' centrelines (m).
 const SIMPLIFY: f32 = 0.3;
 
+/// A route along the roads: its line, the road's width at each point, and each of the
+/// points it was asked to pass through: its index in the line.
+pub struct RouteLine {
+    pub line: Vec<Vec2>,
+    pub widths: Vec<f32>,
+    pub marks: Vec<u16>,
+}
+
 /// A stretch of road between two junctions.
 struct Stretch {
     ends: [u32; 2],
@@ -300,8 +308,9 @@ impl Roads {
     }
 
     /// The route through `via` along the roads (back to the first point if `looped`): its
-    /// line (a loop's last point is its first) and the road's width at each point.
-    pub fn route(&self, via: &[Vec2], looped: bool) -> Result<(Vec<Vec2>, Vec<f32>), String> {
+    /// line (a loop's last point is its first), the road's width at each point, and where
+    /// each of `via` is in the line (a loop's first again at the end).
+    pub fn route(&self, via: &[Vec2], looped: bool) -> Result<RouteLine, String> {
         if via.len() < 2 {
             return Err("needs at least two points".into());
         }
@@ -309,7 +318,7 @@ impl Roads {
             .map(|(i, &p)| match self.snap(p) {
                 Some((on, distance)) if distance <= SNAP => Ok(on),
                 Some((_, distance)) => Err(format!(
-                    "point {} ({:.0} {:.0}) is {distance:.0} m from the nearest road",
+                    "checkpoint {} ({:.0} {:.0}) is {distance:.0} m from the nearest road",
                     i + 1,
                     p.x,
                     p.y
@@ -327,7 +336,11 @@ impl Roads {
         let mut at_point = vec![0];
         for (i, j) in legs {
             let (points, w) = self.way(snapped[i], snapped[j]).ok_or_else(|| {
-                format!("no way along the roads from point {} to {}", i + 1, j + 1)
+                format!(
+                    "no way along the roads from checkpoint {} to {}",
+                    i + 1,
+                    j + 1
+                )
             })?;
             for (p, w) in points.into_iter().zip(w) {
                 if line.last() != Some(&p) {
@@ -357,7 +370,7 @@ impl Roads {
                 && came.dot(ahead) < TURN_BACK
             {
                 return Err(format!(
-                    "the route turns back at point {} ({:.0} {:.0}): move it, or add one to say \
+                    "the route turns back at checkpoint {} ({:.0} {:.0}): move it, or add one to say \
                      which way",
                     k + 1,
                     via[k].x,
@@ -365,13 +378,20 @@ impl Roads {
                 ));
             }
         }
-        let keep = simplify(&line, SIMPLIFY);
-        let line: Vec<Vec2> = keep.iter().map(|&i| line[i]).collect();
-        let widths = keep.iter().map(|&i| widths[i]).collect();
-        if line.len() > usize::from(u16::MAX) {
+        let keep = simplify(&line, SIMPLIFY, &at_point);
+        if keep.len() > usize::from(u16::MAX) {
             return Err("too long".into());
         }
-        Ok((line, widths))
+        let marks = (at_point.iter())
+            .map(|&i| keep.partition_point(|&k| k < i) as u16)
+            .collect();
+        let line: Vec<Vec2> = keep.iter().map(|&i| line[i]).collect();
+        let widths = keep.iter().map(|&i| widths[i]).collect();
+        Ok(RouteLine {
+            line,
+            widths,
+            marks,
+        })
     }
 }
 
@@ -389,12 +409,17 @@ fn direction(line: &[Vec2], i: usize, step: isize) -> Option<Vec2> {
     }
 }
 
-/// The points of `line` to keep for it to stay within `tolerance` (Douglas–Peucker).
-fn simplify(line: &[Vec2], tolerance: f32) -> Vec<usize> {
+/// The points of `line` to keep for it to stay within `tolerance` (Douglas–Peucker),
+/// `kept` among them.
+fn simplify(line: &[Vec2], tolerance: f32, kept: &[usize]) -> Vec<usize> {
     let mut keep = vec![false; line.len()];
     keep[0] = true;
     keep[line.len() - 1] = true;
-    let mut stack = vec![(0, line.len() - 1)];
+    for &i in kept {
+        keep[i] = true;
+    }
+    let fixed: Vec<usize> = (0..line.len()).filter(|&i| keep[i]).collect();
+    let mut stack: Vec<(usize, usize)> = fixed.windows(2).map(|w| (w[0], w[1])).collect();
     while let Some((a, b)) = stack.pop() {
         let (pa, pb) = (line[a], line[b]);
         let far = (a + 1..b)
