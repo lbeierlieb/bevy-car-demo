@@ -17,7 +17,6 @@ use super::race::{COUNTDOWN, Course};
 use super::round::{Action, Game, Phase, Play, Round};
 use super::{EventKind, Events, marker_spot, start_spot};
 use crate::car::{ActiveCar, Car, CarSetup, Held, ResetRule};
-use crate::chassis::CHASSIS;
 use crate::menu::kit::{self, Panel, Place};
 use crate::menu::nav::MenuInput;
 use crate::net::protocol::PlayerId;
@@ -37,10 +36,6 @@ const TOUCHES_EVERY: f64 = 0.2;
 /// The nearest hunter's distance is shown red and yellow within these (m).
 const HUNTER_CLOSE: f32 = 50.0;
 const HUNTER_NEAR: f32 = 200.0;
-/// The cars lent for "muscle vs rally": the hunters', the hunted's (their base engines:
-/// the muscle car's smaller V8).
-const MUSCLE: &str = "Harrow";
-const RALLY: &str = "Skarn";
 
 pub struct LobbyPlugin;
 
@@ -306,15 +301,8 @@ pub(super) fn follow(
             place,
             cars.iter_mut().find(|(_, car)| car.index == active.0),
         ) {
-            let lend = match round.game {
-                Game::Hunt(settings) if settings.cars == Cars::MuscleVsRally => {
-                    Some(if round.host == you { RALLY } else { MUSCLE })
-                }
-                _ => None,
-            };
-            if let Some(name) = lend {
-                // A factory car for the round; ours waits.
-                let chassis = CHASSIS.iter().position(|c| c.name == name).unwrap_or(0);
+            if let Some(chassis) = round.lent_chassis(you) {
+                // A factory car for the round; ours waits (the server builds the same).
                 let setup = CarSetup::factory(chassis, 0);
                 let mut lent = Car::spawn_at(car.index, setup, &terrain, p.x, p.y, yaw);
                 lent.drivetrain.neutral();

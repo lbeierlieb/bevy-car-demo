@@ -1318,8 +1318,15 @@ mod tests {
         use crate::events::round::{Action, Game};
         let listener = LoopbackListener::default();
         let mut server = hunt_server(&listener);
-        let mut anna = hunter(&listener, "Anna", 0.0);
-        let mut ben = hunter(&listener, "Ben", 3.0);
+        // Driving, so the server has their cars too.
+        let driving = |mut app: App| {
+            app.add_plugins((crate::sim::SimPlugin, crate::car::CarPlugin))
+                .init_resource::<crate::input::WheelInput>()
+                .add_systems(Update, crate::looks::show_cars);
+            app
+        };
+        let mut anna = driving(hunter(&listener, "Anna", 0.0));
+        let mut ben = driving(hunter(&listener, "Ben", 3.0));
         car(&mut anna).refuel(0.5);
         let annas_fuel = car(&mut anna).fuel.litres();
         let mut all = [&mut server, &mut anna, &mut ben];
@@ -1349,6 +1356,16 @@ mod tests {
         let chassis = |app: &mut App| CHASSIS[car(app).setup.build.chassis].name;
         assert_eq!(chassis(all[h]), "Skarn", "the hunted's rally car");
         assert_eq!(chassis(all[k]), "Harrow", "the hunter's muscle car");
+        // The server lends the same.
+        let on_server = |server: &mut App| {
+            let mut peers = server.world_mut().query::<&super::server::Peer>();
+            let mut names: Vec<&str> = (peers.iter(server.world()))
+                .filter_map(|peer| Some(CHASSIS[peer.shadow.car()?.setup.build.chassis].name))
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(on_server(all[0]), ["Harrow", "Skarn"]);
         let parts = car(all[k]).setup.engine.parts.clone();
         let family = &crate::physics::engine::families::FAMILIES[parts.family];
         assert_eq!(family.versions[parts.version].code, "M50", "the smaller V8");
@@ -1370,6 +1387,7 @@ mod tests {
         assert!(!round(all[h]).unwrap().running());
         assert_eq!(chassis(all[h]), "Tarn");
         assert_eq!(chassis(all[k]), "Tarn");
+        assert_eq!(on_server(all[0]), ["Tarn", "Tarn"]);
         assert!(
             (car(all[1]).fuel.litres() - annas_fuel).abs() < 0.01,
             "Anna's own"

@@ -133,6 +133,9 @@ pub struct Shadow {
     /// Where a car without a state yet goes when it gets one, if it's elsewhere: where the
     /// server put it (or the car it replaces was).
     anchor: Option<Spot>,
+    /// The player's own car while they drive one lent for an event's round: its spec and
+    /// state (the player's game can't change the lent one's build meanwhile).
+    own: Option<(Option<CarSpec>, Car)>,
     /// What R does with the car (the player's round's rules).
     pub rule: ResetRule,
     /// Whether the car may be refuelled (stopped at a gas station).
@@ -182,7 +185,7 @@ struct Report {
 impl Shadow {
     /// The player's car is built of `spec` from now on.
     pub fn set_spec(&mut self, spec: CarSpec, baked: &mut BakedMaps) {
-        if self.spec.as_ref() == Some(&spec) {
+        if self.spec.as_ref() == Some(&spec) || self.own.is_some() {
             return;
         }
         // The new car goes where the old one is.
@@ -300,6 +303,38 @@ impl Shadow {
             }
             None => self.anchor = Some(spot),
         }
+    }
+
+    /// Lends the player a car of `spec` (a factory build) at `spot`, keeping theirs until
+    /// `give_back`. Without a car of theirs yet, or maps for it, it's only put there.
+    pub fn lend(&mut self, spec: CarSpec, terrain: &Terrain, spot: Spot) {
+        let maps = spec.stock_maps();
+        let (Some(maps), Some(own), None) = (maps, self.car.take(), &self.own) else {
+            return self.put(terrain, spot);
+        };
+        let mut lent = spec_car(&spec, maps);
+        lent.keep_settings(&own);
+        self.own = Some((self.spec.replace(spec), own));
+        self.baking = None;
+        self.built = None;
+        self.car = Some(lent);
+        self.waiting.clear();
+        self.placements.clear();
+        self.put(terrain, spot);
+    }
+
+    /// Gives the player their own car back at `spot`, as it was when the lent one came;
+    /// without one lent, only puts theirs there.
+    pub fn give_back(&mut self, terrain: &Terrain, spot: Spot) {
+        if let Some((spec, own)) = self.own.take() {
+            self.spec = spec;
+            self.baking = None;
+            self.built = None;
+            self.car = Some(own);
+            self.waiting.clear();
+            self.placements.clear();
+        }
+        self.put(terrain, spot);
     }
 
     /// Where the car is, as the server has it (none before it has a state).

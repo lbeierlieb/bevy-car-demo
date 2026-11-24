@@ -11,12 +11,13 @@ use super::hunt::{self, CAUGHT_SPEED, CAUGHT_TIME, Catch, Ending, TAG_RANGE};
 use super::race::{self, BEST_KEPT, Best, COUNTDOWN, Course, FINISH_GRACE, MAX_RACERS, Racer};
 use super::round::{Action, Game, Outcome, Phase, Play, Round};
 use super::{Event, EventKind, marker_spot, start_spot};
-use crate::car::ResetRule;
+use crate::car::{CarSetup, ResetRule};
 use crate::heli::{Chase, HeliPose};
 use crate::net::protocol::CarId;
 use crate::net::protocol::{CarState, PlayerId, ToClient};
 use crate::net::server::{Peer, Server};
 use crate::net::shadow::Spot;
+use crate::spec::CarSpec;
 use crate::terrain::Terrain;
 use crate::traffic::network::Network;
 use crate::traffic::{Realm, Traffic};
@@ -607,7 +608,13 @@ pub fn run_rounds(
                             parked: live.round.game.race().is_none(),
                             hold: live.round.hold(peer.id),
                         };
-                        peer.shadow.put(&terrain, spot);
+                        match live.round.lent_chassis(peer.id) {
+                            Some(chassis) => {
+                                let spec = CarSpec::of(&CarSetup::factory(chassis, 0));
+                                peer.shadow.lend(spec, &terrain, spot);
+                            }
+                            None => peer.shadow.put(&terrain, spot),
+                        }
                     }
                 }
             }
@@ -625,7 +632,7 @@ pub fn run_rounds(
                             parked: true,
                             hold: 0.0,
                         };
-                        peer.shadow.put(&terrain, spot);
+                        peer.shadow.give_back(&terrain, spot);
                     }
                 }
             }
