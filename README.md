@@ -73,12 +73,14 @@ A small Bevy demo of car simulation techniques:
 nix develop               # toolchain + native libraries
 cargo run                 # the sandbox: optimised build (release-dev profile) with fast rebuilds
 cargo run --bin editor    # the map editor (native only)
+cargo run --bin races     # the race editor (native only): a race's grid and checkpoints
 cargo test                # physics unit tests and headless driving tests
 ```
 
-There are two apps built from the same library: the **sandbox** (`src/main.rs`, every
-car and part for free, with the developer tools) and the **map editor**
-(`src/bin/editor.rs`, no cars; see "The map editor" below). The sandbox is the list of
+The apps are built from the same library: the **sandbox** (`src/main.rs`, every car and
+part for free, with the developer tools), the **map editor** (`src/bin/editor.rs`, no
+cars; see "The map editor" below), the **race editor** (`src/bin/races.rs`, no cars;
+see "The race editor") and the server. The sandbox is the list of
 plugins it adds to the shared `CorePlugin`. On
 native, they read the baked map from `assets/gerach.terrain` at startup, so a fresh
 bake shows up without recompiling (the copy built in is the fallback, and the web
@@ -126,15 +128,17 @@ the hunted 50 m up, and can't be shaken off: everyone in the hunt sees it from a
 the marker, in its lobby, with their own car. Other groups can start their own hunts at
 the same marker meanwhile.
 
-**Races** (blue markers) have routes of their own, loops or sprints, which needn't start
-at the marker. Stopped on its marker, choose a **time trial** (alone, against the clock)
-or a **race**: the first one in opens the lobby there and sets the route, the direction,
-the laps (on a loop), traffic, whether the cars collide (if not, the other racers are
+**Races** (blue markers) have routes of their own, loops or sprints, made in the race
+editor, which needn't start at the marker. Stopped on its marker, choose a **time
+trial** (alone, against the clock) or a **race**: the first one in opens the lobby
+there and sets the route, the laps (on a loop), traffic, whether the cars collide (if not, the other racers are
 see-through and pass through each other; traffic still counts) and whether racers can
 reset (R: the rescue helicopter carries the car back to the last gate passed, which
-takes a while), and starts the race once someone else has joined. Everyone is put on a
-grid at the route's start, held for a countdown, and drives through the gates along the
-route in order: a gate missed has to be gone back for. A bar at the top shows the lap,
+takes a while), and starts the race once someone else has joined (as many racers as the route has grid
+spots). Everyone is put on the route's grid (pole is the spot nearest the first
+checkpoint), held for a countdown, and drives through its checkpoints' gates in order:
+a gate missed has to be gone back for. A sprint ends at its last checkpoint; a loop's
+lap ends at its first (the first lap includes the way there from the grid). A bar at the top shows the lap,
 the place, the time, lap times, the gap to the car ahead and where the next gate is; the
 map (M) shows the route. Once the first racer is through, the others have a minute.
 The results show in the lobby afterwards, with the best laps (a sprint's whole way) of
@@ -155,11 +159,12 @@ default) or `all` (everyone, wherever they are). `--chat off` switches the chat 
 `--name-tags off` the names over the players' cars. `--shops shops.cfg` says where the
 shops are (lines of kind, x, z and name; `assets/shops.cfg`, the repo's list, explains
 them); without it there are none. `--events events.cfg` likewise says where the events
-are (`assets/events.cfg`), and a race's routes: under the race, `route loop NAME` or
-`route sprint NAME`, then the points it passes through, a line each. The server finds
-the way along the roads between them when it starts and refuses a point more than 30 m
-from a road or a route turning back at a point, saying which (so put a point where the
-route turns off, to keep it on the road meant). `--spawn "x z [heading]"` says where players start: the
+are (`assets/events.cfg`), and a race's routes, pasted under the race from the race
+editor's export: `route loop NAME` or `route sprint NAME`, then the grid spots (`grid x
+z heading`, compass degrees) and the checkpoints (`x z`), a line each. The server finds
+the way along the roads between the checkpoints when it starts and refuses a checkpoint
+more than 30 m from a road, a route turning back at one, or a lap under 500 m, saying
+which. `--spawn "x z [heading]"` says where players start: the
 paved road nearest that map point (x east, z south, in metres, as the gizmos (1) and the
 map (M) show them), facing as close to the compass heading as the road allows; without
 it, in Gerach.
@@ -340,12 +345,13 @@ tire grip force, cyan for roll centres.
 | `src/lib.rs`, `src/main.rs` | The shared `WorldPlugin` and `CorePlugin`; the sandbox app |
 | `src/net/`, `src/online.rs`, `src/bin/server.rs` | Multiplayer: protocol, server, client, WebTransport; the start menu; the server app |
 | `src/editor/`, `src/bin/editor.rs` | The map editor |
+| `src/race_editor/`, `src/bin/races.rs` | The race editor |
 | `src/osm.rs` | The map file's reader and writer (shared with the bake) |
 | `src/shops.rs` | Shops on the map (from the server): going in |
 | `src/paint.rs` | The paint shops' spray booth: tins, a test card, the mist of a coat |
 | `src/gas.rs` | The gas stations' forecourt: the car at a pump, its display, pumping |
 | `src/alignment.rs` | The alignment shops' bay: the lift, laser heads, the aligner's screen |
-| `src/events/` | Events on the map (from the server): lobbies, rounds and rules of the car hunt, races and time trials; routes along the roads |
+| `src/events/` | Events on the map (from the server): lobbies, rounds and rules of the car hunt, races and time trials; routes, their grids and gates along the roads |
 | `src/garage/` | The car dealers' showroom and the parts shops (`bay.rs`: the workshop, the car on a two-post lift) |
 | `src/dyno/`, `src/ecu_ui.rs` | The dyno shops' room: rollers, runs, holds, ECU tuning, cam timing |
 | `src/workshop.rs` | Baking engine maps in the background, and their cache |
@@ -526,6 +532,29 @@ so JOSM and `bake import` still work with the file.
 - **File**: Ctrl+Z / Ctrl+Y undo and redo, Ctrl+S saves. F5 (or "Save and bake")
   saves, builds and runs the bake (about 20 s, progress in the panel) into
   `assets/gerach.terrain` and reloads the map in place.
+
+## The race editor
+
+`cargo run --bin races [FILE]` (native only) flies over the map like the map editor
+(right mouse button held to look, WASD, Q/E, Shift, the wheel for the speed, M for the
+map) and makes one race route: its grid and its checkpoints.
+
+- **Grid spots** (G): a click puts a box as big as the biggest car on the ground; it
+  turns with the mouse until the next click (Esc calls it off). A click on a spot's
+  disc or box turns it again, Shift+wheel turns the selected one a degree a notch (or
+  type the heading in the window). Spots are numbered pole first (nearest the first
+  checkpoint); overlapping boxes turn red. 16 at most.
+- **Checkpoints** (C): each click adds the next one, each a gate. Ctrl+click puts one
+  between the two around that place; a click on the first (green) makes the route a
+  loop. The route is found along the roads the shortest way, as the server will, and
+  drawn over the road with the gates as a race shows them (start green, finish yellow).
+  Where it takes the wrong road, add a checkpoint.
+- Drag any disc to move what it marks; Delete removes what's under the pointer;
+  Ctrl+Z / Ctrl+Y undo and redo. The window says whether the server would take the
+  route, and why not.
+- **Export** asks for a file name (in the working directory) and the route's name, and
+  writes the route with a commented `race` line (its marker at pole) to paste into the
+  events file. **Open** (or the file on the command line) reads one back.
 
 ## Deliberate simplifications
 

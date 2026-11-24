@@ -24,9 +24,11 @@ HUD, map, sound, egui), help (quick start, hints), the Vireo hot hatch (B16), R 
 gizmos, 2 telemetry, the central menu (Esc), shops (online), F11 fullscreen in all apps). The career was removed for the multiplayer work (see
 "Multiplayer"). Keep it that way: no mode flags; something only one app has is a plugin
 of its own (e.g. `car::ResetPlugin`, `ui::PanelPlugin`), and
-shared pieces are public functions (e.g. `workshop`, `garage::start`). An app,
-the map editor (`src/bin/editor.rs`, native only), has no `CorePlugin` (no cars): its
-`editor::EditorPlugin` adds the terrain, scenery, sky and map plugins itself.
+shared pieces are public functions (e.g. `workshop`, `garage::start`). Two apps, the
+map editor (`src/bin/editor.rs`) and the race editor (`src/bin/races.rs`; both native
+only), have no `CorePlugin` (no cars): `editor::EditorPlugin` and
+`race_editor::RaceEditorPlugin` add the terrain, scenery, sky and map plugins
+themselves (see "Race editor").
 
 - Window keys are on the number row (moved from F1–F6 at the user's wish, 2026-11-19):
   1 gizmos (with the car's map x, z, height and heading top right, for placing things in
@@ -217,7 +219,8 @@ Shops need a server (`JOIN=127.0.0.1`, see below) and `PLACE` at the building's 
 `TAPS="Enter@200"` goes into the scene: onto the rollers, up to the pump…; older click
 coordinates in these notes are from before the menus, 2026-11-23, and are wrong now;
 the car hunt's marker `-95,2341` with `--events assets/events.cfg`, its lobby window opens
-at once; the race marker exactly: `PLACE_EXACT=1 PLACE="-62,2280,150"`, then
+at once; a race marker exactly (the repo list has none since 2026-11-24: add one with a
+route; "Races Baunach" was at (−62, 2280)): `PLACE_EXACT=1 PLACE="-62,2280,150"`, then
 `TAPS="Enter@200"` is "Time trial", `ArrowDown@200;Enter@204` "Race"; in the dyno's room
 the page is the first row (`ArrowRight` steps it: runs, ECU tune, cams and boost), "Hold"
 the third; a hold needs ~200 frames more to settle).
@@ -472,40 +475,49 @@ in a running round (`Connection::in_running_round`). Tests: `realms_see_only_the
 from the lobby unless a test clears it).
 Not done: a round's own chat lines (who caught whom) for the server's chat.
 
-**Races and time trials** (asked for by the user, 2026-11-22; built the same day): a
-`race` event (blue marker; "Races Baunach" at (−62, 2280), the same parking lot's east
-side) has routes listed under it in the events file: `route loop|sprint NAME`, then
-`x z` lines, the points it passes through (several per event; needn't start at the
-marker). `events::resolve` (the server at startup, `Terrain::load`) finds the way along
-**every** road but streams (`routes.rs`: a graph of stretches between junctions like
-`traffic::network`, Dijkstra between consecutive points, unpaved ×3 and under 3.5 m
-×1.5 per metre), refusing a point over 30 m from a road, a route turning back at a point
-(way out against way in, cosine < −0.7 over 15 m) or shorter than 500 m; the line
-(simplified to 0.3 m) and widths go out with `ToClient::Events` (protocol 13). Repo
-routes: "Baunacher Ring" (loop, 2.4 km through the town) and "Nordost-Sprint" (1.9 km
-out on the road to the north-east). Agreed with the user:
+**Races and time trials** (asked for by the user, 2026-11-22; built the same day;
+grid and gates by hand since 2026-11-24, the user: the automatic gates in Baunach
+weren't great): a `race` event (blue marker) has routes listed under it in the events
+file, made in the race editor: `route loop|sprint NAME`, then `grid x z heading` lines
+(compass degrees; up to 16; pole = nearest the first checkpoint, `race::order_grid`)
+and `x z` lines, its checkpoints, **each a gate** (several routes per event; needn't
+start at the marker; `events::read_routes` reads an export without a race line).
+`events::resolve_route` (the server at startup, `Terrain::load`; the race editor live)
+finds the way along **every** road but streams (`routes.rs`: a graph of stretches
+between junctions like `traffic::network`, Dijkstra between consecutive checkpoints,
+unpaved ×3 and under 3.5 m ×1.5 per metre), refusing a checkpoint over 30 m from a
+road, a route turning back at one (way out against way in, cosine < −0.7 over 15 m),
+shorter than 500 m, or without a grid; the line (simplified to 0.3 m, the checkpoints'
+points kept), widths and `marks` (each checkpoint's index in the line) go out with
+`ToClient::Events` (protocol 16). The repo's Baunach routes were removed (2026-11-24;
+"Races Baunach" with them, as a race needs a route): the user makes new ones. The old
+"Baunacher Ring" points are the `RING` test route in `events/mod.rs`. Agreed with the
+user:
 - On the marker a window asks: time trial (`Action::Trial`, a private round of one,
   `Game::Trial`, never merged or joined) or race (`Action::Enter`: the lobby there, the
-  first in hosts and sets things; at most 16; starts with 2+).
-- Settings (`race::Settings`): route, normal or reverse, laps (loops, 1–20, default 3),
+  first in hosts and sets things; at most the route's grid spots; starts with 2+, not
+  with more racers than the picked route's spots).
+- Settings (`race::Settings`): route, laps (loops, 1–20, default 3; no reverse since
+  the grid is by hand: a reverse race is a route of its own),
   traffic (off), cars collide (on; off: `net::GhostPlayers`, the client treats remote
   cars with a name tag (in a realm, players' cars) as ghosts, traffic still collides),
   racers can reset (on; R: `ResetRule::Spot`, the rescue helicopter to the last gate
   passed, right half of the road; time trials never reset, "Start again"
   (`Action::Restart`) instead). Player cars only, for now.
-- Running (`race.rs`: `Course` = a route one way with laps): a grid at the route's start
-  (pairs on roads 5 m+, rows 6 m, else single file 9 m; past a turn over 0.6 rad within
-  30 m of the start, `Course::grid_start`: the sprint's first point is round a corner and
-  its front row stood sideways on that stub, 2026-11-23), held (`car::Held`) for
-  `COUNTDOWN` (5 s), the parking brake off, in neutral (put in gear during the countdown;
-  agreed with the user, 2026-11-22); the clock runs from the green light. Gates
-  every ≤ 150 m from 187 m on (past the longest grid), the last at the lap's end (a
-  loop's start); the server judges them from the cars' states (`Gate::crossed`: forwards,
-  within road half-width + 6 m, not a jump over 60 m), in order. Standing (`Racer`:
+- Running (`race.rs`: `Course` = a route with laps): each racer on their grid spot by
+  slot (R before any gate goes back there), held (`car::Held`) for `COUNTDOWN` (5 s),
+  the parking brake off, in neutral (put in gear during the countdown; agreed with the
+  user, 2026-11-22); the clock runs from the green light. Gates
+  (`race::checkpoint_gates`): at each checkpoint's mark, facing the line's way in and
+  out over 10 m averaged; a sprint's are all checkpoints (the last the finish), a loop's
+  lap is the second on, then the first (passing the first from the grid is the start,
+  not a gate; lap 1 includes the way there); the server judges them from the cars'
+  states (`Gate::crossed`: forwards, within road half-width + 6 m, not a jump over 60 m),
+  in order. "Wrong way!" only within 30 m of the line (not on the way from the grid). Standing (`Racer`:
   gates, last gate's time, laps, finished, left) goes out with the round on every gate.
   First one through: the rest have `FINISH_GRACE` (60 s); over when all are through or
   gone; results (`race::Results`) in the lobby. Leaving mid-race lists you as "Left".
-- Best times: per (event, route, direction, traffic), time trials only, a loop's laps or
+- Best times: per (event, route, traffic), time trials only, a loop's laps or
   a sprint's whole way, top 10, one per name, for the session (`Rounds::best`, sent as
   `Round::best`).
 - Client (`racing.rs`): the chooser, the race lobby window, the bar (countdown, lap,
@@ -517,6 +529,28 @@ Tests: `a_race_runs_from_the_grid_to_the_results`, `a_time_trial_puts_its_lap_on
 `the_races_routes_are_found_along_the_roads`, `race::tests`.
 Not done: race-specific cars ("everyone the same car"), saving best times, rolling
 starts, a minimap.
+
+**Race editor** (asked for by the user, 2026-11-24, instead of recording a route while
+driving; `src/race_editor/`, `src/bin/races.rs`, `cargo run --bin races [FILE]`): the
+map editor's fly camera (`editor::camera`; Shift+wheel no longer sets its speed) and
+ground hit (`editor::overlay::ground_hit`), no cars. `mod.rs`: `Draft` (the `Plan`:
+looped, grid in placement order, checkpoints; undo/redo of whole plans, `touch` while
+dragging/turning and `commit` at the end, `change_merged` for wheel notches; the route
+found again at most every 0.1 s by `resolve_route` on a `RoadGraph` built at startup;
+`text` = the export: comment, commented `race` line at pole, `Route::text`). `edit.rs`
+(G grid tool: click places a box of the biggest car's body box, `show::CarBox`, turning
+to face the pointer until the next click, Esc calls it off; click on a spot's disc or
+box turns it again; Shift+wheel 1°; C checkpoint tool: click appends, Ctrl+click
+inserts into the nearest leg of the found line (straight legs while none), a click on
+the first checkpoint's disc loops; discs drag (4 px makes a drag); Delete removes what's
+under the pointer; Ctrl+Z/Y). `show.rs` (boxes red where they overlap, arrows, discs,
+gates via `racing::spawn_gate` (start green, finish yellow), the line as gizmos, red
+straight lines while not found, egui labels, map lines and marks). `panel.rs` (window;
+Open and Export dialogs asking a file name in the working directory, `.cfg` added,
+asking before overwriting). Shots: `BIN=races` (unstrip hooks `EditorShotPlugin`; keys
+`KeyG`/`KeyC` in `EDITKEYS`); a road at a village: `EDITCAM="-2965,-1972,28,-153,-62"`
+runs up the screen through x 600–660 (`CLICK="600,520,30;600,380,40"` places a spot
+facing up it). Nothing of it tried with a real mouse yet.
 
 ## Helicopters (asked for by the user, 2026-11-22)
 
