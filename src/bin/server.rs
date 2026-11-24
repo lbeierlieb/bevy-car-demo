@@ -28,10 +28,6 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    use std::time::Duration;
-
-    use bevy::app::ScheduleRunnerPlugin;
-    use bevy::log::LogPlugin;
     use bevy::prelude::*;
     use car_sim::net::quic::{Certificate, QuicListener};
     use car_sim::*;
@@ -68,15 +64,7 @@ fn main() {
         }
     };
 
-    let mut app = App::new();
-    app.add_plugins((
-        MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
-            1.0 / 60.0,
-        ))),
-        LogPlugin::default(),
-    ))
-    .add_plugins((WorldPlugin, net::ServerPlugin))
-    .insert_resource(
+    let mut app = net::server_app(
         net::Server::new(listener)
             .with_max_players(options.max_players)
             .with_map(options.map_players)
@@ -85,12 +73,10 @@ fn main() {
             .with_shops(options.shops)
             .with_spawn(options.spawn)
             .with_events(options.events),
-    )
-    .insert_resource(traffic::Traffic {
-        cars: options.traffic,
-        ..default()
-    })
-    .add_systems(Update, (report, timing));
+        options.traffic,
+        true,
+    );
+    app.add_systems(Update, (report, timing));
     if let Some(telegram) = telegram {
         telegram.send("The server started".to_string());
         app.insert_resource(telegram)
@@ -102,18 +88,8 @@ fn main() {
              native game joins, with CAR_SIM_INSECURE=1"
         );
     }
-    // One thread for the systems: there's little to do in each, and handing it to the
-    // task pool's threads every frame cost more than the work (an idle server: 2.3 % of a
-    // core, 0.6 % so; with traffic 5.5 %, 3.1 %); the VPS it runs on has one core anyway.
-    for (_, schedule) in app
-        .world_mut()
-        .resource_mut::<bevy::ecs::schedule::Schedules>()
-        .iter_mut()
-    {
-        schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
-    }
     info!("Listening on UDP port {}", options.port);
-    app.run();
+    net::run_server(app);
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -56,6 +56,40 @@ pub fn connect(address: &str) -> Box<dyn link::Link> {
     }
 }
 
+/// The app a server runs, 60 updates a second: the world with its traffic (`cars` around
+/// each player) and `server` taking players. With `log`, it logs (the dedicated server;
+/// in a game the game logs already).
+pub fn server_app(server: Server, cars: usize, log: bool) -> bevy::app::App {
+    use bevy::app::ScheduleRunnerPlugin;
+    use bevy::prelude::*;
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(
+        std::time::Duration::from_secs_f64(1.0 / 60.0),
+    )));
+    if log {
+        app.add_plugins(bevy::log::LogPlugin::default());
+    }
+    app.add_plugins((crate::WorldPlugin, ServerPlugin))
+        .insert_resource(server)
+        .insert_resource(crate::traffic::Traffic { cars, ..default() });
+    app
+}
+
+/// Runs a server's app on this thread until it exits.
+pub fn run_server(mut app: bevy::app::App) -> bevy::app::AppExit {
+    // One thread for the systems: there's little to do in each, and handing it to the
+    // task pool's threads every frame cost more than the work (an idle server: 2.3 % of a
+    // core, 0.6 % so; with traffic 5.5 %, 3.1 %); the VPS it runs on has one core anyway.
+    for (_, schedule) in app
+        .world_mut()
+        .resource_mut::<bevy::ecs::schedule::Schedules>()
+        .iter_mut()
+    {
+        schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
+    }
+    app.run()
+}
+
 /// How often a player's car's state is sent (per second).
 pub const SEND_RATE: f64 = 30.0;
 /// How far other players' cars are seen (m).
