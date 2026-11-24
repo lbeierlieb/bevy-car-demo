@@ -7,9 +7,19 @@
 //! Night is "day for night" as in film (darker, bluer, washed out, the sky held down),
 //! with the sun turned into weak, cold moonlight so shadows fade. Off in the graphics
 //! settings, there's no pass and the lights are the plain day's (the web starts with it
-//! off). In a shop's scene (`car::Away`) it's always day, so the rooms stay lit.
+//! off); with "Day and night" off it's always day, graded. In a shop's scene
+//! (`car::Away`) it's always day, so the rooms stay lit.
+//!
+//! With post-processing the camera renders in HDR with bloom (stronger at night, for
+//! `night`'s lamps and windows), and the grade runs after tonemapping, on the picture
+//! as shown.
 
+use bevy::camera::Hdr;
 use bevy::core_pipeline::fullscreen_material::{FullscreenMaterial, FullscreenMaterialPlugin};
+use bevy::core_pipeline::tonemapping::tonemapping;
+use bevy::ecs::schedule::ScheduleConfigs;
+use bevy::ecs::system::BoxedSystem;
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy::render::RenderApp;
 use bevy::render::extract_component::ExtractComponent;
@@ -25,6 +35,7 @@ impl Plugin for GradePlugin {
         bevy::asset::embedded_asset!(app, "shaders/grade.wesl");
         app.add_plugins(FullscreenMaterialPlugin::<Grade>::default())
             .init_resource::<Clock>()
+            .init_resource::<Darkness>()
             .add_systems(PostUpdate, apply);
     }
 }
@@ -46,6 +57,13 @@ impl Default for Clock {
         Self(0.12)
     }
 }
+
+/// How dark it is (0 day, 1 night): how much `night`'s lamps and windows glow.
+#[derive(Resource, Default)]
+pub struct Darkness(pub f32);
+
+/// The bloom's strength by day and added at night.
+const BLOOM: (f32, f32) = (0.04, 0.2);
 
 /// The grade's numbers, as the shader reads them (vectors of four: WebGL 2 wants 16 bytes).
 #[derive(Component, ExtractComponent, Clone, Copy, ShaderType, Default, PartialEq, Debug)]
@@ -70,6 +88,14 @@ impl FullscreenMaterial for Grade {
     fn fragment_shader() -> ShaderRef {
         "embedded://car_sim/shaders/grade.wesl".into()
     }
+
+    /// After tonemapping (in HDR the picture is in range only then), before FXAA.
+    fn schedule_configs(system: ScheduleConfigs<BoxedSystem>) -> ScheduleConfigs<BoxedSystem> {
+        system
+            .in_set(bevy::core_pipeline::Core3dSystems::PostProcess)
+            .after(tonemapping)
+            .before(bevy::anti_alias::fxaa::fxaa)
+    }
 }
 
 /// A time of day: the grade and the lights.
@@ -80,6 +106,8 @@ pub struct Look {
     pub sun: Vec4,
     /// The ambient light's colour (rgb) and its brightness as a share of `AMBIENT` (a).
     pub ambient: Vec4,
+    /// What the sky dome, the fog and the clear colour are multiplied by (rgb).
+    pub sky: Vec4,
 }
 
 impl Look {
@@ -95,6 +123,7 @@ impl Look {
         },
         sun: Vec4::new(1.0, 0.95, 0.86, 1.15),
         ambient: Vec4::new(0.8, 0.95, 1.1, 0.85),
+        sky: Vec4::ONE,
     };
     /// Golden hour: a low orange sun, a darker, warmer picture, the sky going orange.
     pub const DUSK: Self = Self {
@@ -108,19 +137,22 @@ impl Look {
         },
         sun: Vec4::new(1.0, 0.72, 0.5, 0.8),
         ambient: Vec4::new(0.75, 0.68, 0.85, 0.7),
+        sky: Vec4::new(0.95, 0.8, 0.72, 1.0),
     };
-    /// Moonlight: dark, blue, washed out, the sky deep blue, faint shadows.
+    /// Moonlight: weak, cold light, a deep blue sky and fog, faint shadows; the grade only
+    /// cools and washes it out, so lamps and windows keep their colour.
     pub const NIGHT: Self = Self {
         grade: Grade {
-            tint: Vec4::new(0.22, 0.3, 0.48, 0.0),
-            sky: Vec4::new(0.3, 0.38, 0.6, 0.85),
-            lift: Vec4::new(0.002, 0.005, 0.014, 0.35),
+            tint: Vec4::new(0.85, 0.92, 1.08, 0.0),
+            sky: Vec4::new(1.0, 1.0, 1.0, 0.0),
+            lift: Vec4::new(0.001, 0.003, 0.008, 0.6),
             look: Vec4::new(0.35, 0.5, 0.012, 0.0),
             shadows: Vec4::new(-0.01, 0.0, 0.025, 0.02),
             highlights: Vec4::new(0.0, 0.0, 0.0, 0.002),
         },
-        sun: Vec4::new(0.62, 0.72, 1.0, 0.35),
-        ambient: Vec4::new(0.6, 0.7, 1.0, 1.0),
+        sun: Vec4::new(0.55, 0.68, 1.0, 0.07),
+        ambient: Vec4::new(0.5, 0.62, 1.0, 0.3),
+        sky: Vec4::new(0.07, 0.1, 0.2, 1.0),
     };
     /// Before sunrise: cooler and pinker than dusk.
     pub const DAWN: Self = Self {
@@ -134,6 +166,7 @@ impl Look {
         },
         sun: Vec4::new(1.0, 0.7, 0.6, 0.6),
         ambient: Vec4::new(0.7, 0.72, 0.95, 0.75),
+        sky: Vec4::new(0.7, 0.62, 0.72, 1.0),
     };
 
     fn mix(self, other: Self, t: f32) -> Self {
@@ -149,6 +182,7 @@ impl Look {
             },
             sun: self.sun.lerp(other.sun, t),
             ambient: self.ambient.lerp(other.ambient, t),
+            sky: self.sky.lerp(other.sky, t),
         }
     }
 
@@ -175,6 +209,12 @@ impl Look {
         from.mix(to, t * t * (3.0 - 2.0 * t))
     }
 
+    /// How dark it is with this look (0 by day, 1 at night), from the sun's strength.
+    pub fn darkness(&self) -> f32 {
+        let (day, night) = (Self::DUSK.sun.w + 0.1, Self::NIGHT.sun.w);
+        ((day - self.sun.w) / (day - night)).clamp(0.0, 1.0)
+    }
+
     /// The look for the setting, at that point of the cycle.
     pub fn of(time: TimeOfDay, phase: f32) -> Self {
         match time {
@@ -188,48 +228,91 @@ impl Look {
 
 /// Runs the clock, puts the grade on the 3D camera (or takes it off with
 /// post-processing off) and sets the lights.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn apply(
     mut commands: Commands,
     graphics: Res<Graphics>,
     time: Res<Time>,
     away: Option<Res<crate::car::Away>>,
     mut clock: ResMut<Clock>,
+    mut darkness: ResMut<Darkness>,
     mut ambient: ResMut<GlobalAmbientLight>,
+    mut clear: ResMut<ClearColor>,
+    dome: Option<Res<crate::sky::SkyMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut suns: Query<&mut DirectionalLight>,
-    mut cameras: Query<(Entity, Option<&mut Grade>), With<crate::camera::ChaseCamera>>,
+    mut fogs: Query<&mut DistanceFog>,
+    mut cameras: Query<
+        (Entity, Option<&mut Grade>, Option<&mut Bloom>),
+        With<crate::camera::ChaseCamera>,
+    >,
 ) {
     clock.0 = (clock.0 + time.delta_secs() / (graphics.day_minutes as f32 * 60.0)).fract();
     let away = away.is_some_and(|away| away.0);
-    let look = if graphics.post && !away {
+    let look = if graphics.post && graphics.day_night && !away {
         Look::of(graphics.time_of_day, clock.0)
     } else {
         Look::DAY
     };
-    let (sun, light) = if graphics.post {
-        (look.sun, look.ambient)
+    let (sun, light, sky) = if graphics.post {
+        (look.sun, look.ambient, look.sky)
     } else {
-        (Vec4::ONE, Vec4::ONE)
+        (Vec4::ONE, Vec4::ONE, Vec4::ONE)
     };
     let color = |v: Vec4| Color::linear_rgb(v.x, v.y, v.z);
+    let haze = Color::from(LinearRgba::from_vec4(
+        crate::sky::HAZE.to_linear().to_vec4() * sky.truncate().extend(1.0),
+    ));
+    if clear.0 != haze {
+        clear.0 = haze;
+    }
+    for mut fog in &mut fogs {
+        if fog.color != haze {
+            fog.color = haze;
+        }
+    }
+    if let Some(dome) = dome {
+        let tint = color(sky);
+        if materials.get(&dome.0).is_some_and(|m| m.base_color != tint)
+            && let Some(mut material) = materials.get_mut(&dome.0)
+        {
+            material.base_color = tint;
+        }
+    }
     for mut light in &mut suns {
         light.color = color(sun);
         light.illuminance = SUN * sun.w;
     }
     ambient.color = color(light);
     ambient.brightness = AMBIENT * light.w;
+    let dark = if graphics.post { look.darkness() } else { 0.0 };
+    if darkness.0 != dark {
+        darkness.0 = dark;
+    }
     let mut grade = look.grade;
     grade.look.w = time.elapsed_secs_wrapped();
-    for (entity, current) in &mut cameras {
-        match (graphics.post, current) {
-            (true, Some(mut current)) => *current = grade,
-            (true, None) => {
-                commands.entity(entity).insert(grade);
+    let bloom = BLOOM.0 + BLOOM.1 * dark;
+    for (entity, current, glow) in &mut cameras {
+        match (graphics.post, current, glow) {
+            (true, Some(mut current), Some(mut glow)) => {
+                *current = grade;
+                if glow.intensity != bloom {
+                    glow.intensity = bloom;
+                }
             }
-            (false, Some(_)) => {
-                commands.entity(entity).remove::<Grade>();
+            (true, _, _) => {
+                commands.entity(entity).insert((
+                    grade,
+                    Bloom {
+                        intensity: bloom,
+                        ..Bloom::NATURAL
+                    },
+                ));
             }
-            (false, None) => {}
+            (false, None, None) => {}
+            (false, _, _) => {
+                commands.entity(entity).remove::<(Grade, Bloom, Hdr)>();
+            }
         }
     }
 }
@@ -249,6 +332,7 @@ mod tests {
             g.highlights - h.highlights,
             a.sun - b.sun,
             a.ambient - b.ambient,
+            a.sky - b.sky,
         ]
         .iter()
         .map(|d| d.abs().max_element())

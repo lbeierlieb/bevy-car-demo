@@ -32,6 +32,10 @@ impl Plugin for SceneryPlugin {
 #[derive(Message)]
 pub struct Reload;
 
+/// The material of the windows lit at night (`night` sets how much they glow).
+#[derive(Resource)]
+pub struct WindowGlow(pub Handle<StandardMaterial>);
+
 #[derive(Resource)]
 struct Scenery {
     roads: RoadRibbons,
@@ -41,6 +45,7 @@ struct Scenery {
     ground_material: Handle<StandardMaterial>,
     road_material: Handle<StandardMaterial>,
     object_material: Handle<StandardMaterial>,
+    window_material: Handle<StandardMaterial>,
     /// Entities of each loaded chunk, by chunk index.
     loaded: Vec<Option<Vec<Entity>>>,
 }
@@ -50,6 +55,11 @@ fn setup(
     terrain: Res<Terrain>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    let window = materials.add(StandardMaterial {
+        perceptual_roughness: 0.2,
+        ..default()
+    });
+    commands.insert_resource(WindowGlow(window.clone()));
     commands.insert_resource(Scenery {
         roads: RoadRibbons::new(&terrain),
         buildings: Buildings::new(&terrain),
@@ -68,6 +78,7 @@ fn setup(
             perceptual_roughness: 0.85,
             ..default()
         }),
+        window_material: window.clone(),
         loaded: vec![None; terrain.chunk_count()],
     });
 }
@@ -144,20 +155,23 @@ fn build_chunk(
     meshes: &mut Assets<Mesh>,
     index: usize,
 ) -> Vec<Entity> {
-    let (mut ground, mut roads, mut objects) = Default::default();
+    let (mut ground, mut roads, mut objects, mut windows) = Default::default();
     scenery.roads.ground_mesh(terrain, index, &mut ground);
     scenery.roads.mesh(terrain, index, &mut roads, &mut objects);
-    scenery.buildings.mesh(terrain, index, &mut objects);
+    scenery
+        .buildings
+        .mesh(terrain, index, &mut objects, &mut windows);
     scenery.fences.mesh(terrain, index, &mut objects);
     scenery.forest.mesh(terrain, index, &mut objects);
 
     // Ground and roads don't cast shadows: on gentle real terrain self-shadowing is barely
     // visible, and skipping it keeps the big meshes out of the shadow pass. They still
     // receive shadows from houses, trees and cars.
-    let layers: [(FlatMesh, &Handle<StandardMaterial>, bool); 3] = [
+    let layers: [(FlatMesh, &Handle<StandardMaterial>, bool); 4] = [
         (ground, &scenery.ground_material, false),
         (roads, &scenery.road_material, false),
         (objects, &scenery.object_material, true),
+        (windows, &scenery.window_material, false),
     ];
     let mut entities = Vec::new();
     for (mesh, material, casts_shadows) in layers {

@@ -145,6 +145,8 @@ pub struct Graphics {
     pub frame_cap: Option<u32>,
     /// The colour grade pass (`grade`).
     pub post: bool,
+    /// Whether the time of day changes the picture and the lights (off: always day).
+    pub day_night: bool,
     pub time_of_day: TimeOfDay,
     /// How long a day of the cycle takes (minutes).
     pub day_minutes: u32,
@@ -178,6 +180,7 @@ impl Graphics {
         vsync: true,
         frame_cap: None,
         post: true,
+        day_night: true,
         time_of_day: TimeOfDay::Cycle,
         day_minutes: 24,
     };
@@ -211,6 +214,8 @@ impl Graphics {
                 }
                 ("post", "on") => graphics.post = true,
                 ("post", "off") => graphics.post = false,
+                ("day_night", "on") => graphics.day_night = true,
+                ("day_night", "off") => graphics.day_night = false,
                 ("time", key) => {
                     if let Some(&time) = TimeOfDay::ALL.iter().find(|t| t.key() == key) {
                         graphics.time_of_day = time;
@@ -257,6 +262,7 @@ impl Graphics {
         let vsync = if self.vsync { "on" } else { "off" };
         let post = if self.post { "on" } else { "off" };
         let time = self.time_of_day.key();
+        let day_night = if self.day_night { "on" } else { "off" };
         let day = self.day_minutes;
         let cap = self.frame_cap.map_or("off".into(), |fps| fps.to_string());
         let resolution = self
@@ -264,8 +270,8 @@ impl Graphics {
             .map_or(String::new(), |p| format!("resolution {p}\n"));
         format!(
             "shadows {shadows}\nantialiasing {antialiasing}\nview {view}\n{resolution}\
-             vsync {vsync}\nframe_cap {cap}\npost {post}\ntime {time}\n\
-             day_length {day}\n"
+             vsync {vsync}\nframe_cap {cap}\npost {post}\nday_night {day_night}\n\
+             time {time}\nday_length {day}\n"
         )
     }
 }
@@ -531,6 +537,7 @@ mod tests {
             resolution: Some(75),
             frame_cap: Some(60),
             post: false,
+            day_night: false,
             time_of_day: TimeOfDay::Night,
             day_minutes: 48,
         };

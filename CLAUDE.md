@@ -1445,10 +1445,25 @@ apply live.
   A `grade::Look` per time of day (DAWN, DAY, DUSK, NIGHT) is the grade plus the sun's
   colour/strength and the ambient light's (shares of `grade::SUN`, `AMBIENT`); the cycle
   (`grade::Clock`, 0 sunrise, 0.25 noon, 0.5 sunset, 0.75 midnight, starting at 0.12)
-  blends them. Sun direction, fog colour and the sky texture don't change ("day for
-  night"); with post-processing off the lights are the plain day's, in a shop's scene
-  (`car::Away`) it's always day. The clock is local, not shared online. Uniform fields
-  are `Vec4`s (WebGL 2 padding).
+  blends them; a look also tints the sky dome (`sky::SkyMaterial`), the fog and the
+  clear colour (`Look::sky`). Night is made by the light (sun 7 %, dim blue ambient,
+  dark blue sky and fog); its grade only cools it, so lamps keep their colour. With
+  post-processing the camera is HDR with `Bloom` (0.04 by day + 0.2 × darkness) and the
+  grade runs after tonemapping, before FXAA (`schedule_configs`). "Day and night"
+  (`day_night on|off`, asked for by the user, 2026-11-24) off: always day, still graded.
+  With post-processing off the lights are the plain day's, LDR, no bloom; in a shop's
+  scene (`car::Away`) it's always day. The clock is local, not shared online. Uniform
+  fields are `Vec4`s (WebGL 2 padding). The sun's direction doesn't move.
+- Night lights (`src/night.rs`, 2026-11-24; local and cosmetic, asked for by the user:
+  nothing sent, every car's lamps on at night): `grade::Darkness` (0 day … 1 night, from
+  the sun's share) scales the emissive of `night::Glow` (head and tail lens materials,
+  shared) and `scenery::WindowGlow`. `Body::lamps` makes per-chassis lens meshes a
+  little proud of the body's lamps (head lamps: `Tone::Lamp` in the front half; the
+  tail's `Lamp` is the number plate), drawn as children of each car's body (not on
+  ghosts). Houses have windows (`buildings.rs`: 1 × 1.2 m every 3.2 m per storey, 3 cm
+  off the wall, unlit ones dark glass in the objects mesh, 40 % by hash in a chunk mesh
+  of their own with the glowing material). Our car (`car::Car`) has two `SpotLight`s
+  at its head lamps (no shadows), hidden by day.
 
 ## Sky
 

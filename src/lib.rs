@@ -33,6 +33,7 @@ pub mod map;
 pub mod menu;
 pub mod name_tags;
 pub mod net;
+pub mod night;
 pub mod obstacles;
 pub mod online;
 pub mod osm;
@@ -142,7 +143,7 @@ impl Plugin for CorePlugin {
             hud::HudPlugin,
             map::MapPlugin,
             audio::AudioPlugin,
-            (sky::SkyPlugin, graphics::GraphicsPlugin),
+            (sky::SkyPlugin, graphics::GraphicsPlugin, night::NightPlugin),
         ))
         .add_systems(Startup, setup);
     }

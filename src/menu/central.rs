@@ -854,6 +854,9 @@ fn graphics(ui: &mut egui::Ui, graphics: &mut ResMut<Graphics>) {
     }
     kit::toggle(ui, "Post-processing", &mut new.post);
     if new.post {
+        kit::toggle(ui, "Day and night", &mut new.day_night);
+    }
+    if new.post && new.day_night {
         kit::pick(
             ui,
             "Time of day",
