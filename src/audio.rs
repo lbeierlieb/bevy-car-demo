@@ -107,8 +107,31 @@ const PULSE_FALL: f32 = 70.0;
 const PULSE_SHORTEST: f32 = 0.0004;
 /// How fast the combustion noise after a pulse dies (seconds).
 const NOISE_DECAY: f32 = 0.004;
-/// Random variation of each firing's strength.
-const JITTER: f32 = 0.2;
+/// Random variation of each firing's strength, from cycle to cycle: most at idle, where
+/// combustion is least steady, least at full throttle.
+const JITTER_IDLE: f32 = 0.15;
+const JITTER_LOAD: f32 = 0.05;
+/// Each cylinder's own character, the same every cycle (filling, runner and header
+/// lengths differ a little): its pulse's strength, and how late it arrives, in firing
+/// intervals. Repeating once a cycle, it's what gives the half orders (the lope).
+const CYLINDER_STRENGTH: f32 = 0.12;
+const CYLINDER_LATE: f32 = 0.04;
+/// Per cylinder in firing order, -1 to 1 (made up, fixed, so every engine of a layout
+/// sounds the same).
+const CYLINDERS: [(f32, f32); 12] = [
+    (0.6, -0.3),
+    (-0.9, 0.5),
+    (0.2, 0.9),
+    (-0.3, -0.8),
+    (1.0, 0.1),
+    (-0.5, -0.4),
+    (0.4, 0.7),
+    (-0.1, -1.0),
+    (0.8, 0.3),
+    (-0.7, -0.1),
+    (0.1, 0.6),
+    (-0.2, -0.6),
+];
 /// Exhaust resonances: frequency (Hz), Q, gain off throttle and at full throttle. Load
 /// brings out the higher ones (a harder, rasping note).
 const RESONANCES: [(f32, f32, f32, f32); 4] = [
@@ -706,10 +729,16 @@ impl EngineVoice {
             (self.cycle + doppler * self.rpm / 120.0 * firings as f32 / rate) % firings as f32;
         if self.cycle.floor() != before.floor() {
             let firing = self.cycle.floor() as usize % firings;
-            let strength =
-                (IDLE_STRENGTH + (1.0 - IDLE_STRENGTH) * self.load) * (1.0 + JITTER * self.noise());
+            let (own_strength, own_late) = CYLINDERS[firing % CYLINDERS.len()];
+            let jitter = JITTER_IDLE + (JITTER_LOAD - JITTER_IDLE) * self.load;
+            let strength = (IDLE_STRENGTH + (1.0 - IDLE_STRENGTH) * self.load)
+                * (1.0 + CYLINDER_STRENGTH * own_strength)
+                * (1.0 + jitter * self.noise());
+            // Seconds of the engine's time between firings.
+            let interval = 120.0 / (self.rpm.max(100.0) * firings as f32);
+            let late = CYLINDER_LATE * (own_late + 1.0) * interval;
             let bank = &mut self.banks[usize::from(self.sound.banks[firing])];
-            bank.since = -bank.delay;
+            bank.since = -bank.delay - late;
             bank.strength = strength;
         }
 
