@@ -734,3 +734,69 @@ fn roll_stiffness() {
         );
     }
 }
+
+/// Prints what simulating one car costs (a server simulates every player's): on the map,
+/// with its houses, trees and fences, following the roads from the spawn at about 50 km/h
+/// (aiming at the road 12 m ahead) for 30 s (`STEP_SECONDS`). The drive is recorded, then
+/// replayed from the start `STEP_REPEAT` times (3) with the clock running, each ending
+/// where the first did to the bit.
+#[test]
+#[ignore]
+fn step_cost() {
+    let number = |name: &str, default: f32| {
+        (std::env::var(name).ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default)
+    };
+    let mut terrain = Terrain::baked();
+    terrain.obstacles = crate::obstacles::build(&terrain);
+    let (p, yaw) = terrain.road_spawns(&crate::terrain::Spawn::DEFAULT, 1, 0.0)[0];
+    let mut start = Car::spawn_at(0, CarSetup::default(), &terrain, p.x, p.y, yaw);
+    start.drivetrain.automatic = true;
+    let dt = 1.0 / CHASSIS_HZ as f32;
+    let seconds = number("STEP_SECONDS", 30.0);
+    let steps = (seconds / dt) as usize;
+    let mut car = start.clone();
+    let mut controls = Vec::with_capacity(steps);
+    let (mut aim, mut distance) = (p, 0.0);
+    for step in 0..steps {
+        let forward = (car.body.rotation * Vec3::NEG_Z).xz().normalize_or_zero();
+        // Finding the road is slow: every tenth of a second.
+        if step % 12 == 0 {
+            let ahead = car.body.position.xz() + 12.0 * forward;
+            aim = terrain
+                .drive_spot(ahead, forward)
+                .map_or(ahead, |(spot, _)| spot);
+        }
+        let to = (aim - car.body.position.xz()).normalize_or_zero();
+        car.controls.steer = -(2.0 * forward.perp_dot(to)).clamp(-1.0, 1.0);
+        let speed = car.forward_speed();
+        car.controls.throttle = (0.3 + 0.3 * (14.0 - speed)).clamp(0.0, 1.0);
+        car.controls.brake = (0.2 * (speed - 16.0)).clamp(0.0, 1.0);
+        controls.push(car.controls);
+        step_car(&mut car, &terrain, dt);
+        distance += car.forward_speed().abs() * dt;
+    }
+    let mut fastest = f64::INFINITY;
+    for _ in 0..number("STEP_REPEAT", 3.0) as usize {
+        let mut again = start.clone();
+        let clock = std::time::Instant::now();
+        for c in &controls {
+            again.controls = *c;
+            step_car(&mut again, &terrain, dt);
+        }
+        fastest = fastest.min(clock.elapsed().as_secs_f64());
+        assert_eq!(
+            again.body.position, car.body.position,
+            "the replay went elsewhere"
+        );
+    }
+    println!(
+        "{:.1} µs a step, {:.2} ms per second driven ({:.2} % of a core); drove {distance:.0} m, \
+         {:.0} m from the start",
+        fastest * 1e6 / steps as f64,
+        fastest * 1e3 / f64::from(seconds),
+        fastest / f64::from(seconds) * 100.0,
+        car.body.position.xz().distance(p)
+    );
+}

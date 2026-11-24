@@ -24,6 +24,7 @@ struct Wave {
     along: f32,
     across: f32,
     amplitude: f32,
+    /// Where it starts (turns).
     phase: f32,
 }
 
@@ -53,7 +54,7 @@ impl Waves {
                     along: n * heading.cos(),
                     across: n * heading.sin(),
                     amplitude,
-                    phase: random(2) * TAU,
+                    phase: random(2),
                 }
             })
             .collect();
@@ -68,8 +69,7 @@ impl Waves {
         }
         let (mut height, mut slope) = (0.0, Vec2::ZERO);
         for w in &self.0 {
-            let angle = TAU * (w.along * along + w.across * right) + w.phase;
-            let (sin, cos) = angle.sin_cos();
+            let (sin, cos) = sin_cos_turns(w.along * along + w.across * right + w.phase);
             height += w.amplitude * cos;
             slope -= Vec2::new(w.along, w.across) * (TAU * w.amplitude * sin);
         }
@@ -87,6 +87,27 @@ impl Waves {
             height * fade,
             slope * fade + Vec2::new(0.0, height * dfade * inward),
         )
+    }
+}
+
+/// The sine and cosine of `turns` whole turns (2π each), from plain arithmetic: the
+/// same to the bit on every platform (the C library's `sinf` isn't: glibc picks a version
+/// by the processor), which a server simulating the players' cars needs, and several
+/// times quicker. Within 1e-6 of the true values.
+pub fn sin_cos_turns(turns: f32) -> (f32, f32) {
+    // Within an eighth of a turn of a quarter, and which quarter (rounded by converting:
+    // `round` is a call into the C library on processors without SSE 4.1).
+    let x = turns * 4.0;
+    let quarters = (x + 0.5f32.copysign(x)) as i32;
+    let a = (turns - quarters as f32 * 0.25) * TAU;
+    let a2 = a * a;
+    let sin = a * (1.0 - a2 / 6.0 * (1.0 - a2 / 20.0 * (1.0 - a2 / 42.0 * (1.0 - a2 / 72.0))));
+    let cos = 1.0 - a2 / 2.0 * (1.0 - a2 / 12.0 * (1.0 - a2 / 30.0 * (1.0 - a2 / 56.0)));
+    match quarters & 3 {
+        0 => (sin, cos),
+        1 => (cos, -sin),
+        2 => (-sin, -cos),
+        _ => (-cos, sin),
     }
 }
 
@@ -182,6 +203,17 @@ impl Feature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sines_of_turns_are_the_sines() {
+        for i in -20000..20000 {
+            let turns = i as f32 * 0.01237;
+            let (sin, cos) = sin_cos_turns(turns);
+            let angle = f64::from(turns) * std::f64::consts::TAU;
+            assert!((f64::from(sin) - angle.sin()).abs() < 1e-6, "sin {turns}");
+            assert!((f64::from(cos) - angle.cos()).abs() < 1e-6, "cos {turns}");
+        }
+    }
 
     /// Checks `at`'s slopes against differences of its heights.
     fn slopes_match(at: impl Fn(f32, f32) -> (f32, Vec2), points: &[(f32, f32)]) {

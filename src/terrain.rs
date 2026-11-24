@@ -762,10 +762,10 @@ impl Terrain {
 
     fn ground_and_roads(&self, x: f32, z: f32, y: f32) -> (Ground, Option<f32>) {
         let p = Vec2::new(x, z);
-        // Per road covering it or within `JOIN_REACH` of it: (road, how far inside its
-        // edge, fade towards its ends, height, slope as d height / d (x, z)).
-        let mut near: [(usize, f32, f32, f32, Vec2); 12] =
-            [(usize::MAX, 0.0, 0.0, 0.0, Vec2::ZERO); 12];
+        // Per road covering it or within `JOIN_REACH` of it, the segment it reaches
+        // furthest over the point with: (road, how far inside its edge, segment, how far
+        // along it).
+        let mut reach: [(usize, f32, usize, f32); 12] = [(usize::MAX, 0.0, 0, 0.0); 12];
         let mut count = 0;
         let mut water = false;
         let mut corner = None;
@@ -796,6 +796,27 @@ impl Terrain {
                 water |= margin >= 0.0;
                 continue;
             }
+            match reach[..count].iter_mut().find(|c| c.0 == r) {
+                Some(entry) if entry.1 >= margin => {}
+                Some(entry) => *entry = (r, margin, i, t),
+                None if count < 12 => {
+                    reach[count] = (r, margin, i, t);
+                    count += 1;
+                }
+                None => {}
+            }
+        }
+        // Each one's height there with its relief, and fade towards its ends: (road, how
+        // far inside its edge, fade, height, slope as d height / d (x, z)).
+        let mut near: [(usize, f32, f32, f32, Vec2); 12] =
+            [(usize::MAX, 0.0, 0.0, 0.0, Vec2::ZERO); 12];
+        for (entry, &(r, margin, i, t)) in near.iter_mut().zip(&reach[..count]) {
+            let road = &self.roads[r];
+            let (a, b) = (road.points[i], road.points[i + 1]);
+            let length = a.distance(b).max(1e-6);
+            let along = (b - a) / length;
+            let off = a.lerp(b, t).distance(p);
+            let s = road.along[i] + t * length;
             let to_end = s.min(road.along[road.along.len() - 1] - s);
             let fade = (to_end / ROAD_FADE).clamp(0.02, 1.0);
             let side = along.perp();
@@ -804,16 +825,7 @@ impl Terrain {
             let (bump, tilt) = road.relief(s, right, margin.max(0.0));
             let height = road.heights[i] + rise * t * length - road.crown * off + bump;
             let slope = along * (rise + tilt.x) + side * (tilt.y - road.crown * right.signum());
-            // One entry per road: the segment it reaches furthest over the point with.
-            match near[..count].iter_mut().find(|c| c.0 == r) {
-                Some(entry) if entry.1 >= margin => {}
-                Some(entry) => *entry = (r, margin, fade, height, slope),
-                None if count < 12 => {
-                    near[count] = (r, margin, fade, height, slope);
-                    count += 1;
-                }
-                None => {}
-            }
+            *entry = (r, margin, fade, height, slope);
         }
         let near = &near[..count];
         // Each road's weight: how far inside its edge; near a road it meets, as if both
