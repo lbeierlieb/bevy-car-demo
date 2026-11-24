@@ -339,8 +339,8 @@ pub struct Car {
     /// since this was last taken (the crash sounds take it every frame): the speed the
     /// knocks changed (m/s), added up.
     pub knocks: f32,
-    /// The handbrake as a parking brake: Space (or a handbrake button) pulls it on or
-    /// releases it. Cars start with it on.
+    /// The parking brake (see `parking_brake_rule`): Space (or a handbrake button) pulls it
+    /// on at a standstill or releases it, gas releases it. Cars start with it on.
     pub parking_brake: bool,
 }
 
@@ -726,12 +726,16 @@ pub fn drive(
         let go = wheel.throttle.unwrap_or(0.0);
         let stop = wheel.brake.unwrap_or(0.0);
         (c.throttle, c.brake) = if go > 0.0 { (go, stop) } else { (0.0, stop) };
-        // Space and a handbrake button pull the parking brake on or release it; a lever
-        // works directly, on top of it.
-        if wheel.handbrake_toggle {
-            *parking_brake ^= true;
-        }
-        c.handbrake = (*parking_brake as u8 as f32).max(wheel.handbrake.unwrap_or(0.0));
+        let pull;
+        (*parking_brake, pull) = parking_brake_rule(
+            *parking_brake,
+            wheel.handbrake_toggle,
+            wheel.handbrake_held,
+            go,
+            speed,
+        );
+        // A lever works directly, on top of it.
+        c.handbrake = pull.max(wheel.handbrake.unwrap_or(0.0));
         if held.0 {
             c.brake = 1.0;
             c.handbrake = 1.0;
@@ -754,6 +758,30 @@ pub fn drive(
             c.steer += (target - c.steer).clamp(-max_delta, max_delta);
         }
     }
+}
+
+/// Below this speed (m/s) a handbrake press pulls the parking brake on.
+pub const PARKING_SPEED: f32 = 0.5;
+
+/// The handbrake button (Space) and the gas on the parking brake: pressed while it's on,
+/// it comes off; pressed standing, it goes on; pressed while driving, it only brakes while
+/// held (asked for by the user, 2026-11-24). Any gas releases it, whatever the gear or
+/// clutch. Gives the parking brake and how hard the handbrake pulls.
+pub fn parking_brake_rule(
+    on: bool,
+    pressed: bool,
+    held: bool,
+    throttle: f32,
+    speed: f32,
+) -> (bool, f32) {
+    let mut on = on;
+    if pressed {
+        on = !on && speed.abs() < PARKING_SPEED;
+    }
+    if throttle > 0.0 {
+        on = false;
+    }
+    (on, if on || held { 1.0 } else { 0.0 })
 }
 
 fn reset_car(
@@ -812,6 +840,25 @@ mod tests {
         assert!(p.distance(off) < 40.0, "{p} isn't the nearest road");
         assert!((car.body.rotation * Vec3::Y).y > 0.99, "not upright");
         assert!(car.parking_brake);
+    }
+
+    #[test]
+    fn the_handbrake_parks_standing_brakes_driving_and_gas_releases_it() {
+        // (on, pressed, held, throttle, speed) -> (on, pull)
+        let rule = parking_brake_rule;
+        // Standing, a press pulls it on; pressed again, it comes off.
+        assert_eq!(rule(false, true, true, 0.0, 0.0), (true, 1.0));
+        assert_eq!(rule(true, false, false, 0.0, 0.0), (true, 1.0));
+        assert!(!rule(true, true, true, 0.0, 0.0).0);
+        // Driving, it brakes only while held.
+        assert_eq!(rule(false, true, true, 0.0, 15.0), (false, 1.0));
+        assert_eq!(rule(false, false, true, 0.0, 15.0), (false, 1.0));
+        assert_eq!(rule(false, false, false, 0.0, 15.0), (false, 0.0));
+        // On while rolling, a press releases it.
+        assert_eq!(rule(true, true, false, 0.0, 5.0), (false, 0.0));
+        // Any gas releases it.
+        assert_eq!(rule(true, false, false, 0.01, 0.0), (false, 0.0));
+        assert_eq!(rule(true, false, false, 1.0, 0.0), (false, 0.0));
     }
 
     #[test]

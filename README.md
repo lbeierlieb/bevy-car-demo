@@ -241,7 +241,7 @@ wheel's steering do). A text field is a row like any other: choose starts typing
 keeps it, Esc throws it away. Menus and text grow with the window, whatever the display's scaling (the menu
 has a size setting on top). When
 the car won't do what you seem to want, a hint over the road says why and what to
-press: giving gas with the parking brake on or in neutral, asking for reverse while
+press: giving gas in neutral, asking for reverse while
 rolling, bouncing off the rev limiter in first gear, a stalled or wrecked engine, an
 empty tank, or a few seconds of gas without moving (stuck: R).
 
@@ -255,7 +255,7 @@ like.
 | Q / E | Shift down / up (R, N, 1 and up; reverse only at a standstill) |
 | I | Start the engine after a stall (only with a clutch pedal) |
 | A / D | Steer |
-| Space | Parking brake on/off (cars start with it on) |
+| Space | Parking brake: pressed standing it goes on, pressed again it comes off; while driving it brakes only while held. Any gas lets it off. Cars start with it on |
 | R | Call the rescue helicopter: it lifts the car and sets it down on the nearest road (in its lane), as it is (fuel, tires and wear stay); about 10 s near a road |
 | H | The quick start |
 | Esc | The menu (everything else is in it) |

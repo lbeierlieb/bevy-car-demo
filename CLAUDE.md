@@ -51,12 +51,12 @@ themselves (see "Race editor").
 Made to be easy to pick up: `help.rs` (`HelpPlugin`, sandbox). At every start a
 quick start (a `kit::Panel`, rank 40; Esc or "Let's drive" closes it, H reopens it; the
 start menu waits for it; made a quick start at the user's wish, 2026-11-23) has only the
-essentials: how to drive off (neutral, parking brake on: E, Space, W), W/S, A/D, E/Q,
+essentials: how to drive off (neutral, parking brake on: E, W), W/S, A/D, E/Q,
 Space, R and Esc (`QUICK_START`); the rest is in the menu; the telemetry panel (2) is hidden by default. Hints over the road say what's wrong, what to press and what
-that does: gas with the parking brake on, reverse asked for while rolling
+that does: reverse asked for while rolling
 (`car::ReverseRefused`, a message from `drive`), on the rev limiter in first gear (only
 there, at the user's wish, 2026-11-22), and
-gas without moving for 3 s (R). In neutral with the parking brake on, the neutral hint comes first (the brake's only once a gear is in; 2026-11-22). Added alone: in neutral, stalled, wrecked engine, empty
+gas without moving for 3 s (R). (The parking brake hint went when gas started releasing it, 2026-11-24.) Added alone: in neutral, stalled, wrecked engine, empty
 tank (stating the problem only, since 2026-11-22). R (`ResetPlugin`) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
 right-hand lane on roads with traffic lanes), carried there by the rescue helicopter (see
 "Helicopters"). The map teleport was removed at the user's
@@ -822,9 +822,13 @@ and plays force feedback, both through hid-fanatecff on Linux.
   up to the lower gear's speed on a downshift (`BLIP_RPM`). Paddles shift
   with the automatic clutch even when a pedal is bound.
 - Each H gate is a button held while the lever is in it; neutral is "no gate held".
-- No hill hold (removed at the user's wish): the handbrake is a parking brake toggled
+- No hill hold (removed at the user's wish): the handbrake is a parking brake worked
   by Space or a handbrake button (`Car::parking_brake`, on when a car spawns or resets,
   a red (P) under the gear); a handbrake lever (an axis) works directly on top of it.
+  `car::parking_brake_rule` (the user, 2026-11-24, "keep it simple"): pressed while on,
+  it comes off; pressed standing (under `PARKING_SPEED`, 0.5 m/s), it goes on; pressed
+  while driving, no toggle, the handbrake only brakes while held; **any gas releases
+  it**, whatever the gear or clutch. Holding it until the car stops doesn't park it.
 
 ### Still to check on the real wheel
 

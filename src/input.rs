@@ -788,8 +788,10 @@ pub struct WheelInput {
     pub clutch: Option<f32>,
     /// A handbrake lever's travel (`None` when the handbrake is a button).
     pub handbrake: Option<f32>,
-    /// A handbrake button was pressed this frame: the parking brake goes on or off.
+    /// A handbrake button was pressed this frame (see `car::parking_brake_rule`).
     pub handbrake_toggle: bool,
+    /// A handbrake button is held: it brakes while driving.
+    pub handbrake_held: bool,
     /// Buttons pressed this frame.
     pub shift_up: bool,
     pub shift_down: bool,
@@ -956,8 +958,8 @@ fn read_wheel(
     let axis = |action| value_of(&config, &gamepads, action, |b| b.input.is_axis());
     // The axis covers the base's range, which may be wider than the game's.
     let angle = axis(Action::Steer).map(|axis| axis * base.range(&config) / 2.0);
-    // A handbrake bound to a button or key toggles the parking brake; to an axis, it's a
-    // lever.
+    // A handbrake bound to a button or key works the parking brake (and brakes while held
+    // when driving); to an axis, it's a lever.
     let button =
         |a: Action, b: &Binding| !a.analog() || (a == Action::Handbrake && !b.input.is_axis());
     let held: Vec<Action> = Action::ALL
@@ -990,6 +992,7 @@ fn read_wheel(
         clutch: value(Action::Clutch),
         handbrake: axis(Action::Handbrake),
         handbrake_toggle: pressed(Action::Handbrake),
+        handbrake_held: down(Action::Handbrake),
         shift_up: pressed(Action::ShiftUp),
         shift_down: pressed(Action::ShiftDown),
         ignition: pressed(Action::Ignition),

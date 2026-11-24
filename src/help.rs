@@ -20,7 +20,10 @@ pub const QUICK_START: [(&str, &str); 6] = [
     ("W / S", "Throttle / brake"),
     ("A / D", "Steer"),
     ("E / Q", "Shift up / down (Q in neutral, standing: reverse)"),
-    ("Space", "Parking brake on / off"),
+    (
+        "Space",
+        "Parking brake: on when standing, off (gas lets it off too)",
+    ),
     ("R", "Stuck? A helicopter carries the car back to the road"),
     ("Esc", "Menu: everything else is in it"),
 ];
@@ -65,8 +68,8 @@ fn intro(mut contexts: EguiContexts, mut intro: ResMut<Intro>) -> Result {
             let drive = kit::button(ui, "Let's drive").clicked();
             kit::note(
                 ui,
-                "You start in neutral with the parking brake on: E for first gear, Space to \
-                 let the brake off, then W.",
+                "You start in neutral with the parking brake on: E for first gear, then W \
+                 (gas lets the brake off).",
             );
             for (keys, action) in QUICK_START {
                 kit::info(ui, action, keys);
@@ -93,20 +96,18 @@ enum Hint {
     Stalled,
     Off,
     Neutral,
-    ParkingBrake,
     Reverse,
     RevLimit,
     Stuck,
 }
 
 impl Hint {
-    const ALL: [Hint; 9] = [
+    const ALL: [Hint; 8] = [
         Hint::Blown,
         Hint::NoFuel,
         Hint::Stalled,
         Hint::Off,
         Hint::Neutral,
-        Hint::ParkingBrake,
         Hint::Reverse,
         Hint::RevLimit,
         Hint::Stuck,
@@ -116,7 +117,6 @@ impl Hint {
     fn delay(self) -> f32 {
         match self {
             Hint::Reverse => 0.0,
-            Hint::ParkingBrake => 0.4,
             Hint::RevLimit => 0.8,
             Hint::Stuck => 3.0,
             _ => 0.6,
@@ -182,9 +182,6 @@ fn hints(
         Hint::NoFuel => gas && no_fuel && !blown,
         Hint::Stalled => gas && !running && !off && !cranking && !blown && !no_fuel,
         Hint::Off => gas && off && !cranking && !blown,
-        // Only once a gear is in: revving in neutral at the start, neutral comes first
-        // (asked for by the user).
-        Hint::ParkingBrake => gas && car.parking_brake && standing && gear != 0,
         Hint::Reverse => reverse,
         Hint::Neutral => gas && running && gear == 0 && standing,
         // Only in first: past it, the driver knows about shifting (asked for by the user).
@@ -270,14 +267,6 @@ fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (S
                 "Hold {} until it fires up: the starter turns it over (or \"Start the \
                  engine\" in the menu, [Esc]).",
                 key("I", Action::Ignition)
-            ),
-        ),
-        Hint::ParkingBrake => (
-            "The parking brake is on".into(),
-            format!(
-                "It holds the car still however much gas you give. Press {} to release \
-                 it, and again to hold the car when you've stopped.",
-                key("Space", Action::Handbrake)
             ),
         ),
         Hint::Reverse => (
