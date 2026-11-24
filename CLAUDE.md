@@ -118,7 +118,8 @@ As built (`src/menu/`):
 - `central.rs` (restructured at the user's wish, 2026-11-23): Main = In-game actions
   (reset, map, camera: pressed for the driver through `input::MenuPresses` as the
   wheel's next frame), Settings (Driving aids (+ traffic alone), Controls, Sound
-  (`audio::SoundSettings`: on/off, volume, `sound.cfg`), Display (UI size, fullscreen)),
+  (`audio::SoundSettings`: on/off, volume, `sound.cfg`), Display (UI size, fullscreen),
+  Graphics (see "Graphics")),
   an event round's restart/leave, online players/leave or join, help and credits, quit
   ("Back to driving" removed at the user's wish, 2026-11-23: the prompt line says how). No engine or parking brake rows, no fullscreen on
   Main (the user: not wanted there). Controls: the profile in use (a choice), its name,
@@ -1372,6 +1373,27 @@ then resets the mouse buttons whenever egui is over the pointer, dropping drags)
 systems check `EguiWantsInput` themselves. The bake is shared code-wise: `src/osm.rs`
 is `#[path]`-included by `tools/bake` (std + quick-xml only). Map file ids: new
 elements without `version` (JOSM rejects one on new elements).
+
+## Graphics (agreed with the user, 2026-11-24)
+
+`src/graphics.rs` (`GraphicsPlugin` in `CorePlugin`; the editors don't have it and
+draw at the nicest): `Graphics` (`graphics.cfg`) with shadows (off; low: 1 cascade,
+1024², 60 m; high: 4 cascades (WebGL 2 has only the first), 2048², 120 m), antialiasing
+(off, FXAA, MSAA 4×), view distance (near: fog 120–320 m; far: 180–480 m; `scenery`
+loads chunks to the fog's end + 80 m and drops them past + 180 m), render resolution
+(50/75/100 %), and natively vsync and a frame rate limit (a sleep in `Last`). Defaults:
+web low/FXAA/near/75 % on a display with a scale factor ≥ 1.5 (else 100; settled once
+the window is known), native high/MSAA/far/100 %. No presets (the user's wish). All
+apply live.
+- Render resolution: the 3D camera (`ChaseCamera`) always draws into an image (`View`,
+  window size × resolution; `ImageRenderTarget::scale_factor` = window scale × resolution,
+  so `world_to_viewport` still gives window points), and egui sits on a `Camera2d` of
+  its own (order 1; `EguiGlobalSettings::auto_create_primary_context` off) that paints
+  the image over the window at the start of every egui pass (`Backdrop`, an
+  `egui::Plugin`: bevy_egui runs the pass in `PostUpdate`, so painting from `Update`
+  would be lost, and shapes in the background layer draw in the order added). At 100 %
+  the shot is pixel for pixel the same as rendering to the window. Not tried in a
+  browser yet.
 
 ## Sky
 

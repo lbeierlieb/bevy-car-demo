@@ -267,6 +267,15 @@ like.
 | M | Map of the whole area (drag, the arrows or a pad's stick to move, scroll, + - or the triggers to zoom; M or Esc closes) |
 | Left-drag, scroll | Orbit and zoom the camera (driver's view: look around) |
 
+### Graphics
+
+The menu's Settings, Graphics: shadows (off, low, high), antialiasing (off, FXAA,
+MSAA 4×), view distance (near, far), the 3D view's render resolution (50, 75 or 100 %
+of the window's pixels; the menus stay sharp) and, natively, vsync and a frame rate
+limit. The web starts on the quick settings (low shadows, FXAA, near, 75 % on a
+high-density display), native on the nice ones. They're saved to
+`~/.config/car-sim/settings/graphics.cfg` (on the web, in the browser's local storage).
+
 ### Steering wheel and pedals
 
 Wheels, pedals and shifters work through the system's gamepad support; the keyboard
