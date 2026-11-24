@@ -16,7 +16,9 @@ use super::nav::{MenuInput, MenuSet};
 use super::{Display, SIZES};
 use crate::audio::SoundSettings;
 use crate::car::{ActiveCar, Away, Car, DriverAids, ResetRule};
-use crate::graphics::{Antialiasing, FRAME_CAPS, Graphics, RESOLUTIONS, Shadows, ViewDistance};
+use crate::graphics::{
+    Antialiasing, FRAME_CAPS, Graphics, RESOLUTIONS, Shadows, TimeOfDay, ViewDistance,
+};
 use crate::heli::rescue::Rescue;
 use crate::input::{
     self, Action, Capture, Capturing, CurveKind, Gamepads, MenuPresses, Nav, Preset, Profile,
@@ -850,10 +852,21 @@ fn graphics(ui: &mut egui::Ui, graphics: &mut ResMut<Graphics>) {
             |cap| cap.map_or("Off".into(), |fps| format!("{fps} fps")),
         );
     }
+    kit::toggle(ui, "Post-processing", &mut new.post);
+    if new.post {
+        kit::pick(
+            ui,
+            "Time of day",
+            &mut new.time_of_day,
+            &TimeOfDay::ALL,
+            |t| t.name().into(),
+        );
+    }
     kit::note(
         ui,
         "Shadows, multisampling, a far view and a high resolution cost the most. FXAA \
-         smooths edges cheaply.",
+         smooths edges cheaply. Post-processing (the time of day's colours) is one \
+         cheap pass; switch it off if the browser struggles.",
     );
     if new != **graphics {
         **graphics = new;

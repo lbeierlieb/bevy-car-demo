@@ -22,6 +22,7 @@ pub mod events;
 pub mod fences;
 pub mod garage;
 pub mod gas;
+pub mod grade;
 pub mod graphics;
 pub mod heli;
 pub mod help;

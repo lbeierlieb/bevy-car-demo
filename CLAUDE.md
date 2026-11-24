@@ -1420,7 +1420,7 @@ draw at the nicest): `Graphics` (`graphics.cfg`) with shadows (off; low: 1 casca
 1024², 60 m; high: 4 cascades (WebGL 2 has only the first), 2048², 120 m), antialiasing
 (off, FXAA, MSAA 4×), view distance (near: fog 120–320 m; far: 180–480 m; `scenery`
 loads chunks to the fog's end + 80 m and drops them past + 180 m), render resolution
-(50/75/100 %), and natively vsync and a frame rate limit (a sleep in `Last`). Defaults:
+(50/75/100 %), post-processing and the time of day, and natively vsync and a frame rate limit (a sleep in `Last`). Defaults:
 web low/FXAA/near/75 % on a display with a scale factor ≥ 1.5 (else 100; settled once
 the window is known), native high/MSAA/far/100 %. No presets (the user's wish). All
 apply live.
@@ -1433,6 +1433,15 @@ apply live.
   would be lost, and shapes in the background layer draw in the order added). At 100 %
   the shot is pixel for pixel the same as rendering to the window. Not tried in a
   browser yet.
+- Post-processing (asked for by the user, 2026-11-24): `src/grade.rs` (`GradePlugin`,
+  added by `GraphicsPlugin`), a colour grade as bevy's `FullscreenMaterial` (one
+  full-screen pass, `src/shaders/grade.wesl`, embedded as
+  `embedded://car_sim/shaders/grade.wesl`): exposure/tint, the sky (bright pixels high
+  on screen) held down, saturation, contrast, shadow lift, vignette, grain. Settings
+  `post on|off` (default on natively, off on the web) and `time day|dusk|night|cycle`
+  (`TimeOfDay`; cycle = day, dusk, night, dawn over `grade::CYCLE`, 24 min). Only the
+  picture changes ("day for night"): sun, ambient, fog and sky texture stay as they are,
+  so switching it off is always day. Uniform fields are `Vec4`s (WebGL 2 padding).
 
 ## Sky
 
