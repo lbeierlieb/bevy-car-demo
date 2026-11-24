@@ -139,7 +139,11 @@ As built (`src/menu/`):
   rest, opposite `full`; `Profile::labels` adds "up"/"down" then). Only the profile in use drives (`read_wheel` turns all of it into
   `WheelInput`; `drive`, the camera, reset and the map read only that). Steering by keys
   or buttons is `Action::SteerLeft`/`SteerRight` (rate-limited as the keys were), by an
-  axis `Action::Steer`. Fixed, never bindable: Esc (menu), H, T, 1, 2, F11, and the
+  axis `Action::Steer`. Looking around by a stick (asked for by the user, 2026-11-24):
+  `Action::LookSide`/`LookUp`, whole axes like steering (`Action::whole_axis`; bound by
+  pushing left/up, no keys), `WheelInput::look` (dead zone `LOOK_DEADZONE`); the camera
+  adds the smoothed push to the mouse's look (driver: head turn up to 2.2 rad; chase:
+  swings round the car up to π), back to the front when let go. Fixed, never bindable: Esc (menu), H, T, 1, 2, F11, and the
   menus' arrows/Enter. `wheel.cfg`: `active N`, `profile N name`, then its `bind` lines
   (`key:KeyW`, `axis:…`, `button:…`); a file from before has its bindings put in profile
   2 ("Wheel"), in use. While a key is bound (and the frame after), egui gets no key

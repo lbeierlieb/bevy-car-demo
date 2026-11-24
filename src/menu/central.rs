@@ -559,6 +559,8 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) -> Opt
         let detail = if listening == Some(action) {
             match action {
                 Action::Steer => "turn the wheel left…".to_string(),
+                Action::LookSide => "push the stick left…".to_string(),
+                Action::LookUp => "push the stick up…".to_string(),
                 Action::Gate(_) => "move the lever into the gate…".to_string(),
                 _ if action.analog() => "press it fully, then release…".to_string(),
                 _ => "press it…".to_string(),
@@ -569,7 +571,7 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) -> Opt
                 "—".to_string()
             } else {
                 let shown = match action_value(config, gamepads, action) {
-                    Some(v) if action == Action::Steer => format!("  {:+.0} %", v * 100.0),
+                    Some(v) if action.whole_axis() => format!("  {:+.0} %", v * 100.0),
                     Some(v) if action.analog() && v > 0.0 => format!("  {:.0} %", v * 100.0),
                     Some(v) if v > 0.5 => "  ●".to_string(),
                     _ => String::new(),

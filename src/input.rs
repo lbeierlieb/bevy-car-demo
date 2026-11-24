@@ -70,6 +70,10 @@ pub enum Action {
     View,
     /// Held: the camera looks backwards.
     LookBack,
+    /// Looking around by an axis (a stick): left and right, up and down, back to the front
+    /// when let go.
+    LookSide,
+    LookUp,
     Map,
     /// A menu button: opening the central menu, or moving and choosing in menus.
     Menu(Nav),
@@ -124,7 +128,7 @@ impl Nav {
 }
 
 impl Action {
-    pub const ALL: [Action; 28] = [
+    pub const ALL: [Action; 30] = [
         Action::Steer,
         Action::SteerLeft,
         Action::SteerRight,
@@ -145,6 +149,8 @@ impl Action {
         Action::Reset,
         Action::View,
         Action::LookBack,
+        Action::LookSide,
+        Action::LookUp,
         Action::Map,
         Action::Menu(Nav::Open),
         Action::Menu(Nav::Up),
@@ -173,6 +179,8 @@ impl Action {
             Action::Reset => "reset".into(),
             Action::View => "view".into(),
             Action::LookBack => "look_back".into(),
+            Action::LookSide => "look_side".into(),
+            Action::LookUp => "look_up".into(),
             Action::Map => "map".into(),
             Action::Menu(nav) => nav.key().into(),
         }
@@ -195,17 +203,27 @@ impl Action {
             Action::Reset => "Reset car".into(),
             Action::View => "Camera view".into(),
             Action::LookBack => "Look back".into(),
+            Action::LookSide => "Look left/right (stick)".into(),
+            Action::LookUp => "Look up/down (stick)".into(),
             Action::Map => "Map".into(),
             Action::Menu(nav) => nav.label().into(),
         }
     }
 
-    /// Steering and the pedals are read as analog values, the rest as buttons.
+    /// Steering, looking around and the pedals are read as analog values, the rest as
+    /// buttons.
     pub fn analog(self) -> bool {
-        matches!(
-            self,
-            Action::Steer | Action::Throttle | Action::Brake | Action::Clutch | Action::Handbrake
-        )
+        self.whole_axis()
+            || matches!(
+                self,
+                Action::Throttle | Action::Brake | Action::Clutch | Action::Handbrake
+            )
+    }
+
+    /// Steering and looking around take a whole axis, from -1 to 1 about its centre (and
+    /// never a key or button).
+    pub fn whole_axis(self) -> bool {
+        matches!(self, Action::Steer | Action::LookSide | Action::LookUp)
     }
 }
 
@@ -525,9 +543,10 @@ impl Profile {
     }
 }
 
-/// A pedal (or a handbrake lever) can have half an axis; steering always has all of it.
+/// A pedal (or a handbrake lever) can have half an axis; steering and looking around
+/// always have all of it.
 fn pedal(action: Action) -> bool {
-    action.analog() && action != Action::Steer
+    action.analog() && !action.whole_axis()
 }
 
 impl WheelConfig {
@@ -979,6 +998,9 @@ pub struct WheelInput {
     pub view: bool,
     /// The look-back button is held.
     pub look_back: bool,
+    /// Looking around by a stick: x from -1 (right) to 1 (left), y from -1 (down) to 1
+    /// (up); zero when let go or unbound.
+    pub look: Vec2,
     /// The ignition button is held (the starter runs while it is).
     pub ignition_held: bool,
     pub map: bool,
@@ -1092,7 +1114,7 @@ fn binding_value(
     let raw = gamepads.raw(binding)?;
     let curves = &config.profile().curves;
     Some(match action {
-        Action::Steer => binding.steer(raw),
+        _ if action.whole_axis() => binding.steer(raw),
         Action::Throttle => curves.throttle.at(binding.travel(raw, config.deadzone)),
         Action::Brake => curves.brake.at(binding.travel(raw, config.deadzone)),
         _ if action.analog() => binding.travel(raw, config.deadzone),
@@ -1129,12 +1151,15 @@ pub fn push_value(config: &WheelConfig, gamepads: &Gamepads, action: Action) -> 
         .filter_map(|binding| {
             let raw = gamepads.raw(binding)?;
             Some(match action {
-                Action::Steer => binding.steer(raw),
+                _ if action.whole_axis() => binding.steer(raw),
                 _ => binding.travel(raw, config.deadzone),
             })
         })
         .reduce(|a, b| if b.abs() > a.abs() { b } else { a })
 }
+
+/// The part of a look stick's travel around its centre that does nothing.
+const LOOK_DEADZONE: f32 = 0.12;
 
 fn read_wheel(
     config: Res<WheelConfig>,
@@ -1190,6 +1215,11 @@ fn read_wheel(
             .find(|&gear| held.contains(&Action::Gate(gear)))
             .unwrap_or(0)
     });
+    // A stick never rests exactly at its centre.
+    let look = |action| {
+        let value = axis(action).filter(|_| !in_menu).unwrap_or(0.0);
+        (value.abs() - LOOK_DEADZONE).max(0.0) / (1.0 - LOOK_DEADZONE) * value.signum()
+    };
     let steer_keys = f32::from(u8::from(down(Action::SteerLeft)))
         - f32::from(u8::from(down(Action::SteerRight)));
     *wheel = WheelInput {
@@ -1208,6 +1238,7 @@ fn read_wheel(
         reset: pressed(Action::Reset),
         view: pressed(Action::View),
         look_back: down(Action::LookBack),
+        look: Vec2::new(look(Action::LookSide), look(Action::LookUp)),
         ignition_held: down(Action::Ignition),
         map: pressed(Action::Map),
         shifter,
@@ -1313,8 +1344,8 @@ fn capture(
         full,
     };
     let mut found = None;
-    // Any control but steering by an axis takes a key.
-    if action != Action::Steer
+    // Any control but one taking a whole axis takes a key.
+    if !action.whole_axis()
         && let Some(&key) = gamepads.keys.get_just_pressed().find(|k| KEYS.contains(k))
     {
         found = Some(Binding::key(key));
@@ -1342,11 +1373,12 @@ fn capture(
                 }
             };
             match (action, &mut capturing.pedal) {
-                // The axis centre is straight ahead; turning left gives the direction.
-                (Action::Steer, _) if (value - start).abs() > 0.15 => {
+                // The axis centre is straight ahead; turning left (looking left or up)
+                // gives the direction.
+                (_, _) if action.whole_axis() && (value - start).abs() > 0.15 => {
                     found = Some(binding(input, 0.0, value));
                 }
-                (Action::Steer, _) => {}
+                (_, _) if action.whole_axis() => {}
                 (_, None) if (value - start).abs() > 0.5 => {
                     capturing.pedal = Some((entity, input, start, value));
                 }
@@ -1531,6 +1563,24 @@ mod tests {
         let mut config = WheelConfig::default();
         config.bind(Action::Throttle, stick(1.0));
         config.bind(Action::Brake, stick(-1.0));
+        assert_eq!(WheelConfig::from_text(&config.to_text()), config);
+    }
+
+    #[test]
+    fn a_stick_looks_around() {
+        let axis = |axis, full| pad(GamepadInput::Axis(axis), 0.0, full);
+        let mut config = WheelConfig::default();
+        let profile = &mut config.profiles[1];
+        // Bound by pushing left and up: those read positive, the other way negative.
+        profile.bind(Action::LookSide, axis(GamepadAxis::RightStickX, -0.8));
+        profile.bind(Action::LookUp, axis(GamepadAxis::RightStickY, 0.9));
+        let side = profile.bindings_of(Action::LookSide).next().unwrap();
+        assert_eq!((side.steer(-0.5), side.steer(0.7)), (0.5, -0.7));
+        // A look takes the whole axis, from a pedal too.
+        profile.bind(Action::Throttle, axis(GamepadAxis::RightStickY, 1.0));
+        assert_eq!(profile.bindings_of(Action::LookUp).count(), 0);
+        profile.bind(Action::LookUp, axis(GamepadAxis::RightStickY, 0.9));
+        assert_eq!(profile.bindings_of(Action::Throttle).count(), 0);
         assert_eq!(WheelConfig::from_text(&config.to_text()), config);
     }
 

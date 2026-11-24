@@ -269,6 +269,7 @@ like.
 | B (hold) | Look back |
 | M | Map of the whole area (drag, the arrows or a pad's stick to move, scroll, + - or the triggers to zoom; M or Esc closes) |
 | Left-drag, scroll | Orbit and zoom the camera (driver's view: look around) |
+| A stick (bind "Look left/right" and "Look up/down" in Controls) | Look around as far as it's pushed (chase view: swing round the car); back to the front when let go |
 
 ### Graphics
 
