@@ -37,7 +37,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 23;
+pub const PROTOCOL: u32 = 24;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -104,6 +104,9 @@ pub enum ToServer {
 pub enum ToClient {
     Welcome {
         you: PlayerId,
+        /// Our car's number (the server sends our own car's state like any other while it
+        /// has it, see `Yours::notice`).
+        car: CarId,
         /// Whether the server has chat on.
         chat: bool,
         /// Where players start.
@@ -165,12 +168,15 @@ pub enum ToClient {
 
 /// A player's car's whole state as the server drives it: after their step `step`, with
 /// the latest of their placements the server had taken up then and how many times it had
-/// moved the car itself.
+/// moved the car itself; and, while the server has the car (the rescue helicopter carrying
+/// it), what to tell the player about that: their game then doesn't drive it, it shows it
+/// as the server sends it to everyone (`Cars`), until it's given back as a move.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Yours {
     pub step: u32,
     pub placed: Option<u32>,
     pub moved: u32,
+    pub notice: Option<String>,
     pub state: Vec<u8>,
 }
 
@@ -342,9 +348,15 @@ impl Wire for ToServer {
 impl Wire for ToClient {
     fn put(&self, out: &mut Vec<u8>) {
         match self {
-            ToClient::Welcome { you, chat, spawn } => {
+            ToClient::Welcome {
+                you,
+                car,
+                chat,
+                spawn,
+            } => {
                 0u8.put(out);
                 you.put(out);
+                car.put(out);
                 chat.put(out);
                 spawn.put(out);
             }
@@ -421,6 +433,7 @@ impl Wire for ToClient {
                 yours.step.put(out);
                 yours.placed.put(out);
                 yours.moved.put(out);
+                yours.notice.put(out);
                 yours.state.put(out);
             }
         }
@@ -430,6 +443,7 @@ impl Wire for ToClient {
         Some(match r.get::<u8>()? {
             0 => ToClient::Welcome {
                 you: r.get()?,
+                car: r.get()?,
                 chat: r.get()?,
                 spawn: r.get()?,
             },
@@ -465,6 +479,7 @@ impl Wire for ToClient {
                 step: r.get()?,
                 placed: r.get()?,
                 moved: r.get()?,
+                notice: r.get()?,
                 state: r.get()?,
             }),
             _ => return None,

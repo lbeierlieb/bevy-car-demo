@@ -57,7 +57,7 @@ that does: reverse asked for while rolling
 (`car::ReverseRefused`, a message from `drive`), on the rev limiter in first gear (only
 there, at the user's wish, 2026-11-22), and
 gas without moving for 3 s (R). (The parking brake hint went when gas started releasing it, 2026-11-24.) Added alone: in neutral, stalled, wrecked engine, empty
-tank (stating the problem only, since 2026-11-22). R (a press in the step's input, `Car::steer`) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
+tank (stating the problem only, since 2026-11-22). R (a press in the step's input, for the server) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
 right-hand lane on roads with traffic lanes), carried there by the rescue helicopter (see
 "Helicopters"). The map teleport was removed at the user's
 wish (2026-11-21). Keys (the keyboard profile's): M map, B (held) looks back; Esc the central menu (the 0
@@ -570,24 +570,33 @@ are dead reckoned from their latest `HeliPose`; never fogged, and drawn at 900 m
 look as big when farther, beacons at least ~0.004 rad across, so the hunt's is seen from
 anywhere; `Chase`, the hunt's flight) and `rescue.rs`.
 
-- **Rescue** (R with `ResetRule::Road`, also a hunter's in a hunt): `Car::call_rescue`; flies
-  in from 140 m ahead of the car (where the chase camera looks), holds over its roof on a
-  12 m cable (longer to stay 4 m over trees and houses within 8 m: their `Upright::top`),
-  lets the cable down, lifts the car (upright), carries it at ~10 m/s average over a lift
-  clearing land, trees and houses along the way, sets it down at the drive spot, unhooks
-  (`Car::place`) and flies off 8 s. ~10 s near a road (`the_helicopter_takes_the_car_to_the_road`).
-  Part of the car's state (`Car::rescue`, in its snapshot; 2026-11-24, phase 3): R is
-  `DriverInput::reset`, `Car::steer` calls it by the `ResetRule` (the server works out
-  each player's from their round, `Round::reset_rule`, `Shadow::rule`), `rescue::fly`
-  runs it after the simulation and the collisions, exactly `sim::STEP` (client: `Fly` in
-  `FixedPostUpdate`; server: `Shadow::finish_step`), overwriting the car's body (wheels
-  hang, engine runs). So the server runs the same rescue and the client predicts it to
-  the bit (`a_rescue_is_run_by_the_server_predicted_and_seen_by_the_others`). `car::Rescued` while it's coming/carrying: input ignored (brakes), neutral (whatever the
-  H-shifter says) and the parking brake on from the call, also once set down, R off,
-  online a ghost (`haunt`). Meanwhile a warning in the upper middle, "⚠ You are being rescued ⚠ / Please
-  do not resist!" (`hud::rescue_warning`, asked for by the user, 2026-11-24). Lets go if the car is moved by something else (> 2 m), gone,
-  or away. Its pose goes in `CarState::heli` (stamped like the state; protocol 10; the server
-  sends its own car's), so the others draw it, the cable to the car's roof when `hooked`. No sound yet.
+- **Rescue** (R with `ResetRule::Road`, also a hunter's in a hunt): flies in from 140 m
+  ahead of the car (where the chase camera looks), holds over its roof on a 12 m cable
+  (longer to stay 4 m over trees and houses within 8 m: their `Upright::top`), lets the
+  cable down, lifts the car (upright), carries it at ~10 m/s average over a lift clearing
+  land, trees and houses along the way, sets it down at the drive spot, unhooks
+  (`Car::place`) and flies off 8 s. ~10 s near a road
+  (`the_helicopter_takes_the_car_to_the_road`). Neutral and the parking brake on from the
+  call, also once set down. Lets go if the car is moved by something else (> 2 m) or the
+  driver's away.
+  **The server's alone** (agreed with the user, 2026-11-24: a lean client; a later quick
+  transport or reset to the garage needs no client change): R is only
+  `DriverInput::reset`; `Shadow` holds the `Rescue`, calls it by its `ResetRule`
+  (`Round::reset_rule`, `Shadow::rule`; `Rescue::press`), drives the car as nobody's at
+  the wheel while it has it, runs `rescue::fly` after the collisions
+  (`Shadow::finish_step`) and refuses placements meanwhile. While it has the car
+  (`Shadow::taken`), `Yours::notice` carries what to tell the player ("⚠ You are being
+  rescued ⚠\nPlease do not resist!"), and the server sends the player their own car like
+  anyone's (`Cars`, no tag; our number comes in `Welcome::car`). The client
+  (`car::Spectating` holds the notice) puts `car::ServerDriven` on the active car: not
+  driven, simulated, predicted, checked or force-fed, hidden, its engine hushed, its body
+  and `Transform` following the remote car of our number (`client::spectate`), which is
+  drawn and heard (helicopter from `CarState::heli`) like any other; the HUD shows the
+  notice (`hud::server_notice`, first line large). Set down, the server gives it back as
+  a move (`Yours::moved`, notice none), the client takes it up and predicts again
+  (`the_server_rescues_a_players_car_while_their_game_looks_on`). The menu's reset row is
+  enabled whenever we're driving: whether R does anything is the server's call. No sound
+  yet.
 - **Hunt helicopter**: the server flies a `Chase` per running round in `run_rounds` over
   the hunted (50 m up, at least 30 m over the ground; no top speed, acceleration ≤ 7 m/s²,
   so it lags, overshoots a hard stop and turns back; wanders ±6 m over a slow target) and
@@ -673,8 +682,8 @@ Built (phases 0, 1, 2 and the start of 3):
   `Rounds::players_collide`), push themselves off traffic, and traffic reacts to the
   server's car (`Visitor` body). The client still pushes itself off remote cars, as its
   prediction (`players_cars_meet_on_the_server`).
-- Phase 3: the rescue helicopter is the server's (protocol 21, see "Helicopters"): no
-  placements for it. **The server moves cars** (protocol 22): `Shadow::put` on joining
+- Phase 3: the rescue helicopter is the server's alone (protocol 24, see "Helicopters"):
+  the client only looks on while the server has the car. **The server moves cars** (protocol 22): `Shadow::put` on joining
   (`online::join_spot`, needs the server's `Network`), at a round's start
   (`events::start_spot`: by the marker or on the grid; again when a time trial restarts)
   and when it's over for a player (`events::marker_spot`, the lobby's slot, else the
@@ -990,7 +999,7 @@ and plays force feedback, both through hid-fanatecff on Linux.
   `rumble.rs`, bevy's `GamepadRumbleRequest` (bevy_gilrs plays it), on the gamepads the
   profile in use binds, never the force feedback wheel; the crash rule is the crash
   sound's (`effects::CrashGate`; read in `Update`, before `effects::cue` clears the
-  knocks); not while away, held or rescued; native only. Strengths are a first guess
+  knocks); not while away, held or while the server has the car; native only. Strengths are a first guess
   (`WEAK`, `LENGTH`), never felt here.
 
 ### Still to check on the real wheel

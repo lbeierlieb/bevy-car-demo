@@ -355,8 +355,10 @@ fn receive(
                         };
                         peer.shadow.put(&terrain, spot);
                     }
+                    let car = peer.car;
                     peer.tell(&ToClient::Welcome {
                         you: id,
+                        car,
                         chat: server.chat,
                         spawn: server.spawn,
                     });
@@ -609,7 +611,7 @@ fn haunt(
                     && hull.contact(placed).is_some()
             })
         };
-        let ghost = car.rescue.has_car()
+        let ghost = peer.shadow.taken()
             || peer.shadow.away()
             || peer.at_marker.is_some()
             || in_lobby.contains(&peer.id)
@@ -786,7 +788,7 @@ fn send(
                     angular_velocity: car.body.angular_velocity,
                     motion: Motion::of(car),
                     ghost: peer.ghost,
-                    heli: car.rescue.pose(stamp),
+                    heli: peer.shadow.heli(stamp),
                 },
                 None => CarState {
                     time,
@@ -848,6 +850,10 @@ fn send(
         let Some(own) = peer.state.filter(|_| peer.name.is_some()) else {
             continue;
         };
+        // Around their car as we have it; their own too while we have it (the rescue
+        // helicopter carrying it), which their game then only shows.
+        let own_position = peer.shadow.position().unwrap_or(own.position);
+        let taken = peer.shadow.taken();
         let realm = Realm::of(realm);
         // In an event's round, everyone in it is on the map.
         let map = if realm == Realm::NORMAL {
@@ -856,7 +862,7 @@ fn send(
             MapPlayers::Everyone
         };
         let peer = &mut *peer;
-        let (cx, cz) = cell(own.position);
+        let (cx, cz) = cell(own_position);
         let mut states = Vec::new();
         let mut messages = Vec::new();
         let mut near = HashSet::new();
@@ -864,8 +870,9 @@ fn send(
             for z in cz - reach..=cz + reach {
                 for &i in grid.get(&(x, z)).into_iter().flatten() {
                     let car = &cars[i];
-                    let distance = car.state.position.distance(own.position);
-                    if car.id == peer.car || car.realm != realm || distance > NEAR {
+                    let distance = car.state.position.distance(own_position);
+                    let ours = car.id == peer.car;
+                    if (ours && !taken) || car.realm != realm || distance > NEAR {
                         continue;
                     }
                     near.insert(car.id);
@@ -881,11 +888,12 @@ fn send(
                             looks: Box::new(car.looks.clone()),
                         });
                     }
-                    if told.tag != car.tag {
-                        told.tag.clone_from(&car.tag);
+                    let tag = if ours { None } else { car.tag.clone() };
+                    if told.tag != tag {
+                        told.tag.clone_from(&tag);
                         messages.push(ToClient::Tag {
                             car: car.id,
-                            name: car.tag.clone(),
+                            name: tag,
                         });
                     }
                     if now >= told.due {

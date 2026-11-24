@@ -349,6 +349,17 @@ mod tests {
         );
     }
 
+    /// What R does for `player` (their game), as the server has it.
+    fn rule(server: &App, player: &App) -> crate::car::ResetRule {
+        let name = connection(player).name.clone();
+        let world = server.world();
+        let mut peers = world.try_query::<&super::server::Peer>().unwrap();
+        (peers.iter(world))
+            .find(|peer| peer.name.as_deref() == Some(name.as_str()))
+            .map(|peer| peer.shadow.rule)
+            .expect("the player on the server")
+    }
+
     /// Anna's car on the server, as it drives it.
     fn on_server(server: &mut App, name: &str) -> Option<Vec3> {
         let mut peers = server.world_mut().query::<&super::server::Peer>();
@@ -566,22 +577,22 @@ mod tests {
     }
 
     #[test]
-    fn a_rescue_is_run_by_the_server_predicted_and_seen_by_the_others() {
+    fn the_server_rescues_a_players_car_while_their_game_looks_on() {
+        use crate::car::{ServerDriven, Spectating};
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
         let mut anna = driver(&listener, "Anna");
-        anna.add_plugins(crate::heli::rescue::RescuePlugin);
         let mut ben = player(&listener, "Ben", 0, 30.0);
         run(&mut [&mut server, &mut anna, &mut ben], 60);
-        let heli = |app: &mut App| {
+        let heli = |app: &mut App, id: Option<protocol::CarId>| {
             (app.world_mut().query::<&RemoteCar>())
-                .single(app.world())
-                .unwrap()
-                .latest()
-                .and_then(|state| state.heli)
+                .iter(app.world())
+                .find(|car| id.is_none_or(|id| car.id == id))
+                .and_then(|car| car.latest()?.heli)
         };
-        assert_eq!(heli(&mut ben), None);
-        // Anna presses R.
+        assert_eq!(heli(&mut ben, None), None);
+        let start = car(&mut anna).body.position;
+        // Anna presses R: the server has her car from then on.
         let press = |anna: &mut App, on: bool| {
             anna.world_mut()
                 .resource_mut::<crate::input::WheelInput>()
@@ -590,31 +601,48 @@ mod tests {
         press(&mut anna, true);
         run(&mut [&mut server, &mut anna, &mut ben], 1);
         press(&mut anna, false);
+        run(&mut [&mut server, &mut anna, &mut ben], 30);
+        let notice = anna.world().resource::<Spectating>().0.clone();
+        assert!(notice.is_some_and(|n| n.contains("rescued")));
+        let driven = |anna: &mut App| {
+            (anna
+                .world_mut()
+                .query_filtered::<(), (With<Car>, With<ServerDriven>)>())
+            .iter(anna.world())
+            .count()
+        };
+        assert_eq!(driven(&mut anna), 1, "her game doesn't drive it");
+        // She sees her car and the helicopter as the server sends them, as Ben does.
+        let ours = connection(&anna).car;
         run(&mut [&mut server, &mut anna, &mut ben], 120);
-        assert!(car(&mut anna).rescue.busy(), "her game should predict it");
-        assert!(anna.world().resource::<crate::car::Rescued>().0);
-        let mut peers = server.world_mut().query::<&super::server::Peer>();
-        let on_server = (peers.iter(server.world()))
-            .find(|peer| peer.name.as_deref() == Some("Anna"))
-            .and_then(|peer| peer.shadow.car())
-            .map(|car| car.rescue.busy());
-        assert_eq!(on_server, Some(true), "the server runs it");
-        let (corrected, compared) = (anna.world())
-            .resource::<super::predict::Prediction>()
-            .corrections();
-        assert!(compared > 5, "{compared} compared");
-        assert_eq!(corrected, 0, "predicted exactly");
-        let seen = heli(&mut ben).expect("Ben doesn't see it");
-        let ours = car(&mut anna).rescue.pose(0.0).unwrap();
-        assert!(seen.position.distance(ours.position) < 5.0);
-        // Set down and flown off, still as the server has it.
-        run(&mut [&mut server, &mut anna, &mut ben], 1200);
-        assert!(!car(&mut anna).rescue.busy(), "never done");
-        let (corrected, _) = (anna.world())
-            .resource::<super::predict::Prediction>()
-            .corrections();
-        assert_eq!(corrected, 0, "predicted exactly to the end");
-        assert_eq!(heli(&mut ben), None);
+        let hers = heli(&mut anna, ours).expect("Anna doesn't see her helicopter");
+        let his = heli(&mut ben, None).expect("Ben doesn't see it");
+        assert!(hers.position.distance(his.position) < 5.0);
+        // Carried up, her car with it.
+        let mut highest = f32::NEG_INFINITY;
+        for _ in 0..600 {
+            run(&mut [&mut server, &mut anna, &mut ben], 1);
+            highest = highest.max(car(&mut anna).body.position.y);
+        }
+        assert!(highest > start.y + 5.0, "only lifted to {highest}");
+        // Set down: hers again, where the server put it, and she drives on from there
+        // as the server does.
+        run(&mut [&mut server, &mut anna, &mut ben], 600);
+        assert_eq!(anna.world().resource::<Spectating>().0, None);
+        assert_eq!(driven(&mut anna), 0);
+        let there = on_server(&mut server, "Anna").unwrap();
+        assert!(car(&mut anna).body.position.distance(there) < 0.5);
+        let corrections = |anna: &App| {
+            (anna.world())
+                .resource::<super::predict::Prediction>()
+                .corrections()
+        };
+        let (before, _) = corrections(&anna);
+        run(&mut [&mut server, &mut anna, &mut ben], 120);
+        let (after, compared) = corrections(&anna);
+        assert!(compared > 5);
+        assert_eq!(after, before, "corrected after being given it back");
+        assert_eq!(heli(&mut ben, None), None, "flown off");
     }
 
     #[test]
@@ -1233,13 +1261,12 @@ mod tests {
 
     /// A player's game with the events' lobby, the car hunt at the origin on its map.
     fn hunter(listener: &LoopbackListener, name: &str, x: f32) -> App {
-        use crate::car::{Held, ResetRule};
+        use crate::car::Held;
         use crate::events::{Events, Placed, lobby::LobbyPlugin};
         let event = crate::events::parse("hunt 0 0 Hunt").unwrap().remove(0);
         let mut app = player(listener, name, 3, x);
         app.add_plugins(LobbyPlugin)
             .init_resource::<Held>()
-            .init_resource::<ResetRule>()
             .init_resource::<ButtonInput<KeyCode>>()
             .insert_resource(Events {
                 list: vec![Placed {
@@ -1374,9 +1401,9 @@ mod tests {
             "held for the head start"
         );
         assert!(!all[h].world().resource::<Held>().0);
-        assert_eq!(*all[h].world().resource::<ResetRule>(), ResetRule::Never);
+        assert_eq!(rule(all[0], all[h]), ResetRule::Never);
         assert_eq!(
-            *all[k].world().resource::<ResetRule>(),
+            rule(all[0], all[k]),
             ResetRule::Never,
             "hunters can't reset"
         );
@@ -1392,7 +1419,7 @@ mod tests {
             (car(all[1]).fuel.litres() - annas_fuel).abs() < 0.01,
             "Anna's own"
         );
-        assert_eq!(*all[h].world().resource::<ResetRule>(), ResetRule::Road);
+        assert_eq!(rule(all[0], all[h]), ResetRule::Road);
     }
 
     /// A race event at the origin, with a square loop 400 m a side around it: its
@@ -1439,12 +1466,11 @@ mod tests {
 
     /// A player's game with the events' lobby and the race at the origin.
     fn racer(listener: &LoopbackListener, name: &str, x: f32) -> App {
-        use crate::car::{Held, ResetRule};
+        use crate::car::Held;
         use crate::events::{Events, Placed, lobby::LobbyPlugin};
         let mut app = player(listener, name, 3, x);
         app.add_plugins(LobbyPlugin)
             .init_resource::<Held>()
-            .init_resource::<ResetRule>()
             .init_resource::<ButtonInput<KeyCode>>()
             .insert_resource(Events {
                 list: vec![Placed {
@@ -1529,10 +1555,7 @@ mod tests {
             );
             assert!(!car(all[i]).parking_brake, "free to go at the green light");
             assert!(all[i].world().resource::<GhostPlayers>().0);
-            assert!(matches!(
-                *all[i].world().resource::<ResetRule>(),
-                ResetRule::Spot(..)
-            ));
+            assert!(matches!(rule(all[0], all[i]), ResetRule::Spot(..)));
         }
         run(&mut all, (COUNTDOWN / FRAME) as usize + 10);
         assert!(!all[1].world().resource::<Held>().0, "go");
@@ -1576,7 +1599,7 @@ mod tests {
             after.best.is_empty(),
             "races don't make the time trials' list"
         );
-        assert_eq!(*all[1].world().resource::<ResetRule>(), ResetRule::Road);
+        assert_eq!(rule(all[0], all[1]), ResetRule::Road);
         assert!(!all[1].world().resource::<GhostPlayers>().0);
     }
 
@@ -1617,7 +1640,7 @@ mod tests {
         let trial = round(all[1]).unwrap();
         assert!(trial.running(), "alone");
         assert_eq!(trial.game, Game::Trial(settings), "still a trial");
-        assert_eq!(*all[1].world().resource::<ResetRule>(), ResetRule::Never);
+        assert_eq!(rule(all[0], all[1]), ResetRule::Never);
         run(&mut all, (COUNTDOWN / FRAME) as usize + 10);
         let course = Course::new(&race_event().routes[0], 1);
         drive_along(&mut all, 1, &course, 20.0, course.gates[2].s + 5.0);

@@ -66,19 +66,17 @@ pub struct HeliPlugin;
 
 impl Plugin for HeliPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Parts>()
-            .add_plugins(rescue::RescuePlugin)
-            .add_systems(
-                PostUpdate,
-                (
-                    (follow_remote_rescues, follow_the_hunt).run_if(resource_exists::<Connection>),
-                    fly_flown,
-                    build_models,
-                    (spin, flash, hang_cables, keep_in_view).chain(),
-                )
-                    .chain()
-                    .before(TransformSystems::Propagate),
-            );
+        app.init_resource::<Parts>().add_systems(
+            PostUpdate,
+            (
+                (follow_remote_rescues, follow_the_hunt).run_if(resource_exists::<Connection>),
+                fly_flown,
+                build_models,
+                (spin, flash, hang_cables, keep_in_view).chain(),
+            )
+                .chain()
+                .before(TransformSystems::Propagate),
+        );
     }
 }
 

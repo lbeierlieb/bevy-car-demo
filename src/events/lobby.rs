@@ -16,7 +16,7 @@ use super::hunt::{CAUGHT_TIME, Cars, Catch};
 use super::race::{COUNTDOWN, Course};
 use super::round::{Action, Game, Phase, Play, Round};
 use super::{EventKind, Events, marker_spot, start_spot};
-use crate::car::{ActiveCar, Car, CarSetup, Held, ResetRule};
+use crate::car::{ActiveCar, Car, CarSetup, Held};
 use crate::menu::kit::{self, Panel, Place};
 use crate::menu::nav::MenuInput;
 use crate::net::protocol::PlayerId;
@@ -256,11 +256,7 @@ pub(super) fn follow(
     network: Option<Res<Network>>,
     active: Res<ActiveCar>,
     mut cars: Query<(Entity, &mut Car)>,
-    (mut held, mut rule, mut ghost_players): (
-        ResMut<Held>,
-        ResMut<ResetRule>,
-        ResMut<GhostPlayers>,
-    ),
+    (mut held, mut ghost_players): (ResMut<Held>, ResMut<GhostPlayers>),
     time: Res<Time<Real>>,
 ) {
     let now = time.elapsed_secs_f64();
@@ -322,7 +318,6 @@ pub(super) fn follow(
         }
     }
     if was_running && !running {
-        *rule = ResetRule::Road;
         // Back by the marker of the round we were in.
         let back = round.as_ref().or(state.seen.as_ref()).and_then(spot);
         let active_car = cars.iter_mut().find(|(_, car)| car.index == active.0);
@@ -349,14 +344,12 @@ pub(super) fn follow(
             Game::Hunt(settings) => {
                 let hunted = round.host == you;
                 held.0 = !hunted && elapsed < f64::from(settings.head_start);
-                *rule = round.reset_rule(None, you);
             }
             Game::Race(settings) | Game::Trial(settings) => {
                 let settings = *settings;
                 let trial = matches!(round.game, Game::Trial(_));
                 held.0 = elapsed < COUNTDOWN;
                 ghost_players.0 = !trial && !settings.collisions;
-                *rule = round.reset_rule(state.course(&connection, round), you);
                 // When each racer passed their gates, for the gaps.
                 for racer in round.standing().iter().flat_map(|s| &s.racers) {
                     if racer.gates > 0 {

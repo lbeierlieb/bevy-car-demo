@@ -1,25 +1,23 @@
-//! The rescue helicopter. Where the rules put the car on the nearest road (R), a
-//! helicopter is called instead of the car jumping there: it flies in from ahead of the
-//! car, holds over it and lets its cable down, lifts the car (turning it upright), carries
-//! it to the road (not fast with a car on the cable: `CARRY_SPEED`), sets it down in the
-//! lane, unhooks and flies off. Near a road it all takes about ten seconds, longer the
-//! farther the road is. From the call until it's set down the driver's input does
-//! nothing (`car::Rescued`, which also makes the car a ghost online) and R does nothing.
+//! The rescue helicopter, the server's alone. Where the rules put a player's car on the
+//! nearest road (R), a helicopter is called instead of the car jumping there: it flies in
+//! from ahead of the car, holds over it and lets its cable down, lifts the car (turning
+//! it upright), carries it to the road (not fast with a car on the cable: `CARRY_SPEED`),
+//! sets it down in the lane, unhooks and flies off. Near a road it all takes about ten
+//! seconds, longer the farther the road is.
 //!
-//! The rescue is part of the car's state (`Car::rescue`, in its snapshots): R is a press
-//! in the step's input, which calls it as the rules say (`Car::steer`), and the flight
-//! runs in each step after the simulation and the collisions (`fly`), which keep
-//! simulating the car (its wheels hang and its engine runs) while the rescue puts its body
-//! where it hangs. So the server, driving the car from the same inputs, runs the same
-//! rescue, and our game predicts it like any driving. The server sends its pose with the
-//! car's state to the other players (`Rescue::pose`), whose games draw it.
+//! The server runs it on its copy of the car (`net::shadow`): R is a press in the step's
+//! input, the flight runs in each step after the simulation and the collisions (`fly`),
+//! which keep simulating the car (its wheels hang and its engine runs) while the rescue
+//! puts its body where it hangs. From the call until it's set down the server has the car:
+//! the player's game only shows it where the server says (`car::Spectating`), and draws
+//! the helicopter from its pose (`Rescue::pose`) like everyone else's game does.
 
 use std::f32::consts::FRAC_PI_4;
 
 use bevy::prelude::*;
 
-use super::{HOOK, Heli, HeliPose, attitude, push, turn, yaw_of};
-use crate::car::{ActiveCar, Car, Rescued, heading};
+use super::{HOOK, HeliPose, attitude, push, turn, yaw_of};
+use crate::car::{Car, ResetRule, heading};
 use crate::physics::collision::Obb;
 use crate::terrain::Terrain;
 
@@ -67,38 +65,34 @@ const TURN: f32 = 1.2;
 /// starting, a lent car) is let go of (m).
 const LET_GO: f32 = 2.0;
 
-pub struct RescuePlugin;
-
-impl Plugin for RescuePlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(FixedPostUpdate, fly_active.in_set(Fly))
-            .add_systems(Update, draw.after(crate::car::sync_transforms));
-    }
-}
-
-/// Where the active car's rescue flies on in each step (after the simulation and
-/// whatever pushes the car off other cars).
-#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Fly;
-
-/// A car's rescue under way, if any (see `Car::rescue`).
+/// A car's rescue under way, if any.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Rescue {
     flight: Option<Flight>,
 }
 
-crate::snapshot::snapshot!(Rescue { flight });
-
-impl Car {
-    /// Calls the helicopter to carry the car to the road at `to` (xz), facing along `yaw`.
-    /// Nothing if one is already under way.
-    pub fn call_rescue(&mut self, terrain: &Terrain, to: Vec2, yaw: f32) {
-        let flight = Rescue::flight_for(self, terrain, to, yaw);
-        self.rescue.flight = self.rescue.flight.take().or(Some(flight));
-    }
-}
-
 impl Rescue {
+    /// R pressed: calls the helicopter as `rule` says, to the nearest road or a spot.
+    /// Nothing if one is already under way.
+    pub fn press(&mut self, rule: ResetRule, car: &Car, terrain: &Terrain) {
+        match rule {
+            ResetRule::Road => {
+                let (p, yaw) = car.road_spot(terrain);
+                self.call(car, terrain, p, yaw);
+            }
+            ResetRule::Spot(p, yaw) => self.call(car, terrain, p, yaw),
+            ResetRule::Never => {}
+        }
+    }
+
+    /// Calls the helicopter to carry `car` to the road at `to` (xz), facing along `yaw`.
+    /// Nothing if one is already under way.
+    pub fn call(&mut self, car: &Car, terrain: &Terrain, to: Vec2, yaw: f32) {
+        if self.flight.is_none() {
+            self.flight = Some(Self::flight_for(car, terrain, to, yaw));
+        }
+    }
+
     /// The flight that carries `car` to `to` (xz), facing along `yaw`.
     fn flight_for(car: &Car, terrain: &Terrain, to: Vec2, yaw: f32) -> Flight {
         let height = car.setup.build.chassis().cg_height + 0.15;
@@ -150,7 +144,7 @@ impl Rescue {
         (self.flight.as_ref()).is_some_and(|flight| flight.leaving.is_none())
     }
 
-    /// Lets go of the car (nobody's at the wheel any more): the helicopter flies off.
+    /// Lets go of the car: the helicopter flies off.
     pub fn let_go(&mut self) {
         if let Some(flight) = &mut self.flight
             && flight.leaving.is_none()
@@ -200,20 +194,6 @@ struct Flight {
     leaving: Option<f32>,
 }
 
-crate::snapshot::snapshot!(Flight {
-    t,
-    to,
-    yaw,
-    end,
-    start,
-    cable,
-    carry,
-    heli,
-    load,
-    left_at,
-    leaving,
-});
-
 /// The helicopter as it flies.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Pose {
@@ -224,14 +204,6 @@ struct Pose {
     push: Vec3,
     cable: f32,
 }
-
-crate::snapshot::snapshot!(Pose {
-    position,
-    velocity,
-    yaw,
-    push,
-    cable
-});
 
 impl Pose {
     fn rotation(&self) -> Quat {
@@ -270,18 +242,6 @@ struct Carry {
     /// The hook's offset from above the load (m), smoothed, from the swing.
     swing: Vec3,
 }
-
-crate::snapshot::snapshot!(Carry {
-    from,
-    rotation,
-    yaw,
-    lift,
-    duration,
-    lifting,
-    setting_down,
-    hooked,
-    swing,
-});
 
 impl Carry {
     fn new(car: &Car, flight: &Flight, terrain: &Terrain) -> Self {
@@ -353,27 +313,10 @@ fn load_point(hull: &Obb, position: Vec3, rotation: Quat) -> Vec3 {
     Vec3::new(position.x, center.y + top, position.z)
 }
 
-/// Flies the active car's rescue on by a step (see `fly`), exactly `sim::STEP` like the
-/// simulation (the server's flies alike).
-fn fly_active(
-    terrain: Res<Terrain>,
-    active: Res<ActiveCar>,
-    mut rescued: ResMut<Rescued>,
-    mut cars: Query<&mut Car>,
-) {
-    rescued.0 = false;
-    for mut car in (cars.iter_mut()).filter(|car| car.index == active.0) {
-        if car.rescue.busy() {
-            fly(&mut car, &terrain, crate::sim::STEP);
-        }
-        rescued.0 = car.rescue.has_car();
-    }
-}
-
 /// Flies `car`'s rescue on by a step of `dt`, carrying the car while it's hooked on: after
 /// the simulation, wherever the car is simulated.
-pub fn fly(car: &mut Car, terrain: &Terrain, dt: f32) {
-    let Some(mut flight) = car.rescue.flight.take() else {
+pub fn fly(rescue: &mut Rescue, car: &mut Car, terrain: &Terrain, dt: f32) {
+    let Some(mut flight) = rescue.flight.take() else {
         return;
     };
     flight.t += dt;
@@ -391,7 +334,7 @@ pub fn fly(car: &mut Car, terrain: &Terrain, dt: f32) {
         Some(_) => fly_off(&mut flight, dt),
     };
     if !gone {
-        car.rescue.flight = Some(flight);
+        rescue.flight = Some(flight);
     }
 }
 
@@ -481,43 +424,6 @@ fn carry(flight: &mut Flight, car: &mut Car, terrain: &Terrain, dt: f32) {
     flight.heli.fly_to(hook - HOOK, wanted, dt);
 }
 
-/// The rescue helicopter where the flight has it.
-#[allow(clippy::type_complexity)]
-fn draw(
-    mut commands: Commands,
-    active: Res<ActiveCar>,
-    cars: Query<&Car>,
-    mut helis: Query<(Entity, &mut Heli, &mut Transform), With<OurRescue>>,
-) {
-    let existing = helis.iter_mut().next();
-    let car = cars.iter().find(|car| car.index == active.0);
-    let Some(flight) = car.and_then(|car| car.rescue.flight.as_ref()) else {
-        if let Some((entity, ..)) = existing {
-            commands.entity(entity).despawn();
-        }
-        return;
-    };
-    let heli = Heli {
-        cable: flight.heli.cable,
-        load: flight.load,
-    };
-    let transform =
-        Transform::from_translation(flight.heli.position).with_rotation(flight.heli.rotation());
-    match existing {
-        Some((_, mut drawn, mut at)) => {
-            *drawn = heli;
-            *at = transform;
-        }
-        None => {
-            commands.spawn((heli, transform, OurRescue));
-        }
-    }
-}
-
-/// Our own rescue helicopter.
-#[derive(Component)]
-struct OurRescue;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,15 +443,16 @@ mod tests {
         let (to, facing) = terrain
             .drive_spot(spawn, Vec2::new(-yaw.sin(), -yaw.cos()))
             .unwrap();
-        car.call_rescue(&terrain, to, facing);
+        let mut rescue = Rescue::default();
+        rescue.call(&car, &terrain, to, facing);
         let dt = 1.0 / 120.0;
         let mut t = 0.0;
         let mut highest = f32::NEG_INFINITY;
         let mut fastest = 0.0f32;
-        while car.rescue.has_car() {
+        while rescue.has_car() {
             car.drive(&crate::car::DriverInput::default(), dt);
             crate::sim::step_car(&mut car, &terrain, dt);
-            fly(&mut car, &terrain, dt);
+            fly(&mut rescue, &mut car, &terrain, dt);
             t += dt;
             let carried = &car;
             highest = highest.max(carried.body.position.y);

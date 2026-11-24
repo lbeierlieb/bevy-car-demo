@@ -35,7 +35,8 @@ use bevy::prelude::*;
 use super::client::CHECK_STEPS;
 use super::protocol::Yours;
 use crate::car::{Car, DriverInput, ResetRule, heading};
-use crate::heli::rescue::fly;
+use crate::heli::HeliPose;
+use crate::heli::rescue::{Rescue, fly};
 use crate::physics::engine::maps::{EngineMaps, fingerprint};
 use crate::sim::{STEP, step_car};
 use crate::snapshot;
@@ -66,6 +67,9 @@ const SILENT: u32 = 30;
 const YOURS_STEPS: u32 = 12;
 /// How often each car's report is logged (s).
 const REPORT: f64 = 10.0;
+/// What the player's game shows while the rescue helicopter has their car (the first line
+/// large).
+const RESCUED: &str = "⚠ You are being rescued ⚠\nPlease do not resist!";
 /// The most checks waiting for the copy to get to their step.
 const MOST_WAITING: usize = 4;
 /// How far a player's placement may be from where the server has the car (m), and how
@@ -136,8 +140,11 @@ pub struct Shadow {
     /// The player's own car while they drive one lent for an event's round: its spec and
     /// state (the player's game can't change the lent one's build meanwhile).
     own: Option<(Option<CarSpec>, Car)>,
-    /// What R does with the car (the player's round's rules).
+    /// What R does with the car (the player's round's rules), and the rescue under way.
     pub rule: ResetRule,
+    rescue: Rescue,
+    /// Whether the player was last told the server has their car.
+    taken: bool,
     /// Whether the car may be refuelled (stopped at a gas station).
     pub refuel: bool,
     report: Report,
@@ -286,23 +293,45 @@ impl Shadow {
         self.yours.take()
     }
 
-    /// Moves the car to `spot`, as it was otherwise. A car without a state yet goes there
-    /// when it gets one.
+    /// Moves the car to `spot`, as it was otherwise (a rescue under way lets go). A car
+    /// without a state yet goes there when it gets one.
     pub fn put(&mut self, terrain: &Terrain, spot: Spot) {
         match &mut self.car {
             Some(car) => {
                 spot.put(car, terrain);
+                self.rescue.let_go();
                 self.moved = self.moved.wrapping_add(1);
                 self.ours.clear();
-                self.yours = Some(Yours {
-                    step: self.done,
-                    placed: self.placed,
-                    moved: self.moved,
-                    state: snapshot::save(car),
-                });
+                self.tell(self.done);
             }
             None => self.anchor = Some(spot),
         }
+    }
+
+    /// The car's state after `step` for the player, now.
+    fn tell(&mut self, step: u32) {
+        let Some(car) = &self.car else {
+            return;
+        };
+        self.taken = self.rescue.has_car();
+        self.yours = Some(Yours {
+            step,
+            placed: self.placed,
+            moved: self.moved,
+            notice: self.taken.then(|| RESCUED.to_string()),
+            state: snapshot::save(car),
+        });
+    }
+
+    /// Whether the server has the car (the rescue helicopter is coming for it or carrying
+    /// it): the player's input does nothing.
+    pub fn taken(&self) -> bool {
+        self.rescue.has_car()
+    }
+
+    /// The rescue helicopter's pose, while there is one, as of `time`.
+    pub fn heli(&self, time: f64) -> Option<HeliPose> {
+        self.rescue.pose(time)
     }
 
     /// Lends the player a car of `spec` (a factory build) at `spot`, keeping theirs until
@@ -378,7 +407,18 @@ impl Shadow {
                 input
             }
         };
-        car.steer(&input, self.rule, terrain, STEP);
+        // R calls the rescue (as the rules say); nobody at the wheel lets it go.
+        if input.away {
+            self.rescue.let_go();
+        } else if input.reset && !self.rescue.busy() {
+            self.rescue.press(self.rule, car, terrain);
+        }
+        // While the server has the car, the player's input does nothing.
+        let input = DriverInput {
+            away: input.away || self.rescue.has_car(),
+            ..input
+        };
+        car.drive(&input, STEP);
         step_car(car, terrain, STEP);
         self.done = step;
         self.started = Some(started);
@@ -391,17 +431,20 @@ impl Shadow {
             return;
         };
         let step = self.done;
-        fly(car, terrain, STEP);
+        fly(&mut self.rescue, car, terrain, STEP);
         if step.is_multiple_of(CHECK_STEPS) {
             self.ours.insert(step, snapshot::save(car));
         }
-        if step.is_multiple_of(YOURS_STEPS) {
-            self.yours = Some(Yours {
-                step,
-                placed: self.placed,
-                moved: self.moved,
-                state: snapshot::save(car),
-            });
+        // The server takes the car, or gives it back (set down: a move), and says so at
+        // once.
+        let taken = self.rescue.has_car();
+        if taken != self.taken {
+            if !taken {
+                self.moved = self.moved.wrapping_add(1);
+            }
+            self.tell(step);
+        } else if step.is_multiple_of(YOURS_STEPS) {
+            self.tell(step);
         }
         let report = &mut self.report;
         report.steps += 1;
@@ -448,6 +491,11 @@ impl Shadow {
         };
         let state = self.placements.remove(&step).expect("the placement");
         self.placements.retain(|&later, _| after(later, step) > 0);
+        if self.rescue.has_car() {
+            // The server has the car: nothing the player's game says changes it.
+            self.placed = Some(step);
+            return;
+        }
         let Some(mut car) = self.car.take().or_else(|| self.built.take()) else {
             return;
         };
@@ -499,16 +547,11 @@ impl Shadow {
             self.ours.retain(|&kept, _| after(kept, step) <= 0);
             self.redrive(&mut car, step, done, terrain);
         }
-        if moved {
-            self.yours = Some(Yours {
-                step: done,
-                placed: self.placed,
-                moved: self.moved,
-                state: snapshot::save(&car),
-            });
-        }
         self.car = Some(car);
         self.done = done;
+        if moved {
+            self.tell(done);
+        }
     }
 
     /// Compares the player's checks the car has got to with its own states, for the log.
@@ -555,9 +598,8 @@ impl Shadow {
                     input
                 }
             };
-            car.steer(&input, self.rule, terrain, STEP);
+            car.drive(&input, STEP);
             step_car(car, terrain, STEP);
-            fly(car, terrain, STEP);
             if step.is_multiple_of(CHECK_STEPS) {
                 self.ours.insert(step, snapshot::save(car));
             }

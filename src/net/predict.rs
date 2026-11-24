@@ -5,8 +5,9 @@
 //! and the steps since are driven again from the inputs kept. Driven alike, the two agree
 //! to the bit, so that only happens where the server knew more (other cars it met).
 //!
-//! The rescue helicopter is part of the car's state and its steps (`heli::rescue`), so it's
-//! predicted like the driving. Where the server moves our car (on joining, to an event's
+//! While the server has our car (the rescue helicopter carrying it: `Yours::notice`), we
+//! neither drive nor predict it: it's shown as the server sends it (`client::spectate`),
+//! until the server gives it back as a move. Where the server moves our car (on joining, to an event's
 //! spots and back), it says so with the state (`Yours::moved`), which is then taken up
 //! whatever we had (our game moves the car alike, but the server's word goes). Whatever
 //! else changes our car between steps (built anew in a shop, refuelled) is noticed by
@@ -22,8 +23,7 @@ use bevy::prelude::*;
 use super::Connection;
 use super::client::Status;
 use super::protocol::Yours;
-use crate::car::{ActiveCar, Car, Correction, DriverInput, ResetRule, StepInput};
-use crate::heli::rescue::fly;
+use crate::car::{ActiveCar, Car, Correction, DriverInput, Spectating, StepInput};
 use crate::sim::{STEP, step_car};
 use crate::snapshot;
 use crate::terrain::Terrain;
@@ -88,8 +88,12 @@ fn active<'a>(
 pub fn notice_placing(
     mut prediction: ResMut<Prediction>,
     (step, chosen): (Res<StepInput>, Res<ActiveCar>),
+    spectating: Option<Res<Spectating>>,
     mut cars: Query<&mut Car>,
 ) {
+    if spectating.is_some_and(|s| s.0.is_some()) {
+        return;
+    }
     let Some(car) = active(cars.iter_mut(), &chosen) else {
         return;
     };
@@ -106,8 +110,12 @@ pub fn notice_placing(
 pub fn note_step(
     mut prediction: ResMut<Prediction>,
     (step, chosen): (Res<StepInput>, Res<ActiveCar>),
+    spectating: Option<Res<Spectating>>,
     mut cars: Query<&mut Car>,
 ) {
+    if spectating.is_some_and(|s| s.0.is_some()) {
+        return;
+    }
     let Some(car) = active(cars.iter_mut(), &chosen) else {
         return;
     };
@@ -124,11 +132,12 @@ pub fn note_step(
 
 /// Takes up the server's latest state of our car if it differs from ours for its step,
 /// driving the steps since again. Not while nobody's at the wheel (our game changes the
-/// car then, and tells the server), unless the server moved it.
+/// car then, and tells the server), unless the server moved it. While the server has the
+/// car, only notes that (and what it says about it).
 pub fn reconcile(
     mut prediction: ResMut<Prediction>,
     connection: Res<Connection>,
-    (step, chosen, rule): (Res<StepInput>, Res<ActiveCar>, Option<Res<ResetRule>>),
+    (step, chosen, mut spectating): (Res<StepInput>, Res<ActiveCar>, Option<ResMut<Spectating>>),
     terrain: Res<Terrain>,
     time: Res<Time<Real>>,
     mut correction: Option<ResMut<Correction>>,
@@ -140,6 +149,15 @@ pub fn reconcile(
         return;
     };
     if !matches!(connection.status, Status::Joined { .. }) {
+        return;
+    }
+    if let Some(spectating) = spectating.as_deref_mut()
+        && spectating.0 != yours.notice
+    {
+        spectating.0.clone_from(&yours.notice);
+    }
+    if yours.notice.is_some() {
+        prediction.history.clear();
         return;
     }
     let moved = yours.moved != prediction.moved;
@@ -158,7 +176,6 @@ pub fn reconcile(
     let Some(mut car) = active(cars.iter_mut(), &chosen) else {
         return;
     };
-    let rule = rule.as_deref().copied().unwrap_or_default();
     let (was, turned) = (car.body.position, car.body.rotation);
     if !snapshot::load(&mut *car, &yours.state) {
         // (A car the server moved that we haven't got yet, a lent one: again with its next
@@ -181,9 +198,8 @@ pub fn reconcile(
     };
     prediction.history[i].2 = yours.state;
     for (_, input, kept) in prediction.history.iter_mut().skip(i + 1) {
-        car.steer(input, rule, &terrain, STEP);
+        car.drive(input, STEP);
         step_car(&mut car, &terrain, STEP);
-        fly(&mut car, &terrain, STEP);
         *kept = snapshot::save(&*car);
     }
     prediction.end = prediction.history.back().map(|(.., state)| state.clone());

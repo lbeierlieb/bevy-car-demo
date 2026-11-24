@@ -1118,7 +1118,7 @@ fn update_engine(
     cars: Query<(&Car, &Looks, &Motion, &GlobalTransform)>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     chase: Query<&ChaseCamera>,
-    engine: Res<EngineAudio>,
+    (engine, spectating): (Res<EngineAudio>, Option<Res<crate::car::Spectating>>),
     listening: Res<Listening>,
 ) {
     let Some((_, looks, motion, transform)) = cars.iter().find(|(car, ..)| car.index == active.0)
@@ -1128,7 +1128,9 @@ fn update_engine(
         engine.targets.set(rpm, load, 0.0);
         return;
     };
-    let volume = if engine.hushed { 0.0 } else { sound.master() };
+    // (While the server has our car, it's heard as the server sends it, like any other.)
+    let away = engine.hushed || spectating.is_some_and(|s| s.0.is_some());
+    let volume = if away { 0.0 } else { sound.master() };
     engine.targets.hear(&looks.engine, &motion.engine, volume);
     // From the driver's seat the road's reflection keeps its delay from outside (the
     // cabin fades it with the rest): dropping it at once clicked.

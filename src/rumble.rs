@@ -8,7 +8,7 @@ use bevy::input::gamepad::{GamepadRumbleIntensity, GamepadRumbleRequest};
 use bevy::prelude::*;
 
 use crate::audio::effects::CrashGate;
-use crate::car::{ActiveCar, Away, Held, Rescued};
+use crate::car::{ActiveCar, Away, Held, Spectating};
 use crate::input::{Input, WheelConfig};
 use crate::wheel_base::ForceFeedback;
 
@@ -44,7 +44,7 @@ fn rumble(
     config: Res<WheelConfig>,
     ffb: Option<Res<ForceFeedback>>,
     active: Res<ActiveCar>,
-    (away, held, rescued): (Res<Away>, Res<Held>, Res<Rescued>),
+    (away, held, spectating): (Res<Away>, Res<Held>, Res<Spectating>),
     cars: Query<&crate::car::Car>,
     gamepads: Query<(Entity, &Name), With<Gamepad>>,
     mut requests: MessageWriter<GamepadRumbleRequest>,
@@ -53,7 +53,7 @@ fn rumble(
     let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return;
     };
-    let quiet = away.0 || held.0 || rescued.0;
+    let quiet = away.0 || held.0 || spectating.0.is_some();
     let Some(strength) = gate.hit(car.knocks, time.delta_secs()).filter(|_| !quiet) else {
         return;
     };

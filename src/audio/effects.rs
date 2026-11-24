@@ -33,7 +33,7 @@ use bevy::audio::{AddAudioSource, ChannelCount, Decodable, SampleRate, Source};
 use bevy::prelude::*;
 
 use super::{EngineAudio, Resonator, SAMPLE_RATE, pan, read, store};
-use crate::car::{ActiveCar, Car, Rescued, ReverseRefused};
+use crate::car::{ActiveCar, Car, ReverseRefused, Spectating};
 use crate::physics::surface::Surface;
 
 /// The squeal's pitch (Hz) at the peak slip, its overtones (times the pitch, gain) and
@@ -382,7 +382,7 @@ fn cue(
     engine: Res<EngineAudio>,
     sound: Res<super::SoundSettings>,
     active: Res<ActiveCar>,
-    rescued: Res<Rescued>,
+    spectating: Res<Spectating>,
     mut cars: Query<(&mut Car, &GlobalTransform)>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     mut refused: MessageReader<ReverseRefused>,
@@ -405,7 +405,7 @@ fn cue(
         car.knocks = 0.0;
     }
     let car = cars.iter().find(|(car, _)| car.index == active.0);
-    let (Some((car, transform)), false, false) = (car, quiet, rescued.0) else {
+    let (Some((car, transform)), false, false) = (car, quiet, spectating.0.is_some()) else {
         for wheel in 0..4 {
             cues.set_squeal(wheel, 0.0, 1.0, 0.0);
         }

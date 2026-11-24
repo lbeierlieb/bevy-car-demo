@@ -15,7 +15,7 @@ use super::kit::{self, Panel, rank};
 use super::nav::{MenuInput, MenuSet};
 use super::{Display, SIZES};
 use crate::audio::SoundSettings;
-use crate::car::{ActiveCar, Away, Car, DriverAids, ResetRule};
+use crate::car::{ActiveCar, Away, Car, DriverAids, Spectating};
 use crate::graphics::{
     Antialiasing, DAY_LENGTHS, FRAME_CAPS, Graphics, RESOLUTIONS, Shadows, TimeOfDay, ViewDistance,
 };
@@ -198,7 +198,7 @@ fn follow_guide(mut menu: ResMut<CentralMenu>, mut capture: ResMut<Capture>) {
 struct Driving<'w, 's> {
     active: Res<'w, ActiveCar>,
     cars: Query<'w, 's, &'static Car>,
-    rule: Option<Res<'w, ResetRule>>,
+    spectating: Option<Res<'w, Spectating>>,
     away: Res<'w, Away>,
     presses: ResMut<'w, MenuPresses>,
 }
@@ -404,12 +404,10 @@ fn actions(ui: &mut egui::Ui, menu: &mut CentralMenu, driving: &mut Driving, con
         .cars
         .iter()
         .find(|car| car.index == driving.active.0);
-    let can_reset = car.is_some_and(|car| !car.rescue.busy())
+    // (Whether R does anything here is the server's call: the event's rules.)
+    let can_reset = car.is_some()
         && !driving.away.0
-        && driving
-            .rule
-            .as_deref()
-            .is_some_and(|rule| *rule != ResetRule::Never);
+        && (driving.spectating.as_deref()).is_none_or(|s| s.0.is_none());
     let reset = ui
         .add_enabled_ui(can_reset, |ui| {
             kit::button_with(

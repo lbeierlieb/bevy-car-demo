@@ -51,7 +51,10 @@ impl Plugin for SimPlugin {
     }
 }
 
-pub fn simulate(terrain: Res<Terrain>, mut cars: Query<&mut Car>) {
+pub fn simulate(
+    terrain: Res<Terrain>,
+    mut cars: Query<&mut Car, Without<crate::car::ServerDriven>>,
+) {
     let dt = STEP;
     let before: Vec<Vec3> = cars.iter().map(|car| car.body.position).collect();
     for mut car in &mut cars {

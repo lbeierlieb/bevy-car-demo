@@ -3,7 +3,6 @@
 use bevy::prelude::*;
 
 use crate::chassis::{CLUTCHES, CarBuild, Chassis, DEFAULT_CHASSIS, SUSPENSIONS};
-use crate::heli::rescue::Rescue;
 use crate::input::WheelInput;
 use crate::net::wire::{Reader, Wire, decode, encode};
 use crate::physics::collision::Obb;
@@ -346,8 +345,6 @@ pub struct Car {
     /// The ignition button switched the engine off and is still held (it doesn't crank
     /// until let go).
     pub switching_off: bool,
-    /// The rescue helicopter coming for the car, carrying it or flying off.
-    pub rescue: Rescue,
     /// How long the car is held still yet (s): at an event's start, set where it's put
     /// (a hunter for the head start, racers for the countdown). The brakes are on whatever
     /// the driver does (the engine still revs).
@@ -395,7 +392,6 @@ impl Car {
             knocks: 0.0,
             parking_brake: true,
             switching_off: false,
-            rescue: Rescue::default(),
             hold: 0.0,
         }
         .with_fuel_load()
@@ -446,9 +442,7 @@ impl Car {
         for (corner, old) in placed.corners.iter_mut().zip(&self.corners) {
             corner.tread = old.tread;
         }
-        // A rescue under way lets go; a hold goes on.
-        placed.rescue = self.rescue.clone();
-        placed.rescue.let_go();
+        // A hold goes on.
         placed.hold = self.hold;
         *self = placed;
     }
@@ -482,7 +476,6 @@ impl Car {
         car.fuel = self.fuel;
         car.fuel.fit(&car.setup.tank);
         car.load_fuel();
-        car.rescue = self.rescue.clone();
         car.hold = self.hold;
         car
     }
@@ -543,7 +536,6 @@ impl crate::snapshot::Snapshot for Car {
         self.fuel.save(out);
         self.parking_brake.save(out);
         self.switching_off.save(out);
-        self.rescue.save(out);
         self.hold.save(out);
     }
 
@@ -560,7 +552,6 @@ impl crate::snapshot::Snapshot for Car {
         self.fuel.load(r)?;
         self.parking_brake.load(r)?;
         self.switching_off.load(r)?;
-        self.rescue.load(r)?;
         self.hold.load(r)?;
         // What another build's state could hold that this one hasn't got.
         if !self.drivetrain.fits(&self.setup.engine) {
@@ -657,8 +648,7 @@ impl Plugin for CarPlugin {
             .add_message::<ReverseRefused>()
             .init_resource::<Away>()
             .init_resource::<Held>()
-            .init_resource::<Rescued>()
-            .init_resource::<ResetRule>()
+            .init_resource::<Spectating>()
             .init_resource::<Presses>()
             .init_resource::<StepInput>()
             .init_resource::<Correction>()
@@ -698,7 +688,7 @@ const KEY_STEER_RETURN_RATE: f32 = 2.5;
 #[derive(Message)]
 pub struct ReverseRefused;
 /// The driver is away from the wheel (in the dyno's room): the active car holds still,
-/// as any other car does, and R does nothing (a rescue under way lets go).
+/// as any other car does, and R does nothing.
 #[derive(Resource, Default)]
 pub struct Away(pub bool);
 
@@ -707,15 +697,20 @@ pub struct Away(pub bool);
 #[derive(Resource, Default)]
 pub struct Held(pub bool);
 
-/// The rescue helicopter is on its way to the active car or carrying it
-/// (`heli::rescue`, as of the last step): the driver's input does nothing (the brakes are
-/// on), and online the car is a ghost.
+/// The server has the active car (online: the rescue helicopter carrying it, say): what
+/// it says about that (shown over the road), while it does. Our game then neither drives
+/// nor simulates the car (`ServerDriven`), it only shows it where the server has it.
 #[derive(Resource, Default)]
-pub struct Rescued(pub bool);
+pub struct Spectating(pub Option<String>);
 
-/// What R does with the active car (in an event's round, its rules; the server works out
-/// the same for its copy of a player's car).
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+/// On the active car while the server has it (see `Spectating`): not simulated or driven
+/// here, it's shown where the server has it.
+#[derive(Component)]
+pub struct ServerDriven;
+
+/// What R does with a player's car (in an event's round, its rules): the server's
+/// business (`net::shadow`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum ResetRule {
     /// Has the rescue helicopter carry it to the nearest road.
     #[default]
@@ -935,13 +930,12 @@ pub fn take_input(
     input.input = taken;
 }
 
-/// The step's input drives the active car (R as `ResetRule` says); any other car holds
-/// all brakes.
+/// The step's input drives the active car; any other car holds all brakes. (R is for
+/// the server: it does nothing here.)
 pub fn drive(
     input: Res<StepInput>,
-    (active, rule): (Res<ActiveCar>, Res<ResetRule>),
-    terrain: Res<Terrain>,
-    mut cars: Query<&mut Car>,
+    active: Res<ActiveCar>,
+    mut cars: Query<&mut Car, Without<ServerDriven>>,
     mut refused: MessageWriter<ReverseRefused>,
 ) {
     let idle = DriverInput {
@@ -954,36 +948,13 @@ pub fn drive(
         } else {
             &idle
         };
-        if car.steer(input, *rule, &terrain, crate::sim::STEP) {
+        if car.drive(input, crate::sim::STEP) {
             refused.write(ReverseRefused);
         }
     }
 }
 
 impl Car {
-    /// The driver's `input` for a step of `dt`, R included: it calls the rescue
-    /// helicopter as `rule` says (to the nearest road, or a spot), unless one is under way
-    /// or nobody's at the wheel. Then as `drive`.
-    pub fn steer(
-        &mut self,
-        input: &DriverInput,
-        rule: ResetRule,
-        terrain: &Terrain,
-        dt: f32,
-    ) -> bool {
-        if input.reset && !input.away && !self.rescue.busy() {
-            match rule {
-                ResetRule::Road => {
-                    let (p, yaw) = self.road_spot(terrain);
-                    self.call_rescue(terrain, p, yaw);
-                }
-                ResetRule::Spot(p, yaw) => self.call_rescue(terrain, p, yaw),
-                ResetRule::Never => {}
-            }
-        }
-        self.drive(input, dt)
-    }
-
     /// The driver's `input` for a step of `dt` to the car's controls, by the car's rules:
     /// Q/E (or the paddles, or an H-shifter) change gear, the ignition button held runs
     /// the starter and pressed while running switches the engine off, keys steer
@@ -995,9 +966,6 @@ impl Car {
         let held = self.hold > 0.0;
         self.hold = (self.hold - dt).max(0.0);
         if input.away {
-            self.rescue.let_go();
-        }
-        if input.away || self.rescue.has_car() {
             self.controls = Controls {
                 brake: 1.0,
                 handbrake: 1.0,

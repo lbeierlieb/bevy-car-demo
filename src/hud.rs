@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Shape, Stroke, pos2, vec2};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
-use crate::car::{ActiveCar, Car, Rescued};
+use crate::car::{ActiveCar, Car, Spectating};
 use crate::menu::MEDIUM;
 use crate::physics::engine::damage::COOLANT_LIMIT;
 use crate::physics::tire::{AMBIENT, Compound, RIBS};
@@ -30,7 +30,7 @@ pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(EguiPrimaryContextPass, (hud, rescue_warning));
+        app.add_systems(EguiPrimaryContextPass, (hud, server_notice));
     }
 }
 
@@ -64,19 +64,23 @@ impl Needles {
     }
 }
 
-/// While the rescue helicopter has the car (`car::Rescued`: from the call until it's set
-/// down), a warning in the upper middle of the screen, its border pulsing.
-fn rescue_warning(
+/// While the server has the car (`car::Spectating`: the rescue helicopter carrying it),
+/// what it says about that in the upper middle of the screen (its first line large), the
+/// border pulsing.
+fn server_notice(
     mut contexts: EguiContexts,
-    rescued: Option<Res<Rescued>>,
+    spectating: Option<Res<Spectating>>,
     time: Res<Time>,
 ) -> Result {
-    if !rescued.is_some_and(|rescued| rescued.0) {
+    let Some(notice) = spectating.and_then(|s| s.0.clone()) else {
         return Ok(());
-    }
+    };
+    let mut lines = notice.lines();
+    let title = lines.next().unwrap_or_default();
+    let rest: Vec<&str> = lines.collect();
     let pulse = 0.5 + 0.5 * (time.elapsed_secs() * 5.0).sin();
     let border = Color32::from_rgb(255, (150.0 + 70.0 * pulse) as u8, 30);
-    egui::Area::new(egui::Id::new("rescue warning"))
+    egui::Area::new(egui::Id::new("server notice"))
         .anchor(Align2::CENTER_TOP, vec2(0.0, 150.0))
         .interactable(false)
         .show(contexts.ctx_mut()?, |ui| {
@@ -88,15 +92,17 @@ fn rescue_warning(
                 .show(ui, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.label(
-                            egui::RichText::new("⚠ You are being rescued ⚠")
+                            egui::RichText::new(title)
                                 .font(FontId::new(30.0, egui::FontFamily::Name(MEDIUM.into())))
                                 .color(Color32::WHITE),
                         );
-                        ui.label(
-                            egui::RichText::new("Please do not resist!")
-                                .font(FontId::new(22.0, egui::FontFamily::Name(MEDIUM.into())))
-                                .color(Color32::from_rgb(255, 225, 120)),
-                        );
+                        for line in &rest {
+                            ui.label(
+                                egui::RichText::new(*line)
+                                    .font(FontId::new(22.0, egui::FontFamily::Name(MEDIUM.into())))
+                                    .color(Color32::from_rgb(255, 225, 120)),
+                            );
+                        }
                     });
                 });
         });

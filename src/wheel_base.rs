@@ -207,7 +207,7 @@ fn force_feedback(
     config: Res<WheelConfig>,
     wheel: Res<WheelInput>,
     active: Res<ActiveCar>,
-    cars: Query<&Car>,
+    cars: Query<&Car, Without<crate::car::ServerDriven>>,
     windows: Query<&Window>,
     time: Res<Time>,
     mut ffb: ResMut<ForceFeedback>,

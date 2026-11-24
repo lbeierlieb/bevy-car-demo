@@ -22,7 +22,7 @@ use super::protocol::{
 };
 use super::wire::{decode, encode};
 use super::{ClockOffset, SEND_RATE};
-use crate::car::{ActiveCar, Car, DriverInput, Rescued, StepInput};
+use crate::car::{ActiveCar, Car, DriverInput, ServerDriven, Spectating, StepInput};
 use crate::events::Event;
 use crate::events::round::{Action, Round};
 use crate::heli::HeliPose;
@@ -99,6 +99,7 @@ impl Plugin for ClientPlugin {
                 dress_cars,
                 send,
                 (move_cars, remove_cars),
+                spectate,
             )
                 .chain()
                 .after(crate::looks::show_cars)
@@ -169,6 +170,8 @@ pub struct Connection {
     pub shops: Vec<Shop>,
     /// Where players start, as the server told.
     pub spawn: Spawn,
+    /// Our car's number, as the server told.
+    pub car: Option<CarId>,
     /// The events on the map, likewise.
     pub events: Vec<Event>,
     /// The event round we're in (its lobby or under way), as the server last told.
@@ -227,6 +230,7 @@ impl Connection {
             chat_on: false,
             shops: Vec::new(),
             spawn: Spawn::DEFAULT,
+            car: None,
             events: Vec::new(),
             round: None,
             busy: HashMap::new(),
@@ -356,9 +360,15 @@ fn receive(
             continue;
         };
         match message {
-            ToClient::Welcome { you, chat, spawn } => {
+            ToClient::Welcome {
+                you,
+                car,
+                chat,
+                spawn,
+            } => {
                 info!("Joined the server as player {you}");
                 connection.status = Status::Joined { you };
+                connection.car = Some(car);
                 connection.chat_on = chat;
                 connection.spawn = spawn;
             }
@@ -591,7 +601,7 @@ fn record_input(mut connection: ResMut<Connection>, input: Res<StepInput>) {
 fn take_check(
     mut connection: ResMut<Connection>,
     (active, step): (Res<ActiveCar>, Res<StepInput>),
-    cars: Query<&Car>,
+    cars: Query<&Car, Without<ServerDriven>>,
 ) {
     if step.step % CHECK_STEPS != 0 {
         return;
@@ -658,8 +668,62 @@ fn send(
             angular_velocity: car.body.angular_velocity,
             motion: *motion,
             ghost,
-            heli: car.rescue.pose(stamp),
+            heli: None,
         }));
+    }
+}
+
+/// While the server has our car (`Spectating`): it isn't driven or simulated here
+/// (`ServerDriven`), and it's hidden, following our car as the server sends it to everyone,
+/// which is drawn (and heard, helicopter and all) like any other car instead. Given back,
+/// ours is shown again and the server's copy hidden until it's gone.
+#[allow(clippy::type_complexity)]
+fn spectate(
+    mut commands: Commands,
+    connection: Res<Connection>,
+    spectating: Option<Res<Spectating>>,
+    active: Res<ActiveCar>,
+    mut cars: Query<(Entity, &mut Car, &mut Transform, Has<ServerDriven>)>,
+    remote: Query<(Entity, &RemoteCar, &Transform, Option<&Visibility>), Without<Car>>,
+) {
+    let on = spectating.is_some_and(|s| s.0.is_some());
+    let mut seen = None;
+    for (entity, car, transform, visibility) in &remote {
+        if Some(car.id) != connection.car {
+            continue;
+        }
+        let wanted = if on {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if visibility != Some(&wanted) {
+            commands.entity(entity).insert(wanted);
+        }
+        let velocity = car.latest().map_or(Vec3::ZERO, |state| state.velocity);
+        seen = Some((*transform, velocity));
+    }
+    for (entity, mut car, mut transform, driven) in &mut cars {
+        if car.index != active.0 {
+            continue;
+        }
+        if on && !driven {
+            commands
+                .entity(entity)
+                .insert((ServerDriven, Visibility::Hidden));
+        } else if !on && driven {
+            commands
+                .entity(entity)
+                .remove::<ServerDriven>()
+                .insert(Visibility::Inherited);
+        }
+        if on && let Some((at, velocity)) = seen {
+            car.body.position = at.translation;
+            car.body.rotation = at.rotation;
+            car.body.velocity = velocity;
+            car.body.angular_velocity = Vec3::ZERO;
+            *transform = at;
+        }
     }
 }
 
@@ -864,7 +928,7 @@ pub struct Touching(pub Vec<CarId>);
 fn haunt(
     mut commands: Commands,
     connection: Option<Res<Connection>>,
-    (wants, rescued): (Res<WantsGhost>, Option<Res<Rescued>>),
+    (wants, spectating): (Res<WantsGhost>, Option<Res<Spectating>>),
     active: Res<ActiveCar>,
     cars: Query<(Entity, &Car, Has<Ghost>)>,
     remote: Query<(&RemoteCar, &Looks)>,
@@ -884,7 +948,9 @@ fn haunt(
         };
         let wanted = joined
             && car.index == active.0
-            && (wants.0 || rescued.as_ref().is_some_and(|r| r.0) || (ghost && overlapping()));
+            && (wants.0
+                || spectating.as_ref().is_some_and(|s| s.0.is_some())
+                || (ghost && overlapping()));
         if wanted && !ghost {
             commands.entity(entity).insert(Ghost);
         } else if !wanted && ghost {
@@ -898,7 +964,7 @@ fn haunt(
 /// theirs, run into nothing.
 fn push_off_remote_cars(
     time: Res<Time>,
-    mut cars: Query<&mut Car, Without<Ghost>>,
+    mut cars: Query<&mut Car, (Without<Ghost>, Without<ServerDriven>)>,
     remote: Query<(&RemoteCar, &Looks), Without<Ghost>>,
     mut touching: ResMut<Touching>,
 ) {
