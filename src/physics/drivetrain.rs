@@ -243,6 +243,17 @@ impl EngineSetup {
     }
 }
 
+/// How hard an engine fires with its cylinders `fill`ed (see `Drivetrain::fill`): 0 at
+/// idle, 1 at full load without boost, more on boost.
+pub fn firing_load(fill: f32) -> f32 {
+    ((fill - 0.2) / 0.7).max(0.0)
+}
+
+/// How full the cylinders are when an engine fires at `load` (the other way round).
+pub fn fill_for(load: f32) -> f32 {
+    0.2 + 0.7 * load
+}
+
 #[derive(Clone, Debug)]
 pub struct Drivetrain {
     pub rpm: f32,
@@ -263,6 +274,9 @@ pub struct Drivetrain {
     pub engine: Engine,
     /// How hard the engine fired in the last step (0 at idle or cut, 1 at full load).
     pub load: f32,
+    /// How full the cylinders were in the last step: air per cycle relative to filling
+    /// the displacement at ambient (above 1 on boost; 0 when not firing).
+    pub fill: f32,
     /// Clutch pedal travel (0 released, 1 pressed) in the last step, if there's a pedal.
     clutch_pedal: Option<f32>,
     /// Engine minus wheel rpm through the pedal clutch in the last step, while slipping.
@@ -301,6 +315,7 @@ impl Drivetrain {
             locked: false,
             engine: Engine::default(),
             load: 0.0,
+            fill: 0.0,
             clutch_pedal: None,
             slip: 0.0,
             grinding: None,
@@ -489,11 +504,12 @@ impl Drivetrain {
         self.engine
             .step(build, throttle_plate(throttle), self.rpm, firing, dt);
         let cycle = self.engine.cycle(build, self.rpm);
-        self.load = if firing && cycle.indicated > 0.0 {
-            ((cycle.load - 0.2) / 0.7).clamp(0.0, 1.0)
+        self.fill = if firing && cycle.indicated > 0.0 {
+            cycle.load
         } else {
             0.0
         };
+        self.load = firing_load(self.fill).min(1.0);
         let wheel_rpm = wheel_omega * ratio * RPM;
         let state = self.engine;
         let starter = move |rpm: f32| {

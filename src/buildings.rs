@@ -25,6 +25,14 @@ const ROOFS: [[f32; 4]; 4] = [
     [0.25, 0.25, 0.28, 1.0],
 ];
 const FLAT_ROOF: [f32; 4] = [0.42, 0.42, 0.44, 1.0];
+/// Window glass, unlit by day.
+const GLASS: [f32; 4] = [0.05, 0.06, 0.08, 1.0];
+/// Windows: width and height, sill above the storey's floor, spacing along a wall (m),
+/// and how many in a hundred are lit at night.
+const WINDOW: Vec2 = Vec2::new(1.0, 1.2);
+const SILL: f32 = 0.9;
+const WINDOW_SPACING: f32 = 3.2;
+const LIT: u32 = 40;
 
 /// The OSM buildings, indexed by the chunk their outline starts in.
 pub struct Buildings {
@@ -40,11 +48,12 @@ impl Buildings {
         Self { by_chunk }
     }
 
-    /// The houses of one chunk.
-    pub fn mesh(&self, terrain: &Terrain, index: usize, mesh: &mut FlatMesh) {
+    /// The houses of one chunk, and their windows that are lit at night (the others are
+    /// in `mesh`).
+    pub fn mesh(&self, terrain: &Terrain, index: usize, mesh: &mut FlatMesh, lit: &mut FlatMesh) {
         for &i in &self.by_chunk[index] {
             let building = &terrain.buildings[i];
-            house(mesh, terrain, building.levels, &building.outline, i);
+            house(mesh, lit, terrain, building.levels, &building.outline, i);
         }
     }
 }
@@ -104,6 +113,7 @@ pub struct Shell {
     pub footprint: Footprint,
     pub bottom: f32,
     pub top: f32,
+    pub storeys: f32,
 }
 
 impl Shell {
@@ -125,6 +135,7 @@ impl Shell {
             footprint,
             bottom,
             top,
+            storeys,
         })
     }
 
@@ -138,7 +149,14 @@ impl Shell {
     }
 }
 
-fn house(mesh: &mut FlatMesh, terrain: &Terrain, levels: f32, outline: &[Vec2], index: usize) {
+fn house(
+    mesh: &mut FlatMesh,
+    lit: &mut FlatMesh,
+    terrain: &Terrain,
+    levels: f32,
+    outline: &[Vec2],
+    index: usize,
+) {
     let Some(shell) = Shell::of(terrain, levels, outline) else {
         return;
     };
@@ -146,6 +164,7 @@ fn house(mesh: &mut FlatMesh, terrain: &Terrain, levels: f32, outline: &[Vec2], 
         footprint,
         bottom,
         top,
+        storeys,
     } = &shell;
     let (bottom, top) = (*bottom, *top);
     let Footprint {
@@ -156,6 +175,44 @@ fn house(mesh: &mut FlatMesh, terrain: &Terrain, levels: f32, outline: &[Vec2], 
     } = *footprint;
     let corners = footprint.corners();
     let at = |c: Vec2, y: f32| Vec3::new(c.x, y, c.y);
+
+    // Windows: a row per storey along every wall long enough, standing 3 cm off it, some
+    // lit at night (by a hash, so the same ones every time).
+    if footprint.area() >= SHED_AREA {
+        let floor = top - 0.3 - storeys * STOREY;
+        for k in 0..4 {
+            let (c0, c1) = (corners[k], corners[(k + 1) % 4]);
+            let length = c0.distance(c1);
+            let count = ((length - 1.0) / WINDOW_SPACING).floor().max(0.0) as u32;
+            let along = (c1 - c0) / length;
+            let out = ((c0 + c1) / 2.0 - center).normalize_or_zero();
+            let half = along * WINDOW.x / 2.0;
+            for storey in 0..*storeys as u32 {
+                let sill = floor + storey as f32 * STOREY + SILL;
+                for i in 0..count {
+                    let c = c0 + along * length * (i as f32 + 0.5) / count as f32 + out * 0.03;
+                    let [a, b, d, e] = [
+                        at(c - half, sill),
+                        at(c + half, sill),
+                        at(c + half, sill + WINDOW.y),
+                        at(c - half, sill + WINDOW.y),
+                    ];
+                    let seed = (index as u32)
+                        .wrapping_mul(2_654_435_761)
+                        .wrapping_add(k as u32 * 97 + storey * 31 + i)
+                        .wrapping_mul(2_246_822_519);
+                    let target = if (seed >> 7) % 100 < LIT {
+                        &mut *lit
+                    } else {
+                        &mut *mesh
+                    };
+                    let outward = out.extend(0.0).xzy();
+                    target.facing([a, b, d], GLASS, outward);
+                    target.facing([a, d, e], GLASS, outward);
+                }
+            }
+        }
+    }
 
     let wall = WALLS[index % WALLS.len()];
     let middle = at(center, (bottom + top) / 2.0);

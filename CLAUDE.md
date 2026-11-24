@@ -139,7 +139,11 @@ As built (`src/menu/`):
   rest, opposite `full`; `Profile::labels` adds "up"/"down" then). Only the profile in use drives (`read_wheel` turns all of it into
   `WheelInput`; `drive`, the camera, reset and the map read only that). Steering by keys
   or buttons is `Action::SteerLeft`/`SteerRight` (rate-limited as the keys were), by an
-  axis `Action::Steer`. Fixed, never bindable: Esc (menu), H, T, 1, 2, F11, and the
+  axis `Action::Steer`. Looking around by a stick (asked for by the user, 2026-11-24):
+  `Action::LookSide`/`LookUp`, whole axes like steering (`Action::whole_axis`; bound by
+  pushing left/up, no keys), `WheelInput::look` (dead zone `LOOK_DEADZONE`); the camera
+  adds the smoothed push to the mouse's look (driver: head turn up to 2.2 rad; chase:
+  swings round the car up to π), back to the front when let go. Fixed, never bindable: Esc (menu), H, T, 1, 2, F11, and the
   menus' arrows/Enter. `wheel.cfg`: `active N`, `profile N name`, then its `bind` lines
   (`key:KeyW`, `axis:…`, `button:…`); a file from before has its bindings put in profile
   2 ("Wheel"), in use. While a key is bound (and the frame after), egui gets no key
@@ -816,9 +820,19 @@ and plays force feedback, both through hid-fanatecff on Linux.
   taking a constant force): any other steering axis, a pad's stick, covers the game's
   (it snapped to full lock at a small push with the base plugged in, 2026-11-24), on a
   curve. **Curves** (asked for by the user, 2026-11-24): each control profile has
-  `input::Curves` for steering, gas and brake (`input::curve`: |push|^exponent; defaults
-  1.8, 1.2, 1.5; `curves s g b` after the `profile` line in `wheel.cfg`; sliders under
-  Controls, Curves). Always applied, no guessing what's a stick (triggers report as
+  `input::Curves` for steering, gas and brake. Drawn curves since 2026-11-24 (asked for
+  by the user, like a MIDI controller's): `input::Curve` is 2–9 points (ends at push 0
+  and 1, any height), joined by a monotone cubic (Fritsch–Carlson, no overshoot) and
+  baked into a 257-entry table whenever the points change, so `Curve::at` is a lookup
+  and a lerp. `input::Preset`s: Linear, Gentle (^1.25, gas default), Progressive (^1.5,
+  brake default), Stick (^1.8, steering default), Precise (^2.6), Smooth (S), Quick.
+  `wheel.cfg`: `curve steer|throttle|brake x,y x,y …` after the `profile` line; an
+  older `curves s g b` (exponents) or `stick_curve` becomes `Curve::power` (five
+  points). The menu: Controls, Bindings, Curves, a screen per curve
+  (`menu::curve::editor`): the graph with the control's push now (`input::push_value`),
+  left/right pick a point, choose grabs it, arrows move it, choose keeps, back puts it
+  back (`CentralMenu::grabbed`/`cancel_grab`); the mouse drags, double-click adds,
+  right-click removes; rows for the preset, adding and removing points. Always applied, no guessing what's a stick (triggers report as
   buttons 0..1 or axes -1..1, some pedals share one axis): a wheel profile sets them to 1;
   the steering's never applies to the force feedback wheel's axis. A pre-profile file's
   "Wheel" profile is linear; an older global `stick_curve` goes into every profile.
@@ -1410,7 +1424,7 @@ draw at the nicest): `Graphics` (`graphics.cfg`) with shadows (off; low: 1 casca
 1024², 60 m; high: 4 cascades (WebGL 2 has only the first), 2048², 120 m), antialiasing
 (off, FXAA, MSAA 4×), view distance (near: fog 120–320 m; far: 180–480 m; `scenery`
 loads chunks to the fog's end + 80 m and drops them past + 180 m), render resolution
-(50/75/100 %), and natively vsync and a frame rate limit (a sleep in `Last`). Defaults:
+(50/75/100 %), post-processing and the time of day, and natively vsync and a frame rate limit (a sleep in `Last`). Defaults:
 web low/FXAA/near/75 % on a display with a scale factor ≥ 1.5 (else 100; settled once
 the window is known), native high/MSAA/far/100 %. No presets (the user's wish). All
 apply live.
@@ -1423,6 +1437,37 @@ apply live.
   would be lost, and shapes in the background layer draw in the order added). At 100 %
   the shot is pixel for pixel the same as rendering to the window. Not tried in a
   browser yet.
+- Post-processing (asked for by the user, 2026-11-24): `src/grade.rs` (`GradePlugin`,
+  added by `GraphicsPlugin`), a colour grade as bevy's `FullscreenMaterial` (one
+  full-screen pass, `src/shaders/grade.wesl`, embedded as
+  `embedded://car_sim/shaders/grade.wesl`): exposure/tint, the sky (bright pixels high
+  on screen) held down, saturation, black crush, S-curve, split toning (teal shadows,
+  warm highlights), shadow lift, vignette, grain, colour fringes at the corners. The day
+  is graded like a modern Bond film (asked for by the user, 2026-11-24). Settings
+  `post on|off` (default on natively, off on the web), `time day|dusk|night|cycle`
+  (`TimeOfDay`, default cycle) and `day_length` (minutes, `DAY_LENGTHS`, default 24).
+  A `grade::Look` per time of day (DAWN, DAY, DUSK, NIGHT) is the grade plus the sun's
+  colour/strength and the ambient light's (shares of `grade::SUN`, `AMBIENT`); the cycle
+  (`grade::Clock`, 0 sunrise, 0.25 noon, 0.5 sunset, 0.75 midnight, starting at 0.12)
+  blends them; a look also tints the sky dome (`sky::SkyMaterial`), the fog and the
+  clear colour (`Look::sky`). Night is made by the light (sun 7 %, dim blue ambient,
+  dark blue sky and fog); its grade only cools it, so lamps keep their colour. With
+  post-processing the camera is HDR with `Bloom` (0.04 by day + 0.2 × darkness) and the
+  grade runs after tonemapping, before FXAA (`schedule_configs`). "Day and night"
+  (`day_night on|off`, asked for by the user, 2026-11-24) off: always day, still graded.
+  With post-processing off the lights are the plain day's, LDR, no bloom; in a shop's
+  scene (`car::Away`) it's always day. The clock is local, not shared online. Uniform
+  fields are `Vec4`s (WebGL 2 padding). The sun's direction doesn't move.
+- Night lights (`src/night.rs`, 2026-11-24; local and cosmetic, asked for by the user:
+  nothing sent, every car's lamps on at night): `grade::Darkness` (0 day … 1 night, from
+  the sun's share) scales the emissive of `night::Glow` (head and tail lens materials,
+  shared) and `scenery::WindowGlow`. `Body::lamps` makes per-chassis lens meshes a
+  little proud of the body's lamps (head lamps: `Tone::Lamp` in the front half; the
+  tail's `Lamp` is the number plate), drawn as children of each car's body (not on
+  ghosts). Houses have windows (`buildings.rs`: 1 × 1.2 m every 3.2 m per storey, 3 cm
+  off the wall, unlit ones dark glass in the objects mesh, 40 % by hash in a chunk mesh
+  of their own with the glowing material). Our car (`car::Car`) has two `SpotLight`s
+  at its head lamps (no shadows), hidden by day.
 
 ## Sky
 
@@ -1480,6 +1525,53 @@ motor's hum, brush noise; each compression dips its speed and swells it; the sol
 clunks in and the pinion clacks out; let go or overrun, it spins down over ~0.5 s).
 `write_effects_wav` (ignored, `EFFECTS_WAV=path`) renders
 them all to listen to. Not done: other cars' squeal and crashes (`Motion` has no slip), tuned by ear.
+
+Listening to the engines offline (2026-11-24, for reworking the engine sound):
+`ENGINE_WAV=dir ENGINES=M50,B16 cargo test --profile release-dev write_engine_wavs --
+--ignored --nocapture` renders each factory engine (all without `ENGINES`) to
+`dir/<code>.wav` (23 s, ~2 s for all 22): idle, three blips, a full-throttle pull from
+2000 rpm to the redline, lifting off, a cruise, then a pass-by at 90 km/h from 8 m
+(the remote-car path: mono, low-pass, pan, Doppler). Raw levels, the same program
+every time, so renders before and after a change can be compared. First render: nothing
+clips, and the V8s (RMS 0.155) are quieter than the 1-litre three (0.19): nothing in
+the level grows with displacement. Since then (with the user listening): the pulse
+lasts a crank angle (20° up, 70° down), each cylinder has a fixed strength and lateness
+(`CYLINDERS`: the lope), and the pulse runs through three pipes as delay lines (`Tube`:
+header, front pipe, tailpipe; inverted reflections from the muffling, losses above
+`PIPE_LOSS`) before the old broad resonances, so harmonics swell and fade 4–7 dB over a
+pull (was ~2). Upper harmonics: the pulse's front sharpens with load (20° to 4°, starting
+with a kink), and what's above 1 kHz bypasses the broad resonances (`BRIGHT`, set by the
+muffling; the stock exhaust counts as ~0.89 muffled): the V8 falls ~4–6 dB per octave of
+orders at 5000 rpm (was ~10). Tried and dropped: steepening in the header as a
+pressure-dependent delay (skipped samples lost the pulse's peak: −2–3 dB in the pull). Tire squeal at half its level, swelling over 0.25 s (scuff first, the tone over it).
+**Inside and outside** (`audio/paths.rs`): outside, the road's reflection of the exhaust
+(`ground_delay` from the car's and the camera's places: ~0.6 ms behind our car, sweeping as
+a car passes), scaled so the lows keep their level; from the driver's view (`ChaseCamera::
+driver`) every car sound but the race's trumpet goes through `Cabin` (body transmission
+two-pole at 450 Hz plus a 15 % leak, three cabin modes 72/118/155 Hz, four early
+reflections per ear, narrow stereo), crossfading over 0.3 s on an S-curve (our road reflection keeps its delay inside: dropping it clicked; the render writes `<code>-switch.wav`). Each car its own cabin
+(`CabinShape::of`, asked for by the user, 2026-11-24): modes from the cabin outline's run,
+the body's width and the roof over the floor; how much comes through and how bright from
+`Chassis::insulation` (a constant per body, 0 stripped or open to 1 the saloon) and the
+engine's distance from the eyes (the mid-engined cars and the V12 supercar brightest);
+open cars (cabin outline of two points or none) get a third of the cabin. One
+`paths::Listener` (inside or not, the cabin) shared by every synth (`Listening`
+resource). Synthetic (no recorded IR).
+**Loudness from the gas** (branch `engine-gas-flow`, protocol 17, tried by the user before
+merging, 2026-11-24): each pulse's strength is the gas a firing pushes out, displacement
+per cylinder (`EngineCharacter::displacement`, in `Looks`) × how full it got
+(`Drivetrain::fill`, air per cycle over the displacement, above 1 on boost; sent as
+`EngineRun::fill` in `load`'s old slot, so no extra bytes per snapshot; the 0–1 tone load
+is `drivetrain::firing_load(fill)` on the receiver; traffic and the showroom send
+`fill_for(load)`). The factor making fewer cylinders louder is gone; `CYLINDER` (0.5 L at
+full fill = strength 1) leaves the big engines room under the limiter. A-weighted at full
+throttle: three −27.5 dB, 1.6 four −24.2, V8 −22.6/−21.3, V10/V12 −20 (the V12 was 2.4 dB
+under the 1.6 before); the whole game ~4 dB quieter. The render writes `<code>-inside.wav`
+too. Idle is ~4 dB louder inside (the boom), a V12's pull 5 dB quieter (its energy is
+where the body blocks). Measured from the renders with numpy (order levels over the pull, envelope
+modulation at half orders); the user judges by ear. Not done: displacement in the level
+(needs it in `EngineCharacter`: protocol bump), the road reflection outside, the cabin
+inside, the whistle (now ~34 dB under the exhaust at 4000 rpm) never tuned.
 
 The engine sound goes through bevy_audio, which can't set the output buffer size. An
 attempt to open the output with rodio/cpal directly (fixed 4096-frame buffer against

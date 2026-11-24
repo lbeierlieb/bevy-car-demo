@@ -7,6 +7,9 @@
 //! else (`Backdrop`), so the menus stay sharp. The image's scale factor keeps the 3D
 //! camera's logical size the window's, so `world_to_viewport` gives window points.
 //!
+//! Post-processing (`grade`): a colour grade for the time of day, which can be switched
+//! off (one full-screen pass, for slow GPUs and some browsers).
+//!
 //! The web starts on the quick settings, native on the nice ones. Only the
 //! driving apps have them; the editors always draw at the nicest.
 
@@ -32,6 +35,7 @@ impl Plugin for GraphicsPlugin {
                 auto_create_primary_context: false,
                 ..default()
             })
+            .add_plugins(crate::grade::GradePlugin)
             .add_systems(Startup, setup)
             .add_systems(Update, (settle_resolution, size_view).chain())
             .add_systems(PostUpdate, (apply, save));
@@ -85,6 +89,41 @@ impl ViewDistance {
     }
 }
 
+/// The colour grade's time of day (only with post-processing on).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TimeOfDay {
+    Day,
+    Dusk,
+    Night,
+    /// Dawn, day, dusk and night in turn, blended, a day in `Graphics::day_minutes`.
+    Cycle,
+}
+
+impl TimeOfDay {
+    pub const ALL: [Self; 4] = [Self::Day, Self::Dusk, Self::Night, Self::Cycle];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Day => "Day",
+            Self::Dusk => "Dusk",
+            Self::Night => "Night",
+            Self::Cycle => "Cycle",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Dusk => "dusk",
+            Self::Night => "night",
+            Self::Cycle => "cycle",
+        }
+    }
+}
+
+/// The lengths of a day in the cycle offered (minutes).
+pub const DAY_LENGTHS: [u32; 5] = [4, 12, 24, 48, 96];
+
 /// The frame rate limits offered (frames per second; none: as fast as it goes).
 pub const FRAME_CAPS: [Option<u32>; 6] = [None, Some(30), Some(60), Some(90), Some(120), Some(144)];
 
@@ -104,6 +143,13 @@ pub struct Graphics {
     pub vsync: bool,
     /// Native only: at most this many frames per second.
     pub frame_cap: Option<u32>,
+    /// The colour grade pass (`grade`).
+    pub post: bool,
+    /// Whether the time of day changes the picture and the lights (off: always day).
+    pub day_night: bool,
+    pub time_of_day: TimeOfDay,
+    /// How long a day of the cycle takes (minutes).
+    pub day_minutes: u32,
 }
 
 impl Default for Graphics {
@@ -115,6 +161,7 @@ impl Default for Graphics {
                 antialiasing: Antialiasing::Fxaa,
                 view: ViewDistance::Near,
                 resolution: None,
+                post: false,
                 ..Self::NICEST
             }
         } else {
@@ -132,6 +179,10 @@ impl Graphics {
         resolution: Some(100),
         vsync: true,
         frame_cap: None,
+        post: true,
+        day_night: true,
+        time_of_day: TimeOfDay::Cycle,
+        day_minutes: 24,
     };
 
     fn load() -> Self {
@@ -159,6 +210,22 @@ impl Graphics {
                         && RESOLUTIONS.contains(&percent)
                     {
                         graphics.resolution = Some(percent);
+                    }
+                }
+                ("post", "on") => graphics.post = true,
+                ("post", "off") => graphics.post = false,
+                ("day_night", "on") => graphics.day_night = true,
+                ("day_night", "off") => graphics.day_night = false,
+                ("time", key) => {
+                    if let Some(&time) = TimeOfDay::ALL.iter().find(|t| t.key() == key) {
+                        graphics.time_of_day = time;
+                    }
+                }
+                ("day_length", minutes) => {
+                    if let Ok(minutes) = minutes.parse()
+                        && DAY_LENGTHS.contains(&minutes)
+                    {
+                        graphics.day_minutes = minutes;
                     }
                 }
                 ("vsync", "on") => graphics.vsync = true,
@@ -193,13 +260,18 @@ impl Graphics {
             ViewDistance::Far => "far",
         };
         let vsync = if self.vsync { "on" } else { "off" };
+        let post = if self.post { "on" } else { "off" };
+        let time = self.time_of_day.key();
+        let day_night = if self.day_night { "on" } else { "off" };
+        let day = self.day_minutes;
         let cap = self.frame_cap.map_or("off".into(), |fps| fps.to_string());
         let resolution = self
             .resolution
             .map_or(String::new(), |p| format!("resolution {p}\n"));
         format!(
             "shadows {shadows}\nantialiasing {antialiasing}\nview {view}\n{resolution}\
-             vsync {vsync}\nframe_cap {cap}\n"
+             vsync {vsync}\nframe_cap {cap}\npost {post}\nday_night {day_night}\n\
+             time {time}\nday_length {day}\n"
         )
     }
 }
@@ -464,6 +536,10 @@ mod tests {
             vsync: false,
             resolution: Some(75),
             frame_cap: Some(60),
+            post: false,
+            day_night: false,
+            time_of_day: TimeOfDay::Night,
+            day_minutes: 48,
         };
         assert_eq!(Graphics::parse(&graphics.text()), graphics);
         assert_eq!(Graphics::parse(&Graphics::NICEST.text()), Graphics::NICEST);

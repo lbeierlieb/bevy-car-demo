@@ -1,7 +1,9 @@
 //! Camera on the active car: a chase view (drag with the left mouse button to orbit, scroll
 //! to zoom) and a driver's view from the seat (drag to look around). C switches views,
 //! facing forward again (the chase view keeps its zoom); B (or the wheel's look-back
-//! button) held looks backwards in either.
+//! button) held looks backwards in either. A stick bound to looking around turns the head
+//! (or swings the chase camera round the car) as far as it's pushed, on top of the mouse's,
+//! and lets it come back to the front when let go.
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
@@ -30,6 +32,17 @@ const DRIVER_FOV: f32 = 0.95;
 const DRIVER_PITCH: f32 = -0.08;
 /// The chase view's default height angle.
 const CHASE_PITCH: f32 = 0.3;
+/// How far a look stick pushed all the way turns the head (radians): to the side, up
+/// and down.
+const STICK_YAW: f32 = 2.2;
+const STICK_UP: f32 = 0.6;
+const STICK_DOWN: f32 = 0.7;
+/// How far it swings the chase camera round the car (all the way to the front) and up
+/// or down.
+const STICK_ORBIT: f32 = std::f32::consts::PI;
+const STICK_PITCH: f32 = 0.6;
+/// How quickly the view follows the stick (1/s): a little smoothing, so a flick doesn't jerk.
+const STICK_RATE: f32 = 12.0;
 
 #[derive(Component)]
 pub struct ChaseCamera {
@@ -44,6 +57,8 @@ pub struct ChaseCamera {
     look_pitch: f32,
     /// Looking backwards (held).
     back: bool,
+    /// The look stick's push, smoothed.
+    stick: Vec2,
 }
 
 impl Default for ChaseCamera {
@@ -57,6 +72,7 @@ impl Default for ChaseCamera {
             look_yaw: 0.0,
             look_pitch: DRIVER_PITCH,
             back: false,
+            stick: Vec2::ZERO,
         }
     }
 }
@@ -77,10 +93,16 @@ impl ChaseCamera {
     }
 }
 
-fn switch_view(wheel: Res<WheelInput>, mut cameras: Query<(&mut ChaseCamera, &mut Projection)>) {
+fn switch_view(
+    time: Res<Time>,
+    wheel: Res<WheelInput>,
+    mut cameras: Query<(&mut ChaseCamera, &mut Projection)>,
+) {
     let back = wheel.look_back;
+    let follow = 1.0 - (-STICK_RATE * time.delta_secs()).exp();
     for (mut camera, _) in &mut cameras {
         camera.back = back;
+        camera.stick = camera.stick.lerp(wheel.look, follow);
     }
     if !wheel.view {
         return;
@@ -143,10 +165,15 @@ pub fn follow(
             // Fixed to the seat: the view moves with every bump and roll of the body.
             // Looking back, the head turns all the way round, level.
             let rotation = car.body.rotation;
+            let stick = camera.stick;
             let (look_yaw, look_pitch) = if camera.back {
                 (std::f32::consts::PI, 0.0)
             } else {
-                (camera.look_yaw, camera.look_pitch)
+                let up = if stick.y > 0.0 { STICK_UP } else { STICK_DOWN };
+                (
+                    (camera.look_yaw + stick.x * STICK_YAW).clamp(-2.6, 2.6),
+                    (camera.look_pitch + stick.y * up).clamp(-0.9, 0.7),
+                )
             };
             *transform = Transform::from_translation(car.body.position + rotation * car.setup.eye)
                 .with_rotation(
@@ -155,12 +182,15 @@ pub fn follow(
             continue;
         }
         // Looking back, from ahead of the car.
-        let yaw = if camera.back {
-            camera.yaw + std::f32::consts::PI
+        let (yaw, pitch) = if camera.back {
+            (camera.yaw + std::f32::consts::PI, camera.pitch)
         } else {
-            camera.yaw + camera.orbit_yaw
+            (
+                camera.yaw + camera.orbit_yaw + camera.stick.x * STICK_ORBIT,
+                (camera.pitch - camera.stick.y * STICK_PITCH).clamp(-0.1, 1.4),
+            )
         };
-        let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-camera.pitch);
+        let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-pitch);
         let mut position = target + rotation * Vec3::new(0.0, 0.0, camera.distance);
         position.y = position
             .y

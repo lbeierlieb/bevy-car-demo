@@ -3,8 +3,10 @@
 //! there are in a cycle and which bank each goes down. A cross-plane V8 fires each bank at
 //! uneven intervals (the burble), a flat four's unequal headers bunch its pulses up in
 //! pairs (the boxer rumble), and the others fire evenly, the more cylinders the smoother.
-//! The pulses ring a few resonances of the exhaust, so the tone changes with engine speed
-//! rather than just its pitch, with a little combustion noise on top. Two banks with an
+//! The pulses run through the header, the front pipe and the tailpipe, each a delay line
+//! ringing a series of resonances (a wave to the far end and back, partly reflected), which
+//! the engine's orders sweep through as it revs, so its harmonics swell and fade; then
+//! they ring a few broad resonances of the exhaust, with a little combustion noise on top. Two banks with an
 //! exhaust each are panned apart.
 //!
 //! The exhaust hardware colours it: the silencer and the catalyst take out level and the
@@ -31,13 +33,15 @@ use std::time::Duration;
 use bevy::audio::{AddAudioSource, ChannelCount, Decodable, SampleRate, Source};
 use bevy::prelude::*;
 
+use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Car};
 use crate::looks::{Looks, Motion};
-use crate::physics::drivetrain::{Drivetrain, EngineSetup};
+use crate::physics::drivetrain::{Drivetrain, EngineSetup, firing_load};
 use crate::physics::engine::families::{Layout, relative_size};
 use crate::physics::engine::hardware::EngineHardware;
 
 pub mod effects;
+mod paths;
 
 const SAMPLE_RATE: u32 = 44_100;
 /// A cross-plane V8's firing order 1-8-4-3-6-5-7-2, 90° of crank apart, with the odd
@@ -99,11 +103,42 @@ fn sound(layout: Layout) -> Sound {
 /// Time constants of the glide towards new targets.
 const GLIDE: f32 = 0.05;
 const LOAD_GLIDE: f32 = 0.02;
-/// Length of an exhaust pulse (seconds), and how fast the combustion noise after it dies.
-const PULSE: f32 = 0.0025;
+/// An exhaust pulse in crank degrees: the blowdown rises quickly as the valve opens, then
+/// falls more slowly. So it's long at idle (full, round) and short near the redline. The
+/// rise is a sharp front at full throttle, the flow through the opening valve choked by
+/// the cylinder's pressure, and that front is what carries the upper harmonics.
+const PULSE_RISE: f32 = 20.0;
+const PULSE_SHARP: f32 = 4.0;
+const PULSE_FALL: f32 = 70.0;
+/// Shortest the rise may get (seconds), a few samples.
+const PULSE_SHORTEST: f32 = 0.00012;
+/// How fast the combustion noise after a pulse dies (seconds).
 const NOISE_DECAY: f32 = 0.004;
-/// Random variation of each firing's strength.
-const JITTER: f32 = 0.2;
+/// Random variation of each firing's strength, from cycle to cycle: most at idle, where
+/// combustion is least steady, least at full throttle.
+const JITTER_IDLE: f32 = 0.15;
+const JITTER_LOAD: f32 = 0.05;
+/// Each cylinder's own character, the same every cycle (filling, runner and header
+/// lengths differ a little): its pulse's strength, and how late it arrives, in firing
+/// intervals. Repeating once a cycle, it's what gives the half orders (the lope).
+const CYLINDER_STRENGTH: f32 = 0.12;
+const CYLINDER_LATE: f32 = 0.04;
+/// Per cylinder in firing order, -1 to 1 (made up, fixed, so every engine of a layout
+/// sounds the same).
+const CYLINDERS: [(f32, f32); 12] = [
+    (0.6, -0.3),
+    (-0.9, 0.5),
+    (0.2, 0.9),
+    (-0.3, -0.8),
+    (1.0, 0.1),
+    (-0.5, -0.4),
+    (0.4, 0.7),
+    (-0.1, -1.0),
+    (0.8, 0.3),
+    (-0.7, -0.1),
+    (0.1, 0.6),
+    (-0.2, -0.6),
+];
 /// Exhaust resonances: frequency (Hz), Q, gain off throttle and at full throttle. Load
 /// brings out the higher ones (a harder, rasping note).
 const RESONANCES: [(f32, f32, f32, f32); 4] = [
@@ -120,6 +155,10 @@ const RIGHT_PIPES: f32 = 1.15;
 const RIGHT_DELAY: f32 = 0.001;
 /// Share of each bank that reaches the other ear.
 const CROSSFEED: f32 = 0.5;
+/// A cylinder of this size (m³; the 2-litre four's) at full load without boost fires at
+/// strength 1. Big engines are louder by the gas they push out: this leaves them room
+/// under the limiter.
+const CYLINDER: f32 = 0.0005;
 /// Strength of a firing off throttle, relative to full throttle.
 const IDLE_STRENGTH: f32 = 0.45;
 /// Overall level before the soft limiter.
@@ -141,6 +180,34 @@ const OPEN_NOISE: f32 = 2.0;
 /// Q, and gain off and at full throttle.
 const EXHAUST_SOUND_SPEED: f32 = 500.0;
 const HEADER: (f32, f32, f32) = (3.0, 0.25, 0.5);
+/// The pipes a pulse runs through, as in the big V8 (shorter in smaller engines, `pipes`):
+/// from the header's collector to the silencer (or catalyst), and the tailpipe after it
+/// (m), with the speed of sound in the cooler gas there (m/s). Each rings a series of
+/// resonances (a wave to the far end and back, partly reflected), which the engine's
+/// orders sweep through as it revs: they swell and fade.
+const FRONT_PIPE: f32 = 1.8;
+const TAIL_PIPE: f32 = 0.8;
+const TAIL_SOUND_SPEED: f32 = 420.0;
+/// What comes back from each pipe's far end (inverted: an opening): from the collector
+/// to the header; from the silencer to the front pipe, little without one (straight
+/// pipe) and much with a restrictive one; from the open end of the tailpipe, more without
+/// a silencer to soak it up.
+const HEADER_REFLECTION: f32 = 0.5;
+const FRONT_REFLECTION: (f32, f32) = (0.2, 0.6);
+const TAIL_REFLECTION: (f32, f32) = (0.8, 0.5);
+/// The pipes' losses: what comes back loses its highs above this (Hz, × the bore: wider
+/// pipes lose less), fully muffled and open (a silencer's packing soaks up the highs).
+const PIPE_LOSS: (f32, f32) = (3000.0, 6000.0);
+/// What leaves the tailpipe above `BRIGHT_SPLIT` (Hz) besides the broad resonances, fully
+/// muffled and open, off throttle and at full throttle: the rasp the silencer takes out.
+const BRIGHT_SPLIT: f32 = 1000.0;
+const BRIGHT: (f32, f32) = (0.4, 1.0);
+const BRIGHT_IDLE: f32 = 0.5;
+/// Level after the pipes, which ring up to a few times louder at their resonances, so the
+/// engine is about as loud as without them.
+const PIPE_LEVEL: f32 = 0.22;
+/// Longest way to a pipe's end and back (samples), at the lowest Doppler factor.
+const TUBE: usize = 1024;
 /// How much louder a bigger pipe is per relative diameter, and how its resonances move
 /// (frequency ∝ diameter^-this).
 const BORE_LEVEL: f32 = 0.3;
@@ -188,6 +255,8 @@ pub struct EngineCharacter {
     pub exhaust: ExhaustSound,
     /// The turbo's shaft speed limit (rad/s), 0 without a turbo.
     pub turbo_limit: f32,
+    /// Swept volume of all cylinders (m³).
+    pub displacement: f32,
 }
 
 impl EngineCharacter {
@@ -197,6 +266,7 @@ impl EngineCharacter {
             layout: setup.parts.family().layout,
             exhaust: ExhaustSound::of(hardware),
             turbo_limit: hardware.turbo.map_or(0.0, |turbo| turbo.max_speed()),
+            displacement: hardware.displacement(),
         }
     }
 }
@@ -206,8 +276,9 @@ impl EngineCharacter {
 pub struct EngineRun {
     pub running: bool,
     pub rpm: f32,
-    /// 0 to 1.
-    pub load: f32,
+    /// How full its cylinders get (see `Drivetrain::fill`): with the displacement, how
+    /// much gas each firing pushes out, which is how loud it is.
+    pub fill: f32,
     /// The turbo's shaft speed (rad/s).
     pub turbo_speed: f32,
 }
@@ -218,7 +289,7 @@ impl EngineRun {
             // Cranking, its compressions are heard (slow chugs at the starter's speed).
             running: drivetrain.running || drivetrain.cranking(),
             rpm: drivetrain.rpm,
-            load: drivetrain.load,
+            fill: drivetrain.fill,
             turbo_speed: drivetrain.engine.turbo_speed,
         }
     }
@@ -331,7 +402,8 @@ fn save_sound(sound: Res<SoundSettings>) {
 
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
-        app.add_audio_source::<EngineSynth>()
+        app.insert_resource(Listening(Arc::new(paths::Listener::default())))
+            .add_audio_source::<EngineSynth>()
             .insert_resource(SoundSettings::load())
             .add_systems(Startup, start_engine)
             .add_systems(
@@ -351,7 +423,9 @@ impl Plugin for AudioPlugin {
 #[derive(Default)]
 struct Targets {
     rpm: AtomicU32,
-    load: AtomicU32,
+    /// How full the cylinders get, and their swept volume (m³).
+    fill: AtomicU32,
+    displacement: AtomicU32,
     volume: AtomicU32,
     /// The engine's layout, as its place in `LAYOUTS`.
     layout: AtomicU32,
@@ -362,6 +436,10 @@ struct Targets {
     /// Where another car is heard from: the pan (-1 left to 1 right), the low-pass's
     /// cutoff (Hz; 0 for our own car: stereo, unfiltered) and the Doppler factor.
     place: [AtomicU32; 3],
+    /// How much later the road's reflection arrives (s; 0 for none).
+    ground: AtomicU32,
+    /// Where it's all heard from (shared by every synth in the game).
+    listener: Arc<paths::Listener>,
 }
 
 fn store(atomic: &AtomicU32, value: f32) {
@@ -376,8 +454,28 @@ impl Targets {
     fn new() -> Self {
         let targets = Self::default();
         targets.set_exhaust(ExhaustSound::default());
+        store(
+            &targets.displacement,
+            EngineHardware::default().displacement(),
+        );
         targets.set_place(0.0, 0.0, 1.0);
         targets
+    }
+
+    /// Targets heard by `listener`.
+    fn heard_by(listener: Arc<paths::Listener>) -> Self {
+        Self {
+            listener,
+            ..Self::new()
+        }
+    }
+
+    fn set_ground(&self, ground: f32) {
+        store(&self.ground, ground);
+    }
+
+    fn ground(&self) -> f32 {
+        read(&self.ground)
     }
 
     fn set_place(&self, pan: f32, cutoff: f32, doppler: f32) {
@@ -391,9 +489,9 @@ impl Targets {
         (pan, cutoff, doppler)
     }
 
-    fn set(&self, rpm: f32, load: f32, volume: f32) {
+    fn set(&self, rpm: f32, fill: f32, volume: f32) {
         store(&self.rpm, rpm);
-        store(&self.load, load);
+        store(&self.fill, fill);
         store(&self.volume, volume);
     }
 
@@ -433,7 +531,7 @@ impl Targets {
     }
 
     fn get(&self) -> (f32, f32, f32) {
-        (read(&self.rpm), read(&self.load), read(&self.volume))
+        (read(&self.rpm), read(&self.fill), read(&self.volume))
     }
 }
 
@@ -490,6 +588,58 @@ struct Shape {
     smoothing: f32,
     /// The engine's time passing in a sample (seconds; shifted by Doppler).
     dt: f32,
+    /// How long a pulse rises and falls (seconds of the engine's time).
+    pulse: (f32, f32),
+    /// What comes back from the far end of the header, the front pipe and the tailpipe
+    /// (negative: inverted), and the share of the way the pipes' low-pass moves each
+    /// sample.
+    reflections: [f32; 3],
+    loss: f32,
+    /// Gain of what's above `BRIGHT_SPLIT`, and the share of the way the low-pass that
+    /// splits it off moves each sample.
+    bright: f32,
+    split: f32,
+}
+
+/// A length of pipe: what goes in comes back from the far end after a while (a delay
+/// line), partly reflected and losing its highs, so it rings at a series of frequencies.
+#[derive(Clone, Copy)]
+struct Tube {
+    line: [f32; TUBE],
+    at: usize,
+    lowpass: f32,
+}
+
+impl Default for Tube {
+    fn default() -> Self {
+        Self {
+            line: [0.0; TUBE],
+            at: 0,
+            lowpass: 0.0,
+        }
+    }
+}
+
+impl Tube {
+    /// What went in `lag` samples ago (between samples).
+    fn read(&self, lag: f32) -> f32 {
+        let back = self.at as f32 + TUBE as f32 - lag.clamp(1.0, (TUBE - 2) as f32);
+        let i = back as usize;
+        let share = back.fract();
+        let (a, b) = (self.line[i % TUBE], self.line[(i + 1) % TUBE]);
+        a + (b - a) * share
+    }
+
+    /// The next sample out, for `x` going in, a way to the end and back of `trip` samples.
+    /// Scaled so the lowest frequencies pass at their level whatever the reflection (an
+    /// inverted one would take them out).
+    fn process(&mut self, x: f32, trip: f32, reflection: f32, loss: f32) -> f32 {
+        self.lowpass += loss * (self.read(trip) - self.lowpass);
+        let y = x + reflection * self.lowpass;
+        self.line[self.at] = y;
+        self.at = (self.at + 1) % TUBE;
+        y * (1.0 - reflection)
+    }
 }
 
 /// One bank's exhaust: the last pulse and the resonances it rings.
@@ -508,8 +658,14 @@ struct Bank {
     tuned: (f32, f32),
     /// The exhaust's resonances, then the header primaries'.
     resonators: [Resonator; 5],
+    /// The header, the front pipe and the tailpipe, and the ways to their ends and back
+    /// (samples).
+    tubes: [Tube; 3],
+    trips: [f32; 3],
     /// The pulse after the turbine.
     smeared: f32,
+    /// What's below `BRIGHT_SPLIT` of the piped pulse.
+    below: f32,
     /// Last input and output of the DC blocker.
     dc: (f32, f32),
 }
@@ -524,7 +680,10 @@ impl Bank {
             side,
             tuned: (0.0, 0.0),
             resonators: [Resonator::default(); 5],
+            tubes: [Tube::default(); 3],
+            trips: [1.0; 3],
             smeared: 0.0,
+            below: 0.0,
             dc: (0.0, 0.0),
         };
         bank.tune(exhaust.bore.powf(-BORE_PITCH), exhaust.header);
@@ -544,6 +703,13 @@ impl Bank {
             resonator.tune(frequency * scale, q);
         }
         self.resonators[4].tune(header * self.side, HEADER.0);
+        // The header's quarter-wave resonance is a way there and back in half its period.
+        let rate = SAMPLE_RATE as f32;
+        self.trips = [
+            rate / (2.0 * header * self.side),
+            rate * 2.0 * FRONT_PIPE / (EXHAUST_SOUND_SPEED * scale),
+            rate * 2.0 * TAIL_PIPE / (TAIL_SOUND_SPEED * scale),
+        ];
     }
 
     fn next(&mut self, noise: f32, shape: &Shape) -> f32 {
@@ -551,8 +717,12 @@ impl Bank {
         let excitation = if self.since < 0.0 {
             0.0
         } else {
-            let pulse = if self.since < PULSE {
-                (PI * self.since / PULSE).sin().powi(2)
+            let (rise, fall) = shape.pulse;
+            // The front starts at once (a kink, not easing in), and rounds over at the top.
+            let pulse = if self.since < rise {
+                (0.5 * PI * self.since / rise).sin()
+            } else if self.since < rise + fall {
+                (0.5 * PI * (self.since - rise) / fall).cos().powi(2)
             } else {
                 0.0
             };
@@ -561,9 +731,22 @@ impl Bank {
         };
         self.since += dt;
         self.smeared += shape.smoothing * (excitation - self.smeared);
-        let mut out = 0.0;
+        // Through the header, the front pipe and the tailpipe, then the exhaust's broad
+        // resonances.
+        let mut piped = self.smeared;
+        for ((tube, &trip), reflection) in self
+            .tubes
+            .iter_mut()
+            .zip(&self.trips)
+            .zip(shape.reflections)
+        {
+            piped = tube.process(piped, trip, reflection, shape.loss);
+        }
+        let piped = PIPE_LEVEL * piped;
+        self.below += shape.split * (piped - self.below);
+        let mut out = shape.bright * (piped - self.below);
         for (resonator, gain) in self.resonators.iter_mut().zip(shape.gains) {
-            out += gain * resonator.process(self.smeared);
+            out += gain * resonator.process(piped);
         }
         // Block any DC offset, which the pulses (all positive pressure) would leave.
         let y = out - self.dc.0 + 0.995 * self.dc.1;
@@ -576,7 +759,11 @@ impl Bank {
 struct EngineVoice {
     targets: Arc<Targets>,
     rpm: f32,
+    /// How full the cylinders get (gliding), how hard that fires them (0 to 1, for the
+    /// tone), and their swept volume (m³).
+    fill: f32,
     load: f32,
+    displacement: f32,
     volume: f32,
     /// The layout the banks are set up for, and how it sounds.
     layout: Layout,
@@ -599,6 +786,9 @@ struct EngineVoice {
     lowpass: f32,
     /// State of the noise generator.
     seed: u32,
+    /// The road's reflection per bank, and the cabin.
+    grounds: [paths::Ground; 2],
+    cabin: paths::Cabin,
     /// The right sample, waiting for its turn after the left one.
     right: Option<f32>,
 }
@@ -610,10 +800,13 @@ impl EngineVoice {
         let exhaust = targets.exhaust();
         // Heard from where it is from the start.
         let (pan, cutoff, doppler) = targets.place();
+        let displacement = read(&targets.displacement);
         Self {
             targets,
             rpm: 0.0,
+            fill: 0.0,
             load: 0.0,
+            displacement,
             volume: 0.0,
             layout,
             banks: banks(&sound, &exhaust),
@@ -629,6 +822,8 @@ impl EngineVoice {
             doppler,
             lowpass: 0.0,
             seed: 0x2545_f491,
+            grounds: [paths::Ground::new(); 2],
+            cabin: paths::Cabin::new(),
             right: None,
         }
     }
@@ -643,13 +838,24 @@ impl EngineVoice {
 
     /// Advances by one sample, returning the left and right outputs.
     fn frame(&mut self) -> (f32, f32) {
+        let (inside, shape) = self.targets.listener.get();
+        let outside = self.engine();
+        let (left, right) = self.cabin.process(outside, inside, &shape);
+        (paths::limit(left), paths::limit(right))
+    }
+
+    /// The engine heard from outside.
+    fn engine(&mut self) -> (f32, f32) {
         let rate = SAMPLE_RATE as f32;
         let glide = |value: &mut f32, target: f32, time: f32| {
             *value += (target - *value) / (time * rate);
         };
-        let (rpm, load, volume) = self.targets.get();
+        let (rpm, fill, volume) = self.targets.get();
         glide(&mut self.rpm, rpm.max(0.0), GLIDE);
-        glide(&mut self.load, load.clamp(0.0, 1.0), LOAD_GLIDE);
+        glide(&mut self.fill, fill.clamp(0.0, 4.0), LOAD_GLIDE);
+        self.load = firing_load(self.fill).min(1.0);
+        let displacement = read(&self.targets.displacement).clamp(1e-5, 0.02);
+        glide(&mut self.displacement, displacement, GLIDE);
         glide(&mut self.volume, volume, GLIDE);
         let exhaust = self.targets.exhaust();
         glide(
@@ -696,10 +902,21 @@ impl EngineVoice {
             (self.cycle + doppler * self.rpm / 120.0 * firings as f32 / rate) % firings as f32;
         if self.cycle.floor() != before.floor() {
             let firing = self.cycle.floor() as usize % firings;
-            let strength =
-                (IDLE_STRENGTH + (1.0 - IDLE_STRENGTH) * self.load) * (1.0 + JITTER * self.noise());
+            let (own_strength, own_late) = CYLINDERS[firing % CYLINDERS.len()];
+            let jitter = JITTER_IDLE + (JITTER_LOAD - JITTER_IDLE) * self.load;
+            // The gas a firing pushes out: the cylinder's size, and how full it got (more
+            // on boost).
+            let cylinder = self.displacement / firings as f32 / CYLINDER;
+            let fired = firing_load(self.fill);
+            let strength = cylinder
+                * (IDLE_STRENGTH + (1.0 - IDLE_STRENGTH) * fired)
+                * (1.0 + CYLINDER_STRENGTH * own_strength)
+                * (1.0 + jitter * self.noise());
+            // Seconds of the engine's time between firings.
+            let interval = 120.0 / (self.rpm.max(100.0) * firings as f32);
+            let late = CYLINDER_LATE * (own_late + 1.0) * interval;
             let bank = &mut self.banks[usize::from(self.sound.banks[firing])];
-            bank.since = -bank.delay;
+            bank.since = -bank.delay - late;
             bank.strength = strength;
         }
 
@@ -722,6 +939,22 @@ impl EngineVoice {
             noise: 1.0 + (OPEN_NOISE - 1.0) * open,
             smoothing: 1.0 / (1.0 + TURBINE_SMEAR * turbine * rate / doppler),
             dt: doppler / rate,
+            pulse: {
+                // Crank degrees a second.
+                let degrees = 6.0 * self.rpm.max(100.0);
+                let rise = PULSE_RISE + (PULSE_SHARP - PULSE_RISE) * load;
+                ((rise / degrees).max(PULSE_SHORTEST), PULSE_FALL / degrees)
+            },
+            reflections: [
+                -HEADER_REFLECTION,
+                -(FRONT_REFLECTION.0 + (FRONT_REFLECTION.1 - FRONT_REFLECTION.0) * muffle),
+                -(TAIL_REFLECTION.0 + (TAIL_REFLECTION.1 - TAIL_REFLECTION.0) * muffle),
+            ],
+            loss: 1.0
+                - (-TAU * (PIPE_LOSS.0 + (PIPE_LOSS.1 - PIPE_LOSS.0) * open) * bore / rate).exp(),
+            bright: (BRIGHT.0 + (BRIGHT.1 - BRIGHT.0) * open)
+                * (BRIGHT_IDLE + (1.0 - BRIGHT_IDLE) * load),
+            split: 1.0 - (-TAU * BRIGHT_SPLIT / rate).exp(),
         };
         let pitch = bore.powf(-BORE_PITCH) * doppler;
         for bank in &mut self.banks {
@@ -729,8 +962,11 @@ impl EngineVoice {
         }
         let left = self.noise();
         let right = self.noise();
+        let ground = self.targets.ground();
         let left = self.banks[0].next(left, &shape);
         let right = self.banks[1].next(right, &shape);
+        let left = self.grounds[0].process(left, ground);
+        let right = self.grounds[1].process(right, ground);
 
         // The turbo whistles around its shaft speed, louder spooled up and under load: a
         // band of noise, retuned as the shaft speeds up.
@@ -754,7 +990,7 @@ impl EngineVoice {
         let exhaust_level = (MUFFLED_LEVEL + (OPEN_LEVEL - MUFFLED_LEVEL) * open)
             * (1.0 + BORE_LEVEL * (bore - 1.0))
             * (1.0 - (1.0 - TURBINE_LEVEL) * turbine);
-        let level = GAIN * self.volume * exhaust_level * (8.0 / firings as f32).sqrt();
+        let level = GAIN * self.volume * exhaust_level;
         let whistle = GAIN * self.volume * whistle;
         let mix = |near: f32, far: f32| (level * (near + CROSSFEED * far) + whistle).tanh();
         if self.cutoff > 0.0 {
@@ -826,7 +1062,8 @@ impl Targets {
     /// Plays an engine that sounds like `voice` running as `run` says, at `volume`.
     fn hear(&self, voice: &EngineCharacter, run: &EngineRun, volume: f32) {
         let volume = if run.running { volume } else { 0.0 };
-        self.set(run.rpm, run.load, volume);
+        self.set(run.rpm, run.fill, volume);
+        store(&self.displacement, voice.displacement);
         self.set_layout(voice.layout);
         self.set_exhaust(voice.exhaust);
         let share = if voice.turbo_limit > 0.0 {
@@ -851,8 +1088,16 @@ struct Voice {
     until: f64,
 }
 
-fn start_engine(mut commands: Commands, mut synths: ResMut<Assets<EngineSynth>>) {
-    let targets = Arc::new(Targets::new());
+/// Where every synth is heard from.
+#[derive(Resource)]
+struct Listening(Arc<paths::Listener>);
+
+fn start_engine(
+    mut commands: Commands,
+    mut synths: ResMut<Assets<EngineSynth>>,
+    listening: Res<Listening>,
+) {
+    let targets = Arc::new(Targets::heard_by(listening.0.clone()));
     commands.spawn(AudioPlayer(synths.add(EngineSynth {
         targets: targets.clone(),
     })));
@@ -862,13 +1107,22 @@ fn start_engine(mut commands: Commands, mut synths: ResMut<Assets<EngineSynth>>)
     });
 }
 
+/// Whether the camera is in the driver's seat.
+fn inside(chase: &Query<&ChaseCamera>) -> bool {
+    chase.iter().any(ChaseCamera::driver)
+}
+
 fn update_engine(
     sound: Res<SoundSettings>,
     active: Res<ActiveCar>,
-    cars: Query<(&Car, &Looks, &Motion)>,
+    cars: Query<(&Car, &Looks, &Motion, &GlobalTransform)>,
+    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    chase: Query<&ChaseCamera>,
     engine: Res<EngineAudio>,
+    listening: Res<Listening>,
 ) {
-    let Some((_, looks, motion)) = cars.iter().find(|(car, ..)| car.index == active.0) else {
+    let Some((_, looks, motion, transform)) = cars.iter().find(|(car, ..)| car.index == active.0)
+    else {
         // No car to drive (yet): silence.
         let (rpm, load, _) = engine.targets.get();
         engine.targets.set(rpm, load, 0.0);
@@ -876,6 +1130,16 @@ fn update_engine(
     };
     let volume = if engine.hushed { 0.0 } else { sound.master() };
     engine.targets.hear(&looks.engine, &motion.engine, volume);
+    // From the driver's seat the road's reflection keeps its delay from outside (the
+    // cabin fades it with the rest): dropping it at once clicked.
+    let inside = inside(&chase);
+    let ground = match cameras.single() {
+        Ok(camera) if !inside => paths::ground_delay(transform.translation(), camera.translation()),
+        _ => engine.targets.ground(),
+    };
+    engine.targets.set_ground(ground);
+    let cabin = paths::CabinShape::of(looks.build.chassis());
+    listening.0.set(inside, cabin);
 }
 
 /// How loud another car's engine is at `distance`, its low-pass's cutoff, and the Doppler
@@ -891,13 +1155,14 @@ fn placed(distance: f32, closing: f32) -> (f32, f32, f32) {
 
 /// The engines of the cars around (other players' and traffic: any car seen but not
 /// driven here), the nearest few, heard from the camera.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn hear_others(
     mut commands: Commands,
     time: Res<Time>,
     sound: Res<SoundSettings>,
     mut synths: ResMut<Assets<EngineSynth>>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
+    listening: Res<Listening>,
     cars: Query<(Entity, &GlobalTransform, &Looks, &Motion), Without<Car>>,
     mut voices: Query<(Entity, &mut Voice)>,
 ) {
@@ -958,13 +1223,16 @@ fn hear_others(
                 .targets
                 .hear(&looks.engine, &motion.engine, master * volume);
             voice.targets.set_place(pan, cutoff, doppler);
+            let ground = paths::ground_delay(transform.translation(), ear);
+            voice.targets.set_ground(ground);
             continue;
         }
         // Newly heard: a voice of its own, set up before it starts.
         let (volume, cutoff, doppler) = placed(distance, 0.0);
-        let targets = Arc::new(Targets::new());
+        let targets = Arc::new(Targets::heard_by(listening.0.clone()));
         targets.hear(&looks.engine, &motion.engine, master * volume);
         targets.set_place(pan, cutoff, doppler);
+        targets.set_ground(paths::ground_delay(transform.translation(), ear));
         commands.spawn((
             Voice {
                 targets: targets.clone(),
@@ -984,9 +1252,190 @@ fn pan(to: Vec3, right: Dir3) -> f32 {
     to.normalize_or_zero().dot(*right).clamp(-1.0, 1.0)
 }
 
+/// Writes stereo `frames` (left, right; -1 to 1, clipped) to a 16-bit WAV file at `path`,
+/// for listening to the synths outside the game.
+#[cfg(test)]
+fn write_wav(path: impl AsRef<std::path::Path>, frames: &[(f32, f32)]) {
+    let data = (frames.len() * 4) as u32;
+    let mut wav = Vec::with_capacity(44 + data as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
+    wav.extend_from_slice(&(SAMPLE_RATE * 4).to_le_bytes());
+    wav.extend_from_slice(&4u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data.to_le_bytes());
+    for &(left, right) in frames {
+        for sample in [left, right] {
+            let sample = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+            wav.extend_from_slice(&sample.to_le_bytes());
+        }
+    }
+    std::fs::write(path, wav).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Renders every factory engine (or those in `ENGINES`, codes separated by commas) to
+    /// `<ENGINE_WAV>/<code>.wav` (default `engine-wav`), through the same program, at the
+    /// level the game plays it, so files can be compared with each other and with older
+    /// renders: idle, three blips, a full-throttle pull from 2000 rpm to the redline,
+    /// lifting off back down, a light cruise, then the same engine passing at 90 km/h,
+    /// heard from 8 m beside the road.
+    #[test]
+    #[ignore]
+    fn write_engine_wavs() {
+        use crate::physics::engine::families::{FAMILIES, Version};
+        let dir = std::env::var("ENGINE_WAV").unwrap_or("engine-wav".into());
+        let only = std::env::var("ENGINES").ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        // Targets change at the game's frame rate; the synth glides between them.
+        const TICK: f32 = 1.0 / 60.0;
+        const IDLE: f32 = 850.0;
+        for (f, family) in FAMILIES.iter().enumerate() {
+            for (v, version) in family.versions.iter().enumerate() {
+                if let Some(only) = &only
+                    && !only.split(',').any(|code| code.trim() == version.code)
+                {
+                    continue;
+                }
+                let hardware = Version::parts(f, v).hardware();
+                let redline = hardware.safe_rpm(usize::MAX);
+                let character = EngineCharacter {
+                    layout: family.layout,
+                    exhaust: ExhaustSound::of(&hardware),
+                    turbo_limit: hardware.turbo.map_or(0.0, |turbo| turbo.max_speed()),
+                    displacement: hardware.displacement(),
+                };
+                // A turbo spooling with engine speed and load, lagging a little.
+                let mut spool = 0.0;
+                let mut run = |rpm: f32, load: f32| {
+                    let target = (rpm / redline) * (0.3 + 0.7 * load);
+                    spool += (target - spool) * (TICK / 0.4);
+                    EngineRun {
+                        running: true,
+                        rpm,
+                        fill: crate::physics::drivetrain::fill_for(load),
+                        turbo_speed: spool * character.turbo_limit,
+                    }
+                };
+                // Engine speed and load over time (seconds since the segment began).
+                type Segment<'a> = (f32, Box<dyn Fn(f32) -> (f32, f32) + 'a>);
+                let rise = 0.6 * redline;
+                let program: Vec<Segment> = vec![
+                    (2.0, Box::new(|_| (IDLE, 0.12))),
+                    (
+                        3.0,
+                        Box::new(|t| {
+                            // A blip a second: 0.2 s on the gas, then falling back.
+                            let t = t % 1.0;
+                            if t < 0.2 {
+                                (IDLE + (rise - IDLE) * t / 0.2, 1.0)
+                            } else {
+                                let fall = ((t - 0.2) / 0.5).min(1.0);
+                                (rise + (IDLE - rise) * fall, 0.0)
+                            }
+                        }),
+                    ),
+                    (1.0, Box::new(|_| (IDLE, 0.12))),
+                    (
+                        6.0,
+                        Box::new(|t| (2000.0 + (redline - 2000.0) * t / 6.0, 1.0)),
+                    ),
+                    (
+                        3.0,
+                        Box::new(|t| (redline + (2000.0 - redline) * t / 3.0, 0.0)),
+                    ),
+                    (2.0, Box::new(|_| (2500.0, 0.3))),
+                ];
+                // From the chase camera, 9 m behind and 2.5 m up, and from the driver's
+                // seat.
+                let per_tick = (TICK * SAMPLE_RATE as f32) as usize;
+                let chase = paths::ground_delay(Vec3::ZERO, Vec3::new(0.0, 2.5, 9.0));
+                // Inside the first car the factory puts this engine in.
+                let cabin = crate::chassis::CHASSIS
+                    .iter()
+                    .find(|chassis| chassis.engines.contains(&version.code))
+                    .map_or(paths::CabinShape::DEFAULT, paths::CabinShape::of);
+                let mut heard = [false, true].map(|inside| {
+                    let targets = Arc::new(Targets::new());
+                    targets.set_ground(chase);
+                    targets.listener.set(inside, cabin);
+                    let mut voice = EngineVoice::new(targets.clone());
+                    let mut frames = Vec::new();
+                    for (length, at) in &program {
+                        for tick in 0..(length / TICK) as usize {
+                            let (rpm, load) = at(tick as f32 * TICK);
+                            targets.hear(&character, &run(rpm, load), 1.0);
+                            frames.extend((0..per_tick).map(|_| voice.frame()));
+                        }
+                    }
+                    frames.extend((0..SAMPLE_RATE as usize / 2).map(|_| (0.0, 0.0)));
+                    frames
+                });
+                let path = std::path::Path::new(&dir);
+                write_wav(path.join(format!("{}-inside.wav", version.code)), &heard[1]);
+                // Switching between the views every 0.75 s, idling, then cruising: there
+                // should be no clicks.
+                let targets = Arc::new(Targets::new());
+                let mut voice = EngineVoice::new(targets.clone());
+                let mut switching = Vec::new();
+                for tick in 0..(6.0 / TICK) as usize {
+                    let t = tick as f32 * TICK;
+                    let (rpm, load) = if t < 3.0 { (IDLE, 0.12) } else { (2500.0, 0.3) };
+                    targets.hear(&character, &run(rpm, load), 1.0);
+                    targets.set_ground(chase);
+                    targets.listener.set((t / 0.75) as usize % 2 == 1, cabin);
+                    switching.extend((0..per_tick).map(|_| voice.frame()));
+                }
+                write_wav(
+                    path.join(format!("{}-switch.wav", version.code)),
+                    &switching,
+                );
+                let frames = &mut heard[0];
+
+                // The pass-by: in fourth at 4000 rpm and a little gas, along x past a
+                // listener 8 m from the road, facing it (their right is +x).
+                let targets = Arc::new(Targets::new());
+                let (speed, side, length) = (25.0, 8.0, 6.0);
+                let place = |t: f32| Vec3::new(-0.5 * speed * length + speed * t, 0.0, -side);
+                let right = Dir3::X;
+                let (rpm, load) = (4000.0, 0.6);
+                let distance = |t: f32| place(t).length();
+                let (volume, cutoff, doppler) = placed(distance(0.0), 0.0);
+                targets.hear(&character, &run(rpm, load), volume);
+                targets.set_place(pan(place(0.0), right), cutoff, doppler);
+                let mut voice = EngineVoice::new(targets.clone());
+                for tick in 0..(length / TICK) as usize {
+                    let t = tick as f32 * TICK;
+                    let closing = (distance(t - TICK) - distance(t)) / TICK;
+                    let (volume, cutoff, doppler) = placed(distance(t), closing);
+                    targets.hear(&character, &run(rpm, load), volume);
+                    targets.set_place(pan(place(t), right), cutoff, doppler);
+                    // Ears 1.7 m above the road.
+                    targets.set_ground(paths::ground_delay(place(t), Vec3::Y * 1.2));
+                    frames.extend((0..per_tick).map(|_| voice.frame()));
+                }
+
+                let path = path.join(format!("{}.wav", version.code));
+                write_wav(&path, frames);
+                println!(
+                    "{}: {} {} ({:?}), redline {redline} rpm",
+                    path.display(),
+                    family.name,
+                    version.name,
+                    family.layout,
+                );
+            }
+        }
+    }
 
     #[test]
     fn each_bank_of_a_cross_plane_v8_fires_unevenly() {
@@ -1139,7 +1588,10 @@ mod tests {
         assert!(loudness(straight, 0.0) > 1.3 * quiet);
         let turbo_quiet = loudness(turbo, 0.0);
         assert!(turbo_quiet < quiet);
-        assert!(loudness(turbo, 1.0) > turbo_quiet * 1.001);
+        // The whistle on its own (uncorrelated with the exhaust, so their energies add):
+        // there, though quiet (here, at 4000 rpm, the pipes ring loudly).
+        let whistle = (loudness(turbo, 1.0).powi(2) - turbo_quiet.powi(2)).sqrt();
+        assert!(whistle > 0.01 * turbo_quiet, "whistle {whistle}");
     }
 
     #[test]

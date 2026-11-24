@@ -321,6 +321,34 @@ impl Body {
         builder.build()
     }
 
+    /// The lamps' lenses in the design frame, a little proud of the body's, to draw them
+    /// lit over it at night: the head lamps' mesh, the tail lamps' and the head lamps'
+    /// centres (for their light).
+    pub fn lamps(&self, wheels: &Wheels) -> (Mesh, Mesh, Vec<Vec3>) {
+        let at = |x: f32, y: f32, across: f32| Vec3::new(across, y, self.z(x, wheels));
+        let (mut heads, mut tails) = (Builder::default(), Builder::default());
+        let mut centres = Vec::new();
+        for detail in self.details.iter().chain(&self.fittings()) {
+            let [x, y, across] = detail.at;
+            let builder = match detail.tone {
+                Tone::TailLamp => &mut tails,
+                // The lamp at the tail is the number plate's.
+                Tone::Lamp if x < self.length / 2.0 => &mut heads,
+                _ => continue,
+            };
+            let size = Vec3::new(detail.size[2], detail.size[1], detail.size[0]) * 1.06 + 0.006;
+            let sides: &[f32] = if across == 0.0 { &[1.0] } else { &[1.0, -1.0] };
+            for side in sides {
+                let centre = at(x, y, side * across);
+                builder.cuboid(centre, size, [1.0; 3]);
+                if detail.tone == Tone::Lamp {
+                    centres.push(centre);
+                }
+            }
+        }
+        (heads.build(), tails.build(), centres)
+    }
+
     /// Lights, grille, number plate and mirrors, placed by the body's outlines.
     fn fittings(&self) -> Vec<Detail> {
         let nose_top = self.deck_height(0.06);

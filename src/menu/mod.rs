@@ -8,6 +8,7 @@ use bevy_egui::{EguiContexts, egui};
 use crate::car::SETTINGS;
 
 pub mod central;
+pub mod curve;
 pub mod kit;
 pub mod nav;
 

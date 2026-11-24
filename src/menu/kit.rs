@@ -17,12 +17,12 @@ const ROW_TEXT: f32 = 17.0;
 const TITLE: f32 = 25.0;
 const MARGIN: f32 = 18.0;
 
-const ROW_FILL: Color32 = Color32::from_rgb(34, 37, 43);
+pub(super) const ROW_FILL: Color32 = Color32::from_rgb(34, 37, 43);
 const ROW_HOVER: Color32 = Color32::from_rgb(48, 52, 60);
-const ROW_FOCUS: Color32 = Color32::from_rgb(74, 58, 30);
-const TEXT: Color32 = Color32::from_rgb(236, 236, 232);
-const WEAK: Color32 = Color32::from_rgb(150, 152, 156);
-const ON: Color32 = Color32::from_rgb(90, 190, 110);
+pub(super) const ROW_FOCUS: Color32 = Color32::from_rgb(74, 58, 30);
+pub(super) const TEXT: Color32 = Color32::from_rgb(236, 236, 232);
+pub(super) const WEAK: Color32 = Color32::from_rgb(150, 152, 156);
+pub(super) const ON: Color32 = Color32::from_rgb(90, 190, 110);
 
 /// Where a panel sits.
 #[derive(Clone, Copy, PartialEq, Debug)]

@@ -257,6 +257,9 @@ pub struct Chassis {
     pub body: Body,
     /// The driver's eyes: behind the nose, above the ground, and left of the centreline.
     pub eye: [f32; 3],
+    /// How well the cabin keeps out sound, 0 (stripped out, or no roof) to 1 (a quiet
+    /// saloon): a share of what comes through the body.
+    pub insulation: f32,
 }
 
 /// The anti-roll bars made for one axle of a chassis: solid bars of these diameters (mm),
@@ -635,6 +638,7 @@ pub static CHASSIS: [Chassis; 13] = [
             details: &[],
         },
         eye: [1.75, 1.2, 0.34],
+        insulation: 0.3,
     },
     Chassis {
         name: "Vireo",
@@ -727,6 +731,7 @@ pub static CHASSIS: [Chassis; 13] = [
             ],
         },
         eye: [2.15, 1.17, 0.36],
+        insulation: 0.45,
     },
     Chassis {
         name: "Linnet",
@@ -815,6 +820,7 @@ pub static CHASSIS: [Chassis; 13] = [
             ],
         },
         eye: [2.3, 1.03, 0.33],
+        insulation: 0.2,
     },
     Chassis {
         name: "Tarn",
@@ -905,6 +911,7 @@ pub static CHASSIS: [Chassis; 13] = [
             details: &[],
         },
         eye: [2.45, 1.1, 0.36],
+        insulation: 0.55,
     },
     Chassis {
         name: "Halden",
@@ -995,6 +1002,7 @@ pub static CHASSIS: [Chassis; 13] = [
             details: &[],
         },
         eye: [2.5, 1.2, 0.38],
+        insulation: 0.8,
     },
     Chassis {
         name: "Skarn",
@@ -1094,6 +1102,7 @@ pub static CHASSIS: [Chassis; 13] = [
             ],
         },
         eye: [2.35, 1.17, 0.36],
+        insulation: 0.1,
     },
     Chassis {
         name: "Harrow",
@@ -1188,6 +1197,7 @@ pub static CHASSIS: [Chassis; 13] = [
             ],
         },
         eye: [2.75, 1.15, 0.38],
+        insulation: 0.45,
     },
     Chassis {
         name: "Calder",
@@ -1280,6 +1290,7 @@ pub static CHASSIS: [Chassis; 13] = [
             ],
         },
         eye: [2.25, 1.02, 0.35],
+        insulation: 0.35,
     },
     Chassis {
         name: "Rheon",
@@ -1374,6 +1385,7 @@ pub static CHASSIS: [Chassis; 13] = [
             ],
         },
         eye: [2.4, 1.08, 0.35],
+        insulation: 0.4,
     },
     Chassis {
         name: "Vespera",
@@ -1471,6 +1483,7 @@ pub static CHASSIS: [Chassis; 13] = [
             ],
         },
         eye: [2.4, 0.97, 0.38],
+        insulation: 0.5,
     },
     Chassis {
         name: "Wisp",
@@ -1560,6 +1573,7 @@ pub static CHASSIS: [Chassis; 13] = [
             ],
         },
         eye: [1.95, 0.9, 0.0],
+        insulation: 0.0,
     },
     Chassis {
         name: "Drover",
@@ -1654,6 +1668,7 @@ pub static CHASSIS: [Chassis; 13] = [
             ],
         },
         eye: [2.45, 1.55, 0.4],
+        insulation: 0.35,
     },
     Chassis {
         name: "Carrow",
@@ -1743,6 +1758,7 @@ pub static CHASSIS: [Chassis; 13] = [
             details: &[],
         },
         eye: [1.75, 1.6, 0.42],
+        insulation: 0.25,
     },
 ];
 

@@ -22,6 +22,7 @@ pub mod events;
 pub mod fences;
 pub mod garage;
 pub mod gas;
+pub mod grade;
 pub mod graphics;
 pub mod heli;
 pub mod help;
@@ -32,6 +33,7 @@ pub mod map;
 pub mod menu;
 pub mod name_tags;
 pub mod net;
+pub mod night;
 pub mod obstacles;
 pub mod online;
 pub mod osm;
@@ -123,7 +125,7 @@ pub struct CorePlugin;
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(GlobalAmbientLight {
-            brightness: 250.0,
+            brightness: grade::AMBIENT,
             ..default()
         })
         .add_plugins((
@@ -141,7 +143,7 @@ impl Plugin for CorePlugin {
             hud::HudPlugin,
             map::MapPlugin,
             audio::AudioPlugin,
-            (sky::SkyPlugin, graphics::GraphicsPlugin),
+            (sky::SkyPlugin, graphics::GraphicsPlugin, night::NightPlugin),
         ))
         .add_systems(Startup, setup);
     }
@@ -156,7 +158,7 @@ fn setup(mut commands: Commands) {
 pub fn spawn_sun(commands: &mut Commands) {
     commands.spawn((
         DirectionalLight {
-            illuminance: 5_000.0,
+            illuminance: grade::SUN,
             shadow_maps_enabled: true,
             ..default()
         },

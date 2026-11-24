@@ -10,15 +10,19 @@ use bevy::prelude::*;
 use bevy::window::{MonitorSelection, WindowMode};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
+use super::curve;
 use super::kit::{self, Panel, rank};
 use super::nav::{MenuInput, MenuSet};
 use super::{Display, SIZES};
 use crate::audio::SoundSettings;
 use crate::car::{ActiveCar, Away, Car, DriverAids, ResetRule};
-use crate::graphics::{Antialiasing, FRAME_CAPS, Graphics, RESOLUTIONS, Shadows, ViewDistance};
+use crate::graphics::{
+    Antialiasing, DAY_LENGTHS, FRAME_CAPS, Graphics, RESOLUTIONS, Shadows, TimeOfDay, ViewDistance,
+};
 use crate::heli::rescue::Rescue;
 use crate::input::{
-    Action, Capture, Capturing, Gamepads, MenuPresses, Nav, Profile, WheelConfig, action_value,
+    self, Action, Capture, Capturing, CurveKind, Gamepads, MenuPresses, Nav, Preset, Profile,
+    WheelConfig, action_value,
 };
 use crate::net::{Connection, Status};
 use crate::wheel_base::{ForceFeedback, WheelBase};
@@ -53,6 +57,7 @@ enum Screen {
     Display,
     Graphics,
     Online,
+    Curve(CurveKind),
 }
 
 impl Screen {
@@ -69,6 +74,9 @@ impl Screen {
             Screen::Display => "Display",
             Screen::Graphics => "Graphics",
             Screen::Online => "Online",
+            Screen::Curve(CurveKind::Steer) => "Steering curve",
+            Screen::Curve(CurveKind::Throttle) => "Gas curve",
+            Screen::Curve(CurveKind::Brake) => "Brake curve",
         }
     }
 }
@@ -84,6 +92,9 @@ pub struct CentralMenu {
     guide: Option<usize>,
     /// "Clear every binding" was chosen once: the next time clears.
     clearing: bool,
+    /// A curve's point is grabbed: "back" puts it back (`cancel_grab`) instead.
+    grabbed: bool,
+    cancel_grab: bool,
 }
 
 impl CentralMenu {
@@ -150,6 +161,8 @@ fn open_and_back(
         if capture.0.is_some() {
             capture.0 = None;
             menu.guide = None;
+        } else if menu.grabbed {
+            menu.cancel_grab = true;
         } else if menu.stack.len() > 1 {
             menu.pop();
         } else {
@@ -243,11 +256,12 @@ fn show(
     };
     let width = match screen {
         Screen::Bindings => 560.0,
-        Screen::Controls => 520.0,
+        Screen::Controls | Screen::Curve(_) => 520.0,
         _ => 460.0,
     };
     let focused = ctx.memory(|m| m.focused());
     let mut go = None;
+    menu.grabbed = false;
     Panel::new("central menu", screen.title())
         .rank(rank::CENTRAL)
         .width(width)
@@ -270,7 +284,7 @@ fn show(
             }
             Screen::Aids => aids(ui, &mut settings),
             Screen::Controls => go = controls(ui, &mut wheel.config),
-            Screen::Bindings => bindings(ui, &mut menu, &mut wheel),
+            Screen::Bindings => go = bindings(ui, &mut menu, &mut wheel),
             Screen::ForceFeedback => force_feedback(ui, &mut wheel),
             Screen::Sound => sound(ui, &mut settings),
             Screen::Display => display(ui, &mut settings, &mut windows),
@@ -280,6 +294,7 @@ fn show(
                     menu.close();
                 }
             }
+            Screen::Curve(kind) => curve_screen(ui, &mut menu, &mut wheel, kind),
         });
     if let Some(next) = go {
         menu.push(next, focused);
@@ -497,7 +512,8 @@ fn controls(ui: &mut egui::Ui, config: &mut WheelConfig) -> Option<Screen> {
     go
 }
 
-fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) {
+fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) -> Option<Screen> {
+    let mut go = None;
     let Wheel {
         config,
         capture,
@@ -543,6 +559,8 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) {
         let detail = if listening == Some(action) {
             match action {
                 Action::Steer => "turn the wheel left…".to_string(),
+                Action::LookSide => "push the stick left…".to_string(),
+                Action::LookUp => "push the stick up…".to_string(),
                 Action::Gate(_) => "move the lever into the gate…".to_string(),
                 _ if action.analog() => "press it fully, then release…".to_string(),
                 _ => "press it…".to_string(),
@@ -553,7 +571,7 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) {
                 "—".to_string()
             } else {
                 let shown = match action_value(config, gamepads, action) {
-                    Some(v) if action == Action::Steer => format!("  {:+.0} %", v * 100.0),
+                    Some(v) if action.whole_axis() => format!("  {:+.0} %", v * 100.0),
                     Some(v) if action.analog() && v > 0.0 => format!("  {:.0} %", v * 100.0),
                     Some(v) if v > 0.5 => "  ●".to_string(),
                     _ => String::new(),
@@ -632,34 +650,52 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) {
         |v| format!("{:.0} %", v * 100.0),
     );
     kit::section(ui, "Curves");
-    let linear = |v: f32| {
-        if v < 1.05 {
-            "linear".to_string()
-        } else {
-            format!("{v:.1}")
+    for kind in CurveKind::ALL {
+        let shown = Preset::of(config.profile().curves.get(kind)).map_or("Your own", Preset::name);
+        if kit::submenu_with(ui, Screen::Curve(kind).title(), shown).clicked() {
+            go = Some(Screen::Curve(kind));
         }
-    };
-    let curves = &mut config.profile_mut().curves;
-    kit::slider(
-        ui,
-        "Steering curve",
-        &mut curves.steer,
-        1.0..=3.0,
-        0.1,
-        linear,
-    );
-    kit::slider(
-        ui,
-        "Gas curve",
-        &mut curves.throttle,
-        1.0..=3.0,
-        0.1,
-        linear,
-    );
-    kit::slider(ui, "Brake curve", &mut curves.brake, 1.0..=3.0, 0.1, linear);
+    }
     kit::note(
         ui,
-        "For the profile in use. 1 is linear (set this for a wheel and pedals); higher is finer near the rest position. A force feedback wheel always steers linearly.",
+        "For the profile in use: how far a stick, trigger or pedal is pushed against what \
+         it asks for. Linear for a wheel and pedals; a force feedback wheel always steers \
+         linearly.",
+    );
+    go
+}
+
+/// One of the profile's curves, drawn and edited.
+fn curve_screen(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel, kind: CurveKind) {
+    let live = input::push_value(&wheel.config, &wheel.gamepads, kind.action());
+    // Edited on a copy, so the settings only count as changed (and get saved) when they are.
+    let mut curve = wheel.config.profile().curves.get(kind).clone();
+    let cancel = std::mem::take(&mut menu.cancel_grab);
+    let edited = curve::editor(ui, kind.key(), &mut curve, live, cancel);
+    menu.grabbed = edited.grabbed;
+    if edited.changed {
+        *wheel.config.profile_mut().curves.get_mut(kind) = curve;
+    }
+    if kit::button_with(ui, "Back to the default", kind.default_preset().name()).clicked() {
+        *wheel.config.profile_mut().curves.get_mut(kind) = kind.default_preset().curve();
+    }
+    kit::note(
+        ui,
+        match kind {
+            CurveKind::Steer => {
+                "Across: how far the steering is pushed; up: how far the front wheels \
+                 turn. Lower in the middle is finer around straight ahead. Not for a force \
+                 feedback wheel, which always steers 1:1."
+            }
+            CurveKind::Throttle => {
+                "Across: how far the gas is pushed; up: how far it opens. Lower early is \
+                 finer at part throttle."
+            }
+            CurveKind::Brake => {
+                "Across: how far the brake is pushed; up: how hard it brakes. Lower early is \
+                 easier to trail off."
+            }
+        },
     );
 }
 
@@ -818,10 +854,34 @@ fn graphics(ui: &mut egui::Ui, graphics: &mut ResMut<Graphics>) {
             |cap| cap.map_or("Off".into(), |fps| format!("{fps} fps")),
         );
     }
+    kit::toggle(ui, "Post-processing", &mut new.post);
+    if new.post {
+        kit::toggle(ui, "Day and night", &mut new.day_night);
+    }
+    if new.post && new.day_night {
+        kit::pick(
+            ui,
+            "Time of day",
+            &mut new.time_of_day,
+            &TimeOfDay::ALL,
+            |t| t.name().into(),
+        );
+        if new.time_of_day == TimeOfDay::Cycle {
+            kit::pick(
+                ui,
+                "Length of a day",
+                &mut new.day_minutes,
+                &DAY_LENGTHS,
+                |m| format!("{m} min"),
+            );
+        }
+    }
     kit::note(
         ui,
         "Shadows, multisampling, a far view and a high resolution cost the most. FXAA \
-         smooths edges cheaply.",
+         smooths edges cheaply. Post-processing (the time of day's colours and light) \
+         is one cheap pass; switch it off if the browser struggles (it's then always \
+         day).",
     );
     if new != **graphics {
         **graphics = new;

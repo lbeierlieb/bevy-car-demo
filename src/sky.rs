@@ -51,6 +51,10 @@ impl Plugin for SkyPlugin {
 #[derive(Component)]
 struct SkyDome;
 
+/// The dome's material (`grade` tints it for the time of day).
+#[derive(Resource)]
+pub struct SkyMaterial(pub Handle<StandardMaterial>);
+
 fn spawn(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -58,16 +62,18 @@ fn spawn(
     mut images: ResMut<Assets<Image>>,
 ) {
     let texture = images.add(texture());
+    let material = materials.add(StandardMaterial {
+        base_color_texture: Some(texture),
+        unlit: true,
+        fog_enabled: false,
+        cull_mode: None,
+        ..default()
+    });
+    commands.insert_resource(SkyMaterial(material.clone()));
     commands.spawn((
         SkyDome,
         Mesh3d(meshes.add(dome())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color_texture: Some(texture),
-            unlit: true,
-            fog_enabled: false,
-            cull_mode: None,
-            ..default()
-        })),
+        MeshMaterial3d(material),
         Transform::default(),
         NotShadowCaster,
         NotShadowReceiver,

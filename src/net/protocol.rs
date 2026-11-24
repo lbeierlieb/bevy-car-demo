@@ -32,7 +32,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 16;
+pub const PROTOCOL: u32 = 17;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -461,14 +461,14 @@ impl Wire for EngineRun {
     fn put(&self, out: &mut Vec<u8>) {
         self.running.put(out);
         self.rpm.put(out);
-        self.load.put(out);
+        self.fill.put(out);
         self.turbo_speed.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         Some(Self {
             running: r.get()?,
             rpm: r.get()?,
-            load: r.get()?,
+            fill: r.get::<f32>()?.clamp(0.0, 4.0),
             turbo_speed: r.get()?,
         })
     }
@@ -515,7 +515,8 @@ impl Wire for Looks {
             && sane(looks.hull.half.max_element(), 0.1, 10.0)
             && sane(looks.mass, 100.0, 10_000.0)
             && sane(looks.inertia.min_element(), 1.0, 100_000.0)
-            && sane(looks.engine.turbo_limit, 0.0, 1e5);
+            && sane(looks.engine.turbo_limit, 0.0, 1e5)
+            && sane(looks.engine.displacement, 1e-4, 0.02);
         fine.then_some(looks)
     }
 }
@@ -644,6 +645,7 @@ impl Wire for EngineCharacter {
         self.exhaust.header.put(out);
         self.exhaust.turbine.put(out);
         self.turbo_limit.put(out);
+        self.displacement.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         let layout = *Layout::ALL.get(r.get::<usize>()?)?;
@@ -657,6 +659,7 @@ impl Wire for EngineCharacter {
             layout,
             exhaust,
             turbo_limit: r.get()?,
+            displacement: r.get()?,
         })
     }
 }

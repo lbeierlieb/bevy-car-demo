@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 use crate::looks::{Ghost, Looks, Motion};
@@ -73,6 +74,8 @@ struct Shared {
     wheel: Handle<Mesh>,
     bar: Handle<Mesh>,
     bodies: HashMap<(usize, usize), Handle<Mesh>>,
+    /// Each chassis' lamp lenses, head and tail (lit at night, `night::Glow`).
+    lamps: HashMap<usize, [Handle<Mesh>; 2]>,
 }
 
 impl Shared {
@@ -143,6 +146,7 @@ fn add_car_meshes(
     mut shared: ResMut<Shared>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    glow: Option<Res<crate::night::Glow>>,
 ) {
     let shared = &mut *shared;
     if shared.wheel == Handle::default() {
@@ -163,18 +167,37 @@ fn add_car_meshes(
                 meshes.add(chassis.body.mesh(&chassis.wheels(), build.paint()))
             })
             .clone();
+        // A ghost's lamps aren't lit (they'd be solid on a see-through car).
+        let lamps = glow.as_ref().filter(|_| !ghost).map(|glow| {
+            let [head, tail] = shared
+                .lamps
+                .entry(build.chassis)
+                .or_insert_with(|| {
+                    let chassis = build.chassis();
+                    let (head, tail, _) = chassis.body.lamps(&chassis.wheels());
+                    [meshes.add(head), meshes.add(tail)]
+                })
+                .clone();
+            [(head, glow.head.clone()), (tail, glow.tail.clone())]
+        });
         let (wheel, bar) = (shared.wheel.clone(), shared.bar.clone());
         let m = shared.materials(&mut materials, ghost);
         commands
             .entity(entity)
             .insert(Visibility::default())
             .with_children(|parent| {
-                parent.spawn((
-                    Body,
-                    Mesh3d(body),
-                    MeshMaterial3d(m.of(None).clone()),
-                    Transform::from_translation(looks.body_offset),
-                ));
+                parent
+                    .spawn((
+                        Body,
+                        Mesh3d(body),
+                        MeshMaterial3d(m.of(None).clone()),
+                        Transform::from_translation(looks.body_offset),
+                    ))
+                    .with_children(|body| {
+                        for (mesh, material) in lamps.into_iter().flatten() {
+                            body.spawn((Mesh3d(mesh), MeshMaterial3d(material), NotShadowCaster));
+                        }
+                    });
                 for corner in 0..4 {
                     let mut part = |kind, mesh: &Handle<Mesh>| {
                         parent.spawn((

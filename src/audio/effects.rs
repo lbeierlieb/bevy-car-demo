@@ -52,14 +52,18 @@ const SQUEAL_FLUTTER: (f32, f32) = (0.5, 28.0);
 /// Broadband scrub under the tone, relative to it, and its low-pass (Hz).
 const SCRUB: (f32, f32) = (0.25, 2500.0);
 /// Level of one wheel squealing all out.
-const SQUEAL: f32 = 0.16;
+const SQUEAL: f32 = 0.08;
 /// Slip, relative to the peak (combined, as the tire model has it), where the squeal
 /// starts and where it's full.
 const SQUEAL_FROM: f32 = 0.55;
 const SQUEAL_FULL: f32 = 1.4;
 /// Speed the tread slides over the road at (m/s) for a full squeal: less only scuffs.
 const SQUEAL_SLIDE: f32 = 2.0;
-/// How quickly a squeal swells and dies (s).
+/// How quickly a squeal swells and dies (s), and how quickly its pitch and place follow.
+/// Swelling, the scrub comes in first and the tone fades in over it (the tone's level
+/// goes with the square of the squeal's).
+const SQUEAL_SWELL: f32 = 0.25;
+const SQUEAL_DIE: f32 = 0.15;
 const SQUEAL_GLIDE: f32 = 0.03;
 
 /// Dog teeth meeting per revolution of the difference, the clash rate's range (Hz), the
@@ -207,6 +211,8 @@ struct Cues {
     starter: [AtomicU32; 3],
     /// Master volume (0 muted).
     volume: AtomicU32,
+    /// Where it's heard from (shared with the engines).
+    listener: Arc<super::paths::Listener>,
 }
 
 impl Cues {
@@ -284,8 +290,15 @@ pub(super) fn build(app: &mut App) {
         );
 }
 
-fn start(mut commands: Commands, mut synths: ResMut<Assets<EffectsSynth>>) {
-    let cues = Arc::new(Cues::default());
+fn start(
+    mut commands: Commands,
+    mut synths: ResMut<Assets<EffectsSynth>>,
+    listening: Res<super::Listening>,
+) {
+    let cues = Arc::new(Cues {
+        listener: listening.0.clone(),
+        ..default()
+    });
     store(&cues.volume, 1.0);
     commands.spawn(AudioPlayer(synths.add(EffectsSynth { cues: cues.clone() })));
     commands.insert_resource(Effects { cues });
@@ -597,6 +610,7 @@ impl Player {
 /// An endless stereo stream (left and right samples interleaved).
 struct EffectsVoice {
     cues: Arc<Cues>,
+    cabin: super::paths::Cabin,
     volume: f32,
     squeals: [Squeal; 4],
     grind: f32,
@@ -731,6 +745,7 @@ impl EffectsVoice {
         }
         Self {
             cues,
+            cabin: super::paths::Cabin::new(),
             volume: 0.0,
             squeals: default(),
             grind: 0.0,
@@ -946,7 +961,13 @@ impl EffectsVoice {
                 // Silent: it starts where it is, at its pitch.
                 (squeal.pitch, squeal.pan) = (pitch, pan);
             }
-            glide(&mut squeal.level, level.clamp(0.0, 1.0), SQUEAL_GLIDE);
+            let level = level.clamp(0.0, 1.0);
+            let swell = if level > squeal.level {
+                SQUEAL_SWELL
+            } else {
+                SQUEAL_DIE
+            };
+            glide(&mut squeal.level, level, swell);
             glide(&mut squeal.pitch, pitch, SQUEAL_GLIDE);
             glide(&mut squeal.pan, pan, SQUEAL_GLIDE);
             if squeal.level < 1e-4 {
@@ -974,7 +995,10 @@ impl EffectsVoice {
             let share = 1.0 - (-TAU * SCRUB.1 / rate).exp();
             squeal.scrub += share * (scrub_noise - squeal.scrub);
             let flutter = (1.0 + SQUEAL_FLUTTER.0 * squeal.flutter.clamp(-1.0, 1.0)).max(0.0);
-            let out = SQUEAL * squeal.level * flutter * (tone + SCRUB.0 * 3.0 * squeal.scrub);
+            let out = SQUEAL
+                * squeal.level
+                * flutter
+                * (squeal.level * tone + SCRUB.0 * 3.0 * squeal.scrub);
             let angle = (squeal.pan + 1.0) * PI / 4.0;
             left += out * angle.cos() * 2f32.sqrt();
             right += out * angle.sin() * 2f32.sqrt();
@@ -1023,10 +1047,15 @@ impl EffectsVoice {
             }
         }
 
+        // The car's own sounds through the cabin from the driver's seat; the trumpet is
+        // the race's, heard as it is.
+        let car = (left + grind + starter, right + grind + starter);
+        let (inside, shape) = self.cues.listener.get();
+        let (left, right) = self.cabin.process(car, inside, &shape);
         let volume = self.volume;
         (
-            (volume * (left + grind + starter + brass)).tanh(),
-            (volume * (right + grind + starter + brass)).tanh(),
+            (volume * (left + brass)).tanh(),
+            (volume * (right + brass)).tanh(),
         )
     }
 }
@@ -1123,10 +1152,12 @@ mod tests {
         assert!(right > 0.1 && left < 0.01 * right, "{left} {right}");
         let (loud, _) = run(&mut voice, 1.0);
         assert!(loud > 0.03, "{loud}");
-        // It stops when the tires grip again.
+        // It dies away when the tires grip again.
         cues.set_squeal(1, 0.0, 1.0, 1.0);
         cues.set_squeal(3, 0.0, 1.0, 1.0);
-        run(&mut voice, 0.5);
+        let (dying, _) = run(&mut voice, 0.2);
+        assert!(dying < loud);
+        run(&mut voice, 1.2);
         assert!(run(&mut voice, 0.2).1 < 1e-3);
     }
 
@@ -1266,13 +1297,9 @@ mod tests {
         let path = std::env::var("EFFECTS_WAV").unwrap_or("effects.wav".into());
         let (cues, mut voice) = voice();
         let effects = Effects { cues: cues.clone() };
-        let mut samples: Vec<i16> = Vec::new();
+        let mut frames = Vec::new();
         let mut play = |voice: &mut EffectsVoice, seconds: f32| {
-            for _ in 0..(seconds * SAMPLE_RATE as f32) as usize {
-                let (left, right) = voice.frame();
-                samples.push((left * 32767.0) as i16);
-                samples.push((right * 32767.0) as i16);
-            }
+            frames.extend((0..(seconds * SAMPLE_RATE as f32) as usize).map(|_| voice.frame()));
         };
         for _ in 0..3 {
             effects.call(Call::Count);
@@ -1319,23 +1346,6 @@ mod tests {
             cues.set_starter(false, 0.0, 0.0);
             play(&mut voice, 1.0);
         }
-        let mut wav = Vec::new();
-        let data = (samples.len() * 2) as u32;
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&(36 + data).to_le_bytes());
-        wav.extend_from_slice(b"WAVEfmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&2u16.to_le_bytes());
-        wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-        wav.extend_from_slice(&(SAMPLE_RATE * 4).to_le_bytes());
-        wav.extend_from_slice(&4u16.to_le_bytes());
-        wav.extend_from_slice(&16u16.to_le_bytes());
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data.to_le_bytes());
-        for sample in samples {
-            wav.extend_from_slice(&sample.to_le_bytes());
-        }
-        std::fs::write(path, wav).unwrap();
+        crate::audio::write_wav(path, &frames);
     }
 }
