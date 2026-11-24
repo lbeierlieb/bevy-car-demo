@@ -19,7 +19,6 @@ use crate::car::{ActiveCar, Away, Car, DriverAids, ResetRule};
 use crate::graphics::{
     Antialiasing, DAY_LENGTHS, FRAME_CAPS, Graphics, RESOLUTIONS, Shadows, TimeOfDay, ViewDistance,
 };
-use crate::heli::rescue::Rescue;
 use crate::input::{
     self, Action, Capture, Capturing, CurveKind, Gamepads, MenuPresses, Nav, Preset, Profile,
     WheelConfig, action_value,
@@ -201,7 +200,6 @@ struct Driving<'w, 's> {
     cars: Query<'w, 's, &'static Car>,
     rule: Option<Res<'w, ResetRule>>,
     away: Res<'w, Away>,
-    rescue: Option<Res<'w, Rescue>>,
     presses: ResMut<'w, MenuPresses>,
 }
 
@@ -406,9 +404,8 @@ fn actions(ui: &mut egui::Ui, menu: &mut CentralMenu, driving: &mut Driving, con
         .cars
         .iter()
         .find(|car| car.index == driving.active.0);
-    let can_reset = car.is_some()
+    let can_reset = car.is_some_and(|car| !car.rescue.busy())
         && !driving.away.0
-        && driving.rescue.as_ref().is_none_or(|r| !r.busy())
         && driving
             .rule
             .as_deref()

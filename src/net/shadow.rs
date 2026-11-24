@@ -29,7 +29,8 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 
 use super::client::CHECK_STEPS;
-use crate::car::{Car, DriverInput};
+use crate::car::{Car, DriverInput, ResetRule};
+use crate::heli::rescue::fly;
 use crate::physics::engine::maps::{EngineMaps, fingerprint};
 use crate::sim::{STEP, step_car};
 use crate::snapshot;
@@ -97,6 +98,8 @@ pub struct Shadow {
     inputs: BTreeMap<u32, DriverInput>,
     /// The latest step an input came for.
     latest: Option<u32>,
+    /// When the step under way began (between `step` and `finish_step`).
+    started: Option<Instant>,
     /// How early their inputs came lately: the least, in steps (for `ToClient::Pace`).
     early: Option<i32>,
     /// The server step the window for moving the offset began at, and how early the
@@ -113,6 +116,8 @@ pub struct Shadow {
     /// The car's latest state to send the player: the step, the latest placement taken
     /// up then, the state.
     yours: Option<(u32, Option<u32>, Vec<u8>)>,
+    /// What R does with the car (the player's round's rules).
+    pub rule: ResetRule,
     report: Report,
 }
 
@@ -249,7 +254,8 @@ impl Shadow {
         self.waiting.insert(step, state);
     }
 
-    /// Server step `tick`: drives the copy through the player's step for it.
+    /// Server step `tick`: drives the copy through the player's step for it (the rest
+    /// of the step, after the cars met, is `finish_step`).
     pub fn step(&mut self, tick: u32, terrain: &Terrain) {
         let (Some(car), Some(offset)) = (&mut self.car, self.offset) else {
             return;
@@ -267,9 +273,20 @@ impl Shadow {
                 input
             }
         };
-        car.drive(&input, STEP);
+        car.steer(&input, self.rule, terrain, STEP);
         step_car(car, terrain, STEP);
         self.done = step;
+        self.started = Some(started);
+    }
+
+    /// The end of the step `step` began, once the cars have met: the rescue flies on, and
+    /// the car's state is kept to compare and send.
+    pub fn finish_step(&mut self, terrain: &Terrain) {
+        let (Some(car), Some(started)) = (&mut self.car, self.started.take()) else {
+            return;
+        };
+        let step = self.done;
+        fly(car, terrain, STEP);
         if step.is_multiple_of(CHECK_STEPS) {
             self.ours.insert(step, snapshot::save(car));
         }
@@ -389,8 +406,9 @@ impl Shadow {
                     input
                 }
             };
-            car.drive(&input, STEP);
+            car.steer(&input, self.rule, terrain, STEP);
             step_car(car, terrain, STEP);
+            fly(car, terrain, STEP);
             if step.is_multiple_of(CHECK_STEPS) {
                 self.ours.insert(step, snapshot::save(car));
             }
@@ -465,6 +483,7 @@ fn guess(inputs: &BTreeMap<u32, DriverInput>, latest: Option<u32>, step: u32) ->
             handbrake_toggle: false,
             shift: 0,
             ignition: false,
+            reset: false,
             ..input
         },
         Some(input) => DriverInput {

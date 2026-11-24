@@ -11,6 +11,7 @@ use super::hunt::{self, CAUGHT_SPEED, CAUGHT_TIME, Catch, Ending, TAG_RANGE};
 use super::race::{self, BEST_KEPT, Best, COUNTDOWN, Course, FINISH_GRACE, MAX_RACERS, Racer};
 use super::round::{Action, Game, Outcome, Phase, Play, Round};
 use super::{Event, EventKind};
+use crate::car::ResetRule;
 use crate::heli::{Chase, HeliPose};
 use crate::net::protocol::CarId;
 use crate::net::protocol::{CarState, PlayerId, ToClient};
@@ -561,6 +562,12 @@ pub fn run_rounds(
                 None => commands.entity(entity).remove::<Realm>(),
             };
         }
+        // What R does with their car.
+        peer.shadow.rule = (rounds.list.iter())
+            .find(|live| live.round.running() && live.has(peer.id))
+            .map_or(ResetRule::Road, |live| {
+                live.round.reset_rule(live.course.as_ref(), peer.id)
+            });
         if peer.name.is_none() {
             continue;
         }

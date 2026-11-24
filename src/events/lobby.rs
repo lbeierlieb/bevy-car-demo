@@ -365,28 +365,14 @@ pub(super) fn follow(
             Game::Hunt(settings) => {
                 let hunted = round.host == you;
                 held.0 = !hunted && elapsed < f64::from(settings.head_start);
-                *rule = if settings.hunters_reset && !hunted {
-                    ResetRule::Road
-                } else {
-                    ResetRule::Never
-                };
+                *rule = round.reset_rule(None, you);
             }
             Game::Race(settings) | Game::Trial(settings) => {
                 let settings = *settings;
                 let trial = matches!(round.game, Game::Trial(_));
                 held.0 = elapsed < COUNTDOWN;
                 ghost_players.0 = !trial && !settings.collisions;
-                let passed = (round.standing())
-                    .and_then(|standing| standing.racers.iter().find(|r| r.player == you))
-                    .map_or(0, |racer| usize::from(racer.gates));
-                let slot = round.slot(you);
-                *rule = match state.course(&connection, round) {
-                    Some(course) if settings.resets && !trial => {
-                        let (p, yaw) = course.reset_spot(passed, slot);
-                        ResetRule::Spot(p, yaw)
-                    }
-                    _ => ResetRule::Never,
-                };
+                *rule = round.reset_rule(state.course(&connection, round), you);
                 // When each racer passed their gates, for the gaps.
                 for racer in round.standing().iter().flat_map(|s| &s.racers) {
                     if racer.gates > 0 {

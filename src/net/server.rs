@@ -552,10 +552,7 @@ fn step_shadows(
     }
     for (mut peer, realm, visitor) in &mut peers {
         let solid = solid(&peer);
-        let Some(car) = peer.shadow.car_mut() else {
-            continue;
-        };
-        if solid {
+        if let Some(car) = peer.shadow.car_mut().filter(|_| solid) {
             let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
             let near = traffic
                 .iter()
@@ -579,7 +576,8 @@ fn step_shadows(
                 }
             }
         }
-        if let Some(mut visitor) = visitor {
+        peer.shadow.finish_step(&terrain);
+        if let (Some(mut visitor), Some(car)) = (visitor, peer.shadow.car()) {
             visitor.body = car.body.clone();
         }
     }
@@ -681,7 +679,8 @@ fn send(
                 time: heli.time + (time - state.time),
                 ..heli
             });
-            // Their car as we drive it (where we have it), whether it's a ghost as they say.
+            // Their car as we drive it (where we have it), with its rescue, whether it's a
+            // ghost as they say.
             let state = match peer.shadow.car() {
                 Some(car) => CarState {
                     time: stamp,
@@ -691,7 +690,7 @@ fn send(
                     angular_velocity: car.body.angular_velocity,
                     motion: Motion::of(car),
                     ghost: state.ghost,
-                    heli,
+                    heli: car.rescue.pose(stamp),
                 },
                 None => CarState {
                     time,

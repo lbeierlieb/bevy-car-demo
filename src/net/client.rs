@@ -26,7 +26,6 @@ use crate::car::{ActiveCar, Car, DriverInput, Rescued, StepInput};
 use crate::events::Event;
 use crate::events::round::{Action, Round};
 use crate::heli::HeliPose;
-use crate::heli::rescue::Rescue;
 use crate::looks::{Ghost, Looks, Motion};
 use crate::physics::collision::Obb;
 use crate::physics::collision::{self, OBSTACLE};
@@ -119,7 +118,6 @@ impl Plugin for ClientPlugin {
                     .after(crate::car::take_input)
                     .before(crate::car::drive),
                 push_off_remote_cars.after(crate::sim::simulate),
-                super::predict::note_simulated.after(push_off_remote_cars),
             )
                 .run_if(resource_exists::<Connection>),
         )
@@ -615,7 +613,6 @@ fn send(
     time: Res<Time<Real>>,
     fixed: Res<Time<Fixed>>,
     active: Res<ActiveCar>,
-    rescue: Option<Res<Rescue>>,
     mut prediction: ResMut<Prediction>,
     cars: Query<(&Car, &Looks, &Motion, Has<Ghost>)>,
 ) {
@@ -665,7 +662,7 @@ fn send(
             angular_velocity: car.body.angular_velocity,
             motion: *motion,
             ghost,
-            heli: rescue.and_then(|rescue| rescue.pose(stamp)),
+            heli: car.rescue.pose(stamp),
         }));
     }
 }

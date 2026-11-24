@@ -20,10 +20,10 @@ repo, so everything worth knowing between sessions belongs here.
 The game is a library (`src/lib.rs`) and apps, each the list of plugins it adds: the
 **sandbox** (`src/main.rs`: the shared `CorePlugin` (`WorldPlugin` (terrain, obstacles,
 simulation, traffic: all the server has too), scenery, input, driving, visuals, camera,
-HUD, map, sound, egui), help (quick start, hints), the Vireo hot hatch (B16), R reset,
+HUD, map, sound, egui), help (quick start, hints), the Vireo hot hatch (B16),
 gizmos, 2 telemetry, the central menu (Esc), shops (online), F11 fullscreen in all apps). The career was removed for the multiplayer work (see
 "Multiplayer"). Keep it that way: no mode flags; something only one app has is a plugin
-of its own (e.g. `car::ResetPlugin`, `ui::PanelPlugin`), and
+of its own (e.g. `ui::PanelPlugin`), and
 shared pieces are public functions (e.g. `workshop`, `garage::start`). Two apps, the
 map editor (`src/bin/editor.rs`) and the race editor (`src/bin/races.rs`; both native
 only), have no `CorePlugin` (no cars): `editor::EditorPlugin` and
@@ -57,7 +57,7 @@ that does: reverse asked for while rolling
 (`car::ReverseRefused`, a message from `drive`), on the rev limiter in first gear (only
 there, at the user's wish, 2026-11-22), and
 gas without moving for 3 s (R). (The parking brake hint went when gas started releasing it, 2026-11-24.) Added alone: in neutral, stalled, wrecked engine, empty
-tank (stating the problem only, since 2026-11-22). R (`ResetPlugin`) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
+tank (stating the problem only, since 2026-11-22). R (a press in the step's input, `Car::steer`) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
 right-hand lane on roads with traffic lanes), carried there by the rescue helicopter (see
 "Helicopters"). The map teleport was removed at the user's
 wish (2026-11-21). Keys (the keyboard profile's): M map, B (held) looks back; Esc the central menu (the 0
@@ -569,19 +569,24 @@ are dead reckoned from their latest `HeliPose`; never fogged, and drawn at 900 m
 look as big when farther, beacons at least ~0.004 rad across, so the hunt's is seen from
 anywhere; `Chase`, the hunt's flight) and `rescue.rs`.
 
-- **Rescue** (R with `ResetRule::Road`, also a hunter's in a hunt): `Rescue::call`; flies
+- **Rescue** (R with `ResetRule::Road`, also a hunter's in a hunt): `Car::call_rescue`; flies
   in from 140 m ahead of the car (where the chase camera looks), holds over its roof on a
   12 m cable (longer to stay 4 m over trees and houses within 8 m: their `Upright::top`),
   lets the cable down, lifts the car (upright), carries it at ~10 m/s average over a lift
   clearing land, trees and houses along the way, sets it down at the drive spot, unhooks
   (`Car::place`) and flies off 8 s. ~10 s near a road (`the_helicopter_takes_the_car_to_the_road`).
-  Runs in `FixedPostUpdate` after the simulation, overwriting the car's body (wheels hang,
-  engine runs). `car::Rescued` while it's coming/carrying: input ignored (brakes), neutral (whatever the
+  Part of the car's state (`Car::rescue`, in its snapshot; 2026-11-24, phase 3): R is
+  `DriverInput::reset`, `Car::steer` calls it by the `ResetRule` (the server works out
+  each player's from their round, `Round::reset_rule`, `Shadow::rule`), `rescue::fly`
+  runs it after the simulation and the collisions, exactly `sim::STEP` (client: `Fly` in
+  `FixedPostUpdate`; server: `Shadow::finish_step`), overwriting the car's body (wheels
+  hang, engine runs). So the server runs the same rescue and the client predicts it to
+  the bit (`a_rescue_is_run_by_the_server_predicted_and_seen_by_the_others`). `car::Rescued` while it's coming/carrying: input ignored (brakes), neutral (whatever the
   H-shifter says) and the parking brake on from the call, also once set down, R off,
   online a ghost (`haunt`). Meanwhile a warning in the upper middle, "⚠ You are being rescued ⚠ / Please
   do not resist!" (`hud::rescue_warning`, asked for by the user, 2026-11-24). Lets go if the car is moved by something else (> 2 m), gone,
-  or away. Its pose goes in `CarState::heli` (stamped like the state; protocol 10), so the
-  others draw it, the cable to the car's roof when `hooked`. No sound yet.
+  or away. Its pose goes in `CarState::heli` (stamped like the state; protocol 10; the server
+  sends its own car's), so the others draw it, the cable to the car's roof when `hooked`. No sound yet.
 - **Hunt helicopter**: the server flies a `Chase` per running round in `run_rounds` over
   the hunted (50 m up, at least 30 m over the ground; no top speed, acceleration ≤ 7 m/s²,
   so it lags, overshoots a hard stop and turns back; wanders ±6 m over a slow target) and
@@ -614,7 +619,7 @@ purchases). Plan agreed (Rocket League's way, not sim racing's trust-the-client)
   and rescue, holds, ghosts, lending cars, parking, fuel); 4 car changes as requests;
   5 shops on the server, generic client.
 
-Built (phases 0, 1 and the start of 2):
+Built (phases 0, 1, 2 and the start of 3):
 - `car::DriverInput`: a step's input (axes, buttons pressed since the last step,
   `away`/`held`), ~10 bytes on the wire; `DriverInput::take` passes it through its
   encoding so the client drives with exactly what the server gets. `Car::drive` applies
@@ -667,9 +672,13 @@ Built (phases 0, 1 and the start of 2):
   `Rounds::players_collide`), push themselves off traffic, and traffic reacts to the
   server's car (`Visitor` body). The client still pushes itself off remote cars, as its
   prediction (`players_cars_meet_on_the_server`).
-- Not done: hunt tags from the server's contacts (clients still send `Touched`), phase 3
-  on (placements are trusted: a modified client can teleport), checking a client's inputs
-  (rates, ranges are clamped by the encoding).
+- Phase 3 (protocol 21): the rescue helicopter is the server's (see "Helicopters"): no
+  placements for it. Still placed by the client (trusted): joining, an event's spots, grid
+  and lent cars, shops' changes (refuelling, builds). Holds, ghosts and the parking brake
+  at markers are still the client's word.
+- Not done: hunt tags from the server's contacts (clients still send `Touched`), the rest
+  of phase 3 (placements are trusted: a modified client can teleport), checking a
+  client's inputs (rates, ranges are clamped by the encoding).
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 

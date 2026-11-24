@@ -5,9 +5,10 @@
 //! and the steps since are driven again from the inputs kept. Driven alike, the two agree
 //! to the bit, so that only happens where the server knew more (other cars it met).
 //!
-//! Whatever changes our car outside the simulation (put on the road, carried by the
-//! rescue helicopter, built anew in a shop, refuelled) is noticed by comparing its state
-//! with what the last step left, and told to the server as a placement (`Place`), which it
+//! The rescue helicopter is part of the car's state and its steps (`heli::rescue`), so it's
+//! predicted like the driving. Whatever else changes our car between steps (put somewhere
+//! by an event, built anew in a shop, refuelled) is noticed by comparing its state with
+//! what the last step left, and told to the server as a placement (`Place`), which it
 //! takes up (trusted, until the server does those things itself). The server says with
 //! each state the latest placement it had taken up; a state from before ours is stale.
 
@@ -17,7 +18,8 @@ use bevy::prelude::*;
 
 use super::Connection;
 use super::client::Status;
-use crate::car::{ActiveCar, Car, Correction, DriverInput, StepInput};
+use crate::car::{ActiveCar, Car, Correction, DriverInput, ResetRule, StepInput};
+use crate::heli::rescue::fly;
 use crate::sim::{STEP, step_car};
 use crate::snapshot;
 use crate::terrain::Terrain;
@@ -31,10 +33,8 @@ const REPORT: f64 = 10.0;
 /// Our car's prediction (see the module's docs).
 #[derive(Resource, Default)]
 pub struct Prediction {
-    /// Our car's state as the last step left it, and as the simulation left it in the
-    /// step under way (before what runs after it, the rescue helicopter).
+    /// Our car's state as the last step left it.
     end: Option<Vec<u8>>,
-    simulated: Option<Vec<u8>>,
     /// Each step's number, input and our car's state after it, the latest last.
     history: VecDeque<(u32, DriverInput, Vec<u8>)>,
     /// The latest step after which our car was put somewhere, and the placement to tell.
@@ -98,17 +98,7 @@ pub fn notice_placing(
     }
 }
 
-/// Right after the simulation in a step.
-pub fn note_simulated(
-    mut prediction: ResMut<Prediction>,
-    chosen: Res<ActiveCar>,
-    mut cars: Query<&mut Car>,
-) {
-    prediction.simulated = active(cars.iter_mut(), &chosen).map(|car| snapshot::save(&*car));
-}
-
-/// At the end of a step: our car's state kept with the step's input; if something after
-/// the simulation changed it (the rescue helicopter), it was put there.
+/// At the end of a step: our car's state kept with the step's input.
 pub fn note_step(
     mut prediction: ResMut<Prediction>,
     (step, chosen): (Res<StepInput>, Res<ActiveCar>),
@@ -119,10 +109,6 @@ pub fn note_step(
     };
     let state = snapshot::save(&*car);
     let prediction = &mut *prediction;
-    if prediction.simulated.as_ref() != Some(&state) {
-        prediction.placed = Some(step.step);
-        prediction.place = Some((step.step, state.clone()));
-    }
     prediction
         .history
         .push_back((step.step, step.input, state.clone()));
@@ -138,7 +124,7 @@ pub fn note_step(
 pub fn reconcile(
     mut prediction: ResMut<Prediction>,
     connection: Res<Connection>,
-    (step, chosen): (Res<StepInput>, Res<ActiveCar>),
+    (step, chosen, rule): (Res<StepInput>, Res<ActiveCar>, Option<Res<ResetRule>>),
     terrain: Res<Terrain>,
     time: Res<Time<Real>>,
     mut correction: Option<ResMut<Correction>>,
@@ -166,6 +152,7 @@ pub fn reconcile(
     let Some(mut car) = active(cars.iter_mut(), &chosen) else {
         return;
     };
+    let rule = rule.as_deref().copied().unwrap_or_default();
     let (was, turned) = (car.body.position, car.body.rotation);
     if !snapshot::load(&mut *car, &state) {
         warn!("The server sent a state that isn't our car's");
@@ -173,8 +160,9 @@ pub fn reconcile(
     }
     prediction.history[i].2 = state;
     for (_, input, kept) in prediction.history.iter_mut().skip(i + 1) {
-        car.drive(input, STEP);
+        car.steer(input, rule, &terrain, STEP);
         step_car(&mut car, &terrain, STEP);
+        fly(&mut car, &terrain, STEP);
         *kept = snapshot::save(&*car);
     }
     prediction.end = prediction.history.back().map(|(.., state)| state.clone());

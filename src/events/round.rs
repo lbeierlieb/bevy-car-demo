@@ -3,6 +3,7 @@
 //! in the lobby with how it ended), and what players ask of it.
 
 use super::{hunt, race};
+use crate::car::ResetRule;
 use crate::net::protocol::{CarId, PlayerId};
 use crate::net::wire::{Reader, Wire};
 
@@ -113,6 +114,32 @@ impl Round {
         match &self.game {
             Game::Hunt(settings) => Some(settings),
             _ => None,
+        }
+    }
+
+    /// What R does for `player` while the round runs (`course`: a race's), the same in
+    /// their game and on the server: in a hunt, the rescue helicopter takes hunters to the
+    /// road if the hunted allows it, never the hunted; in a race that allows it, to the
+    /// last gate passed (before any, the grid spot); never in a time trial.
+    pub fn reset_rule(&self, course: Option<&race::Course>, player: PlayerId) -> ResetRule {
+        if !self.running() {
+            return ResetRule::Road;
+        }
+        match &self.game {
+            Game::Hunt(settings) if settings.hunters_reset && self.host != player => {
+                ResetRule::Road
+            }
+            Game::Hunt(_) | Game::Trial(_) => ResetRule::Never,
+            Game::Race(settings) => match course {
+                Some(course) if settings.resets => {
+                    let passed = (self.standing())
+                        .and_then(|standing| standing.racers.iter().find(|r| r.player == player))
+                        .map_or(0, |racer| usize::from(racer.gates));
+                    let (p, yaw) = course.reset_spot(passed, self.slot(player));
+                    ResetRule::Spot(p, yaw)
+                }
+                _ => ResetRule::Never,
+            },
         }
     }
 

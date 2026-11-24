@@ -414,13 +414,12 @@ mod tests {
     }
 
     #[test]
-    fn a_rescue_helicopter_is_seen_by_the_others() {
-        use crate::heli::rescue::Rescue;
+    fn a_rescue_is_run_by_the_server_predicted_and_seen_by_the_others() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut anna = driver(&listener, "Anna");
+        anna.add_plugins(crate::heli::rescue::RescuePlugin);
         let mut ben = player(&listener, "Ben", 0, 30.0);
-        anna.init_resource::<Rescue>();
         run(&mut [&mut server, &mut anna, &mut ben], 60);
         let heli = |app: &mut App| {
             (app.world_mut().query::<&RemoteCar>())
@@ -430,22 +429,40 @@ mod tests {
                 .and_then(|state| state.heli)
         };
         assert_eq!(heli(&mut ben), None);
-        // Anna calls it (in this test it stays where it was called to).
-        let entity = (anna.world_mut().query_filtered::<Entity, With<Car>>())
-            .single(anna.world())
-            .unwrap();
-        anna.world_mut()
-            .resource_scope(|world, terrain: Mut<Terrain>| {
-                let car = world.get::<Car>(entity).unwrap().clone();
-                let to = Vec2::new(20.0, 0.0);
-                (world.resource_mut::<Rescue>()).call(entity, &car, &terrain, to, 0.0);
-            });
-        run(&mut [&mut server, &mut anna, &mut ben], 10);
-        let sent = anna.world().resource::<Rescue>().pose(0.0).unwrap();
+        // Anna presses R.
+        let press = |anna: &mut App, on: bool| {
+            anna.world_mut()
+                .resource_mut::<crate::input::WheelInput>()
+                .reset = on;
+        };
+        press(&mut anna, true);
+        run(&mut [&mut server, &mut anna, &mut ben], 1);
+        press(&mut anna, false);
+        run(&mut [&mut server, &mut anna, &mut ben], 120);
+        assert!(car(&mut anna).rescue.busy(), "her game should predict it");
+        assert!(anna.world().resource::<crate::car::Rescued>().0);
+        let mut peers = server.world_mut().query::<&super::server::Peer>();
+        let on_server = (peers.iter(server.world()))
+            .find(|peer| peer.name.as_deref() == Some("Anna"))
+            .and_then(|peer| peer.shadow.car())
+            .map(|car| car.rescue.busy());
+        assert_eq!(on_server, Some(true), "the server runs it");
+        let (corrected, compared) = (anna.world())
+            .resource::<super::predict::Prediction>()
+            .corrections();
+        assert!(compared > 5, "{compared} compared");
+        assert_eq!(corrected, 0, "predicted exactly");
         let seen = heli(&mut ben).expect("Ben doesn't see it");
-        assert_eq!(seen.position, sent.position);
-        assert_eq!(seen.rotation, sent.rotation);
-        assert!(!seen.hooked);
+        let ours = car(&mut anna).rescue.pose(0.0).unwrap();
+        assert!(seen.position.distance(ours.position) < 5.0);
+        // Set down and flown off, still as the server has it.
+        run(&mut [&mut server, &mut anna, &mut ben], 1200);
+        assert!(!car(&mut anna).rescue.busy(), "never done");
+        let (corrected, _) = (anna.world())
+            .resource::<super::predict::Prediction>()
+            .corrections();
+        assert_eq!(corrected, 0, "predicted exactly to the end");
+        assert_eq!(heli(&mut ben), None);
     }
 
     #[test]

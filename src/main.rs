@@ -21,7 +21,6 @@ fn main() {
             events::EventsPlugin,
             // Starts in the coupé; R puts the car back on the nearest road.
             car::DefaultCarPlugin,
-            car::ResetPlugin,
             // 1: gizmos, 2: the panel with telemetry, driving aids and bindings (hidden
             // at first).
             debug::DebugPlugin,

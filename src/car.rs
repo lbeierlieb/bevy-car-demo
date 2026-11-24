@@ -346,6 +346,8 @@ pub struct Car {
     /// The ignition button switched the engine off and is still held (it doesn't crank
     /// until let go).
     pub switching_off: bool,
+    /// The rescue helicopter coming for the car, carrying it or flying off.
+    pub rescue: Rescue,
 }
 
 impl Car {
@@ -389,6 +391,7 @@ impl Car {
             knocks: 0.0,
             parking_brake: true,
             switching_off: false,
+            rescue: Rescue::default(),
         }
         .with_fuel_load()
     }
@@ -438,6 +441,9 @@ impl Car {
         for (corner, old) in placed.corners.iter_mut().zip(&self.corners) {
             corner.tread = old.tread;
         }
+        // A rescue under way lets go.
+        placed.rescue = self.rescue.clone();
+        placed.rescue.let_go();
         *self = placed;
     }
 
@@ -470,6 +476,7 @@ impl Car {
         car.fuel = self.fuel;
         car.fuel.fit(&car.setup.tank);
         car.load_fuel();
+        car.rescue = self.rescue.clone();
         car
     }
 
@@ -529,6 +536,7 @@ impl crate::snapshot::Snapshot for Car {
         self.fuel.save(out);
         self.parking_brake.save(out);
         self.switching_off.save(out);
+        self.rescue.save(out);
     }
 
     fn load(&mut self, r: &mut crate::net::wire::Reader) -> Option<()> {
@@ -544,6 +552,7 @@ impl crate::snapshot::Snapshot for Car {
         self.fuel.load(r)?;
         self.parking_brake.load(r)?;
         self.switching_off.load(r)?;
+        self.rescue.load(r)?;
         // What another build's state could hold that this one hasn't got.
         if !self.drivetrain.fits(&self.setup.engine) {
             return None;
@@ -662,17 +671,6 @@ impl Plugin for DefaultCarPlugin {
     }
 }
 
-/// R (or the wheel's reset button) calls the rescue helicopter, which carries the active
-/// car back to the nearest road and sets it down on its wheels, as it was (fuel, tires and
-/// engine wear stay); what an event's rules say otherwise (`ResetRule`).
-pub struct ResetPlugin;
-
-impl Plugin for ResetPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Update, reset_car.before(sync_transforms));
-    }
-}
-
 fn spawn_default_car(mut commands: Commands, terrain: Res<Terrain>, spawn: Res<Spawn>) {
     // On the road at the spawn point.
     let (p, yaw) = terrain.road_spawns(&spawn, 1, 0.0)[0];
@@ -691,7 +689,7 @@ const KEY_STEER_RETURN_RATE: f32 = 2.5;
 #[derive(Message)]
 pub struct ReverseRefused;
 /// The driver is away from the wheel (in the dyno's room): the active car holds still,
-/// as any other car does, and R does nothing.
+/// as any other car does, and R does nothing (a rescue under way lets go).
 #[derive(Resource, Default)]
 pub struct Away(pub bool);
 
@@ -701,12 +699,13 @@ pub struct Away(pub bool);
 pub struct Held(pub bool);
 
 /// The rescue helicopter is on its way to the active car or carrying it
-/// (`heli::rescue`): the driver's input does nothing (the brakes are on), and online the
-/// car is a ghost.
+/// (`heli::rescue`, as of the last step): the driver's input does nothing (the brakes are
+/// on), and online the car is a ghost.
 #[derive(Resource, Default)]
 pub struct Rescued(pub bool);
 
-/// What R does with the active car (in an event's round, its rules).
+/// What R does with the active car (in an event's round, its rules; the server works out
+/// the same for its copy of a player's car).
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
 pub enum ResetRule {
     /// Has the rescue helicopter carry it to the nearest road.
@@ -745,8 +744,9 @@ pub struct DriverInput {
     /// The ignition button pressed since the last step, and held.
     pub ignition: bool,
     pub ignition_held: bool,
-    /// Nobody's at the wheel (away in a shop's room, or the car carried by the rescue
-    /// helicopter): all brakes, nothing else.
+    /// R (reset) pressed since the last step.
+    pub reset: bool,
+    /// Nobody's at the wheel (away in a shop's room): all brakes, nothing else.
     pub away: bool,
     /// Held at the start: the brakes are on whatever the driver does.
     pub held: bool,
@@ -774,6 +774,7 @@ impl DriverInput {
             shift: presses.shift,
             ignition: presses.ignition,
             ignition_held: wheel.ignition_held,
+            reset: presses.reset,
             away: false,
             held: false,
             traction_control: true,
@@ -817,6 +818,7 @@ impl Wire for DriverInput {
             self.steer_keys < 0.0,
             self.traction_control,
             self.abs,
+            self.reset,
         ];
         let flags = (bits.iter().enumerate()).fold(0u16, |f, (i, &b)| f | (u16::from(b) << i));
         flags.put(out);
@@ -881,6 +883,7 @@ impl Wire for DriverInput {
             held: bit(9),
             traction_control: bit(12),
             abs: bit(13),
+            reset: bit(14),
         })
     }
 }
@@ -891,6 +894,7 @@ pub struct Presses {
     pub shift: i8,
     pub ignition: bool,
     pub handbrake: bool,
+    pub reset: bool,
 }
 
 /// The simulation step under way (or the last), numbered from the start, and the driver's
@@ -908,18 +912,19 @@ fn gather_presses(wheel: Res<WheelInput>, mut presses: ResMut<Presses>) {
         .saturating_add(wheel.shift_up as i8 - wheel.shift_down as i8);
     presses.ignition |= wheel.ignition;
     presses.handbrake |= wheel.handbrake_toggle;
+    presses.reset |= wheel.reset;
 }
 
 /// This step's input from the wheel, and whether the driver is at it.
 pub fn take_input(
     wheel: Res<WheelInput>,
     mut presses: ResMut<Presses>,
-    (away, held, rescued): (Res<Away>, Res<Held>, Res<Rescued>),
+    (away, held): (Res<Away>, Res<Held>),
     aids: Res<DriverAids>,
     mut input: ResMut<StepInput>,
 ) {
     let mut taken = DriverInput::take(&wheel, &mut presses);
-    taken.away = away.0 || rescued.0;
+    taken.away = away.0;
     taken.held = held.0;
     taken.traction_control = aids.traction_control;
     taken.abs = aids.abs;
@@ -927,10 +932,12 @@ pub fn take_input(
     input.input = taken;
 }
 
-/// The step's input drives the active car; any other car holds all brakes.
+/// The step's input drives the active car (R as `ResetRule` says); any other car holds
+/// all brakes.
 pub fn drive(
     input: Res<StepInput>,
-    active: Res<ActiveCar>,
+    (active, rule): (Res<ActiveCar>, Res<ResetRule>),
+    terrain: Res<Terrain>,
     mut cars: Query<&mut Car>,
     mut refused: MessageWriter<ReverseRefused>,
 ) {
@@ -944,13 +951,36 @@ pub fn drive(
         } else {
             &idle
         };
-        if car.drive(input, crate::sim::STEP) {
+        if car.steer(input, *rule, &terrain, crate::sim::STEP) {
             refused.write(ReverseRefused);
         }
     }
 }
 
 impl Car {
+    /// The driver's `input` for a step of `dt`, R included: it calls the rescue
+    /// helicopter as `rule` says (to the nearest road, or a spot), unless one is under way
+    /// or nobody's at the wheel. Then as `drive`.
+    pub fn steer(
+        &mut self,
+        input: &DriverInput,
+        rule: ResetRule,
+        terrain: &Terrain,
+        dt: f32,
+    ) -> bool {
+        if input.reset && !input.away && !self.rescue.busy() {
+            match rule {
+                ResetRule::Road => {
+                    let (p, yaw) = self.road_spot(terrain);
+                    self.call_rescue(terrain, p, yaw);
+                }
+                ResetRule::Spot(p, yaw) => self.call_rescue(terrain, p, yaw),
+                ResetRule::Never => {}
+            }
+        }
+        self.drive(input, dt)
+    }
+
     /// The driver's `input` for a step of `dt` to the car's controls, by the car's rules:
     /// Q/E (or the paddles, or an H-shifter) change gear, the ignition button held runs
     /// the starter and pressed while running switches the engine off, keys steer
@@ -960,6 +990,9 @@ impl Car {
         self.traction_control = input.traction_control;
         self.abs = input.abs;
         if input.away {
+            self.rescue.let_go();
+        }
+        if input.away || self.rescue.has_car() {
             self.controls = Controls {
                 brake: 1.0,
                 handbrake: 1.0,
@@ -1068,28 +1101,6 @@ pub fn parking_brake_rule(
         on = false;
     }
     (on, if on || held { 1.0 } else { 0.0 })
-}
-
-fn reset_car(
-    wheel: Res<WheelInput>,
-    active: Res<ActiveCar>,
-    terrain: Res<Terrain>,
-    cars: Query<(Entity, &Car)>,
-    (away, rule): (Res<Away>, Res<ResetRule>),
-    mut rescue: ResMut<Rescue>,
-) {
-    if wheel.reset && !away.0 && !rescue.busy() {
-        for (entity, car) in cars.iter().filter(|(_, car)| car.index == active.0) {
-            match *rule {
-                ResetRule::Road => {
-                    let (p, yaw) = car.road_spot(&terrain);
-                    rescue.call(entity, car, &terrain, p, yaw);
-                }
-                ResetRule::Spot(p, yaw) => rescue.call(entity, car, &terrain, p, yaw),
-                ResetRule::Never => {}
-            }
-        }
-    }
 }
 
 /// How quickly what's drawn of the active car closes on where it is after a correction
@@ -1244,6 +1255,7 @@ mod tests {
             shift: 2,
             ignition: false,
             ignition_held: true,
+            reset: true,
             away: false,
             held: true,
             traction_control: false,
