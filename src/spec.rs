@@ -16,7 +16,7 @@ use crate::physics::engine::table::Table;
 use crate::physics::fuel::PUMP_OCTANE;
 
 /// A car as built: from it, `setup` makes the car the simulation runs.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CarSpec {
     pub build: CarBuild,
     /// As installed in the car (`CarBuild::install`).

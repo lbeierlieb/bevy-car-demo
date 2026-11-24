@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use crate::chassis::{CLUTCHES, CarBuild, Chassis, DEFAULT_CHASSIS, SUSPENSIONS};
 use crate::heli::rescue::Rescue;
 use crate::input::WheelInput;
+use crate::net::wire::{Reader, Wire, decode, encode};
 use crate::physics::collision::Obb;
 use crate::physics::drivetrain::{Differential, Drive, Drivetrain, EngineSetup, REVERSE_SPEED};
 use crate::physics::engine::EngineBuild;
@@ -754,7 +755,8 @@ pub struct DriverInput {
 impl DriverInput {
     /// Takes this step's input: the wheel as it is now, and the presses gathered since the
     /// last step (which are then cleared, so each counts once however many steps a frame
-    /// runs, and none is lost when a frame runs none).
+    /// runs, and none is lost when a frame runs none). As precise as it goes over the
+    /// network: the car is driven by exactly what the server is sent.
     pub fn take(wheel: &WheelInput, presses: &mut Presses) -> Self {
         let input = Self {
             steer: wheel.steer,
@@ -773,7 +775,104 @@ impl DriverInput {
             held: false,
         };
         *presses = Presses::default();
-        input
+        input.sent()
+    }
+
+    /// The input as the other end reads it.
+    pub fn sent(&self) -> Self {
+        decode(&encode(self)).expect("an input reads back")
+    }
+}
+
+/// A share of the way (0 to 1) in 16 bits.
+fn put_share(x: f32, out: &mut Vec<u8>) {
+    ((x.clamp(0.0, 1.0) * 65535.0).round() as u16).put(out);
+}
+
+fn get_share(r: &mut Reader) -> Option<f32> {
+    Some(f32::from(r.get::<u16>()?) / 65535.0)
+}
+
+/// About ten bytes: which of the optional ones there are and the buttons as bits, the
+/// axes in 16 bits (steering signed), the shifter's gate and the shifts.
+impl Wire for DriverInput {
+    fn put(&self, out: &mut Vec<u8>) {
+        let bits = [
+            self.steer.is_some(),
+            self.clutch.is_some(),
+            self.handbrake.is_some(),
+            self.shifter.is_some(),
+            self.handbrake_toggle,
+            self.handbrake_held,
+            self.ignition,
+            self.ignition_held,
+            self.away,
+            self.held,
+            self.steer_keys > 0.0,
+            self.steer_keys < 0.0,
+        ];
+        let flags = (bits.iter().enumerate()).fold(0u16, |f, (i, &b)| f | (u16::from(b) << i));
+        flags.put(out);
+        if let Some(steer) = self.steer {
+            ((steer.clamp(-1.0, 1.0) * 32767.0).round() as i16).put(out);
+        }
+        put_share(self.throttle, out);
+        put_share(self.brake, out);
+        if let Some(clutch) = self.clutch {
+            put_share(clutch, out);
+        }
+        if let Some(handbrake) = self.handbrake {
+            put_share(handbrake, out);
+        }
+        if let Some(gate) = self.shifter {
+            gate.put(out);
+        }
+        self.shift.put(out);
+    }
+
+    fn get(r: &mut Reader) -> Option<Self> {
+        let flags: u16 = r.get()?;
+        let bit = |i: u32| flags & (1 << i) != 0;
+        let steer = bit(0)
+            .then(|| Some(f32::from(r.get::<i16>()?) / 32767.0))
+            .flatten();
+        if bit(0) && steer.is_none() {
+            return None;
+        }
+        let throttle = get_share(r)?;
+        let brake = get_share(r)?;
+        let mut optional = |on: bool| -> Option<Option<f32>> {
+            if on {
+                get_share(r).map(Some)
+            } else {
+                Some(None)
+            }
+        };
+        let clutch = optional(bit(1))?;
+        let handbrake = optional(bit(2))?;
+        let shifter = if bit(3) {
+            let gate: i8 = r.get()?;
+            (-1..=8).contains(&gate).then_some(gate)?;
+            Some(gate)
+        } else {
+            None
+        };
+        Some(Self {
+            steer: steer.map(|s| s.clamp(-1.0, 1.0)),
+            steer_keys: f32::from(i8::from(bit(10)) - i8::from(bit(11))),
+            throttle,
+            brake,
+            clutch,
+            handbrake,
+            handbrake_toggle: bit(4),
+            handbrake_held: bit(5),
+            shifter,
+            shift: r.get()?,
+            ignition: bit(6),
+            ignition_held: bit(7),
+            away: bit(8),
+            held: bit(9),
+        })
     }
 }
 
@@ -785,9 +884,13 @@ pub struct Presses {
     pub handbrake: bool,
 }
 
-/// The driver's input to the active car in the simulation step under way (or the last).
+/// The simulation step under way (or the last), numbered from the start, and the driver's
+/// input to the active car in it.
 #[derive(Resource, Clone, Copy, Debug, Default)]
-pub struct StepInput(pub DriverInput);
+pub struct StepInput {
+    pub step: u32,
+    pub input: DriverInput,
+}
 
 /// Gathers the presses of this frame for the next simulation step.
 fn gather_presses(wheel: Res<WheelInput>, mut presses: ResMut<Presses>) {
@@ -799,7 +902,7 @@ fn gather_presses(wheel: Res<WheelInput>, mut presses: ResMut<Presses>) {
 }
 
 /// This step's input from the wheel, and whether the driver is at it.
-fn take_input(
+pub fn take_input(
     wheel: Res<WheelInput>,
     mut presses: ResMut<Presses>,
     (away, held, rescued): (Res<Away>, Res<Held>, Res<Rescued>),
@@ -808,7 +911,8 @@ fn take_input(
     let mut taken = DriverInput::take(&wheel, &mut presses);
     taken.away = away.0 || rescued.0;
     taken.held = held.0;
-    input.0 = taken;
+    input.step = input.step.wrapping_add(1);
+    input.input = taken;
 }
 
 /// The step's input drives the active car, with the driver's aids; any other car holds
@@ -829,7 +933,7 @@ pub fn drive(
         let input = if car.index == active.0 {
             car.traction_control = aids.traction_control;
             car.abs = aids.abs;
-            &input.0
+            &input.input
         } else {
             &idle
         };
@@ -1074,6 +1178,37 @@ mod tests {
         van.drivetrain.gear = top + 1;
         assert!(!load(&mut minim, &save(&van)));
         assert!(!load(&mut minim, &save(&van)[..20]), "cut short");
+    }
+
+    #[test]
+    fn inputs_read_back_as_sent() {
+        let input = DriverInput {
+            steer: Some(-0.123456),
+            steer_keys: -1.0,
+            throttle: 0.7,
+            brake: 1.0,
+            clutch: Some(0.25),
+            handbrake: None,
+            handbrake_toggle: true,
+            handbrake_held: false,
+            shifter: Some(-1),
+            shift: 2,
+            ignition: false,
+            ignition_held: true,
+            away: false,
+            held: true,
+        };
+        let sent = input.sent();
+        assert!((sent.steer.unwrap() - input.steer.unwrap()).abs() < 1e-4);
+        assert!((sent.throttle - 0.7).abs() < 1e-4);
+        assert_eq!(sent.sent(), sent, "sent twice, the same");
+        let bytes = encode(&sent).len();
+        assert!(bytes <= 14, "{bytes} bytes");
+        assert_eq!(
+            DriverInput::default().sent(),
+            DriverInput::default(),
+            "nothing pressed"
+        );
     }
 
     #[test]

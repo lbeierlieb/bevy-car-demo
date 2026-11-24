@@ -2,7 +2,10 @@
 //!
 //! A client says hello (protocol version, the map's fingerprint, the player's name), then
 //! sends its car's looks whenever they change (reliably) and its state ~30 times a second
-//! (unreliably: a lost one is soon replaced). The server welcomes it (or refuses it) and
+//! (unreliably: a lost one is soon replaced). For the server to drive the same car, it
+//! also sends what the car is built of whenever that changes, the driver's input in every
+//! simulation step (unreliably, each with the few before it) and now and then the car's
+//! whole state after a step. The server welcomes it (or refuses it) and
 //! tells it where the shops and events are (its own lists, separate from the map), then
 //! tells everyone who joins and leaves, and sends each player the states of the cars near
 //! them, the nearer the more often, with their looks before the first state and after
@@ -18,6 +21,7 @@ use bevy::prelude::*;
 
 use super::wire::{Reader, Wire};
 use crate::audio::{EngineCharacter, EngineRun, ExhaustSound};
+use crate::car::DriverInput;
 use crate::chassis::{CHASSIS, CLUTCHES, CarBuild, FACTORY_TOE, GEARBOXES, PAINTS, SUSPENSIONS};
 use crate::events::Event;
 use crate::events::round::{Action, Round};
@@ -28,11 +32,12 @@ use crate::physics::engine::families::Layout;
 use crate::physics::suspension::ArmGeometry;
 use crate::physics::tire::COMPOUNDS;
 use crate::shops::Shop;
+use crate::spec::CarSpec;
 use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 17;
+pub const PROTOCOL: u32 = 18;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -71,6 +76,20 @@ pub enum ToServer {
     Chat(String),
     /// About the events: into a lobby, out, the hunted's settings and choices.
     Event(Action),
+    /// What our car is built of, whole, whenever it changes (for the server to drive the
+    /// same car).
+    Car(Box<CarSpec>),
+    /// The driver's input in the simulation steps up to `last`, the latest last (the
+    /// last few each time, so a lost message loses nothing).
+    Inputs {
+        last: u32,
+        inputs: Vec<DriverInput>,
+    },
+    /// Our car's whole state (`snapshot`) after simulation step `step`, now and then.
+    Check {
+        step: u32,
+        state: Vec<u8>,
+    },
 }
 
 /// Server to client.
@@ -135,7 +154,7 @@ impl ToServer {
 
     /// Whether it must arrive (else a newer one will do).
     pub fn reliable(&self) -> bool {
-        !matches!(self, ToServer::State(_))
+        !matches!(self, ToServer::State(_) | ToServer::Inputs { .. })
     }
 }
 
@@ -238,6 +257,20 @@ impl Wire for ToServer {
                 4u8.put(out);
                 action.put(out);
             }
+            ToServer::Car(spec) => {
+                5u8.put(out);
+                spec.put(out);
+            }
+            ToServer::Inputs { last, inputs } => {
+                6u8.put(out);
+                last.put(out);
+                inputs.put(out);
+            }
+            ToServer::Check { step, state } => {
+                7u8.put(out);
+                step.put(out);
+                state.put(out);
+            }
         }
     }
 
@@ -252,6 +285,15 @@ impl Wire for ToServer {
             2 => ToServer::State(r.get()?),
             3 => ToServer::Chat(r.get()?),
             4 => ToServer::Event(r.get()?),
+            5 => ToServer::Car(Box::new(r.get()?)),
+            6 => ToServer::Inputs {
+                last: r.get()?,
+                inputs: r.get()?,
+            },
+            7 => ToServer::Check {
+                step: r.get()?,
+                state: r.get()?,
+            },
             _ => return None,
         })
     }

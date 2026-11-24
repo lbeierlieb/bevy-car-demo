@@ -5,7 +5,7 @@ const MAX_AXES: usize = 8;
 
 /// Values on a grid of any number of axes (each ascending). Lookups interpolate linearly
 /// along every axis and clamp to the grid's edges; an axis of length one is constant.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Table {
     axes: Vec<Vec<f32>>,
     /// Row-major: the last axis varies fastest.

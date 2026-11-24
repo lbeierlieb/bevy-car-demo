@@ -364,6 +364,8 @@ fn receive(
                     peer.looks = Some(*looks);
                     peer.revision += 1;
                 }
+                // The server doesn't simulate players' cars yet.
+                ToServer::Car(_) | ToServer::Inputs { .. } | ToServer::Check { .. } => {}
                 ToServer::State(state) => {
                     peer.clock.heard(state.time, now);
                     if peer.state.is_none_or(|old| state.time > old.time) {

@@ -100,7 +100,7 @@ pub struct Actuators {
 /// An ECU: speed-density fuelling from rpm, manifold pressure and intake air temperature,
 /// a spark map, a rev limiter and idle control; and, if its model can, cam switching and
 /// phasing (otherwise the cams stay on the first profile, unphased).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Ecu {
     pub model: EcuModel,
     /// Engine size as set up in the ECU: displacement (m³) and cylinders.
@@ -123,7 +123,7 @@ pub struct Ecu {
 }
 
 /// When to switch cam profiles, and where to put the phasers.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CamControl {
     /// Switch to the second cam profile above `switch_rpm` with the manifold pressure above
     /// `switch_map` (Pa), and back a little below either.

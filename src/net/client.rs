@@ -21,7 +21,7 @@ use super::protocol::{
 };
 use super::wire::{decode, encode};
 use super::{ClockOffset, SEND_RATE};
-use crate::car::{ActiveCar, Car, Rescued};
+use crate::car::{ActiveCar, Car, DriverInput, Rescued, StepInput};
 use crate::events::Event;
 use crate::events::round::{Action, Round};
 use crate::heli::HeliPose;
@@ -31,6 +31,7 @@ use crate::physics::collision::Obb;
 use crate::physics::collision::{self, OBSTACLE};
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
+use crate::spec::CarSpec;
 use crate::terrain::{Spawn, Terrain};
 
 /// How long a car is carried on past its latest state; then it's held there (s). More
@@ -63,6 +64,12 @@ const CHAT_KEPT: usize = 50;
 const REPORT: f64 = 10.0;
 /// A state this much past the quickest counts as late (s).
 const LATE: f64 = 0.03;
+/// The inputs sent in each message: the latest and the ones before (a few frames' worth,
+/// so a lost message or two loses none).
+const INPUTS_SENT: usize = 12;
+/// How often our car's whole state goes to the server for checking against its own
+/// simulation of it (s).
+const CHECK_EVERY: f64 = 1.0;
 
 pub struct ClientPlugin;
 
@@ -75,6 +82,7 @@ impl Plugin for ClientPlugin {
                 .after(crate::looks::show_cars)
                 .run_if(resource_exists::<Connection>),
         )
+        .init_resource::<StepInput>()
         .init_resource::<WantsGhost>()
         .init_resource::<GhostPlayers>()
         .init_resource::<Touching>()
@@ -82,8 +90,10 @@ impl Plugin for ClientPlugin {
         .add_systems(PreUpdate, forget_cars)
         .add_systems(
             FixedUpdate,
-            push_off_remote_cars
-                .after(crate::sim::simulate)
+            (
+                record_input.after(crate::car::take_input),
+                push_off_remote_cars.after(crate::sim::simulate),
+            )
                 .run_if(resource_exists::<Connection>),
         );
     }
@@ -148,6 +158,13 @@ pub struct Connection {
     /// The looks last sent of our car, and when its state was (s).
     sent_looks: Option<Looks>,
     sent: f64,
+    /// What our car was built of when last sent.
+    sent_spec: Option<CarSpec>,
+    /// The driver's latest inputs by step, the latest last; the last step sent, and when
+    /// our car's whole state last went for checking (s).
+    inputs: VecDeque<(u32, DriverInput)>,
+    inputs_sent: Option<u32>,
+    checked: f64,
     /// How the cars' states came lately, logged every `REPORT` seconds.
     report: Report,
 }
@@ -189,6 +206,10 @@ impl Connection {
             map: HashMap::new(),
             sent_looks: None,
             sent: f64::NEG_INFINITY,
+            sent_spec: None,
+            inputs: VecDeque::new(),
+            inputs_sent: None,
+            checked: f64::NEG_INFINITY,
             report: Report::default(),
         };
         connection.say(&ToServer::Hello {
@@ -490,12 +511,23 @@ fn dress_cars(
     }
 }
 
-/// Our car's looks when they change, and its state every so often.
+/// Keeps the driver's input in each simulation step, to send.
+fn record_input(mut connection: ResMut<Connection>, input: Res<StepInput>) {
+    let inputs = &mut connection.inputs;
+    inputs.push_back((input.step, input.input));
+    while inputs.len() > INPUTS_SENT {
+        inputs.pop_front();
+    }
+}
+
+/// Our car's looks when they change, and its state every so often; what it's built of
+/// when that changes, the driver's input in every step, and its whole state now and then
+/// (for the server to drive it too).
 fn send(
     mut connection: ResMut<Connection>,
     time: Res<Time<Real>>,
     fixed: Res<Time<Fixed>>,
-    active: Res<ActiveCar>,
+    (active, step): (Res<ActiveCar>, Res<StepInput>),
     rescue: Option<Res<Rescue>>,
     cars: Query<(&Car, &Looks, &Motion, Has<Ghost>)>,
 ) {
@@ -510,6 +542,25 @@ fn send(
     if connection.sent_looks.as_ref() != Some(looks) {
         connection.sent_looks = Some(looks.clone());
         connection.say(&ToServer::Looks(Box::new(looks.clone())));
+    }
+    let spec = CarSpec::of(&car.setup);
+    if connection.sent_spec.as_ref() != Some(&spec) {
+        connection.say(&ToServer::Car(Box::new(spec.clone())));
+        connection.sent_spec = Some(spec);
+    }
+    if let Some(&(last, _)) = connection.inputs.back()
+        && connection.inputs_sent != Some(last)
+    {
+        connection.inputs_sent = Some(last);
+        let inputs = connection.inputs.iter().map(|&(_, input)| input).collect();
+        connection.say(&ToServer::Inputs { last, inputs });
+    }
+    if now - connection.checked >= CHECK_EVERY {
+        connection.checked = now;
+        connection.say(&ToServer::Check {
+            step: step.step,
+            state: crate::snapshot::save(car),
+        });
     }
     if now - connection.sent >= 1.0 / SEND_RATE {
         connection.sent = now;
