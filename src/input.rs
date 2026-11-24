@@ -314,8 +314,6 @@ pub struct WheelConfig {
     pub base_range: Option<f32>,
     /// Dead zone at either end of pedal travel (0..0.5).
     pub deadzone: f32,
-    /// How a stick's push becomes steering (an exponent, 1 linear, see `stick_steer`).
-    pub stick_curve: f32,
     /// Force feedback strength and on/off, and whether its direction is flipped.
     pub ffb_gain: f32,
     /// How much stronger the quick part of the force feedback (bumps, the driven front
@@ -333,7 +331,6 @@ impl Default for WheelConfig {
             range: 540.0,
             base_range: None,
             deadzone: 0.02,
-            stick_curve: STICK_CURVE,
             ffb_gain: 0.5,
             ffb_road: 2.5,
             ffb_enabled: true,
@@ -345,9 +342,36 @@ impl Default for WheelConfig {
 /// How many profiles there are, and how many inputs a control takes in one.
 pub const PROFILES: usize = 4;
 pub const PER_ACTION: usize = 2;
-/// The stick steering curve's default: a quarter push turns the wheels 8 % of full lock,
-/// half 29 %.
-pub const STICK_CURVE: f32 = 1.8;
+
+/// How a profile's inputs become steering, throttle and brake: exponents of the push (1
+/// linear; higher is finer near the rest position, see `curve`). The steering's never
+/// applies to the force feedback wheel's axis (a wheel stays 1:1 with the front wheels).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Curves {
+    pub steer: f32,
+    pub throttle: f32,
+    pub brake: f32,
+}
+
+impl Curves {
+    pub const LINEAR: Self = Self {
+        steer: 1.0,
+        throttle: 1.0,
+        brake: 1.0,
+    };
+}
+
+impl Default for Curves {
+    /// For a gamepad: a quarter push steers 8 % of full lock, half 29 %; throttle only a
+    /// little (the pedal's linkage is progressive already), half 44 %; brake half 35 %.
+    fn default() -> Self {
+        Self {
+            steer: 1.8,
+            throttle: 1.2,
+            brake: 1.5,
+        }
+    }
+}
 /// The keyboard defaults' version written to `wheel.cfg` (2: no arrows; see `from_text`).
 const KEYS_VERSION: u32 = 2;
 
@@ -356,6 +380,7 @@ const KEYS_VERSION: u32 = 2;
 pub struct Profile {
     pub name: String,
     pub bindings: Vec<(Action, Binding)>,
+    pub curves: Curves,
 }
 
 impl Profile {
@@ -382,6 +407,7 @@ impl Profile {
                 .into_iter()
                 .map(|(action, key)| (action, Binding::key(key)))
                 .collect(),
+            ..default()
         }
     }
 
@@ -390,7 +416,7 @@ impl Profile {
         let mut profiles = vec![Self::keyboard()];
         profiles.extend((2..=PROFILES).map(|n| Self {
             name: format!("Profile {n}"),
-            bindings: Vec::new(),
+            ..default()
         }));
         profiles
     }
@@ -477,7 +503,7 @@ impl WheelConfig {
 
     fn to_text(&self) -> String {
         let mut text = format!(
-            "# car-sim wheel settings\nkeys {KEYS_VERSION}\nrange {}\ndeadzone {}\nffb_gain {}\nffb_road {}\nffb_enabled {}\nffb_invert {}\nactive {}\nstick_curve {}\n",
+            "# car-sim wheel settings\nkeys {KEYS_VERSION}\nrange {}\ndeadzone {}\nffb_gain {}\nffb_road {}\nffb_enabled {}\nffb_invert {}\nactive {}\n",
             self.range,
             self.deadzone,
             self.ffb_gain,
@@ -485,7 +511,6 @@ impl WheelConfig {
             self.ffb_enabled,
             self.ffb_invert,
             self.active,
-            self.stick_curve,
         );
         if let Some(base_range) = self.base_range {
             text += &format!("base_range {base_range}\n");
@@ -494,6 +519,12 @@ impl WheelConfig {
         // device name (may contain spaces, so it's last).
         for (i, profile) in self.profiles.iter().enumerate() {
             text += &format!("profile {i} {}\n", profile.name);
+            let Curves {
+                steer,
+                throttle,
+                brake,
+            } = profile.curves;
+            text += &format!("curves {steer} {throttle} {brake}\n");
             for (action, b) in &profile.bindings {
                 text += &format!(
                     "bind {} {} {} {} {}\n",
@@ -512,15 +543,19 @@ impl WheelConfig {
     /// from before the profiles has its bindings put in the second profile ("Wheel"),
     /// which is then in use; the first gets the keyboard's defaults. A file from when the
     /// keyboard's defaults steered with the arrows too has those taken out of the first.
+    /// A steering curve from before the profiles had curves goes into every profile.
     fn from_text(text: &str) -> Self {
         let mut config = Self::default();
         let mut keys_version = 1;
         let mut profiles: Option<Vec<Profile>> = None;
         let mut current = 0;
+        // A wheel and pedals: linear.
         let mut old = Profile {
             name: "Wheel".into(),
-            bindings: Vec::new(),
+            curves: Curves::LINEAR,
+            ..default()
         };
+        let mut stick_curve = None;
         let mut active = None;
         for line in text.lines() {
             let mut words = line.split_whitespace();
@@ -532,9 +567,7 @@ impl WheelConfig {
                 "range" => config.range = value.parse().unwrap_or(config.range),
                 "base_range" => config.base_range = value.parse().ok().or(config.base_range),
                 "deadzone" => config.deadzone = value.parse().unwrap_or(config.deadzone),
-                "stick_curve" => {
-                    config.stick_curve = value.parse().unwrap_or(config.stick_curve);
-                }
+                "stick_curve" => stick_curve = value.parse::<f32>().ok(),
                 "ffb_gain" => config.ffb_gain = value.parse().unwrap_or(config.ffb_gain),
                 "ffb_road" => config.ffb_road = value.parse().unwrap_or(config.ffb_road),
                 "ffb_enabled" => config.ffb_enabled = value.parse().unwrap_or(config.ffb_enabled),
@@ -548,7 +581,7 @@ impl WheelConfig {
                         (1..=PROFILES)
                             .map(|n| Profile {
                                 name: format!("Profile {n}"),
-                                bindings: Vec::new(),
+                                ..default()
                             })
                             .collect()
                     });
@@ -557,6 +590,22 @@ impl WheelConfig {
                         list[i].name = name;
                     }
                     current = i;
+                    if let Some(steer) = stick_curve {
+                        list[i].curves.steer = steer;
+                    }
+                }
+                "curves" => {
+                    let values: Vec<f32> = std::iter::once(value)
+                        .chain(words)
+                        .filter_map(|w| w.parse().ok())
+                        .collect();
+                    if let (Some(list), &[steer, throttle, brake]) = (&mut profiles, &values[..]) {
+                        list[current].curves = Curves {
+                            steer,
+                            throttle,
+                            brake,
+                        };
+                    }
                 }
                 "bind" => {
                     let action = Action::ALL.into_iter().find(|a| a.key() == value);
@@ -605,6 +654,11 @@ impl WheelConfig {
                 config.active = 1;
             }
             None => {}
+        }
+        if let Some(steer) = stick_curve {
+            for profile in &mut config.profiles[..] {
+                profile.curves.steer = steer;
+            }
         }
         config
     }
@@ -971,8 +1025,11 @@ fn binding_value(
     binding: &Binding,
 ) -> Option<f32> {
     let raw = gamepads.raw(binding)?;
+    let curves = config.profile().curves;
     Some(match action {
         Action::Steer => binding.steer(raw),
+        Action::Throttle => curve(binding.travel(raw, config.deadzone), curves.throttle),
+        Action::Brake => curve(binding.travel(raw, config.deadzone), curves.brake),
         _ if action.analog() => binding.travel(raw, config.deadzone),
         _ => binding.travel(raw, 0.0),
     })
@@ -998,10 +1055,10 @@ pub fn action_value(config: &WheelConfig, gamepads: &Gamepads, action: Action) -
     value_of(config, gamepads, action, |_| true)
 }
 
-/// A stick's push (-1 to 1) as steering on a curve: fine around the centre, quicker
-/// towards the end, full lock all the way out.
-pub fn stick_steer(push: f32, curve: f32) -> f32 {
-    push.signum() * push.abs().clamp(0.0, 1.0).powf(curve.max(1.0))
+/// A push (-1 to 1) on a curve (an exponent): fine near the rest position, quicker
+/// towards the end, all the way out the same.
+pub fn curve(push: f32, exponent: f32) -> f32 {
+    push.signum() * push.abs().clamp(0.0, 1.0).powf(exponent.max(1.0))
 }
 
 fn read_wheel(
@@ -1031,7 +1088,7 @@ fn read_wheel(
             let value = binding_value(&config, &gamepads, Action::Steer, b)?;
             Some(match base.axis_range(&config, ffb.as_deref(), &b.device) {
                 Some(range) => value * range / 2.0,
-                None => stick_steer(value, config.stick_curve) * config.range / 2.0,
+                None => curve(value, config.profile().curves.steer) * config.range / 2.0,
             })
         })
         .reduce(|a, b| if b.abs() > a.abs() { b } else { a });
@@ -1271,7 +1328,6 @@ mod tests {
             base_range: Some(2520.0),
             ffb_gain: 0.35,
             ffb_road: 4.0,
-            stick_curve: 2.4,
             ffb_invert: true,
             active: 2,
             ..default()
@@ -1324,14 +1380,37 @@ mod tests {
     }
 
     #[test]
-    fn a_stick_steers_finely_around_the_centre() {
-        assert_eq!(stick_steer(0.0, STICK_CURVE), 0.0);
-        assert_eq!(stick_steer(1.0, STICK_CURVE), 1.0);
-        assert_eq!(stick_steer(-1.0, STICK_CURVE), -1.0);
-        let half = stick_steer(0.5, STICK_CURVE);
+    fn curves_are_fine_near_the_rest_position() {
+        let curves = Curves::default();
+        assert_eq!(curve(0.0, curves.steer), 0.0);
+        assert_eq!(curve(1.0, curves.steer), 1.0);
+        assert_eq!(curve(-1.0, curves.steer), -1.0);
+        let half = curve(0.5, curves.steer);
         assert!((0.25..0.35).contains(&half), "{half}");
-        assert_eq!(stick_steer(-0.5, STICK_CURVE), -half);
-        assert_eq!(stick_steer(0.4, 1.0), 0.4);
+        assert_eq!(curve(-0.5, curves.steer), -half);
+        assert_eq!(curve(0.4, 1.0), 0.4);
+        // The throttle's is gentler than the brake's.
+        assert!(curve(0.5, curves.throttle) > curve(0.5, curves.brake));
+    }
+
+    #[test]
+    fn curves_are_kept_per_profile() {
+        let mut config = WheelConfig::default();
+        config.profiles[2].curves = Curves {
+            steer: 2.2,
+            throttle: 1.0,
+            brake: 1.7,
+        };
+        let back = WheelConfig::from_text(&config.to_text());
+        assert_eq!(back, config);
+        assert_eq!(back.profiles[0].curves, Curves::default());
+        // A steering curve from before goes into every profile.
+        let old = WheelConfig::from_text("stick_curve 2.5\nprofile 0 Keys\nprofile 1 Pad\n");
+        assert!(old.profiles.iter().all(|p| p.curves.steer == 2.5));
+        assert_eq!(old.profiles[1].curves.brake, Curves::default().brake);
+        // A file from before the profiles is a wheel's: linear.
+        let wheel = WheelConfig::from_text("bind brake axis:LeftZ -1 1 Fake Wheel\n");
+        assert_eq!(wheel.profiles[1].curves, Curves::LINEAR);
     }
 
     #[test]

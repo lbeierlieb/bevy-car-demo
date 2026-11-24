@@ -631,24 +631,35 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) {
         0.01,
         |v| format!("{:.0} %", v * 100.0),
     );
-    kit::section(ui, "Gamepad");
+    kit::section(ui, "Curves");
+    let linear = |v: f32| {
+        if v < 1.05 {
+            "linear".to_string()
+        } else {
+            format!("{v:.1}")
+        }
+    };
+    let curves = &mut config.profile_mut().curves;
     kit::slider(
         ui,
-        "Stick steering curve",
-        &mut config.stick_curve,
+        "Steering curve",
+        &mut curves.steer,
         1.0..=3.0,
         0.1,
-        |v| {
-            if v < 1.05 {
-                "linear".into()
-            } else {
-                format!("{v:.1}")
-            }
-        },
+        linear,
     );
+    kit::slider(
+        ui,
+        "Gas curve",
+        &mut curves.throttle,
+        1.0..=3.0,
+        0.1,
+        linear,
+    );
+    kit::slider(ui, "Brake curve", &mut curves.brake, 1.0..=3.0, 0.1, linear);
     kit::note(
         ui,
-        "Higher steers finer around the centre and quicker towards the end of the stick.",
+        "For the profile in use. 1 is linear (set this for a wheel and pedals); higher is finer near the rest position. A force feedback wheel always steers linearly.",
     );
 }
 

@@ -815,8 +815,13 @@ and plays force feedback, both through hid-fanatecff on Linux.
   device's axis covers the base's range (`WheelBase::axis_range`; on Linux the device
   taking a constant force): any other steering axis, a pad's stick, covers the game's
   (it snapped to full lock at a small push with the base plugged in, 2026-11-24), on a
-  curve (asked for by the user: fine around the centre; `input::stick_steer`,
-  |push|^`stick_curve`, default 1.8, "Stick steering curve" under Controls, Gamepad).
+  curve. **Curves** (asked for by the user, 2026-11-24): each control profile has
+  `input::Curves` for steering, gas and brake (`input::curve`: |push|^exponent; defaults
+  1.8, 1.2, 1.5; `curves s g b` after the `profile` line in `wheel.cfg`; sliders under
+  Controls, Curves). Always applied, no guessing what's a stick (triggers report as
+  buttons 0..1 or axes -1..1, some pedals share one axis): a wheel profile sets them to 1;
+  the steering's never applies to the force feedback wheel's axis. A pre-profile file's
+  "Wheel" profile is linear; an older global `stick_curve` goes into every profile.
 - Starter (asked for by the user, 2026-11-22): the ignition button (I or bound) held
   runs the starter (`Drivetrain::starter`: `STARTER_TORQUE` falling to nothing at
   `STARTER_SPEED`, ignition on); the ECU fires after `SYNC_TURNS` revolutions and the
