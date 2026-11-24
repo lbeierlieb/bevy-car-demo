@@ -108,10 +108,14 @@
           };
           wasmDeps = craneLib.buildDepsOnly wasmArgs;
 
+          # The game alone (`nix run`): the editors are for the dev shell, the server is a
+          # package of its own. Each binary is a full LTO link of Bevy, so building them all
+          # took about four times as long.
           native = craneLib.buildPackage (
             nativeArgs
             // {
               cargoArtifacts = nativeDeps;
+              cargoExtraArgs = "--locked --bin ${pname}";
               nativeBuildInputs =
                 nativeArgs.nativeBuildInputs ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.makeWrapper ];
               postFixup = lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''

@@ -631,7 +631,10 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   traffic, streams for the handshake, looks and events. Handshake checks the protocol
   version and the terrain's fingerprint. Dev only: without a certificate the server makes
   a throwaway one and a native client can skip verification (browsers can't join).
-- **Nix**: `packages.server`, `packages.web`, `nixosModules.server`:
+- **Nix**: `packages.default` (`native`) is the game alone (`--bin car-sim`; with every
+  binary, each a thin-LTO link of Bevy, it took about four times as long; the editors
+  have no package, they're for the dev shell; agreed with the user, 2026-11-24),
+  `packages.server`, `packages.web`, `nixosModules.server`:
   `services.car-sim = { enable; domain; port; openFirewall; traffic; maxPlayers;
   web.enable; }`, certificate via `security.acme` (nginx's `enableACME` with
   `web.enable`, else ACME's standalone listener on port 80), taken up by the server
