@@ -17,7 +17,7 @@ use bevy::prelude::*;
 
 use super::Connection;
 use super::client::Status;
-use crate::car::{ActiveCar, Car, DriverInput, StepInput};
+use crate::car::{ActiveCar, Car, Correction, DriverInput, StepInput};
 use crate::sim::{STEP, step_car};
 use crate::snapshot;
 use crate::terrain::Terrain;
@@ -141,6 +141,7 @@ pub fn reconcile(
     (step, chosen): (Res<StepInput>, Res<ActiveCar>),
     terrain: Res<Terrain>,
     time: Res<Time<Real>>,
+    mut correction: Option<ResMut<Correction>>,
     mut cars: Query<&mut Car>,
 ) {
     let prediction = &mut *prediction;
@@ -165,7 +166,7 @@ pub fn reconcile(
     let Some(mut car) = active(cars.iter_mut(), &chosen) else {
         return;
     };
-    let was = car.body.position;
+    let (was, turned) = (car.body.position, car.body.rotation);
     if !snapshot::load(&mut *car, &state) {
         warn!("The server sent a state that isn't our car's");
         return;
@@ -177,6 +178,9 @@ pub fn reconcile(
         *kept = snapshot::save(&*car);
     }
     prediction.end = prediction.history.back().map(|(.., state)| state.clone());
+    if let Some(correction) = correction.as_deref_mut() {
+        correction.moved(&car, was, turned);
+    }
     let report = &mut prediction.report;
     report.corrected += 1;
     report.farthest = report.farthest.max(was.distance(car.body.position));

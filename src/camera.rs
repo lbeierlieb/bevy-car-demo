@@ -147,16 +147,17 @@ pub fn follow(
     time: Res<Time>,
     active: Res<ActiveCar>,
     terrain: Res<Terrain>,
-    cars: Query<&Car>,
+    cars: Query<(&Car, &Transform), Without<ChaseCamera>>,
     mut cameras: Query<(&mut ChaseCamera, &mut Transform)>,
 ) {
-    let Some(car) = cars.iter().find(|car| car.index == active.0) else {
+    // Where the car is drawn (see `car::Correction`).
+    let Some((car, drawn)) = cars.iter().find(|(car, _)| car.index == active.0) else {
         return;
     };
-    let target = car.body.position + Vec3::Y * 0.5;
+    let target = drawn.translation + Vec3::Y * 0.5;
     for (mut camera, mut transform) in &mut cameras {
         // Trail the car's heading with a little lag, taking the short way around.
-        let delta = (heading(car.body.rotation) - camera.yaw + std::f32::consts::PI)
+        let delta = (heading(drawn.rotation) - camera.yaw + std::f32::consts::PI)
             .rem_euclid(std::f32::consts::TAU)
             - std::f32::consts::PI;
         camera.yaw += delta * (1.0 - (-3.0 * time.delta_secs()).exp());
@@ -164,7 +165,7 @@ pub fn follow(
         if camera.driver {
             // Fixed to the seat: the view moves with every bump and roll of the body.
             // Looking back, the head turns all the way round, level.
-            let rotation = car.body.rotation;
+            let rotation = drawn.rotation;
             let stick = camera.stick;
             let (look_yaw, look_pitch) = if camera.back {
                 (std::f32::consts::PI, 0.0)
@@ -175,7 +176,7 @@ pub fn follow(
                     (camera.look_pitch + stick.y * up).clamp(-0.9, 0.7),
                 )
             };
-            *transform = Transform::from_translation(car.body.position + rotation * car.setup.eye)
+            *transform = Transform::from_translation(drawn.translation + rotation * car.setup.eye)
                 .with_rotation(
                     rotation * Quat::from_rotation_y(look_yaw) * Quat::from_rotation_x(look_pitch),
                 );

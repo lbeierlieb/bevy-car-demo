@@ -643,6 +643,7 @@ impl Plugin for CarPlugin {
             .init_resource::<ResetRule>()
             .init_resource::<Presses>()
             .init_resource::<StepInput>()
+            .init_resource::<Correction>()
             .add_systems(PreUpdate, gather_presses.after(crate::input::ReadWheel))
             .add_systems(
                 FixedUpdate,
@@ -1091,10 +1092,50 @@ fn reset_car(
     }
 }
 
-pub fn sync_transforms(mut cars: Query<(&Car, &mut Transform)>) {
+/// How quickly what's drawn of the active car closes on where it is after a correction
+/// (s, the time constant), and the correction past which it's drawn there at once (m).
+const CORRECTION_TIME: f32 = 0.1;
+const CORRECTION_SNAP: f32 = 4.0;
+
+/// How far what's drawn of the active car is from the car: after the server corrected it
+/// (see `net::predict`), it's drawn where it was and glides to where it is, the view with
+/// it, rather than jumping.
+#[derive(Resource, Default)]
+pub struct Correction {
+    pub offset: Vec3,
+    /// Turns the car's rotation to the drawn one.
+    pub turn: Quat,
+}
+
+impl Correction {
+    /// The active car was moved from (`position`, `rotation`) to where it is now by a
+    /// correction: what's drawn stays put.
+    pub fn moved(&mut self, car: &Car, position: Vec3, rotation: Quat) {
+        self.offset += position - car.body.position;
+        self.turn = (self.turn * rotation * car.body.rotation.inverse()).normalize();
+        if self.offset.length() > CORRECTION_SNAP {
+            *self = Self::default();
+        }
+    }
+}
+
+/// Each car's entity where the car is (the active car where it's drawn, see `Correction`).
+pub fn sync_transforms(
+    time: Res<Time>,
+    active: Res<ActiveCar>,
+    mut correction: ResMut<Correction>,
+    mut cars: Query<(&Car, &mut Transform)>,
+) {
+    let fade = (-time.delta_secs() / CORRECTION_TIME).exp();
+    correction.offset *= fade;
+    correction.turn = Quat::IDENTITY.slerp(correction.turn, fade);
     for (car, mut transform) in &mut cars {
         transform.translation = car.body.position;
         transform.rotation = car.body.rotation;
+        if car.index == active.0 {
+            transform.translation += correction.offset;
+            transform.rotation = correction.turn * car.body.rotation;
+        }
     }
 }
 
