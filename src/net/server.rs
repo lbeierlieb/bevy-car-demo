@@ -31,6 +31,7 @@ use crate::events::Event;
 use crate::events::rounds::{EventAction, Rounds, run_rounds};
 use crate::heli::HeliPose;
 use crate::looks::{Looks, Motion};
+use crate::physics::collision::{self, OBSTACLE};
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
 use crate::terrain::{Spawn, Terrain};
@@ -524,11 +525,63 @@ fn receive(
 /// How often each player is told how early their inputs come (s).
 const PACE_EVERY: f64 = 0.25;
 
-/// A server step: drives each player's car on the server one step (see `shadow`).
-fn step_shadows(mut tick: ResMut<Tick>, terrain: Res<Terrain>, mut peers: Query<&mut Peer>) {
+/// A server step: drives each player's car on the server one step (see `shadow`), then
+/// lets them meet: players' cars push each other (in the same world, neither a ghost,
+/// not in a race without collisions), and push themselves off the traffic, which moves
+/// itself (`traffic::step`) against where the players' cars are (`Visitor`).
+fn step_shadows(
+    mut tick: ResMut<Tick>,
+    (terrain, rounds): (Res<Terrain>, Res<Rounds>),
+    mut peers: Query<(&mut Peer, Option<&Realm>, Option<&mut Visitor>)>,
+    traffic: Query<(&TrafficCar, Option<&Realm>)>,
+) {
     tick.0 = tick.0.wrapping_add(1);
-    for mut peer in &mut peers {
+    for (mut peer, ..) in &mut peers {
         peer.shadow.step(tick.0, &terrain);
+    }
+    let solid = |peer: &Peer| peer.state.is_some_and(|state| !state.ghost);
+    let mut pairs = peers.iter_combinations_mut();
+    while let Some([(mut a, ra, _), (mut b, rb, _)]) = pairs.fetch_next() {
+        let realm = Realm::of(ra);
+        if realm != Realm::of(rb) || !solid(&a) || !solid(&b) || !rounds.players_collide(realm) {
+            continue;
+        }
+        if let (Some(a), Some(b)) = (a.shadow.car_mut(), b.shadow.car_mut()) {
+            crate::sim::collide_cars(a, b, crate::sim::STEP);
+        }
+    }
+    for (mut peer, realm, visitor) in &mut peers {
+        let solid = solid(&peer);
+        let Some(car) = peer.shadow.car_mut() else {
+            continue;
+        };
+        if solid {
+            let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
+            let near = traffic
+                .iter()
+                .filter(|(_, r)| Realm::of(*r) == Realm::of(realm));
+            for (other, _) in near {
+                let placed = other.hull.placed(other.body.position, other.body.rotation);
+                let reach = hull.radius() + placed.radius();
+                if hull.center.distance_squared(placed.center) > reach * reach {
+                    continue;
+                }
+                if let Some(contact) = hull.contact(&placed) {
+                    let mut body = other.body.clone();
+                    let impulse = collision::resolve(
+                        &mut car.body,
+                        Some(&mut body),
+                        &[contact],
+                        OBSTACLE,
+                        crate::sim::STEP,
+                    );
+                    car.knocks += impulse / car.body.mass;
+                }
+            }
+        }
+        if let Some(mut visitor) = visitor {
+            visitor.body = car.body.clone();
+        }
     }
 }
 

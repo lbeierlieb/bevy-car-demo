@@ -659,10 +659,17 @@ Built (phases 0, 1 and the start of 2):
   Server margin: moved once a second by the worst lateness (a game at 4 fps sends 30
   steps at once); the client's frames may catch up 1 s of game time (Bevy's 0.25 s let
   a slow game fall behind the server's clock for good).
-- Not done: smoothing what's drawn after a correction (it snaps; the camera follows
-  `car.body`), collisions on the server (players' cars against each other and traffic;
-  the client still pushes itself off remote cars), hunt tags from the server's contacts,
-  phase 3 on.
+- `car::Correction`: after a correction the active car is drawn where it was and glides
+  to where it is (0.1 s; past 4 m at once); the camera follows the drawn car (its
+  `Transform`), not `car.body`.
+- Collisions on the server (`server::step_shadows`, after the cars' steps): players'
+  cars push each other (same realm, neither a ghost by the client's word,
+  `Rounds::players_collide`), push themselves off traffic, and traffic reacts to the
+  server's car (`Visitor` body). The client still pushes itself off remote cars, as its
+  prediction (`players_cars_meet_on_the_server`).
+- Not done: hunt tags from the server's contacts (clients still send `Touched`), phase 3
+  on (placements are trusted: a modified client can teleport), checking a client's inputs
+  (rates, ranges are clamped by the encoding).
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 

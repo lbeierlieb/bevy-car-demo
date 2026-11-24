@@ -51,6 +51,13 @@ pub struct Rounds {
 }
 
 impl Rounds {
+    /// Whether players' cars collide in `realm` (not in a race set so they don't).
+    pub fn players_collide(&self, realm: Realm) -> bool {
+        (self.list.iter())
+            .filter(|live| live.realm == realm && realm != Realm::NORMAL)
+            .all(|live| live.round.game.race().is_none_or(|race| race.collisions))
+    }
+
     /// The rounds there are.
     pub fn iter(&self) -> impl Iterator<Item = &Round> {
         self.list.iter().map(|live| &live.round)

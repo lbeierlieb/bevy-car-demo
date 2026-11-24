@@ -299,7 +299,12 @@ mod tests {
 
     /// A player whose game drives their car, joined to the server behind `listener`.
     fn driver(listener: &LoopbackListener, name: &str) -> App {
-        let mut app = player(listener, name, 3, 0.0);
+        driver_at(listener, name, Vec2::ZERO)
+    }
+
+    /// The same, starting at `at` (map x, z), facing -z.
+    fn driver_at(listener: &LoopbackListener, name: &str, at: Vec2) -> App {
+        let mut app = player_on(listener, name, 3, at, Terrain::flat());
         app.add_plugins((crate::sim::SimPlugin, crate::car::CarPlugin))
             .init_resource::<crate::input::WheelInput>();
         let engine = car(&mut app).setup.engine.clone();
@@ -342,6 +347,34 @@ mod tests {
             more > compared + 3,
             "the server's states should keep coming"
         );
+    }
+
+    #[test]
+    fn players_cars_meet_on_the_server() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        // Anna stands with the parking brake on; Ben comes from behind, flat out.
+        let mut anna = driver(&listener, "Anna");
+        let mut ben = driver_at(&listener, "Ben", Vec2::new(0.3, 14.0));
+        ben.world_mut()
+            .resource_mut::<crate::input::WheelInput>()
+            .throttle = Some(1.0);
+        let anna_on_server = |server: &mut App| {
+            let mut peers = server.world_mut().query::<&super::server::Peer>();
+            (peers.iter(server.world()))
+                .find(|peer| peer.name.as_deref() == Some("Anna"))
+                .and_then(|peer| Some(peer.shadow.car()?.body.position))
+        };
+        run(&mut [&mut server, &mut anna, &mut ben], 60);
+        let before = anna_on_server(&mut server).expect("Anna's car on the server");
+        run(&mut [&mut server, &mut anna, &mut ben], 240);
+        let after = anna_on_server(&mut server).expect("Anna's car on the server");
+        let pushed = before.z - after.z;
+        println!("Ben pushed Anna's car {pushed:.2} m on the server");
+        assert!(pushed > 0.5, "{pushed} m");
+        // Her game took up the server's word.
+        let ahead = before.z - car(&mut anna).body.position.z;
+        assert!(ahead > 0.5, "her car moved {ahead} m in her game");
     }
 
     #[test]

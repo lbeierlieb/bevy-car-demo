@@ -439,10 +439,13 @@ impl Shadow {
         };
     }
 
-    /// The car as the server drives it, to change (for tests).
-    #[cfg(test)]
+    /// The car as the server drives it, while the player's inputs come, to push about.
     pub fn car_mut(&mut self) -> Option<&mut Car> {
-        self.car.as_mut()
+        let latest = self.latest?;
+        let done = self.done;
+        self.car
+            .as_mut()
+            .filter(|_| after(done, latest) <= SILENT as i32)
     }
 
     /// How many of the checks so far matched to the bit, of how many (for tests).
