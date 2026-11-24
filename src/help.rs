@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, text::LayoutJob};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
-use crate::car::{ActiveCar, Car, ReverseRefused, drive};
+use crate::car::{ActiveCar, Car, ReverseRefused};
 use crate::input::{Action, WheelConfig, WheelInput};
 use crate::menu::kit::{self, Panel, rank};
 use crate::menu::nav::{MenuInput, MenuSet};
@@ -34,7 +34,7 @@ impl Plugin for HelpPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Intro { open: true })
             .init_resource::<Hints>()
-            .add_systems(Update, (toggle.in_set(MenuSet::Top), hints.after(drive)))
+            .add_systems(Update, (toggle.in_set(MenuSet::Top), hints))
             .add_systems(EguiPrimaryContextPass, (intro, show_hint));
     }
 }

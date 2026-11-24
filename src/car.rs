@@ -342,6 +342,9 @@ pub struct Car {
     /// The parking brake (see `parking_brake_rule`): Space (or a handbrake button) pulls it
     /// on at a standstill or releases it, gas releases it. Cars start with it on.
     pub parking_brake: bool,
+    /// The ignition button switched the engine off and is still held (it doesn't crank
+    /// until let go).
+    pub switching_off: bool,
 }
 
 impl Car {
@@ -383,6 +386,7 @@ impl Car {
             fuel,
             knocks: 0.0,
             parking_brake: true,
+            switching_off: false,
         }
         .with_fuel_load()
     }
@@ -586,7 +590,14 @@ impl Plugin for CarPlugin {
             .init_resource::<Held>()
             .init_resource::<Rescued>()
             .init_resource::<ResetRule>()
-            .add_systems(Update, (drive, sync_transforms).chain());
+            .init_resource::<Presses>()
+            .init_resource::<StepInput>()
+            .add_systems(PreUpdate, gather_presses.after(crate::input::ReadWheel))
+            .add_systems(
+                FixedUpdate,
+                (take_input, drive).chain().before(crate::sim::simulate),
+            )
+            .add_systems(Update, sync_transforms);
     }
 }
 
@@ -606,7 +617,7 @@ pub struct ResetPlugin;
 
 impl Plugin for ResetPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, reset_car.after(drive).before(sync_transforms));
+        app.add_systems(Update, reset_car.before(sync_transforms));
     }
 }
 
@@ -656,107 +667,214 @@ pub enum ResetRule {
     Never,
 }
 
-/// Keyboard and wheel to controls for the active car; any other car holds all brakes. Q/E
-/// (or the paddles, or an H-shifter) change gear, I starts a stalled engine.
-pub fn drive(
-    wheel: Res<WheelInput>,
-    time: Res<Time>,
-    (active, away, held, rescued): (Res<ActiveCar>, Res<Away>, Res<Held>, Res<Rescued>),
-    aids: Res<DriverAids>,
-    mut cars: Query<&mut Car>,
-    (mut refused, mut switching_off): (MessageWriter<ReverseRefused>, Local<bool>),
-) {
-    // The ignition button: held, it runs the starter; pressed with the engine running, it
-    // switches it off (and holding on after that doesn't crank).
-    let ignition = wheel.ignition_held;
-    let ignition_pressed = wheel.ignition;
-    if !ignition {
-        *switching_off = false;
+/// What the driver does in one simulation step: the wheel's and pedals' positions, and
+/// the buttons pressed since the step before (see `DriverInput::take`). A car's own rules
+/// turn it into controls (`Car::drive`), the same way wherever it's simulated, so a
+/// step's input is all that has to go to the server for it to drive the car alike.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DriverInput {
+    /// Steering by an axis, -1 (right) to 1 (left) of full lock.
+    pub steer: Option<f32>,
+    /// Steering by keys or buttons: -1 (right), 0 or 1 (left), to turn towards.
+    pub steer_keys: f32,
+    pub throttle: f32,
+    pub brake: f32,
+    /// Clutch pedal travel, if there's a pedal.
+    pub clutch: Option<f32>,
+    /// A handbrake lever's travel, if it's a lever.
+    pub handbrake: Option<f32>,
+    /// A handbrake button pressed since the last step, and held.
+    pub handbrake_toggle: bool,
+    pub handbrake_held: bool,
+    /// With an H-shifter: the gate the lever is in (0 between gates).
+    pub shifter: Option<i8>,
+    /// Shifts up less shifts down pressed since the last step.
+    pub shift: i8,
+    /// The ignition button pressed since the last step, and held.
+    pub ignition: bool,
+    pub ignition_held: bool,
+    /// Nobody's at the wheel (away in a shop's room, or the car carried by the rescue
+    /// helicopter): all brakes, nothing else.
+    pub away: bool,
+    /// Held at the start: the brakes are on whatever the driver does.
+    pub held: bool,
+}
+
+impl DriverInput {
+    /// Takes this step's input: the wheel as it is now, and the presses gathered since the
+    /// last step (which are then cleared, so each counts once however many steps a frame
+    /// runs, and none is lost when a frame runs none).
+    pub fn take(wheel: &WheelInput, presses: &mut Presses) -> Self {
+        let input = Self {
+            steer: wheel.steer,
+            steer_keys: wheel.steer_keys,
+            throttle: wheel.throttle.unwrap_or(0.0),
+            brake: wheel.brake.unwrap_or(0.0),
+            clutch: wheel.clutch,
+            handbrake: wheel.handbrake,
+            handbrake_toggle: presses.handbrake,
+            handbrake_held: wheel.handbrake_held,
+            shifter: wheel.shifter,
+            shift: presses.shift,
+            ignition: presses.ignition,
+            ignition_held: wheel.ignition_held,
+            away: false,
+            held: false,
+        };
+        *presses = Presses::default();
+        input
     }
+}
+
+/// The buttons pressed since the last simulation step (frames and steps don't line up).
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct Presses {
+    pub shift: i8,
+    pub ignition: bool,
+    pub handbrake: bool,
+}
+
+/// The driver's input to the active car in the simulation step under way (or the last).
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct StepInput(pub DriverInput);
+
+/// Gathers the presses of this frame for the next simulation step.
+fn gather_presses(wheel: Res<WheelInput>, mut presses: ResMut<Presses>) {
+    presses.shift = presses
+        .shift
+        .saturating_add(wheel.shift_up as i8 - wheel.shift_down as i8);
+    presses.ignition |= wheel.ignition;
+    presses.handbrake |= wheel.handbrake_toggle;
+}
+
+/// This step's input from the wheel, and whether the driver is at it.
+fn take_input(
+    wheel: Res<WheelInput>,
+    mut presses: ResMut<Presses>,
+    (away, held, rescued): (Res<Away>, Res<Held>, Res<Rescued>),
+    mut input: ResMut<StepInput>,
+) {
+    let mut taken = DriverInput::take(&wheel, &mut presses);
+    taken.away = away.0 || rescued.0;
+    taken.held = held.0;
+    input.0 = taken;
+}
+
+/// The step's input drives the active car; any other car holds all brakes.
+pub fn drive(
+    input: Res<StepInput>,
+    time: Res<Time>,
+    active: Res<ActiveCar>,
+    mut cars: Query<&mut Car>,
+    mut refused: MessageWriter<ReverseRefused>,
+) {
+    let idle = DriverInput {
+        away: true,
+        ..default()
+    };
     for mut car in &mut cars {
-        if car.index != active.0 || away.0 || rescued.0 {
-            car.controls = Controls {
+        let input = if car.index == active.0 {
+            &input.0
+        } else {
+            &idle
+        };
+        if car.drive(input, time.delta_secs()) {
+            refused.write(ReverseRefused);
+        }
+    }
+}
+
+impl Car {
+    /// The driver's `input` for a step of `dt` to the car's controls, by the car's rules:
+    /// Q/E (or the paddles, or an H-shifter) change gear, the ignition button held runs
+    /// the starter and pressed while running switches the engine off, keys steer
+    /// rate-limited, the handbrake button works the parking brake (`parking_brake_rule`).
+    /// Says whether reverse was asked for while rolling (and refused).
+    pub fn drive(&mut self, input: &DriverInput, dt: f32) -> bool {
+        if input.away {
+            self.controls = Controls {
                 brake: 1.0,
                 handbrake: 1.0,
                 ..default()
             };
-            car.drivetrain.grinding = None;
-            car.drivetrain.starter = false;
-            continue;
+            self.drivetrain.grinding = None;
+            self.drivetrain.starter = false;
+            return false;
         }
-        car.traction_control = aids.traction_control;
-        car.abs = aids.abs;
-        let speed = car.forward_speed();
-        let steer_target = wheel.steer_keys;
-
+        let speed = self.forward_speed();
         let Car {
             setup,
             corners,
             drivetrain,
             controls: c,
             parking_brake,
+            switching_off,
             ..
-        } = &mut *car;
-        c.clutch = wheel.clutch;
-        if ignition_pressed && drivetrain.running {
+        } = self;
+        // The ignition button: held, it runs the starter; pressed with the engine running,
+        // it switches it off (and holding on after that doesn't crank).
+        if !input.ignition_held {
+            *switching_off = false;
+        }
+        c.clutch = input.clutch;
+        if input.ignition && drivetrain.running {
             drivetrain.switch_off();
             *switching_off = true;
         }
-        drivetrain.starter = ignition && !*switching_off;
+        drivetrain.starter = input.ignition_held && !*switching_off;
         let gear = drivetrain.selected_gear();
-        let shift = wheel.shift_up as i8 - wheel.shift_down as i8;
+        let shift = input.shift;
         let shares = setup.engine.drive.shares();
         let wheel_omega = (0..4).map(|i| shares[i] * corners[i].omega).sum();
-        if let Some(gate) = wheel.shifter {
+        if let Some(gate) = input.shifter {
             drivetrain.select_gate(&setup.engine, gate, speed, wheel_omega);
         } else {
             drivetrain.grinding = None;
         }
-        if wheel.shifter.is_none() && shift != 0 {
+        if input.shifter.is_none() && shift != 0 {
             // Q/E or the paddles shift down/up.
             drivetrain.shift_by(&setup.engine, shift, wheel_omega, speed);
         }
-        let wants_reverse = match wheel.shifter {
+        let wants_reverse = match input.shifter {
             Some(gate) => gate < 0,
             None => shift < 0 && gear == 0,
         };
-        if wants_reverse && drivetrain.selected_gear() >= 0 && speed.abs() >= REVERSE_SPEED {
-            refused.write(ReverseRefused);
-        }
-        let go = wheel.throttle.unwrap_or(0.0);
-        let stop = wheel.brake.unwrap_or(0.0);
+        let refused =
+            wants_reverse && drivetrain.selected_gear() >= 0 && speed.abs() >= REVERSE_SPEED;
+        let (go, stop) = (input.throttle, input.brake);
         (c.throttle, c.brake) = if go > 0.0 { (go, stop) } else { (0.0, stop) };
         let pull;
         (*parking_brake, pull) = parking_brake_rule(
             *parking_brake,
-            wheel.handbrake_toggle,
-            wheel.handbrake_held,
+            input.handbrake_toggle,
+            input.handbrake_held,
             go,
             speed,
         );
         // A lever works directly, on top of it.
-        c.handbrake = pull.max(wheel.handbrake.unwrap_or(0.0));
-        if held.0 {
+        c.handbrake = pull.max(input.handbrake.unwrap_or(0.0));
+        if input.held {
             c.brake = 1.0;
             c.handbrake = 1.0;
         }
-        if let Some(steer) = wheel.steer {
+        if let Some(steer) = input.steer {
             // A steering wheel turns the front wheels directly, at a fixed ratio.
             c.steer = steer;
         } else {
             // Keys steer less at speed, and are rate-limited like turning a real wheel.
             // Turning in is slow so a tap only nudges the wheels; letting go (or steering
             // the other way) brings them back to the middle faster.
-            let target = steer_target / (1.0 + speed.abs() * 0.04);
+            let target = input.steer_keys / (1.0 + speed.abs() * 0.04);
             let towards_middle = (target - c.steer) * c.steer < 0.0;
             let rate = if towards_middle {
                 KEY_STEER_RETURN_RATE
             } else {
                 KEY_STEER_RATE
             };
-            let max_delta = rate * time.delta_secs();
+            let max_delta = rate * dt;
             c.steer += (target - c.steer).clamp(-max_delta, max_delta);
         }
+        refused
     }
 }
 
