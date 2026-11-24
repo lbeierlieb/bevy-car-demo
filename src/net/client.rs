@@ -67,9 +67,9 @@ const LATE: f64 = 0.03;
 /// The inputs sent in each message: the latest and the ones before (a few frames' worth,
 /// so a lost message or two loses none).
 const INPUTS_SENT: usize = 12;
-/// How often our car's whole state goes to the server for checking against its own
-/// simulation of it (s).
-const CHECK_EVERY: f64 = 1.0;
+/// Our car's whole state goes to the server after every step whose number is a multiple
+/// of this (once a second), for checking against the server's own simulation of it.
+pub const CHECK_STEPS: u32 = 120;
 
 pub struct ClientPlugin;
 
@@ -95,7 +95,8 @@ impl Plugin for ClientPlugin {
                 push_off_remote_cars.after(crate::sim::simulate),
             )
                 .run_if(resource_exists::<Connection>),
-        );
+        )
+        .add_systems(FixedLast, take_check.run_if(resource_exists::<Connection>));
     }
 }
 
@@ -160,11 +161,11 @@ pub struct Connection {
     sent: f64,
     /// What our car was built of when last sent.
     sent_spec: Option<CarSpec>,
-    /// The driver's latest inputs by step, the latest last; the last step sent, and when
-    /// our car's whole state last went for checking (s).
+    /// The driver's latest inputs by step, the latest last, and the last step sent.
     inputs: VecDeque<(u32, DriverInput)>,
     inputs_sent: Option<u32>,
-    checked: f64,
+    /// Our car's whole state after the latest step to check, to send.
+    check: Option<(u32, Vec<u8>)>,
     /// How the cars' states came lately, logged every `REPORT` seconds.
     report: Report,
 }
@@ -209,7 +210,7 @@ impl Connection {
             sent_spec: None,
             inputs: VecDeque::new(),
             inputs_sent: None,
-            checked: f64::NEG_INFINITY,
+            check: None,
             report: Report::default(),
         };
         connection.say(&ToServer::Hello {
@@ -520,6 +521,21 @@ fn record_input(mut connection: ResMut<Connection>, input: Res<StepInput>) {
     }
 }
 
+/// Our car's whole state after a step to check, once all of the step is done (the
+/// pushes off other cars, the rescue helicopter).
+fn take_check(
+    mut connection: ResMut<Connection>,
+    (active, step): (Res<ActiveCar>, Res<StepInput>),
+    cars: Query<&Car>,
+) {
+    if step.step % CHECK_STEPS != 0 {
+        return;
+    }
+    if let Some(car) = cars.iter().find(|car| car.index == active.0) {
+        connection.check = Some((step.step, crate::snapshot::save(car)));
+    }
+}
+
 /// Our car's looks when they change, and its state every so often; what it's built of
 /// when that changes, the driver's input in every step, and its whole state now and then
 /// (for the server to drive it too).
@@ -527,7 +543,7 @@ fn send(
     mut connection: ResMut<Connection>,
     time: Res<Time<Real>>,
     fixed: Res<Time<Fixed>>,
-    (active, step): (Res<ActiveCar>, Res<StepInput>),
+    active: Res<ActiveCar>,
     rescue: Option<Res<Rescue>>,
     cars: Query<(&Car, &Looks, &Motion, Has<Ghost>)>,
 ) {
@@ -555,12 +571,8 @@ fn send(
         let inputs = connection.inputs.iter().map(|&(_, input)| input).collect();
         connection.say(&ToServer::Inputs { last, inputs });
     }
-    if now - connection.checked >= CHECK_EVERY {
-        connection.checked = now;
-        connection.say(&ToServer::Check {
-            step: step.step,
-            state: crate::snapshot::save(car),
-        });
+    if let Some((step, state)) = connection.check.take() {
+        connection.say(&ToServer::Check { step, state });
     }
     if now - connection.sent >= 1.0 / SEND_RATE {
         connection.sent = now;

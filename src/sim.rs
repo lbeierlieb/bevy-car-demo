@@ -15,6 +15,10 @@ use crate::terrain::Terrain;
 pub mod steering;
 
 pub const CHASSIS_HZ: f64 = 120.0;
+/// A simulation step (s). Every step is exactly this, wherever a car is simulated (the
+/// fixed clock's own step, a whole number of nanoseconds, is a hair off), so the server's
+/// copy of a car steps exactly as the player's.
+pub const STEP: f32 = (1.0 / CHASSIS_HZ) as f32;
 pub const SUBSTEPS: usize = 10;
 const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
 /// Density of the air (kg/m³).
@@ -47,8 +51,8 @@ impl Plugin for SimPlugin {
     }
 }
 
-pub fn simulate(time: Res<Time>, terrain: Res<Terrain>, mut cars: Query<&mut Car>) {
-    let dt = time.delta_secs();
+pub fn simulate(terrain: Res<Terrain>, mut cars: Query<&mut Car>) {
+    let dt = STEP;
     let before: Vec<Vec3> = cars.iter().map(|car| car.body.position).collect();
     for mut car in &mut cars {
         step_car(&mut car, &terrain, dt);

@@ -24,6 +24,7 @@ use super::link::{Link, Listener};
 use super::protocol::{
     CarId, CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, clean_chat,
 };
+use super::shadow::{BakedMaps, Shadow};
 use super::wire::{decode, encode};
 use super::{ClockOffset, NEAR, RATES, SEND_RATE};
 use crate::events::Event;
@@ -72,9 +73,10 @@ impl Plugin for ServerPlugin {
             .init_resource::<CarNumbers>()
             .init_resource::<Rounds>()
             .init_resource::<Traffic>()
+            .init_resource::<BakedMaps>()
             .add_systems(
                 Update,
-                (accept, receive, run_rounds, send)
+                (accept, receive, run_shadows, run_rounds, send)
                     .chain()
                     .run_if(resource_exists::<Server>),
             );
@@ -199,6 +201,8 @@ pub struct Peer {
     told: HashMap<CarId, Told>,
     /// When they wrote their latest chat lines (s), the last `CHAT_LINES`.
     chatted: VecDeque<f64>,
+    /// Their car as the server drives it from their inputs.
+    pub shadow: Shadow,
 }
 
 /// What a player has been told of a car: its looks' revision and the name it shows, and
@@ -240,6 +244,7 @@ fn accept(
             revision: 0,
             told: HashMap::new(),
             chatted: VecDeque::new(),
+            shadow: Shadow::default(),
         });
     }
 }
@@ -247,8 +252,7 @@ fn accept(
 /// Reads what every player said, and lets go of the ones who left or fell silent.
 fn receive(
     mut commands: Commands,
-    server: Res<Server>,
-    terrain: Res<Terrain>,
+    (server, terrain, mut baked): (Res<Server>, Res<Terrain>, ResMut<BakedMaps>),
     time: Res<Time<Real>>,
     mut peers: Query<(Entity, &mut Peer, Option<&mut Transform>, Option<&Realm>)>,
     mut presence: MessageWriter<Presence>,
@@ -364,8 +368,13 @@ fn receive(
                     peer.looks = Some(*looks);
                     peer.revision += 1;
                 }
-                // The server doesn't simulate players' cars yet.
-                ToServer::Car(_) | ToServer::Inputs { .. } | ToServer::Check { .. } => {}
+                ToServer::Car(spec) => peer.shadow.set_spec(*spec, &mut baked),
+                ToServer::Inputs { last, inputs } => {
+                    if !inputs.is_empty() {
+                        peer.shadow.take_inputs(last, &inputs);
+                    }
+                }
+                ToServer::Check { step, state } => peer.shadow.check(step, state),
                 ToServer::State(state) => {
                     peer.clock.heard(state.time, now);
                     if peer.state.is_none_or(|old| state.time > old.time) {
@@ -499,6 +508,22 @@ fn receive(
             if peer.name.is_some() && peer.id != id {
                 peer.tell(&ToClient::Left { id });
             }
+        }
+    }
+}
+
+/// Drives each player's car on the server from their inputs (see `shadow`).
+fn run_shadows(
+    terrain: Res<Terrain>,
+    time: Res<Time<Real>>,
+    mut baked: ResMut<BakedMaps>,
+    mut peers: Query<&mut Peer>,
+) {
+    let now = now(&time);
+    for mut peer in &mut peers {
+        let peer = &mut *peer;
+        if let Some(name) = &peer.name {
+            peer.shadow.run(&terrain, &mut baked, now, name);
         }
     }
 }

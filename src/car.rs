@@ -364,7 +364,8 @@ impl Car {
         Self::new(index, setup, position, Quat::from_rotation_y(yaw))
     }
 
-    fn new(index: usize, setup: CarSetup, position: Vec3, rotation: Quat) -> Self {
+    /// A car at rest at `position`, turned by `rotation`.
+    pub fn new(index: usize, setup: CarSetup, position: Vec3, rotation: Quat) -> Self {
         let body = RigidBody::new(position, rotation, setup.sprung_mass, setup.inertia);
         let fuel = Fuel::new(setup.tank.litres);
         let corners =
@@ -919,7 +920,6 @@ pub fn take_input(
 /// all brakes.
 pub fn drive(
     input: Res<StepInput>,
-    time: Res<Time>,
     active: Res<ActiveCar>,
     aids: Res<DriverAids>,
     mut cars: Query<&mut Car>,
@@ -937,7 +937,7 @@ pub fn drive(
         } else {
             &idle
         };
-        if car.drive(input, time.delta_secs()) {
+        if car.drive(input, crate::sim::STEP) {
             refused.write(ReverseRefused);
         }
     }

@@ -12,6 +12,7 @@ pub mod protocol;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod quic;
 pub mod server;
+pub mod shadow;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 pub mod wire;
@@ -260,6 +261,43 @@ mod tests {
         assert_eq!(url("127.0.0.1:47433"), "https://127.0.0.1:47433");
         assert_eq!(url("[::1]:5000"), "https://[::1]:5000");
         assert_eq!(url("[::1]"), "https://[::1]:4433");
+    }
+
+    /// The server's copy of a player's car (see `shadow`): how many of the player's checks
+    /// it matched to the bit, of how many.
+    fn shadow_matched(server: &mut App) -> (usize, usize) {
+        let mut peers = server.world_mut().query::<&super::server::Peer>();
+        let peer = peers.single(server.world()).unwrap();
+        peer.shadow.matched()
+    }
+
+    #[test]
+    fn the_server_drives_a_players_car_as_they_do() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let mut anna = player(&listener, "Anna", 3, 0.0);
+        anna.add_plugins((crate::sim::SimPlugin, crate::car::CarPlugin))
+            .init_resource::<crate::input::WheelInput>();
+        let engine = car(&mut anna).setup.engine.clone();
+        car(&mut anna).drivetrain.shift_to(&engine, 1);
+        // Anna drives off, steering this way and that, braking now and then, shifting up.
+        for frame in 0..900 {
+            let t = frame as f32 * FRAME as f32;
+            let mut wheel = anna.world_mut().resource_mut::<crate::input::WheelInput>();
+            wheel.throttle = Some(0.5 + 0.5 * (t * 0.8).sin());
+            wheel.brake = Some((2.0 * ((t * 1.3).sin() - 0.8)).max(0.0));
+            wheel.steer = Some(0.3 * (t * 0.6).sin());
+            wheel.shift_up = frame == 200 || frame == 400;
+            run(&mut [&mut server, &mut anna], 1);
+        }
+        let (exact, checks) = shadow_matched(&mut server);
+        println!("{exact} of {checks} checks to the bit");
+        assert!(checks >= 5, "{checks} checks");
+        assert_eq!(exact, checks, "the server's copy went its own way");
+        assert!(
+            car(&mut anna).fuel.distance > 50.0,
+            "Anna should have driven off"
+        );
     }
 
     #[test]
