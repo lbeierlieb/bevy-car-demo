@@ -72,6 +72,10 @@ const MOST_WAITING: usize = 4;
 /// much farther for each m/s it moves per second the placement is old.
 const REACH: f32 = 2.0;
 const REACH_PER_SPEED: f32 = 1.5;
+/// How much more fuel a player's placement may have than the server's car (L), and how
+/// much more for each second it's old (what the engine could burn meanwhile).
+const FUEL_SLACK: f32 = 0.05;
+const FUEL_PER_SECOND: f32 = 0.1;
 
 /// The server's simulation step, counted.
 #[derive(Resource, Default)]
@@ -131,6 +135,8 @@ pub struct Shadow {
     anchor: Option<Spot>,
     /// What R does with the car (the player's round's rules).
     pub rule: ResetRule,
+    /// Whether the car may be refuelled (stopped at a gas station).
+    pub refuel: bool,
     report: Report,
 }
 
@@ -433,8 +439,14 @@ impl Shadow {
                 self.car = Some(was);
                 return;
             }
-            // Nor let it go early.
+            // Nor let it go early, nor fill it up away from a gas station.
             car.hold = if was.hold > 0.0 { was.hold + age } else { 0.0 };
+            let most = was.fuel.litres() + FUEL_SLACK + FUEL_PER_SECOND * age;
+            if !self.refuel && car.fuel.litres() > most {
+                warn!("A player's game filled their car away from a gas station: refused");
+                car.fuel = was.fuel;
+                car.load_fuel();
+            }
         } else if let Some(spot) = self.anchor.take() {
             // Held as the server says.
             car.hold = spot.hold;

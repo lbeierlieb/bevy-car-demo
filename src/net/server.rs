@@ -217,7 +217,7 @@ pub struct Peer {
     /// Whether their car is a ghost (see `haunt`), and the marker it stopped at, while it's
     /// still near.
     pub ghost: bool,
-    at_marker: Option<Vec2>,
+    at_marker: Option<(Vec2, bool)>,
 }
 
 /// What a player has been told of a car: its looks' revision and the name it shows, and
@@ -556,15 +556,18 @@ const MARKER_LEAVE: f32 = 9.0;
 fn haunt(
     mut commands: Commands,
     (server, rounds, terrain): (Res<Server>, Res<Rounds>, Res<Terrain>),
-    mut markers: Local<Option<Vec<Vec2>>>,
+    mut markers: Local<Option<Vec<(Vec2, bool)>>>,
     mut peers: Query<(Entity, &mut Peer, Option<&Realm>)>,
     traffic: Query<(&TrafficCar, Option<&Realm>)>,
 ) {
+    // Each marker, and whether it's a gas station's.
     let markers = markers.get_or_insert_with(|| {
-        let shops = (server.shops.iter()).map(|shop| crate::shops::kerb(&terrain, shop.at).0);
-        shops
-            .chain(server.events.iter().map(|event| event.at))
-            .collect()
+        let shops = (server.shops.iter()).map(|shop| {
+            let gas = shop.kind == crate::shops::ShopKind::Gas;
+            (crate::shops::kerb(&terrain, shop.at).0, gas)
+        });
+        let events = server.events.iter().map(|event| (event.at, false));
+        shops.chain(events).collect()
     });
     let in_lobby: HashSet<PlayerId> = (rounds.iter())
         .filter(|round| !round.running())
@@ -588,14 +591,13 @@ fn haunt(
             continue;
         };
         let p = car.body.position.xz();
-        if (peer.at_marker).is_some_and(|marker| marker.distance(p) > MARKER_LEAVE) {
+        if (peer.at_marker).is_some_and(|(marker, _)| marker.distance(p) > MARKER_LEAVE) {
             peer.at_marker = None;
         }
-        if car.body.velocity.length() < MARKER_STOPPED {
-            let on = markers
-                .iter()
-                .find(|m| m.distance(p) < crate::shops::MARKER_RADIUS);
-            peer.at_marker = peer.at_marker.or(on.copied());
+        if car.body.velocity.length() < MARKER_STOPPED && peer.at_marker.is_none() {
+            peer.at_marker = (markers.iter())
+                .find(|(m, _)| m.distance(p) < crate::shops::MARKER_RADIUS)
+                .copied();
         }
         let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
         let overlapping = || {
@@ -616,6 +618,7 @@ fn haunt(
             commands.entity(entity).remove::<Visitor>();
         }
         peer.ghost = ghost;
+        peer.shadow.refuel = peer.at_marker.is_some_and(|(_, gas)| gas);
     }
 }
 

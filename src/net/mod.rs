@@ -466,6 +466,52 @@ mod tests {
         )
     }
 
+    /// Anna's game drains her tank to 10 L, then fills it up (at a gas station's marker if
+    /// `at_gas`): how much is in it afterwards, in her game and on the server.
+    fn anna_fills_up(at_gas: bool) -> (f32, f32) {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        if at_gas {
+            let shop = crate::shops::Shop {
+                kind: crate::shops::ShopKind::Gas,
+                name: "Pump".to_string(),
+                at: Vec2::ZERO,
+            };
+            let with = server.world_mut().remove_resource::<Server>().unwrap();
+            server.insert_resource(with.with_shops(vec![shop]));
+        }
+        let mut anna = driver(&listener, "Anna");
+        run(&mut [&mut server, &mut anna], 120);
+        let fill = |anna: &mut App, litres: f32| {
+            let mut car = car(anna);
+            let share = litres / car.setup.tank.litres;
+            car.refuel(share);
+        };
+        fill(&mut anna, 10.0);
+        run(&mut [&mut server, &mut anna], 60);
+        fill(&mut anna, 40.0);
+        run(&mut [&mut server, &mut anna], 60);
+        let mut peers = server.world_mut().query::<&super::server::Peer>();
+        let on_server = (peers.single(server.world()).ok())
+            .and_then(|peer| Some(peer.shadow.car()?.fuel.litres()))
+            .unwrap();
+        (car(&mut anna).fuel.litres(), on_server)
+    }
+
+    #[test]
+    fn a_car_is_only_filled_up_at_a_gas_station() {
+        let (ours, theirs) = anna_fills_up(false);
+        assert!(
+            ours < 10.5 && theirs < 10.5,
+            "filled to {ours} L, {theirs} L on the server"
+        );
+        let (ours, theirs) = anna_fills_up(true);
+        assert!(
+            ours > 39.0 && theirs > 39.0,
+            "filled to {ours} L, {theirs} L on the server"
+        );
+    }
+
     #[test]
     fn players_cars_meet_on_the_server() {
         let (pushed, ahead, _) = ben_drives_into_anna(false);

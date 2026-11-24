@@ -695,9 +695,13 @@ Built (phases 0, 1, 2 and the start of 3):
   stays one while it overlaps a car; that's what collisions, `Visitor` and the state sent
   to others use (the client's `CarState::ghost` only while the server has no car)
   (`a_car_stopped_at_a_shop_is_a_ghost_by_the_servers_word`). The client still decides
-  its own `Ghost` for its prediction (`haunt`). Still the client's word (trusted): the
-  car's condition and build (shops' changes, lent cars' builds), the parking brake at
-  markers.
+  its own `Ghost` for its prediction (`haunt`). **Fuel**: a placement with more fuel
+  than the server's car (beyond `FUEL_SLACK` + `FUEL_PER_SECOND` × its age) is refused
+  unless the car is stopped at a gas station's marker (`Shadow::refuel`, from `haunt`)
+  (`a_car_is_only_filled_up_at_a_gas_station`). Still the client's word (trusted, phase
+  4/5): a car built anew (`ToServer::Car` + its first placement: build, fuel, wear, so
+  also lent cars and getting our own back), repairs and tires, the parking brake pulled
+  at markers (harmless: it only stops our own car).
 - Not done: hunt tags from the server's contacts (clients still send `Touched`), the rest
   of phase 3 (placements are trusted: a modified client can teleport), checking a
   client's inputs (rates, ranges are clamped by the encoding).
