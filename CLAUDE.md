@@ -134,7 +134,9 @@ As built (`src/menu/`):
   user's wish: they're the menus'; a `wheel.cfg` without `keys 2` has them taken out of
   the first profile), Space, Q/E, I, R, C, B, M), the others start empty ("set one up for a gamepad, one for a wheel"); each action
   up to `PER_ACTION` (2) inputs, binding a third drops the oldest, an input belongs to one
-  action per profile. Only the profile in use drives (`read_wheel` turns all of it into
+  action per profile, except that an axis's two halves can go to two pedals (a stick
+  up throttle, down brake; asked for by the user, 2026-11-24: `Binding::other_half`, same
+  rest, opposite `full`; `Profile::labels` adds "up"/"down" then). Only the profile in use drives (`read_wheel` turns all of it into
   `WheelInput`; `drive`, the camera, reset and the map read only that). Steering by keys
   or buttons is `Action::SteerLeft`/`SteerRight` (rate-limited as the keys were), by an
   axis `Action::Steer`. Fixed, never bindable: Esc (menu), H, T, 1, 2, F11, and the

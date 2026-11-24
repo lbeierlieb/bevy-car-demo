@@ -229,8 +229,8 @@ fn hints(
 fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (String, String) {
     // What the profile in use has bound to an action: "[I]", "[E] or [button 4]".
     let key = |_default: &str, action| {
-        let names: Vec<String> = (config.profile().bindings_of(action))
-            .map(|b| format!("[{}]", b.label()))
+        let names: Vec<String> = (config.profile().labels(action).into_iter())
+            .map(|label| format!("[{label}]"))
             .collect();
         if names.is_empty() {
             format!(

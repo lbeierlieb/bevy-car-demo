@@ -254,6 +254,31 @@ impl Binding {
     pub fn is_on(&self, device: &str) -> bool {
         device.trim() == self.device.trim()
     }
+    /// Whether this is the other half of the same axis as `other`: both resting at about
+    /// the same value (a stick's centre) and pushed the opposite way, so a stick can be
+    /// throttle one way and brake the other.
+    fn other_half(&self, other: &Binding) -> bool {
+        self.input.is_axis()
+            && (self.device.trim(), self.input) == (other.device.trim(), other.input)
+            && (self.rest - other.rest).abs() < 0.2
+            && (self.full - self.rest) * (other.full - other.rest) < 0.0
+    }
+
+    /// Which way an axis is pushed from its rest: "up", "down", "left", "right", "+", "-".
+    fn half(&self) -> Option<&'static str> {
+        let Input::Pad(GamepadInput::Axis(axis)) = self.input else {
+            return None;
+        };
+        let more = self.full > self.rest;
+        Some(match axis {
+            GamepadAxis::LeftStickY | GamepadAxis::RightStickY => ["down", "up"][usize::from(more)],
+            GamepadAxis::LeftStickX | GamepadAxis::RightStickX => {
+                ["left", "right"][usize::from(more)]
+            }
+            _ => ["-", "+"][usize::from(more)],
+        })
+    }
+
     /// Pedal travel from 0 (`rest`) to 1 (`full`), with a dead zone at both ends.
     fn travel(&self, raw: f32, deadzone: f32) -> f32 {
         let span = self.full - self.rest;
@@ -372,11 +397,14 @@ impl Profile {
             .map(|(_, binding)| binding)
     }
 
-    /// Adds an input to an action, taking it away from any other action; past
-    /// `PER_ACTION` inputs, the oldest goes.
+    /// Adds an input to an action, taking it away from any other action (an axis's other
+    /// half stays with a pedal: see `Binding::other_half`); past `PER_ACTION` inputs, the
+    /// oldest goes.
     pub fn bind(&mut self, action: Action, binding: Binding) {
-        self.bindings
-            .retain(|(_, b)| (b.device.trim(), b.input) != (binding.device.trim(), binding.input));
+        self.bindings.retain(|(a, b)| {
+            (b.device.trim(), b.input) != (binding.device.trim(), binding.input)
+                || (*a != action && pedal(*a) && pedal(action) && b.other_half(&binding))
+        });
         if self.bindings_of(action).count() >= PER_ACTION
             && let Some(oldest) = self.bindings.iter().position(|(a, _)| *a == action)
         {
@@ -388,6 +416,28 @@ impl Profile {
     pub fn unbind(&mut self, action: Action) {
         self.bindings.retain(|(a, _)| *a != action);
     }
+
+    /// The names of an action's inputs for people: "W", "RightStickY up" (the half, when
+    /// the other half of the axis is bound too).
+    pub fn labels(&self, action: Action) -> Vec<String> {
+        self.bindings_of(action)
+            .map(|binding| {
+                let shared = self.bindings.iter().any(|(a, b)| {
+                    *a != action
+                        && (b.device.trim(), b.input) == (binding.device.trim(), binding.input)
+                });
+                match binding.half() {
+                    Some(half) if shared => format!("{} {half}", binding.label()),
+                    _ => binding.label(),
+                }
+            })
+            .collect()
+    }
+}
+
+/// A pedal (or a handbrake lever) can have half an axis; steering always has all of it.
+fn pedal(action: Action) -> bool {
+    action.analog() && action != Action::Steer
 }
 
 impl WheelConfig {
@@ -1243,6 +1293,44 @@ mod tests {
         );
         profile.bind(Action::Brake, Binding::key(KeyCode::KeyK));
         assert_eq!(profile.bindings_of(Action::Throttle).count(), 1);
+    }
+
+    #[test]
+    fn a_stick_can_be_throttle_one_way_and_brake_the_other() {
+        let stick = |full| pad(GamepadInput::Axis(GamepadAxis::RightStickY), 0.0, full);
+        let mut profile = Profile::default();
+        profile.bind(Action::Throttle, stick(1.0));
+        profile.bind(Action::Brake, stick(-1.0));
+        assert_eq!(profile.bindings_of(Action::Throttle).count(), 1);
+        assert_eq!(profile.bindings_of(Action::Brake).count(), 1);
+        assert_eq!(profile.labels(Action::Throttle), ["RightStickY up"]);
+        assert_eq!(profile.labels(Action::Brake), ["RightStickY down"]);
+        // Each half reads only its own way.
+        let throttle = profile.bindings_of(Action::Throttle).next().unwrap();
+        let brake = profile.bindings_of(Action::Brake).next().unwrap();
+        assert_eq!(
+            (throttle.travel(0.8, 0.0), brake.travel(0.8, 0.0)),
+            (0.8, 0.0)
+        );
+        assert_eq!(
+            (throttle.travel(-0.5, 0.0), brake.travel(-0.5, 0.0)),
+            (0.0, 0.5)
+        );
+        // The same half again moves it; the clutch takes a half from the brake.
+        profile.bind(Action::Clutch, stick(-0.9));
+        assert_eq!(profile.bindings_of(Action::Brake).count(), 0);
+        assert_eq!(profile.bindings_of(Action::Throttle).count(), 1);
+        // Steering takes the whole axis, and a pedal takes it from steering.
+        profile.bind(Action::Steer, stick(1.0));
+        assert_eq!(profile.bindings.len(), 1);
+        profile.bind(Action::Brake, stick(-1.0));
+        assert_eq!(profile.bindings_of(Action::Steer).count(), 0);
+        assert_eq!(profile.labels(Action::Brake), ["RightStickY"]);
+        // Halves survive the config file.
+        let mut config = WheelConfig::default();
+        config.bind(Action::Throttle, stick(1.0));
+        config.bind(Action::Brake, stick(-1.0));
+        assert_eq!(WheelConfig::from_text(&config.to_text()), config);
     }
 
     #[test]

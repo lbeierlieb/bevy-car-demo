@@ -381,12 +381,7 @@ fn main(
 
 /// What the profile in use has bound to an action, for a row's right side.
 fn bound(config: &WheelConfig, action: Action) -> String {
-    let names: Vec<String> = config
-        .profile()
-        .bindings_of(action)
-        .map(|b| b.label())
-        .collect();
-    names.join(", ")
+    config.profile().labels(action).join(", ")
 }
 
 /// Things to do while driving, also for a controller without the buttons: reset, the
