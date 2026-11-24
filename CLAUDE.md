@@ -117,7 +117,7 @@ As built (`src/menu/`):
   arrows and dropped it, `claim` giving it to the first row: stuck there (2026-11-23).
 - `central.rs` (restructured at the user's wish, 2026-11-23): Main = In-game actions
   (reset, map, camera: pressed for the driver through `input::MenuPresses` as the
-  wheel's next frame), Settings (Driving aids (+ traffic alone), Controls, Sound
+  wheel's next frame), Settings (Driving aids, Controls, Sound
   (`audio::SoundSettings`: on/off, volume, `sound.cfg`), Display (UI size, fullscreen),
   Graphics (see "Graphics")),
   an event round's restart/leave, online players/leave or join, help and credits, quit
@@ -213,13 +213,15 @@ Always run `strip.sh` and check that `grep -c shot src/lib.rs src/main.rs
 src/bin/*.rs` prints 0 for each before committing. Keys are pressed from a third of
 the frames until the shot (`m` opens the map, `2` shows the telemetry panel, `f` shows the gizmos (off by default), `c` the driver's view, `b` looks back; keys stay held through the shot's frame),
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
-Shops need a server (`JOIN=127.0.0.1`, see below) and `PLACE` at the building's point
+Shots play alone (on the game's own server, with the repo's shops and events) unless
+`JOIN`, `MENU=1`, `OFFLINE=1` (no server, no traffic) or `LINEUP` (likewise, as a join
+would move the car). Shops need `PLACE` at the building's point
 (the car lands on the marker and goes in): gas `-2603,-1736`, car dealer
 `-1476,-1213`, alignment `-1480,-1305`, paint `3500,-63`, parts `-1950,-3160`, dyno
 `-2601,-3784` (the shop's window takes the focus on its first row, so
 `TAPS="Enter@200"` goes into the scene: onto the rollers, up to the pump…; older click
 coordinates in these notes are from before the menus, 2026-11-23, and are wrong now;
-the car hunt's marker `-95,2341` with `--events assets/events.cfg`, its lobby window opens
+the car hunt's marker `-95,2341`, its lobby window opens
 at once; a race marker exactly (the repo list has none since 2026-11-24: add one with a
 route; "Races Baunach" was at (−62, 2280)): `PLACE_EXACT=1 PLACE="-62,2280,150"`, then
 `TAPS="Enter@200"` is "Time trial", `ArrowDown@200;Enter@204` "Race"; in the dyno's room
@@ -305,7 +307,7 @@ The tool windows (3–6) became places on the map to drive to; the keys 3–6 ar
 user's wish, 2026-11-22; the repo's list is `assets/shops.cfg` (tests read it): lines
 `kind x z name`, the building's map point; one of each in Baunach and Rattelsdorf, and
 shared by Gerach and Reckendorf, 1.6 km apart; names made up, never a real business or brand, at the user's wish), sent as `ToClient::Shops` after the
-welcome (protocol 6). Alone there are none (the plugin is there, idle). The client puts
+welcome (protocol 6). Alone they're the repo's lists (the game's own server). The client puts
 each marker (glowing disc, 3.5 m, and a beam) on the nearest paved road at the edge on
 the building's side (`kerb`); names float above within 500 m. Free (no money). The plan
 as built, in order:
@@ -407,8 +409,7 @@ as built, in order:
    engine, for now); `ui::tool_window` is gone; help, README.
 
 Not done yet: dyno runs aren't saved; the HUD shows the parked car's gauges while in the
-dyno's room; alone, a car can't be changed at all (and an empty tank alone is the end of
-the drive).
+dyno's room.
 
 ## Events (agreed with the user, 2026-11-22; built the same day)
 
@@ -590,9 +591,16 @@ anywhere; `Chase`, the hunt's flight) and `rescue.rs`.
 A multiplayer sandbox first; the career comes back later, built on it. Native and web
 native offers **"Play alone"** and **"Join server"** (a start menu, chosen at runtime);
 the web only asks for the name and joins the server the page came from (no playing
-alone, no address field; agreed with the user, 2026-11-21). Alone is just driving the
-default car with traffic (the menu, gizmos, R, M kept); changing the car is only at the
-shops a server puts on the map (see "Shops").
+alone, no address field; agreed with the user, 2026-11-21). **Alone is joining a server
+of the game's own** (agreed with the user, 2026-11-24, so there's one way to play and
+alone has shops and events): `net::local::start` runs `net::server_app` (the
+dedicated server's setup too) on a thread, joined over `Loopback`, with the repo's
+`assets/shops.cfg` and `events.cfg` (embedded), the default traffic (20; the "Cars
+around" slider went), chat off, one player; the `LocalLink` stops it when dropped (the
+`Connection` goes). `online::Menu::alone` says it's the game's own (the central menu
+then has "Join a server" instead of the players). A player never simulates traffic
+(`traffic::TrafficPlugin` is the server's; players have `NetworkPlugin`: the road
+network and `FactoryLooks`).
 No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headless:
 `MinimalPlugins` and the world core) runs on the user's VPS.
 
@@ -614,7 +622,7 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   pushes itself off traffic on its own side, like off other players' cars) and **interest
   management** (128 m grid, ~600 m radius, rates falling with distance ~30/10/3 Hz).
   A silent player (a hidden browser tab stops the loop) is frozen for others and
-  dropped after 30 s. The traffic density slider only exists alone.
+  dropped after 30 s.
 - **Transport**: WebTransport (QUIC, one UDP port, default 4433) with a real
   certificate; `wtransport` for the server and native client, the browser's
   WebTransport for the web (maybe `xwt` for both clients). Datagrams for snapshots and
@@ -657,9 +665,8 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   `net::connect`, `online.rs` (`OnlinePlugin` in the sandbox: menu, players window,
   name tags, joining cars placed in lane spots near the spawn by player id),
   `bin/server.rs` options `--port --cert --key --traffic --max-players`; tried with a
-  local server and two headless games: both joined, saw each other, shared traffic); 6. shared traffic (done: `traffic::Source` (Own/Server, switched by the
-  client on joining/leaving, own traffic despawned); since protocol 5 sent like any
-  car, see below);
+  local server and two headless games: both joined, saw each other, shared traffic); 6. shared traffic (done; since protocol 5 sent like any car, see below;
+  since 2026-11-24 only servers simulate traffic);
   7. Nix packages and module, README for the VPS (done: `packages.server`
   (crane, `--bin server`), `packages.web` (= `wasm`), `nixosModules.server` =
   `nix/module.nix` (options `enable domain port openFirewall traffic maxPlayers
@@ -746,8 +753,8 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   joined: `RemoteCar` (states, `Drawn`, body for contacts) with `Looks`/`Motion` and an
   optional `client::Tag`, dead reckoned (no rail prediction); looks and tags that come
   before a car's first state wait in `Connection::known` (30 s); no traffic of its own;
-  `switch_source` removes traffic and remote cars when joining or leaving. Name tags
-  follow `Tag`. Alone (and on the server): `TrafficCar` simulates as before,
+  `forget_cars` removes the remote cars when not joined. Name tags
+  follow `Tag`. On the server: `TrafficCar` simulates as before,
   `traffic::show` gives it `Looks` (`FactoryLooks`, per chassis with its base engine,
   16 ms for all 13) and `Motion` (steer, spin from rolled, suspension at rest, the
   engine from the driver's `traffic::powertrain::Shifter`)
@@ -990,8 +997,8 @@ catalogue entries, and things like swap subframes are named so they can be price
   player car in the game; traffic has its own, see below). No damage, sounds or wheel collisions yet; a crash at speed
   just stops the body (wheel spin is left as it was).
 - **Traffic** (`traffic.rs`, `traffic/network.rs`; agreed with the user: no real
-  physics needed, following the roads matters, crashes at junctions are fine, a
-  "Cars around" slider in the menu's driving aids (alone), 0–60 cars, default 20; no HUD or map changes).
+  physics needed, following the roads matters, crashes at junctions are fine, 0–60 cars, default 20 (the
+  server's `--traffic`); no HUD or map changes).
   The network: roads 4 m and wider (not water) split into edges at shared OSM points,
   a lane each way a quarter of the width right of the centreline (1.05–2.6 m), 1781
   edges / 151 km, built in ~5 ms. Speed limits every 20 m, German defaults from what the
@@ -1419,7 +1426,7 @@ level ∝ share of its limit², more under load. All constants at the top of `au
 none tuned by ear yet. No diverter "pssh" or overrun pops (fuel cut leaves nothing to burn).
 
 Other cars are heard too (asked for by the user, 2026-11-21; `hear_others`): any car
-with `Looks` and `Motion` that isn't a `Car` (remote cars, traffic alone), the nearest 6
+with `Looks` and `Motion` that isn't a `Car` (remote cars), the nearest 6
 within 150 m (heard from 135 m, so one at the edge doesn't flicker), each an
 `AudioPlayer` of its own on a `Voice` entity (fading out over 0.2 s when dropped). The
 same synth, placed by `Targets::place`: mixed to one source, panned from the camera

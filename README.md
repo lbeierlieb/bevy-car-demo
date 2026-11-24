@@ -96,8 +96,10 @@ pull request.
 The game starts with a menu: **Play alone**, or **Join server** with your name and the
 server's address (`host`, `host:port` or `https://host:port`; the port is 4433 unless
 said otherwise). The web version only asks for your name and joins the server the page
-came from. Alone, you just drive around the map with traffic. On a server each player
-drives their own car as alone (physics and
+came from. **Play alone** (native only) starts a server of the game's own in the
+background and joins it: the same map, traffic, shops and events as on a server
+(`assets/shops.cfg`, `assets/events.cfg`), with nobody else there. On a server each player
+drives their own car (physics and
 force feedback stay on your machine) and sees the others near them (within 600 m), with
 their names over the cars; the list of players (top left) has **Leave the server**.
 
@@ -498,8 +500,8 @@ cargo build --release
 The map was imported with `import 50.0118569 10.8455963 9600x8448 ../../map/gerach.osm`
 and is baked with `../../map/gerach.osm 50.0118569 10.8455963 9600x8448
 ../../assets/gerach.terrain` (about 20 seconds; the map editor runs the same with F5).
-Where the cars start isn't part of the map: the server says it (`--spawn`), and playing
-alone starts in Gerach (`Spawn::DEFAULT` in `src/terrain.rs`). To use a different file,
+Where the cars start isn't part of the map: the server says it (`--spawn`), and the game's
+own server (playing alone) starts in Gerach (`Spawn::DEFAULT` in `src/terrain.rs`). To use a different file,
 change `BAKED` and `TERRAIN_FILE` in `src/terrain.rs` (and the map file and bake
 arguments at the top of `src/editor/mod.rs`). To make the map bigger, import the bigger
 rectangle into the same file and bake with the new size. The public Overpass server sometimes answers
