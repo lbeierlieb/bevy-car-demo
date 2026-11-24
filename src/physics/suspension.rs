@@ -490,6 +490,32 @@ fn apply_brake(omega: f32, brake_torque: f32, inertia: f32, dt: f32) -> f32 {
     omega.signum() * (omega.abs() - dw).max(0.0)
 }
 
+crate::snapshot::snapshot!(Corner {
+    theta,
+    theta_dot,
+    omega,
+    spin,
+    tread,
+    slips,
+    steer,
+    drive_torque,
+    bar_force,
+    drive_inertia,
+    brake_torque,
+    contact,
+    travel,
+});
+
+crate::snapshot::snapshot!(Contact {
+    point,
+    normal,
+    load,
+    surface,
+    patch,
+    tire,
+    force
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;

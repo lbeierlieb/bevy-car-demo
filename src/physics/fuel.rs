@@ -120,6 +120,15 @@ impl Fuel {
     }
 }
 
+crate::snapshot::snapshot!(Fuel {
+    litres,
+    burnt,
+    octane,
+    distance,
+    slosh,
+    supply
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;

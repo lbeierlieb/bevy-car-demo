@@ -354,6 +354,14 @@ impl Drivetrain {
     }
 
     /// The gear shown to the driver: the one being shifted into, if shifting.
+    /// Whether its gears are ones `engine`'s gearbox has (after loading a snapshot).
+    pub fn fits(&self, engine: &EngineSetup) -> bool {
+        let gears = -1..=engine.top_gear();
+        gears.contains(&self.gear)
+            && gears.contains(&self.selected_gear())
+            && self.grinding.is_none_or(|gear| gears.contains(&gear))
+    }
+
     pub fn selected_gear(&self) -> i8 {
         self.shift.map_or(self.gear, |(gear, _)| gear)
     }
@@ -638,6 +646,27 @@ impl Drivetrain {
         }
     }
 }
+
+crate::snapshot::snapshot!(Drivetrain {
+    rpm,
+    running,
+    gear,
+    automatic,
+    shift,
+    in_gear,
+    engaged,
+    locked,
+    engine,
+    load,
+    fill,
+    clutch_pedal,
+    slip,
+    grinding,
+    starter,
+    switched_off,
+    cranking,
+    turned,
+});
 
 #[cfg(test)]
 mod tests {

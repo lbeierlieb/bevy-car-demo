@@ -149,6 +149,15 @@ fn rotate_by(rotation: Quat, rotation_vector: Vec3) -> Quat {
     (Quat::from_scaled_axis(rotation_vector) * rotation).normalize()
 }
 
+// The motion; the mass and its balance follow from the setup and the fuel (`Car::load_fuel`),
+// and the forces are cleared every step.
+crate::snapshot::snapshot!(RigidBody {
+    position,
+    rotation,
+    velocity,
+    angular_velocity
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;

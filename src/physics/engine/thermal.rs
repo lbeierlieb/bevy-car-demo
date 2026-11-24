@@ -70,6 +70,8 @@ impl Thermal {
     }
 }
 
+crate::snapshot::snapshot!(Thermal { coolant, oil, fan });
+
 #[cfg(test)]
 mod tests {
     use super::*;

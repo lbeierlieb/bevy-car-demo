@@ -149,6 +149,13 @@ pub fn full_scale(setup: &CarSetup) -> f32 {
     FULL_SCALE_LEVER * front
 }
 
+crate::snapshot::snapshot!(Rack {
+    lateral,
+    longitudinal,
+    vertical,
+    drive
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;

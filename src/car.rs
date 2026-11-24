@@ -503,6 +503,57 @@ impl Car {
     }
 }
 
+crate::snapshot::snapshot!(Controls {
+    throttle,
+    brake,
+    clutch,
+    steer,
+    handbrake
+});
+
+/// The car's state as it drives (see `snapshot`); its setup stays, and the body's mass
+/// follows the fuel loaded.
+impl crate::snapshot::Snapshot for Car {
+    fn save(&self, out: &mut Vec<u8>) {
+        self.body.save(out);
+        self.corners.save(out);
+        self.drivetrain.save(out);
+        self.controls.save(out);
+        self.rack.save(out);
+        self.traction_control.save(out);
+        self.traction.save(out);
+        self.abs.save(out);
+        self.abs_pressure.save(out);
+        self.fuel.save(out);
+        self.knocks.save(out);
+        self.parking_brake.save(out);
+        self.switching_off.save(out);
+    }
+
+    fn load(&mut self, r: &mut crate::net::wire::Reader) -> Option<()> {
+        crate::snapshot::Snapshot::load(&mut self.body, r)?;
+        self.corners.load(r)?;
+        self.drivetrain.load(r)?;
+        self.controls.load(r)?;
+        self.rack.load(r)?;
+        self.traction_control.load(r)?;
+        self.traction.load(r)?;
+        self.abs.load(r)?;
+        self.abs_pressure.load(r)?;
+        self.fuel.load(r)?;
+        self.knocks.load(r)?;
+        self.parking_brake.load(r)?;
+        self.switching_off.load(r)?;
+        // What another build's state could hold that this one hasn't got.
+        if !self.drivetrain.fits(&self.setup.engine) {
+            return None;
+        }
+        self.fuel.fit(&self.setup.tank);
+        self.load_fuel();
+        Some(())
+    }
+}
+
 /// Yaw angle of an orientation's forward (-z) direction.
 pub fn heading(rotation: Quat) -> f32 {
     let forward = rotation * Vec3::NEG_Z;
@@ -962,6 +1013,67 @@ mod tests {
         assert!(p.distance(off) < 40.0, "{p} isn't the nearest road");
         assert!((car.body.rotation * Vec3::Y).y > 0.99, "not upright");
         assert!(car.parking_brake);
+    }
+
+    /// Drives `car` for `seconds` (from `from`) on `terrain` with the controls changing all
+    /// the time: gas, brakes (ABS), steering, shifts up and down, the handbrake.
+    fn drive_about(car: &mut Car, terrain: &Terrain, from: f32, seconds: f32) {
+        let dt = 1.0 / crate::sim::CHASSIS_HZ as f32;
+        let steps = (seconds / dt) as usize;
+        for i in 0..steps {
+            let t = from + i as f32 * dt;
+            let input = DriverInput {
+                steer: Some(0.4 * (t * 0.7).sin()),
+                throttle: (0.5 + 0.5 * (t * 0.5).sin()).clamp(0.0, 1.0),
+                brake: (2.0 * ((t * 0.9 + 3.0).sin() - 0.7)).max(0.0),
+                handbrake_held: (t % 7.0) < 0.3,
+                // Up at 1.5 s, 3 s, down at 6.5 s, every 8 s.
+                shift: match ((t % 8.0) / dt) as usize {
+                    180 | 360 => 1,
+                    780 => -1,
+                    _ => 0,
+                },
+                ..default()
+            };
+            car.drive(&input, dt);
+            crate::sim::step_car(car, terrain, dt);
+        }
+    }
+
+    #[test]
+    fn a_loaded_car_drives_on_as_the_saved_one() {
+        use crate::snapshot::{load, save};
+        let terrain = Terrain::baked();
+        let (p, yaw) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
+        let setup = CarSetup::factory(5, 0);
+        let mut car = Car::spawn_at(0, setup.clone(), &terrain, p.x, p.y, yaw);
+        car.drivetrain.shift_to(&car.setup.engine, 1);
+        drive_about(&mut car, &terrain, 0.0, 4.0);
+        let bytes = save(&car);
+        // A car of the same setup somewhere else, fresh from the factory.
+        let mut loaded = Car::spawn_at(0, setup, &terrain, p.x + 50.0, p.y, 0.0);
+        assert!(load(&mut loaded, &bytes));
+        assert_eq!(save(&loaded), bytes);
+        drive_about(&mut car, &terrain, 4.0, 6.0);
+        drive_about(&mut loaded, &terrain, 4.0, 6.0);
+        assert_eq!(save(&loaded), save(&car), "the loaded car went its own way");
+        assert!(car.fuel.distance > 15.0, "drove {} m", car.fuel.distance);
+        println!("{} bytes", bytes.len());
+    }
+
+    #[test]
+    fn a_snapshot_of_another_gearbox_is_refused() {
+        use crate::snapshot::{load, save};
+        let terrain = Terrain::flat();
+        // The van's in fifth, a gear the city car's box has; then sixth.
+        let mut van = Car::spawn_at(0, CarSetup::factory(12, 0), &terrain, 0.0, 0.0, 0.0);
+        let mut minim = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, 0.0, 0.0, 0.0);
+        let top = minim.setup.engine.top_gear();
+        van.drivetrain.gear = top;
+        assert!(load(&mut minim, &save(&van)));
+        van.drivetrain.gear = top + 1;
+        assert!(!load(&mut minim, &save(&van)));
+        assert!(!load(&mut minim, &save(&van)[..20]), "cut short");
     }
 
     #[test]

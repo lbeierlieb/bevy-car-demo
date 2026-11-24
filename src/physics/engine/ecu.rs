@@ -479,6 +479,21 @@ impl Ecu {
     }
 }
 
+crate::snapshot::snapshot!(EcuState {
+    limiter,
+    idle,
+    overrun,
+    high_cam
+});
+crate::snapshot::snapshot!(Actuators {
+    fuel,
+    spark,
+    idle_valve,
+    cam_profile,
+    intake_phase,
+    exhaust_phase,
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;

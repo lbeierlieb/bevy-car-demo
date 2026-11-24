@@ -535,6 +535,25 @@ fn exhaust_pressure(hardware: &EngineHardware, flow: f32, temperature: f32, wast
     (low + high) / 2.0
 }
 
+crate::snapshot::snapshot!(Engine {
+    boost_pressure,
+    intake_pressure,
+    exhaust_pressure,
+    charge_temperature,
+    turbo_speed,
+    wastegate,
+    compressor_flow,
+    ecu,
+    actuators,
+    firing,
+    thermal,
+    airspeed,
+    damage,
+    peak_pressure,
+    fuel_supply,
+    fuel_flow,
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;

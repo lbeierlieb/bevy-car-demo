@@ -19,6 +19,17 @@ pub enum Surface {
 }
 
 impl Surface {
+    pub const ALL: [Surface; 8] = [
+        Surface::Asphalt,
+        Surface::Cobbles,
+        Surface::Gravel,
+        Surface::Dirt,
+        Surface::Grass,
+        Surface::Field,
+        Surface::Forest,
+        Surface::Water,
+    ];
+
     /// Share of the tire's grip on dry asphalt.
     pub fn grip(self) -> f32 {
         match self {
@@ -58,5 +69,15 @@ impl Surface {
             Surface::Forest => "forest",
             Surface::Water => "water",
         }
+    }
+}
+
+impl crate::snapshot::Snapshot for Surface {
+    fn save(&self, out: &mut Vec<u8>) {
+        out.push(*self as u8);
+    }
+    fn load(&mut self, r: &mut crate::net::wire::Reader) -> Option<()> {
+        *self = *Self::ALL.get(usize::from(r.get::<u8>()?))?;
+        Some(())
     }
 }

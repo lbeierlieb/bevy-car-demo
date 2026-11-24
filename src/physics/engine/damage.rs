@@ -235,6 +235,18 @@ impl Damage {
     }
 }
 
+crate::snapshot::snapshot!(CylinderWear {
+    piston,
+    valves,
+    rod
+});
+crate::snapshot::snapshot!(Damage {
+    cylinders,
+    head_gasket,
+    bearings,
+    turbo
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;

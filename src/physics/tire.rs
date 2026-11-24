@@ -727,6 +727,25 @@ impl TireParams {
     }
 }
 
+crate::snapshot::snapshot!(Tread {
+    surface,
+    core,
+    carcass,
+    wear
+});
+crate::snapshot::snapshot!(Patch {
+    loads,
+    grip,
+    camber,
+    peak
+});
+crate::snapshot::snapshot!(TireForce {
+    fx,
+    fy,
+    slip_ratio,
+    slip_angle
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
