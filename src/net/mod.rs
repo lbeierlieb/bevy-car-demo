@@ -434,32 +434,53 @@ mod tests {
         assert_eq!(again, corrected + 1, "only the move: the hold predicted");
     }
 
-    #[test]
-    fn players_cars_meet_on_the_server() {
+    /// Anna stands with the parking brake on (at a shop, if `at_shop`); Ben comes from
+    /// behind, flat out: how far Anna's car was pushed on the server, how far in her game,
+    /// and how far Ben got past where she stood (m).
+    fn ben_drives_into_anna(at_shop: bool) -> (f32, f32, f32) {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        // Anna stands with the parking brake on; Ben comes from behind, flat out.
+        if at_shop {
+            let shop = crate::shops::Shop {
+                kind: crate::shops::ShopKind::Gas,
+                name: "Pump".to_string(),
+                at: Vec2::ZERO,
+            };
+            let with = server.world_mut().remove_resource::<Server>().unwrap();
+            server.insert_resource(with.with_shops(vec![shop]));
+        }
         let mut anna = driver(&listener, "Anna");
         let mut ben = driver_at(&listener, "Ben", Vec2::new(0.3, 14.0));
         ben.world_mut()
             .resource_mut::<crate::input::WheelInput>()
             .throttle = Some(1.0);
-        let anna_on_server = |server: &mut App| {
-            let mut peers = server.world_mut().query::<&super::server::Peer>();
-            (peers.iter(server.world()))
-                .find(|peer| peer.name.as_deref() == Some("Anna"))
-                .and_then(|peer| Some(peer.shadow.car()?.body.position))
-        };
         run(&mut [&mut server, &mut anna, &mut ben], 60);
-        let before = anna_on_server(&mut server).expect("Anna's car on the server");
+        let before = on_server(&mut server, "Anna").expect("Anna's car on the server");
         run(&mut [&mut server, &mut anna, &mut ben], 240);
-        let after = anna_on_server(&mut server).expect("Anna's car on the server");
-        let pushed = before.z - after.z;
+        let after = on_server(&mut server, "Anna").expect("Anna's car on the server");
+        let ben_at = on_server(&mut server, "Ben").expect("Ben's car on the server");
+        (
+            before.z - after.z,
+            before.z - car(&mut anna).body.position.z,
+            before.z - ben_at.z,
+        )
+    }
+
+    #[test]
+    fn players_cars_meet_on_the_server() {
+        let (pushed, ahead, _) = ben_drives_into_anna(false);
         println!("Ben pushed Anna's car {pushed:.2} m on the server");
         assert!(pushed > 0.5, "{pushed} m");
         // Her game took up the server's word.
-        let ahead = before.z - car(&mut anna).body.position.z;
         assert!(ahead > 0.5, "her car moved {ahead} m in her game");
+    }
+
+    #[test]
+    fn a_car_stopped_at_a_shop_is_a_ghost_by_the_servers_word() {
+        let (pushed, ahead, past) = ben_drives_into_anna(true);
+        assert!(pushed.abs() < 0.1, "pushed {pushed} m on the server");
+        assert!(ahead.abs() < 0.1, "pushed {ahead} m in her game");
+        assert!(past > 5.0, "Ben only got {past} m past her");
     }
 
     #[test]

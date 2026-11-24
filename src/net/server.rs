@@ -81,7 +81,7 @@ impl Plugin for ServerPlugin {
             .insert_resource(Time::<Fixed>::from_hz(crate::sim::CHASSIS_HZ))
             .add_systems(
                 Update,
-                (accept, receive, run_shadows, run_rounds, send)
+                (accept, receive, run_shadows, run_rounds, haunt, send)
                     .chain()
                     .run_if(resource_exists::<Server>),
             )
@@ -214,6 +214,10 @@ pub struct Peer {
     chatted: VecDeque<f64>,
     /// Their car as the server drives it from their inputs.
     pub shadow: Shadow,
+    /// Whether their car is a ghost (see `haunt`), and the marker it stopped at, while it's
+    /// still near.
+    pub ghost: bool,
+    at_marker: Option<Vec2>,
 }
 
 /// What a player has been told of a car: its looks' revision and the name it shows, and
@@ -256,6 +260,8 @@ fn accept(
             told: HashMap::new(),
             chatted: VecDeque::new(),
             shadow: Shadow::default(),
+            ghost: false,
+            at_marker: None,
         });
     }
 }
@@ -404,7 +410,7 @@ fn receive(
                     peer.clock.heard(state.time, now);
                     if peer.state.is_none_or(|old| state.time > old.time) {
                         peer.state = Some(state);
-                        if state.ghost {
+                        if peer.ghost {
                             // Traffic drives through a ghost.
                             commands.entity(entity).remove::<Visitor>();
                         } else if let Some(looks) = &peer.looks {
@@ -537,6 +543,82 @@ fn receive(
     }
 }
 
+/// A car stopped on a shop's or event's marker (within `MARKER_RADIUS`, slower than this,
+/// m/s) is a ghost until this far from it (m): a little farther than the game lets go.
+const MARKER_STOPPED: f32 = 1.5;
+const MARKER_LEAVE: f32 = 9.0;
+
+/// Which players' cars are ghosts, which nothing collides with, by the server's word: a
+/// car the rescue helicopter has, one whose driver is away in a shop's room, one stopped
+/// on a shop's or event's marker (several use them at once) until it's driven off, one in
+/// an event's lobby; and a ghost stays one until it overlaps nobody. Traffic drives
+/// through ghosts (they're no `Visitor`).
+fn haunt(
+    mut commands: Commands,
+    (server, rounds, terrain): (Res<Server>, Res<Rounds>, Res<Terrain>),
+    mut markers: Local<Option<Vec<Vec2>>>,
+    mut peers: Query<(Entity, &mut Peer, Option<&Realm>)>,
+    traffic: Query<(&TrafficCar, Option<&Realm>)>,
+) {
+    let markers = markers.get_or_insert_with(|| {
+        let shops = (server.shops.iter()).map(|shop| crate::shops::kerb(&terrain, shop.at).0);
+        shops
+            .chain(server.events.iter().map(|event| event.at))
+            .collect()
+    });
+    let in_lobby: HashSet<PlayerId> = (rounds.iter())
+        .filter(|round| !round.running())
+        .flat_map(|round| round.players.iter().copied())
+        .collect();
+    // Every car's box where the server has it, by realm.
+    let mut boxes: Vec<(Option<Entity>, Realm, crate::physics::collision::Obb)> = Vec::new();
+    for (entity, peer, realm) in &peers {
+        if let Some(car) = peer.shadow.car() {
+            let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
+            boxes.push((Some(entity), Realm::of(realm), hull));
+        }
+    }
+    for (car, realm) in &traffic {
+        let hull = car.hull.placed(car.body.position, car.body.rotation);
+        boxes.push((None, Realm::of(realm), hull));
+    }
+    for (entity, mut peer, realm) in &mut peers {
+        let peer = &mut *peer;
+        let Some(car) = peer.shadow.car() else {
+            continue;
+        };
+        let p = car.body.position.xz();
+        if (peer.at_marker).is_some_and(|marker| marker.distance(p) > MARKER_LEAVE) {
+            peer.at_marker = None;
+        }
+        if car.body.velocity.length() < MARKER_STOPPED {
+            let on = markers
+                .iter()
+                .find(|m| m.distance(p) < crate::shops::MARKER_RADIUS);
+            peer.at_marker = peer.at_marker.or(on.copied());
+        }
+        let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
+        let overlapping = || {
+            (boxes.iter()).any(|(other, r, placed)| {
+                let reach = hull.radius() + placed.radius();
+                *other != Some(entity)
+                    && *r == Realm::of(realm)
+                    && hull.center.distance_squared(placed.center) <= reach * reach
+                    && hull.contact(placed).is_some()
+            })
+        };
+        let ghost = car.rescue.has_car()
+            || peer.shadow.away()
+            || peer.at_marker.is_some()
+            || in_lobby.contains(&peer.id)
+            || (peer.ghost && overlapping());
+        if ghost && !peer.ghost {
+            commands.entity(entity).remove::<Visitor>();
+        }
+        peer.ghost = ghost;
+    }
+}
+
 /// How often each player is told how early their inputs come (s).
 const PACE_EVERY: f64 = 0.25;
 
@@ -554,7 +636,7 @@ fn step_shadows(
     for (mut peer, ..) in &mut peers {
         peer.shadow.step(tick.0, &terrain);
     }
-    let solid = |peer: &Peer| peer.state.is_some_and(|state| !state.ghost);
+    let solid = |peer: &Peer| peer.state.is_some() && !peer.ghost;
     let mut pairs = peers.iter_combinations_mut();
     while let Some([(mut a, ra, _), (mut b, rb, _)]) = pairs.fetch_next() {
         let realm = Realm::of(ra);
@@ -700,7 +782,7 @@ fn send(
                     velocity: car.body.velocity,
                     angular_velocity: car.body.angular_velocity,
                     motion: Motion::of(car),
-                    ghost: state.ghost,
+                    ghost: peer.ghost,
                     heli: car.rescue.pose(stamp),
                 },
                 None => CarState {

@@ -325,6 +325,7 @@ as built, in order:
    ghost after leaving until it overlaps nobody. So several players use a shop at once.
    (`CarState::ghost`; `shops` sets `net::WantsGhost`, `client::haunt` puts `looks::Ghost`
    on our car, `move_cars` on remote ones; `push_off_remote_cars` skips ghosts, the server
+   decides ghosts itself since 2026-11-24 (`server::haunt`, see "Server authority") and
    removes a ghost's `traffic::Visitor`; `visuals` swaps in a second, blended material set.)
 4. ✓ Shops on the map (M), with a legend (`map::MapLegend`); their names only when zoomed in (under 1.6 m per screen point, `MapMark::label_below`; at the user's wish, 2026-11-22). 5. ✓ **Gas station**: 95/98/102; the tank keeps
    its octane, mixing by volume; the engine's knock limit reads the tank's octane (the
@@ -688,9 +689,15 @@ Built (phases 0, 1, 2 and the start of 3):
   `Car::hold` (s left, in the snapshot, counted down in `Car::drive`, kept by `place` and
   `rebuilt`; a placement can't shorten it) replaces `DriverInput::held`; set where the car
   is put at a round's start (`Spot::hold` = `Round::hold`), so the release is predicted
-  exactly. The `Held` resource is only the round clock's view (rumble, tests). Still the
-  client's word (trusted): the car's condition and build (shops' changes, lent cars'
-  builds), ghosts, the parking brake at markers.
+  exactly. The `Held` resource is only the round clock's view (rumble, tests). **Ghosts**
+  by the server's word (`server::haunt`, `Peer::ghost`): rescued, away, stopped on a
+  shop's or event's marker until 9 m off it (`Peer::at_marker`), in a lobby, and a ghost
+  stays one while it overlaps a car; that's what collisions, `Visitor` and the state sent
+  to others use (the client's `CarState::ghost` only while the server has no car)
+  (`a_car_stopped_at_a_shop_is_a_ghost_by_the_servers_word`). The client still decides
+  its own `Ghost` for its prediction (`haunt`). Still the client's word (trusted): the
+  car's condition and build (shops' changes, lent cars' builds), the parking brake at
+  markers.
 - Not done: hunt tags from the server's contacts (clients still send `Touched`), the rest
   of phase 3 (placements are trusted: a modified client can teleport), checking a
   client's inputs (rates, ranges are clamped by the encoding).

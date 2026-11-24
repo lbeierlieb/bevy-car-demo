@@ -559,6 +559,11 @@ impl Shadow {
         };
     }
 
+    /// Whether nobody's at the wheel, by the latest input (away in a shop's room).
+    pub fn away(&self) -> bool {
+        (self.latest.and_then(|latest| self.inputs.get(&latest))).is_some_and(|input| input.away)
+    }
+
     /// The car as the server drives it, while the player's inputs come, to push about.
     pub fn car_mut(&mut self) -> Option<&mut Car> {
         let latest = self.latest?;
