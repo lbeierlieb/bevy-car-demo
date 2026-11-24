@@ -816,9 +816,19 @@ and plays force feedback, both through hid-fanatecff on Linux.
   taking a constant force): any other steering axis, a pad's stick, covers the game's
   (it snapped to full lock at a small push with the base plugged in, 2026-11-24), on a
   curve. **Curves** (asked for by the user, 2026-11-24): each control profile has
-  `input::Curves` for steering, gas and brake (`input::curve`: |push|^exponent; defaults
-  1.8, 1.2, 1.5; `curves s g b` after the `profile` line in `wheel.cfg`; sliders under
-  Controls, Curves). Always applied, no guessing what's a stick (triggers report as
+  `input::Curves` for steering, gas and brake. Drawn curves since 2026-11-24 (asked for
+  by the user, like a MIDI controller's): `input::Curve` is 2–9 points (ends at push 0
+  and 1, any height), joined by a monotone cubic (Fritsch–Carlson, no overshoot) and
+  baked into a 257-entry table whenever the points change, so `Curve::at` is a lookup
+  and a lerp. `input::Preset`s: Linear, Gentle (^1.25, gas default), Progressive (^1.5,
+  brake default), Stick (^1.8, steering default), Precise (^2.6), Smooth (S), Quick.
+  `wheel.cfg`: `curve steer|throttle|brake x,y x,y …` after the `profile` line; an
+  older `curves s g b` (exponents) or `stick_curve` becomes `Curve::power` (five
+  points). The menu: Controls, Bindings, Curves, a screen per curve
+  (`menu::curve::editor`): the graph with the control's push now (`input::push_value`),
+  left/right pick a point, choose grabs it, arrows move it, choose keeps, back puts it
+  back (`CentralMenu::grabbed`/`cancel_grab`); the mouse drags, double-click adds,
+  right-click removes; rows for the preset, adding and removing points. Always applied, no guessing what's a stick (triggers report as
   buttons 0..1 or axes -1..1, some pedals share one axis): a wheel profile sets them to 1;
   the steering's never applies to the force feedback wheel's axis. A pre-profile file's
   "Wheel" profile is linear; an older global `stick_curve` goes into every profile.

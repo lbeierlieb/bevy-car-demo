@@ -15,6 +15,9 @@ use bevy::prelude::*;
 
 use crate::wheel_base::WheelBase;
 
+pub mod curve;
+pub use curve::{Curve, Preset};
+
 pub struct InputPlugin;
 
 impl Plugin for InputPlugin {
@@ -343,32 +346,87 @@ impl Default for WheelConfig {
 pub const PROFILES: usize = 4;
 pub const PER_ACTION: usize = 2;
 
-/// How a profile's inputs become steering, throttle and brake: exponents of the push (1
-/// linear; higher is finer near the rest position, see `curve`). The steering's never
-/// applies to the force feedback wheel's axis (a wheel stays 1:1 with the front wheels).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// How a profile's inputs become steering, throttle and brake: drawn curves of the push
+/// (see `curve`). The steering's never applies to the force feedback wheel's axis (a
+/// wheel stays 1:1 with the front wheels).
+#[derive(Clone, Debug, PartialEq)]
 pub struct Curves {
-    pub steer: f32,
-    pub throttle: f32,
-    pub brake: f32,
+    pub steer: Curve,
+    pub throttle: Curve,
+    pub brake: Curve,
+}
+
+/// Which of a profile's curves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CurveKind {
+    Steer,
+    Throttle,
+    Brake,
+}
+
+impl CurveKind {
+    pub const ALL: [CurveKind; 3] = [CurveKind::Steer, CurveKind::Throttle, CurveKind::Brake];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            CurveKind::Steer => "steer",
+            CurveKind::Throttle => "throttle",
+            CurveKind::Brake => "brake",
+        }
+    }
+
+    pub fn action(self) -> Action {
+        match self {
+            CurveKind::Steer => Action::Steer,
+            CurveKind::Throttle => Action::Throttle,
+            CurveKind::Brake => Action::Brake,
+        }
+    }
+
+    /// The preset a gamepad starts with.
+    pub fn default_preset(self) -> Preset {
+        match self {
+            CurveKind::Steer => Preset::Stick,
+            CurveKind::Throttle => Preset::Gentle,
+            CurveKind::Brake => Preset::Progressive,
+        }
+    }
 }
 
 impl Curves {
-    pub const LINEAR: Self = Self {
-        steer: 1.0,
-        throttle: 1.0,
-        brake: 1.0,
-    };
+    pub fn linear() -> Self {
+        Self {
+            steer: Curve::linear(),
+            throttle: Curve::linear(),
+            brake: Curve::linear(),
+        }
+    }
+
+    pub fn get(&self, kind: CurveKind) -> &Curve {
+        match kind {
+            CurveKind::Steer => &self.steer,
+            CurveKind::Throttle => &self.throttle,
+            CurveKind::Brake => &self.brake,
+        }
+    }
+
+    pub fn get_mut(&mut self, kind: CurveKind) -> &mut Curve {
+        match kind {
+            CurveKind::Steer => &mut self.steer,
+            CurveKind::Throttle => &mut self.throttle,
+            CurveKind::Brake => &mut self.brake,
+        }
+    }
 }
 
 impl Default for Curves {
     /// For a gamepad: a quarter push steers 8 % of full lock, half 29 %; throttle only a
-    /// little (the pedal's linkage is progressive already), half 44 %; brake half 35 %.
+    /// little (the pedal's linkage is progressive already), half 42 %; brake half 35 %.
     fn default() -> Self {
         Self {
-            steer: 1.8,
-            throttle: 1.2,
-            brake: 1.5,
+            steer: CurveKind::Steer.default_preset().curve(),
+            throttle: CurveKind::Throttle.default_preset().curve(),
+            brake: CurveKind::Brake.default_preset().curve(),
         }
     }
 }
@@ -519,12 +577,10 @@ impl WheelConfig {
         // device name (may contain spaces, so it's last).
         for (i, profile) in self.profiles.iter().enumerate() {
             text += &format!("profile {i} {}\n", profile.name);
-            let Curves {
-                steer,
-                throttle,
-                brake,
-            } = profile.curves;
-            text += &format!("curves {steer} {throttle} {brake}\n");
+            for kind in CurveKind::ALL {
+                let curve = profile.curves.get(kind).to_text();
+                text += &format!("curve {} {curve}\n", kind.key());
+            }
             for (action, b) in &profile.bindings {
                 text += &format!(
                     "bind {} {} {} {} {}\n",
@@ -543,7 +599,8 @@ impl WheelConfig {
     /// from before the profiles has its bindings put in the second profile ("Wheel"),
     /// which is then in use; the first gets the keyboard's defaults. A file from when the
     /// keyboard's defaults steered with the arrows too has those taken out of the first.
-    /// A steering curve from before the profiles had curves goes into every profile.
+    /// A steering curve from before the profiles had curves goes into every profile, and
+    /// curves from before they were drawn (exponents) become drawn ones.
     fn from_text(text: &str) -> Self {
         let mut config = Self::default();
         let mut keys_version = 1;
@@ -552,7 +609,7 @@ impl WheelConfig {
         // A wheel and pedals: linear.
         let mut old = Profile {
             name: "Wheel".into(),
-            curves: Curves::LINEAR,
+            curves: Curves::linear(),
             ..default()
         };
         let mut stick_curve = None;
@@ -567,7 +624,7 @@ impl WheelConfig {
                 "range" => config.range = value.parse().unwrap_or(config.range),
                 "base_range" => config.base_range = value.parse().ok().or(config.base_range),
                 "deadzone" => config.deadzone = value.parse().unwrap_or(config.deadzone),
-                "stick_curve" => stick_curve = value.parse::<f32>().ok(),
+                "stick_curve" => stick_curve = value.parse::<f32>().ok().map(Curve::power),
                 "ffb_gain" => config.ffb_gain = value.parse().unwrap_or(config.ffb_gain),
                 "ffb_road" => config.ffb_road = value.parse().unwrap_or(config.ffb_road),
                 "ffb_enabled" => config.ffb_enabled = value.parse().unwrap_or(config.ffb_enabled),
@@ -590,8 +647,8 @@ impl WheelConfig {
                         list[i].name = name;
                     }
                     current = i;
-                    if let Some(steer) = stick_curve {
-                        list[i].curves.steer = steer;
+                    if let Some(steer) = &stick_curve {
+                        list[i].curves.steer = steer.clone();
                     }
                 }
                 "curves" => {
@@ -601,10 +658,18 @@ impl WheelConfig {
                         .collect();
                     if let (Some(list), &[steer, throttle, brake]) = (&mut profiles, &values[..]) {
                         list[current].curves = Curves {
-                            steer,
-                            throttle,
-                            brake,
+                            steer: Curve::power(steer),
+                            throttle: Curve::power(throttle),
+                            brake: Curve::power(brake),
                         };
+                    }
+                }
+                "curve" => {
+                    let kind = CurveKind::ALL.into_iter().find(|k| k.key() == value);
+                    if let (Some(list), Some(kind), Some(curve)) =
+                        (&mut profiles, kind, Curve::from_words(words))
+                    {
+                        *list[current].curves.get_mut(kind) = curve;
                     }
                 }
                 "bind" => {
@@ -657,7 +722,7 @@ impl WheelConfig {
         }
         if let Some(steer) = stick_curve {
             for profile in &mut config.profiles[..] {
-                profile.curves.steer = steer;
+                profile.curves.steer = steer.clone();
             }
         }
         config
@@ -1025,11 +1090,11 @@ fn binding_value(
     binding: &Binding,
 ) -> Option<f32> {
     let raw = gamepads.raw(binding)?;
-    let curves = config.profile().curves;
+    let curves = &config.profile().curves;
     Some(match action {
         Action::Steer => binding.steer(raw),
-        Action::Throttle => curve(binding.travel(raw, config.deadzone), curves.throttle),
-        Action::Brake => curve(binding.travel(raw, config.deadzone), curves.brake),
+        Action::Throttle => curves.throttle.at(binding.travel(raw, config.deadzone)),
+        Action::Brake => curves.brake.at(binding.travel(raw, config.deadzone)),
         _ if action.analog() => binding.travel(raw, config.deadzone),
         _ => binding.travel(raw, 0.0),
     })
@@ -1055,10 +1120,20 @@ pub fn action_value(config: &WheelConfig, gamepads: &Gamepads, action: Action) -
     value_of(config, gamepads, action, |_| true)
 }
 
-/// A push (-1 to 1) on a curve (an exponent): fine near the rest position, quicker
-/// towards the end, all the way out the same.
-pub fn curve(push: f32, exponent: f32) -> f32 {
-    push.signum() * push.abs().clamp(0.0, 1.0).powf(exponent.max(1.0))
+/// How far an action's inputs are pushed, before its curve: steering -1 to 1 (the
+/// wheel's axis over the game's range), pedals 0 to 1. For showing on the curve.
+pub fn push_value(config: &WheelConfig, gamepads: &Gamepads, action: Action) -> Option<f32> {
+    config
+        .profile()
+        .bindings_of(action)
+        .filter_map(|binding| {
+            let raw = gamepads.raw(binding)?;
+            Some(match action {
+                Action::Steer => binding.steer(raw),
+                _ => binding.travel(raw, config.deadzone),
+            })
+        })
+        .reduce(|a, b| if b.abs() > a.abs() { b } else { a })
 }
 
 fn read_wheel(
@@ -1088,7 +1163,7 @@ fn read_wheel(
             let value = binding_value(&config, &gamepads, Action::Steer, b)?;
             Some(match base.axis_range(&config, ffb.as_deref(), &b.device) {
                 Some(range) => value * range / 2.0,
-                None => curve(value, config.profile().curves.steer) * config.range / 2.0,
+                None => config.profile().curves.steer.at(value) * config.range / 2.0,
             })
         })
         .reduce(|a, b| if b.abs() > a.abs() { b } else { a });
@@ -1382,35 +1457,43 @@ mod tests {
     #[test]
     fn curves_are_fine_near_the_rest_position() {
         let curves = Curves::default();
-        assert_eq!(curve(0.0, curves.steer), 0.0);
-        assert_eq!(curve(1.0, curves.steer), 1.0);
-        assert_eq!(curve(-1.0, curves.steer), -1.0);
-        let half = curve(0.5, curves.steer);
+        assert_eq!(curves.steer.at(0.0), 0.0);
+        assert_eq!(curves.steer.at(1.0), 1.0);
+        assert_eq!(curves.steer.at(-1.0), -1.0);
+        let half = curves.steer.at(0.5);
         assert!((0.25..0.35).contains(&half), "{half}");
-        assert_eq!(curve(-0.5, curves.steer), -half);
-        assert_eq!(curve(0.4, 1.0), 0.4);
+        assert_eq!(curves.steer.at(-0.5), -half);
+        assert!((Curve::linear().at(0.4) - 0.4).abs() < 1e-6);
         // The throttle's is gentler than the brake's.
-        assert!(curve(0.5, curves.throttle) > curve(0.5, curves.brake));
+        assert!(curves.throttle.at(0.5) > curves.brake.at(0.5));
     }
 
     #[test]
     fn curves_are_kept_per_profile() {
         let mut config = WheelConfig::default();
         config.profiles[2].curves = Curves {
-            steer: 2.2,
-            throttle: 1.0,
-            brake: 1.7,
+            steer: Curve::new(&[[0.0, 0.0], [0.3, 0.1], [0.6, 0.5], [1.0, 1.0]]),
+            throttle: Curve::linear(),
+            brake: Preset::Quick.curve(),
         };
         let back = WheelConfig::from_text(&config.to_text());
         assert_eq!(back, config);
         assert_eq!(back.profiles[0].curves, Curves::default());
         // A steering curve from before goes into every profile.
-        let old = WheelConfig::from_text("stick_curve 2.5\nprofile 0 Keys\nprofile 1 Pad\n");
-        assert!(old.profiles.iter().all(|p| p.curves.steer == 2.5));
+        let old = WheelConfig::from_text("stick_curve 2.6\nprofile 0 Keys\nprofile 1 Pad\n");
+        assert!(
+            old.profiles
+                .iter()
+                .all(|p| p.curves.steer == Preset::Precise.curve())
+        );
         assert_eq!(old.profiles[1].curves.brake, Curves::default().brake);
+        // Exponents from before the curves were drawn.
+        let old = WheelConfig::from_text("profile 0 Pad\ncurves 1.8 1 1.5\n");
+        assert_eq!(old.profiles[0].curves.steer, Preset::Stick.curve());
+        assert_eq!(old.profiles[0].curves.throttle, Curve::power(1.0));
         // A file from before the profiles is a wheel's: linear.
         let wheel = WheelConfig::from_text("bind brake axis:LeftZ -1 1 Fake Wheel\n");
-        assert_eq!(wheel.profiles[1].curves, Curves::LINEAR);
+        assert_eq!(wheel.profiles[1].curves, Curves::linear());
     }
 
     #[test]
