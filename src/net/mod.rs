@@ -71,9 +71,13 @@ pub fn server_app(server: Server, cars: usize, log: bool) -> bevy::app::App {
     if log {
         app.add_plugins(bevy::log::LogPlugin::default());
     }
-    app.add_plugins((crate::WorldPlugin, ServerPlugin))
-        .insert_resource(server)
-        .insert_resource(crate::traffic::Traffic { cars, ..default() });
+    app.add_plugins((
+        crate::WorldPlugin,
+        crate::traffic::TrafficPlugin,
+        ServerPlugin,
+    ))
+    .insert_resource(server)
+    .insert_resource(crate::traffic::Traffic { cars, ..default() });
     app
 }
 
@@ -654,7 +658,6 @@ mod tests {
         let terrain = Terrain::baked();
         let (spawn, _) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
         let mut anna = player_on(&listener, "Anna", 3, spawn, terrain);
-        anna.add_plugins(TrafficPlugin);
         run(&mut [&mut server, &mut anna], 120);
         let on_server: Vec<(u32, Vec3, Looks)> = (server.world_mut())
             .query::<(&TrafficCar, &Transform, &Looks)>()

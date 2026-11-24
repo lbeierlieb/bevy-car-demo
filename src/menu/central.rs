@@ -21,7 +21,6 @@ use crate::input::{
     Action, Capture, Capturing, Gamepads, MenuPresses, Nav, Profile, WheelConfig, action_value,
 };
 use crate::net::{Connection, Status};
-use crate::traffic::{MOST_CARS, Source, Traffic};
 use crate::wheel_base::{ForceFeedback, WheelBase};
 
 pub struct CentralMenuPlugin;
@@ -196,8 +195,6 @@ struct Driving<'w, 's> {
 #[derive(SystemParam)]
 struct Settings<'w> {
     aids: ResMut<'w, DriverAids>,
-    traffic: ResMut<'w, Traffic>,
-    source: Res<'w, Source>,
     sound: ResMut<'w, SoundSettings>,
     display: ResMut<'w, Display>,
     graphics: ResMut<'w, Graphics>,
@@ -457,23 +454,6 @@ fn aids(ui: &mut egui::Ui, settings: &mut Settings) {
         aids.traction_control = tc;
         aids.abs = abs;
         aids.save();
-    }
-    // Alone: the traffic around (on a server, the server's).
-    if *settings.source == Source::Own {
-        kit::section(ui, "Traffic");
-        let mut cars = settings.traffic.cars as f32;
-        if kit::slider(
-            ui,
-            "Cars around",
-            &mut cars,
-            0.0..=MOST_CARS as f32,
-            1.0,
-            |v| format!("{v:.0}"),
-        )
-        .changed()
-        {
-            settings.traffic.cars = cars as usize;
-        }
     }
 }
 

@@ -99,7 +99,8 @@ fn toggle_fullscreen(keys: Res<ButtonInput<KeyCode>>, mut windows: Query<&mut Wi
 }
 
 /// The world without anything to see or hear, which the server has too: the map with its
-/// houses and trees to hit, the simulation, and the traffic.
+/// houses and trees to hit, the simulation, and the road network (the traffic's
+/// simulation is the server's alone, `traffic::TrafficPlugin`).
 pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
@@ -108,7 +109,7 @@ impl Plugin for WorldPlugin {
             terrain::TerrainPlugin,
             obstacles::ObstaclesPlugin,
             sim::SimPlugin,
-            traffic::TrafficPlugin,
+            traffic::NetworkPlugin,
         ));
     }
 }

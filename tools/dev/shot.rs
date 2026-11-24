@@ -503,12 +503,20 @@ fn proxy_cam(
     }
 }
 
-/// TRAFFICCAM="back,height[,nth]": follow the nth (default 0) nearest traffic car to the
+/// TRAFFICCAM="back,height[,nth]": follow the nth (default 0) nearest traffic car (sent by
+/// the server: playing alone is on the game's own) to the
 /// player from `back` m behind it and `height` m up.
 fn traffic_cam(
     mut cams: Query<&mut Transform, With<Camera3d>>,
     cars: Query<&crate::car::Car>,
-    traffic: Query<&crate::traffic::TrafficCar>,
+    traffic: Query<
+        &Transform,
+        (
+            With<crate::net::client::RemoteCar>,
+            Without<crate::net::client::Tag>,
+            Without<Camera3d>,
+        ),
+    >,
 ) {
     let Ok(spec) = std::env::var("TRAFFICCAM") else {
         return;
@@ -517,19 +525,19 @@ fn traffic_cam(
     let Some(player) = cars.iter().next() else {
         return;
     };
-    let mut near: Vec<_> = traffic.iter().map(|t| &t.body).collect();
+    let mut near: Vec<&Transform> = traffic.iter().collect();
     near.sort_by(|a, b| {
-        a.position
+        a.translation
             .distance(player.body.position)
-            .total_cmp(&b.position.distance(player.body.position))
+            .total_cmp(&b.translation.distance(player.body.position))
     });
     let Some(body) = near.get(v.get(2).copied().unwrap_or(0.0) as usize) else {
         return;
     };
     let forward = body.rotation * Vec3::NEG_Z;
-    let eye = body.position - forward * v[0] + Vec3::Y * v[1];
+    let eye = body.translation - forward * v[0] + Vec3::Y * v[1];
     for mut t in &mut cams {
-        *t = Transform::from_translation(eye).looking_at(body.position + forward * 6.0, Vec3::Y);
+        *t = Transform::from_translation(eye).looking_at(body.translation + forward * 6.0, Vec3::Y);
     }
 }
 

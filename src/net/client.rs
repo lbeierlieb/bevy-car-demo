@@ -32,7 +32,6 @@ use crate::physics::collision::{self, OBSTACLE};
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
 use crate::terrain::{Spawn, Terrain};
-use crate::traffic::{self, TrafficCar};
 
 /// How long a car is carried on past its latest state; then it's held there (s). More
 /// than the time between states far away (3 a second), and a lost one.
@@ -76,12 +75,11 @@ impl Plugin for ClientPlugin {
                 .after(crate::looks::show_cars)
                 .run_if(resource_exists::<Connection>),
         )
-        .init_resource::<traffic::Source>()
         .init_resource::<WantsGhost>()
         .init_resource::<GhostPlayers>()
         .init_resource::<Touching>()
         .add_systems(Update, haunt.before(send))
-        .add_systems(PreUpdate, switch_source)
+        .add_systems(PreUpdate, forget_cars)
         .add_systems(
             FixedUpdate,
             push_off_remote_cars
@@ -694,22 +692,14 @@ fn remove_cars(mut commands: Commands, time: Res<Time<Real>>, cars: Query<(Entit
     }
 }
 
-/// On a server the traffic is the server's (and ours goes); off it, our own again (and
-/// the server's cars go, the other players' with them).
-fn switch_source(
+/// Off a server, the cars it sent go (the traffic and the other players').
+fn forget_cars(
     mut commands: Commands,
     connection: Option<Res<Connection>>,
-    mut source: ResMut<traffic::Source>,
-    traffic: Query<Entity, With<TrafficCar>>,
     remote: Query<Entity, With<RemoteCar>>,
 ) {
-    let wanted = match connection.map(|c| c.status.clone()) {
-        Some(Status::Joined { .. }) => traffic::Source::Server,
-        _ => traffic::Source::Own,
-    };
-    if *source != wanted {
-        *source = wanted;
-        for entity in traffic.iter().chain(&remote) {
+    if !connection.is_some_and(|c| matches!(c.status, Status::Joined { .. })) {
+        for entity in &remote {
             commands.entity(entity).despawn();
         }
     }

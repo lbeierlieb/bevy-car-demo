@@ -8,9 +8,10 @@
 //! model), no quicker than the engine pulls in the gear the driver's in (`powertrain.rs`,
 //! which also runs the engine for its sound). Any knock against another car (or the player's) ends the drive: the car is a
 //! loose rigid body on its box from then on, sliding and tumbling to a stop. Cars come
-//! and go out of sight around the players: every simulated `Car` and every `Anchor` (on
-//! the server, the players driving elsewhere). `TrafficPlugin` is the simulation alone
-//! (the server has it). Each car also has the `Looks` and `Motion` of its chassis as it
+//! and go out of sight around the players: every `Anchor` (the server's players).
+//! `TrafficPlugin` is the simulation, which only a server has (alone too: the game's own,
+//! `net::local`); a player gets its cars like any other car the server sends.
+//! `NetworkPlugin` is the road network, which players use too. Each car also has the `Looks` and `Motion` of its chassis as it
 //! leaves the factory (`show`), so it's drawn (and sent to players) like any other car.
 
 pub mod network;
@@ -21,7 +22,7 @@ use std::collections::{HashMap, VecDeque};
 use bevy::prelude::*;
 
 use crate::body::Wheels;
-use crate::car::{Car, CarSetup, body_box};
+use crate::car::{CarSetup, body_box};
 use crate::chassis::{CHASSIS, SHOP_PAINTS};
 use crate::looks::{Looks, Motion, WheelMotion};
 use crate::physics::collision::{self, Contact, GROUND, OBSTACLE, Obb};
@@ -87,7 +88,7 @@ const DRIVETRAIN_MASS: f32 = 230.0;
 const STILL: f32 = 0.05;
 const SETTLE_TIME: f32 = 2.0;
 
-/// How many traffic cars drive around each player (the panel's traffic density), and in
+/// How many traffic cars drive around each player (the server's `--traffic`), and in
 /// the realms that want another number (e.g. none in an event's round without traffic).
 #[derive(Resource)]
 pub struct Traffic {
@@ -126,38 +127,43 @@ impl Realm {
     }
 }
 
-/// The traffic's simulation: drivers, crashes, cars coming and going around the players.
+/// The road network traffic drives on (`Network`, made at startup), and what each
+/// chassis looks like as it leaves the factory (`FactoryLooks`).
+pub struct NetworkPlugin;
+
+impl Plugin for NetworkPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, make_network)
+            .init_resource::<FactoryLooks>();
+    }
+}
+
+fn make_network(mut commands: Commands, terrain: Res<Terrain>) {
+    commands.insert_resource(Network::new(&terrain));
+}
+
+/// The traffic's simulation (a server's): drivers, crashes, cars coming and going around
+/// the players.
 pub struct TrafficPlugin;
 
 impl Plugin for TrafficPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<NetworkPlugin>() {
+            app.add_plugins(NetworkPlugin);
+        }
         app.init_resource::<Traffic>()
-            .add_systems(Startup, |mut commands: Commands, terrain: Res<Terrain>| {
-                let network = Network::new(&terrain);
-                commands.insert_resource(Spawner::new(&network));
-                commands.insert_resource(network);
-            })
-            .init_resource::<Source>()
-            .init_resource::<FactoryLooks>()
+            .add_systems(
+                Startup,
+                (|mut commands: Commands, network: Res<Network>| {
+                    commands.insert_resource(Spawner::new(&network));
+                })
+                .after(make_network),
+            )
             .init_resource::<CarNumbers>()
-            .add_systems(Update, populate.run_if(is_own))
+            .add_systems(Update, populate)
             .add_systems(Update, show.after(populate).before(crate::looks::show_cars))
-            .add_systems(FixedUpdate, step.after(crate::sim::simulate).run_if(is_own));
+            .add_systems(FixedUpdate, step.after(crate::sim::simulate));
     }
-}
-
-/// Where the traffic comes from: simulated here (alone, and on the server), or from the
-/// server (a player on one): then there is none here, the server's cars come like any
-/// other car the server sends (`net::client::RemoteCar`).
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Source {
-    #[default]
-    Own,
-    Server,
-}
-
-fn is_own(source: Res<Source>) -> bool {
-    *source == Source::Own
 }
 
 /// A car driven somewhere else (on the server, a player's): traffic keeps its distance
@@ -227,7 +233,7 @@ fn show(
     }
 }
 
-/// Someone traffic drives around, besides every simulated `Car`: where they are is the
+/// Someone traffic drives around (a player on the server): where they are is the
 /// entity's `Transform`.
 #[derive(Component)]
 pub struct Anchor;
@@ -498,9 +504,6 @@ impl Spawner {
     }
 }
 
-/// Whom traffic drives around.
-type Player = Or<(With<Car>, With<Anchor>)>;
-
 /// Keeps the number of cars around each player at what's asked for: new ones appear out
 /// of everyone's sight on the roads around the player with the fewest, ones left far
 /// behind by everyone go (and when there are too many, the one farthest from anyone,
@@ -515,7 +518,7 @@ fn populate(
     terrain: Res<Terrain>,
     mut spawner: ResMut<Spawner>,
     mut numbers: ResMut<CarNumbers>,
-    players: Query<(&Transform, Option<&Realm>), Player>,
+    players: Query<(&Transform, Option<&Realm>), With<Anchor>>,
     others: Query<(Entity, &TrafficCar, Option<&Realm>)>,
 ) {
     // Each realm's players and cars.
@@ -845,22 +848,17 @@ impl Vehicle {
 }
 
 /// Moves every traffic car on: drivers along their routes, crashed cars as loose bodies;
-/// then the cars that touch each other or the player's crash (each realm on its own).
+/// then the cars that touch each other or a player's crash (each realm on its own).
 fn step(
     time: Res<Time>,
     terrain: Res<Terrain>,
     network: Res<Network>,
     mut traffic: Query<(&mut TrafficCar, Option<&Realm>)>,
-    mut cars: Query<(&mut Car, Option<&Realm>)>,
     visitors: Query<(&Visitor, Option<&Realm>)>,
 ) {
     let dt = time.delta_secs();
     let vehicles: Vec<Vehicle> = (traffic.iter())
         .map(|(car, realm)| Vehicle::of(&car.body, &car.hull, realm))
-        .chain(
-            cars.iter()
-                .map(|(car, realm)| Vehicle::of(&car.body, &car.setup.hull, realm)),
-        )
         .chain((visitors.iter()).map(|(v, realm)| Vehicle::of(&v.body, &v.hull, realm)))
         .collect();
     let mut contacts = Vec::new();
@@ -872,7 +870,7 @@ fn step(
         }
     }
 
-    // Knocks between traffic cars, and with the player's.
+    // Knocks between traffic cars.
     let mut pairs = traffic.iter_combinations_mut();
     while let Some([(mut a, ra), (mut b, rb)]) = pairs.fetch_next() {
         if Realm::of(ra) != Realm::of(rb) {
@@ -884,28 +882,8 @@ fn step(
             collision::resolve(&mut a.body, Some(&mut b.body), &[contact], OBSTACLE, dt);
         }
     }
-    for (mut player, realm) in &mut cars {
-        let hull = player
-            .setup
-            .hull
-            .placed(player.body.position, player.body.rotation);
-        for (mut car, _) in (traffic.iter_mut()).filter(|(_, r)| Realm::of(*r) == Realm::of(realm))
-        {
-            if let Some(contact) = touch(&hull, &car.placed_hull()) {
-                crash(&mut car);
-                let impulse = collision::resolve(
-                    &mut player.body,
-                    Some(&mut car.body),
-                    &[contact],
-                    OBSTACLE,
-                    dt,
-                );
-                player.knocks += impulse / player.body.mass;
-            }
-        }
-    }
-    // Cars driven elsewhere: only the traffic car is moved (the other is pushed off on
-    // its own side).
+    // Players' cars: only the traffic car is moved (the player's is pushed off on its own
+    // side).
     for (visitor, realm) in &visitors {
         let hull = visitor
             .hull
