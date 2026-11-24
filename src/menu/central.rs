@@ -15,6 +15,7 @@ use super::nav::{MenuInput, MenuSet};
 use super::{Display, SIZES};
 use crate::audio::SoundSettings;
 use crate::car::{ActiveCar, Away, Car, DriverAids, ResetRule};
+use crate::graphics::{Antialiasing, Graphics, Shadows, ViewDistance};
 use crate::heli::rescue::Rescue;
 use crate::input::{
     Action, Capture, Capturing, Gamepads, MenuPresses, Nav, Profile, WheelConfig, action_value,
@@ -51,6 +52,7 @@ enum Screen {
     ForceFeedback,
     Sound,
     Display,
+    Graphics,
     Online,
 }
 
@@ -66,6 +68,7 @@ impl Screen {
             Screen::ForceFeedback => "Force feedback",
             Screen::Sound => "Sound",
             Screen::Display => "Display",
+            Screen::Graphics => "Graphics",
             Screen::Online => "Online",
         }
     }
@@ -197,6 +200,7 @@ struct Settings<'w> {
     source: Res<'w, Source>,
     sound: ResMut<'w, SoundSettings>,
     display: ResMut<'w, Display>,
+    graphics: ResMut<'w, Graphics>,
 }
 
 #[derive(SystemParam)]
@@ -260,6 +264,7 @@ fn show(
                     Screen::Controls,
                     Screen::Sound,
                     Screen::Display,
+                    Screen::Graphics,
                 ] {
                     if kit::submenu(ui, screen.title()).clicked() {
                         go = Some(screen);
@@ -272,6 +277,7 @@ fn show(
             Screen::ForceFeedback => force_feedback(ui, &mut wheel),
             Screen::Sound => sound(ui, &mut settings),
             Screen::Display => display(ui, &mut settings, &mut windows),
+            Screen::Graphics => graphics(ui, &mut settings.graphics),
             Screen::Online => {
                 if online_screen(ui, &mut online, &mut commands) {
                     menu.close();
@@ -732,6 +738,58 @@ fn display(ui: &mut egui::Ui, settings: &mut Settings, windows: &mut Query<&mut 
         if kit::toggle(ui, "Fullscreen", &mut full).changed() {
             toggle_fullscreen(windows);
         }
+    }
+}
+
+fn graphics(ui: &mut egui::Ui, graphics: &mut ResMut<Graphics>) {
+    let mut new = **graphics;
+    kit::pick(
+        ui,
+        "Shadows",
+        &mut new.shadows,
+        &[Shadows::Off, Shadows::Low, Shadows::High],
+        |s| {
+            match s {
+                Shadows::Off => "Off",
+                Shadows::Low => "Low",
+                Shadows::High => "High",
+            }
+            .into()
+        },
+    );
+    kit::pick(
+        ui,
+        "Antialiasing",
+        &mut new.antialiasing,
+        &[Antialiasing::Off, Antialiasing::Fxaa, Antialiasing::Msaa],
+        |a| {
+            match a {
+                Antialiasing::Off => "Off",
+                Antialiasing::Fxaa => "FXAA",
+                Antialiasing::Msaa => "MSAA 4×",
+            }
+            .into()
+        },
+    );
+    kit::pick(
+        ui,
+        "View distance",
+        &mut new.view,
+        &[ViewDistance::Near, ViewDistance::Far],
+        |v| {
+            match v {
+                ViewDistance::Near => "Near",
+                ViewDistance::Far => "Far",
+            }
+            .into()
+        },
+    );
+    kit::note(
+        ui,
+        "Shadows, multisampling and a far view cost the most. FXAA smooths edges cheaply.",
+    );
+    if new != **graphics {
+        **graphics = new;
     }
 }
 

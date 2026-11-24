@@ -22,6 +22,7 @@ pub mod events;
 pub mod fences;
 pub mod garage;
 pub mod gas;
+pub mod graphics;
 pub mod heli;
 pub mod help;
 pub mod hud;
@@ -138,7 +139,7 @@ impl Plugin for CorePlugin {
             hud::HudPlugin,
             map::MapPlugin,
             audio::AudioPlugin,
-            sky::SkyPlugin,
+            (sky::SkyPlugin, graphics::GraphicsPlugin),
         ))
         .add_systems(Startup, setup);
     }

@@ -8,15 +8,10 @@ use bevy::prelude::*;
 
 use crate::buildings::Buildings;
 use crate::fences::Fences;
+use crate::graphics::{Graphics, ViewDistance};
 use crate::terrain::{FlatMesh, RoadRibbons, Terrain};
 use crate::trees::Forest;
 
-/// Chunks whose centre is within this distance of the camera are loaded: just past the
-/// fog (which ends at 480 m) plus half a chunk diagonal.
-const LOAD_DISTANCE: f32 = 560.0;
-/// Loaded chunks are dropped beyond this, a little further out so they don't flicker
-/// in and out at the edge.
-const UNLOAD_DISTANCE: f32 = 660.0;
 /// Once the first view is loaded, chunks are built each frame until this much time has
 /// gone (s), at least one: a chunk in a village with its roads cut out of the ground
 /// takes about 3.5 ms natively, one in the fields a fraction of that.
@@ -102,10 +97,13 @@ fn stream(
     mut scenery: ResMut<Scenery>,
     mut meshes: ResMut<Assets<Mesh>>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
+    graphics: Option<Res<Graphics>>,
 ) {
     let Ok(camera) = camera.single() else {
         return;
     };
+    // How far chunks are loaded and kept follows the fog (the editors see far).
+    let (load, unload) = (graphics.map_or(ViewDistance::Far, |g| g.view)).reach();
     let eye = camera.translation().xz();
     let distance = |index: usize| {
         let (lo, hi) = terrain.chunk_bounds(index);
@@ -113,7 +111,7 @@ fn stream(
     };
 
     for index in 0..scenery.loaded.len() {
-        if scenery.loaded[index].is_some() && distance(index) > UNLOAD_DISTANCE {
+        if scenery.loaded[index].is_some() && distance(index) > unload {
             // Despawning drops the last handles to the chunk's meshes, which frees them.
             for entity in scenery.loaded[index].take().unwrap() {
                 commands.entity(entity).despawn();
@@ -124,7 +122,7 @@ fn stream(
     let mut wanted: Vec<(usize, f32)> = (0..scenery.loaded.len())
         .filter(|&index| scenery.loaded[index].is_none())
         .map(|index| (index, distance(index)))
-        .filter(|&(_, d)| d < LOAD_DISTANCE)
+        .filter(|&(_, d)| d < load)
         .collect();
     wanted.sort_by(|a, b| a.1.total_cmp(&b.1));
     // Load the whole first view at once, then nearest first within the frame's budget.
