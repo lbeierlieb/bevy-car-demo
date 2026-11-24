@@ -15,7 +15,7 @@ use super::nav::{MenuInput, MenuSet};
 use super::{Display, SIZES};
 use crate::audio::SoundSettings;
 use crate::car::{ActiveCar, Away, Car, DriverAids, ResetRule};
-use crate::graphics::{Antialiasing, FRAME_CAPS, Graphics, Shadows, ViewDistance};
+use crate::graphics::{Antialiasing, FRAME_CAPS, Graphics, RESOLUTIONS, Shadows, ViewDistance};
 use crate::heli::rescue::Rescue;
 use crate::input::{
     Action, Capture, Capturing, Gamepads, MenuPresses, Nav, Profile, WheelConfig, action_value,
@@ -784,6 +784,16 @@ fn graphics(ui: &mut egui::Ui, graphics: &mut ResMut<Graphics>) {
             .into()
         },
     );
+    let mut resolution = new.resolution.unwrap_or(100);
+    if kit::pick(
+        ui,
+        "Render resolution",
+        &mut resolution,
+        &RESOLUTIONS,
+        |p| format!("{p} %"),
+    ) {
+        new.resolution = Some(resolution);
+    }
     if !cfg!(target_arch = "wasm32") {
         kit::toggle(ui, "Vsync", &mut new.vsync);
         kit::pick(
@@ -796,7 +806,8 @@ fn graphics(ui: &mut egui::Ui, graphics: &mut ResMut<Graphics>) {
     }
     kit::note(
         ui,
-        "Shadows, multisampling and a far view cost the most. FXAA smooths edges cheaply.",
+        "Shadows, multisampling, a far view and a high resolution cost the most. FXAA \
+         smooths edges cheaply.",
     );
     if new != **graphics {
         **graphics = new;

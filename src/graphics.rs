@@ -1,11 +1,24 @@
 //! The graphics settings (central menu, Settings, Graphics), kept in
 //! `~/.config/car-sim/settings/graphics.cfg`: shadows, antialiasing and how far the land
-//! is seen; natively also vsync and a frame rate limit. The web starts on the quick settings, native on the nice ones. Only the
+//! is seen, the 3D view's resolution; natively also vsync and a frame rate limit.
+//!
+//! The 3D camera draws into an image of the window's size times the render resolution,
+//! and egui (on a camera of its own) paints it over the whole window, under everything
+//! else (`Backdrop`), so the menus stay sharp. The image's scale factor keeps the 3D
+//! camera's logical size the window's, so `world_to_viewport` gives window points.
+//!
+//! The web starts on the quick settings, native on the nice ones. Only the
 //! driving apps have them; the editors always draw at the nicest.
 
+use std::sync::{Arc, Mutex};
+
 use bevy::anti_alias::fxaa::Fxaa;
+use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureFormat};
+use bevy::window::PrimaryWindow;
+use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiTextureHandle, PrimaryEguiContext, egui};
 
 use crate::car::SETTINGS;
 
@@ -14,6 +27,13 @@ pub struct GraphicsPlugin;
 impl Plugin for GraphicsPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Graphics::load())
+            // egui goes on the camera `setup` makes, not on the first one there is.
+            .insert_resource(EguiGlobalSettings {
+                auto_create_primary_context: false,
+                ..default()
+            })
+            .add_systems(Startup, setup)
+            .add_systems(Update, (settle_resolution, size_view).chain())
             .add_systems(PostUpdate, (apply, save));
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(PostUpdate, present)
@@ -68,12 +88,18 @@ impl ViewDistance {
 /// The frame rate limits offered (frames per second; none: as fast as it goes).
 pub const FRAME_CAPS: [Option<u32>; 6] = [None, Some(30), Some(60), Some(90), Some(120), Some(144)];
 
+/// The render resolutions offered (% of the window's pixels each way).
+pub const RESOLUTIONS: [u32; 3] = [50, 75, 100];
+
 /// The graphics settings.
 #[derive(Resource, Clone, Copy, PartialEq, Debug)]
 pub struct Graphics {
     pub shadows: Shadows,
     pub antialiasing: Antialiasing,
     pub view: ViewDistance,
+    /// The 3D view's resolution (% of the window's pixels each way); none until the window
+    /// is known on the web (75 on a high-density display, else 100).
+    pub resolution: Option<u32>,
     /// Native only (the browser paces the page itself): wait for the display's refresh.
     pub vsync: bool,
     /// Native only: at most this many frames per second.
@@ -88,6 +114,7 @@ impl Default for Graphics {
                 shadows: Shadows::Low,
                 antialiasing: Antialiasing::Fxaa,
                 view: ViewDistance::Near,
+                resolution: None,
                 ..Self::NICEST
             }
         } else {
@@ -102,6 +129,7 @@ impl Graphics {
         shadows: Shadows::High,
         antialiasing: Antialiasing::Msaa,
         view: ViewDistance::Far,
+        resolution: Some(100),
         vsync: true,
         frame_cap: None,
     };
@@ -126,6 +154,13 @@ impl Graphics {
                 ("antialiasing", "msaa") => graphics.antialiasing = Antialiasing::Msaa,
                 ("view", "near") => graphics.view = ViewDistance::Near,
                 ("view", "far") => graphics.view = ViewDistance::Far,
+                ("resolution", percent) => {
+                    if let Ok(percent) = percent.parse()
+                        && RESOLUTIONS.contains(&percent)
+                    {
+                        graphics.resolution = Some(percent);
+                    }
+                }
                 ("vsync", "on") => graphics.vsync = true,
                 ("vsync", "off") => graphics.vsync = false,
                 ("frame_cap", "off") => graphics.frame_cap = None,
@@ -159,11 +194,137 @@ impl Graphics {
         };
         let vsync = if self.vsync { "on" } else { "off" };
         let cap = self.frame_cap.map_or("off".into(), |fps| fps.to_string());
+        let resolution = self
+            .resolution
+            .map_or(String::new(), |p| format!("resolution {p}\n"));
         format!(
-            "shadows {shadows}\nantialiasing {antialiasing}\nview {view}\nvsync {vsync}\n\
-             frame_cap {cap}\n"
+            "shadows {shadows}\nantialiasing {antialiasing}\nview {view}\n{resolution}\
+             vsync {vsync}\nframe_cap {cap}\n"
         )
     }
+}
+
+/// The image the 3D camera draws into, and its egui texture for `Backdrop`.
+#[derive(Resource)]
+struct View {
+    image: Handle<Image>,
+    texture: Arc<Mutex<Option<egui::TextureId>>>,
+}
+
+/// Paints the 3D view over the whole window at the start of every egui pass, so it's
+/// under whatever else goes into the background layer.
+struct Backdrop(Arc<Mutex<Option<egui::TextureId>>>);
+
+impl egui::Plugin for Backdrop {
+    fn debug_name(&self) -> &'static str {
+        "3D view"
+    }
+
+    fn on_begin_pass(&mut self, ui: &mut egui::Ui) {
+        let Some(texture) = *self.0.lock().unwrap() else {
+            return;
+        };
+        let rect = ui.ctx().viewport_rect();
+        ui.ctx().layer_painter(egui::LayerId::background()).image(
+            texture,
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    }
+}
+
+/// The camera egui draws with (the window's only one), and the image for the 3D view.
+fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: 1,
+            ..default()
+        },
+        Msaa::Off,
+        PrimaryEguiContext,
+    ));
+    let image = Image::new_target_texture(1, 1, TextureFormat::Rgba8UnormSrgb, None);
+    commands.insert_resource(View {
+        image: images.add(image),
+        texture: default(),
+    });
+}
+
+/// The web's default resolution, once the window's pixel density is known.
+fn settle_resolution(mut graphics: ResMut<Graphics>, windows: Query<&Window, With<PrimaryWindow>>) {
+    if graphics.resolution.is_some() {
+        return;
+    }
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    if window.resolution.physical_width() > 1 {
+        graphics.resolution = Some(if window.scale_factor() >= 1.5 {
+            75
+        } else {
+            100
+        });
+    }
+}
+
+/// Keeps the 3D view's image the window's size times the resolution, the 3D camera
+/// drawing into it, and egui knowing it.
+#[allow(clippy::too_many_arguments)]
+fn size_view(
+    mut commands: Commands,
+    graphics: Res<Graphics>,
+    view: Res<View>,
+    mut images: ResMut<Assets<Image>>,
+    mut contexts: EguiContexts,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(Entity, &RenderTarget), With<crate::camera::ChaseCamera>>,
+    mut added: Local<bool>,
+) -> Result {
+    let Ok(window) = windows.single() else {
+        return Ok(());
+    };
+    if !*added {
+        let Ok(ctx) = contexts.ctx_mut() else {
+            return Ok(());
+        };
+        ctx.add_plugin(Backdrop(view.texture.clone()));
+        let id = contexts.add_image(EguiTextureHandle::Weak(view.image.id()));
+        *view.texture.lock().unwrap() = Some(id);
+        *added = true;
+    }
+    let scale = graphics.resolution.unwrap_or(100) as f32 / 100.0;
+    let size = UVec2::new(
+        window.resolution.physical_width(),
+        window.resolution.physical_height(),
+    );
+    let size = (size.as_vec2() * scale).round().as_uvec2().max(UVec2::ONE);
+    let Some(image) = images.get(&view.image) else {
+        return Ok(());
+    };
+    if image.size() != size {
+        images.get_mut(&view.image).unwrap().resize(Extent3d {
+            width: size.x,
+            height: size.y,
+            depth_or_array_layers: 1,
+        });
+    }
+    let target = RenderTarget::Image(ImageRenderTarget {
+        handle: view.image.clone(),
+        scale_factor: window.scale_factor() * scale,
+    });
+    for (camera, current) in &cameras {
+        let same = matches!(
+            (current, &target),
+            (RenderTarget::Image(a), RenderTarget::Image(b))
+                if a.handle == b.handle && a.scale_factor == b.scale_factor
+        );
+        if !same {
+            commands.entity(camera).insert(target.clone());
+        }
+    }
+    Ok(())
 }
 
 /// The sun's shadow settings for that quality (the shadow map's size goes in
@@ -301,6 +462,7 @@ mod tests {
             antialiasing: Antialiasing::Fxaa,
             view: ViewDistance::Near,
             vsync: false,
+            resolution: Some(75),
             frame_cap: Some(60),
         };
         assert_eq!(Graphics::parse(&graphics.text()), graphics);
