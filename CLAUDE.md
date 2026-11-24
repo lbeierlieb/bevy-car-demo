@@ -215,7 +215,7 @@ the embedded copy, `Terrain::baked`, the fallback otherwise); commit the re-bake
 `tools/dev/unstrip.sh` copies `tools/dev/shot.rs` into `src/` and hooks it into
 `lib.rs` and the apps; `tools/dev/shot.sh out.png [frames] [keys]` renders headless and
 saves a screenshot (`BIN=editor` for the editor); `tools/dev/strip.sh` removes the hook.
-Always run `strip.sh` and check that `grep -c shot src/lib.rs src/main.rs
+Always run `strip.sh` and check that `grep -cw shot src/lib.rs src/main.rs
 src/bin/*.rs` prints 0 for each before committing. Keys are pressed from a third of
 the frames until the shot (`m` opens the map, `2` shows the telemetry panel, `f` shows the gizmos (off by default), `c` the driver's view, `b` looks back; keys stay held through the shot's frame),
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
@@ -591,6 +591,63 @@ anywhere; `Chase`, the hunt's flight) and `rescue.rs`.
   `TOPPLE="side,frame"` moves the car off the road onto its roof, `HELICAM="side,height,along"`
   looks at the car and helicopter, key `r` is R; e.g. `LINEUP=3,1 STEP=0.05 TOPPLE="14,20"
   HELICAM="-40,6,-30" bash tools/dev/shot.sh out.png 195 r` (the car in a forest, lifted).
+
+## Server authority (agreed with the user, 2026-11-24; branch `server-physics`)
+
+The server is to be in charge of every car's physics (later the shops too, and in the end
+the client knows nothing of cars but generic code, the server sending models, parameters,
+purchases). Plan agreed (Rocket League's way, not sim racing's trust-the-client):
+- Clients send only their inputs, numbered by simulation step; the server simulates every
+  car once, forwards, never rewinding. Each client predicts its own car ahead and, when
+  the server's state for a step disagrees beyond a threshold, takes it and replays its
+  stored inputs since (physics snaps, the drawn car and the force feedback smooth).
+  Normal driving must never feel delayed; in collisions drift and snaps are fine.
+- Only our own car is fully predicted; other cars stay dead reckoned. Small differences
+  (native vs wasm, glibc's libm by CPU) are tolerated, not eliminated; the `libm` crate
+  is the fallback if normal driving diverges.
+- A physics change needs client and server updated together (ends "client-only changes
+  need no server update" for anything driving). Shop changes are trusted until the shops
+  move to the server. Cosmetics (FFB, sound, camera, later smoke, marks) stay local.
+- Phases: 0 groundwork; 1 shadow mode (server drives a copy, logs divergence and cost:
+  try on the VPS); 2 authority (server states to others, owner reconciles, collisions on
+  the server, hunt tags from server contacts); 3 discrete gameplay on the server (reset
+  and rescue, holds, ghosts, lending cars, parking, fuel); 4 car changes as requests;
+  5 shops on the server, generic client.
+
+Built (phases 0 and 1):
+- `car::DriverInput`: a step's input (axes, buttons pressed since the last step,
+  `away`/`held`), ~10 bytes on the wire; `DriverInput::take` passes it through its
+  encoding so the client drives with exactly what the server gets. `Car::drive` applies
+  it (all the car's rules: shifting, ignition, parking brake, key steering) in
+  `FixedUpdate` before `simulate`; `StepInput { step, input }` numbers the steps. Every
+  step is exactly `sim::STEP` (the fixed clock's nanosecond `Duration` as f32 differs,
+  which broke bit-equality at once).
+- `snapshot.rs`: `Snapshot` (save, load into a value of the same setup), the `snapshot!`
+  macro listing a struct's state fields in its own module; a car is ~1.1 kB; a loaded car
+  drives on to the bit (`a_loaded_car_drives_on_as_the_saved_one`). Any new state field in
+  the physics must go into its module's `snapshot!` list, or replays and the server drift.
+- `spec.rs`: `CarSpec` (CarBuild with alignment and brakes, Parts, Ecu), checked on read
+  (ranges, the engine fitting, the tune's engine).
+- Protocol 19: `ToServer::Car(CarSpec)`, `Inputs { last, inputs }` (the steps since the
+  last message plus 12 again, at most 64), `Check { step, state }` (snapshot after every
+  `client::CHECK_STEPS`th step, taken in `FixedLast`); `ToClient::Pace { early }`.
+- One server timeline: `shadow::Tick` counts the server's steps (`step_shadows` in
+  `FixedUpdate`, 120 Hz set by `ServerPlugin`); a player's step `tick + offset` is driven
+  at `tick`, the offset set when inputs first come (or come over 30 late / 120 early) so
+  they come `MARGIN` (4) steps early. The server tells the least margin 4× a second
+  (`Pace`); the client's `pace` stretches its fixed timestep by up to 3 % to keep it at 2
+  (each step still simulates `sim::STEP`). A missing input is guessed (the one before
+  without presses; nobody at the wheel after 30 silent steps).
+- `net/shadow.rs` (`Peer::shadow`): the server builds the car (baking maps on a thread,
+  cached in `BakedMaps`), drives it from the inputs on its clock, compares at each check
+  (a check ahead of the copy waits for it), logs every 10 s (`… car on the
+  server: N of M checks to the bit, …, µs each, … without their input`), then takes the
+  player's state and re-drives the steps since. In the game against the dedicated server
+  here: every check to the bit, ~178 µs a step (the VPS ~4–5× slower: ~10 % of its vCPU
+  per player). `step_cost` (ignored) prints one car's cost on the map (147 µs a step; it
+  was 715 before the relief fix, which sped up the clients too).
+- Not done: phase 2 on. Time-based things still inside a step on the client (rescue,
+  push-off from remote cars) make the server's copy differ; the checks resync it.
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 

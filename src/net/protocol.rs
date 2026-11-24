@@ -37,7 +37,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 18;
+pub const PROTOCOL: u32 = 19;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -146,6 +146,11 @@ pub enum ToClient {
     /// Where the helicopter over the hunted is, to everyone in a car hunt's running
     /// round, wherever they are, a few times a second.
     Heli(HeliPose),
+    /// How many simulation steps before the server needed them our inputs came lately (at
+    /// the least; negative: too late), a few times a second.
+    Pace {
+        early: i16,
+    },
 }
 
 impl ToServer {
@@ -165,7 +170,11 @@ impl ToClient {
     pub fn reliable(&self) -> bool {
         !matches!(
             self,
-            ToClient::Cars(_) | ToClient::Map(_) | ToClient::Pings(_) | ToClient::Heli(_)
+            ToClient::Cars(_)
+                | ToClient::Map(_)
+                | ToClient::Pings(_)
+                | ToClient::Heli(_)
+                | ToClient::Pace { .. }
         )
     }
 }
@@ -372,6 +381,10 @@ impl Wire for ToClient {
                 15u8.put(out);
                 pose.put(out);
             }
+            ToClient::Pace { early } => {
+                16u8.put(out);
+                early.put(out);
+            }
         }
     }
 
@@ -409,6 +422,7 @@ impl Wire for ToClient {
             13 => ToClient::Round(r.get()?),
             14 => ToClient::Busy(r.get()?),
             15 => ToClient::Heli(r.get()?),
+            16 => ToClient::Pace { early: r.get()? },
             _ => return None,
         })
     }

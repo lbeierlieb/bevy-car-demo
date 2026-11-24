@@ -24,7 +24,7 @@ use super::link::{Link, Listener};
 use super::protocol::{
     CarId, CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, clean_chat,
 };
-use super::shadow::{BakedMaps, Shadow};
+use super::shadow::{BakedMaps, Shadow, Tick};
 use super::wire::{decode, encode};
 use super::{ClockOffset, NEAR, RATES, SEND_RATE};
 use crate::events::Event;
@@ -74,10 +74,18 @@ impl Plugin for ServerPlugin {
             .init_resource::<Rounds>()
             .init_resource::<Traffic>()
             .init_resource::<BakedMaps>()
+            .init_resource::<Tick>()
+            .insert_resource(Time::<Fixed>::from_hz(crate::sim::CHASSIS_HZ))
             .add_systems(
                 Update,
                 (accept, receive, run_shadows, run_rounds, send)
                     .chain()
+                    .run_if(resource_exists::<Server>),
+            )
+            .add_systems(
+                FixedUpdate,
+                step_shadows
+                    .before(crate::sim::simulate)
                     .run_if(resource_exists::<Server>),
             );
     }
@@ -252,7 +260,7 @@ fn accept(
 /// Reads what every player said, and lets go of the ones who left or fell silent.
 fn receive(
     mut commands: Commands,
-    (server, terrain, mut baked): (Res<Server>, Res<Terrain>, ResMut<BakedMaps>),
+    (server, terrain, mut baked, tick): (Res<Server>, Res<Terrain>, ResMut<BakedMaps>, Res<Tick>),
     time: Res<Time<Real>>,
     mut peers: Query<(Entity, &mut Peer, Option<&mut Transform>, Option<&Realm>)>,
     mut presence: MessageWriter<Presence>,
@@ -371,7 +379,7 @@ fn receive(
                 ToServer::Car(spec) => peer.shadow.set_spec(*spec, &mut baked),
                 ToServer::Inputs { last, inputs } => {
                     if !inputs.is_empty() {
-                        peer.shadow.take_inputs(last, &inputs);
+                        peer.shadow.take_inputs(last, &inputs, tick.0);
                     }
                 }
                 ToServer::Check { step, state } => peer.shadow.check(step, state),
@@ -512,18 +520,39 @@ fn receive(
     }
 }
 
-/// Drives each player's car on the server from their inputs (see `shadow`).
+/// How often each player is told how early their inputs come (s).
+const PACE_EVERY: f64 = 0.25;
+
+/// A server step: drives each player's car on the server one step (see `shadow`).
+fn step_shadows(mut tick: ResMut<Tick>, terrain: Res<Terrain>, mut peers: Query<&mut Peer>) {
+    tick.0 = tick.0.wrapping_add(1);
+    for mut peer in &mut peers {
+        peer.shadow.step(tick.0, &terrain);
+    }
+}
+
+/// Between server frames: the copies of players' cars compared with their checks, and
+/// each player told now and then how early their inputs come.
 fn run_shadows(
-    terrain: Res<Terrain>,
+    (terrain, tick): (Res<Terrain>, Res<Tick>),
     time: Res<Time<Real>>,
     mut baked: ResMut<BakedMaps>,
+    mut paced: Local<f64>,
     mut peers: Query<&mut Peer>,
 ) {
     let now = now(&time);
+    let pace = now - *paced >= PACE_EVERY;
+    if pace {
+        *paced = now;
+    }
     for mut peer in &mut peers {
         let peer = &mut *peer;
         if let Some(name) = &peer.name {
-            peer.shadow.run(&terrain, &mut baked, now, name);
+            peer.shadow.update(&terrain, &mut baked, tick.0, now, name);
+        }
+        if pace && let Some(early) = peer.shadow.take_early() {
+            let early = early.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
+            peer.tell(&ToClient::Pace { early });
         }
     }
 }

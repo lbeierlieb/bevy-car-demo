@@ -64,12 +64,23 @@ const CHAT_KEPT: usize = 50;
 const REPORT: f64 = 10.0;
 /// A state this much past the quickest counts as late (s).
 const LATE: f64 = 0.03;
-/// The inputs sent in each message: the latest and the ones before (a few frames' worth,
-/// so a lost message or two loses none).
-const INPUTS_SENT: usize = 12;
+/// Each message sends the inputs of the steps since the last one and this many before
+/// them again (a few frames' worth, so a lost message or two loses none), at most
+/// `MOST_INPUTS` (a slow frame runs many steps; a datagram holds about 80).
+const INPUTS_AGAIN: u32 = 12;
+const MOST_INPUTS: usize = 64;
 /// Our car's whole state goes to the server after every step whose number is a multiple
 /// of this (once a second), for checking against the server's own simulation of it.
 pub const CHECK_STEPS: u32 = 120;
+/// How early (in steps, at the least) we keep our inputs coming to the server: our clock
+/// runs a little faster or slower until they do (see `pace`).
+const EARLY: f32 = 2.0;
+/// How much faster or slower our clock runs per step our inputs come too late or too
+/// early, and at most.
+const PACE_GAIN: f64 = 0.004;
+const MOST_PACE: f64 = 0.03;
+/// Without word from the server for this long, our clock runs at its own pace (s).
+const PACE_GONE: f64 = 1.0;
 
 pub struct ClientPlugin;
 
@@ -77,7 +88,7 @@ impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (receive, dress_cars, send, (move_cars, remove_cars))
+            (receive, pace, dress_cars, send, (move_cars, remove_cars))
                 .chain()
                 .after(crate::looks::show_cars)
                 .run_if(resource_exists::<Connection>),
@@ -166,6 +177,8 @@ pub struct Connection {
     inputs_sent: Option<u32>,
     /// Our car's whole state after the latest step to check, to send.
     check: Option<(u32, Vec<u8>)>,
+    /// How early our inputs came to the server lately (steps), and when it said (s).
+    early: Option<(i16, f64)>,
     /// How the cars' states came lately, logged every `REPORT` seconds.
     report: Report,
 }
@@ -211,6 +224,7 @@ impl Connection {
             inputs: VecDeque::new(),
             inputs_sent: None,
             check: None,
+            early: None,
             report: Report::default(),
         };
         connection.say(&ToServer::Hello {
@@ -439,6 +453,7 @@ fn receive(
             ToClient::Round(round) => connection.round = round,
             ToClient::Busy(busy) => connection.busy = busy.into_iter().collect(),
             ToClient::Heli(pose) => connection.hunt_heli = Some((pose, now)),
+            ToClient::Pace { early } => connection.early = Some((early, now)),
             ToClient::Pings(pings) => {
                 connection.pings = pings.into_iter().collect();
             }
@@ -492,6 +507,24 @@ fn receive(
     }
 }
 
+/// Runs our simulation's clock a little faster when our inputs come to the server late,
+/// slower when they come too early, so they come just in time (the server drives our car
+/// on its own clock). Each step simulates `sim::STEP` all the same: only how many there
+/// are a second changes, by a few percent at most.
+fn pace(connection: Res<Connection>, time: Res<Time<Real>>, mut fixed: ResMut<Time<Fixed>>) {
+    let now = now(&time);
+    let pace = match connection.early {
+        Some((early, at)) if now - at < PACE_GONE => {
+            (PACE_GAIN * f64::from(f32::from(early) - EARLY)).clamp(-MOST_PACE, MOST_PACE)
+        }
+        _ => 0.0,
+    };
+    let step = std::time::Duration::from_secs_f64((1.0 + pace) / crate::sim::CHASSIS_HZ);
+    if fixed.timestep() != step {
+        fixed.set_timestep(step);
+    }
+}
+
 /// Gives a remote car its looks and name once they're here: a state can overtake them
 /// (it comes as a datagram, they come over the stream) and spawn the car first.
 fn dress_cars(
@@ -516,7 +549,7 @@ fn dress_cars(
 fn record_input(mut connection: ResMut<Connection>, input: Res<StepInput>) {
     let inputs = &mut connection.inputs;
     inputs.push_back((input.step, input.input));
-    while inputs.len() > INPUTS_SENT {
+    while inputs.len() > MOST_INPUTS {
         inputs.pop_front();
     }
 }
@@ -567,8 +600,13 @@ fn send(
     if let Some(&(last, _)) = connection.inputs.back()
         && connection.inputs_sent != Some(last)
     {
+        let new = connection
+            .inputs_sent
+            .map_or(u32::MAX, |sent| last.wrapping_sub(sent));
+        let count = (new.saturating_add(INPUTS_AGAIN) as usize).min(connection.inputs.len());
+        let inputs = connection.inputs.iter().rev().take(count).rev();
+        let inputs = inputs.map(|&(_, input)| input).collect();
         connection.inputs_sent = Some(last);
-        let inputs = connection.inputs.iter().map(|&(_, input)| input).collect();
         connection.say(&ToServer::Inputs { last, inputs });
     }
     if let Some((step, state)) = connection.check.take() {
