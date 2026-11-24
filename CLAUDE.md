@@ -581,7 +581,9 @@ anywhere; `Chase`, the hunt's flight) and `rescue.rs`.
   driver's away.
   **The server's alone** (agreed with the user, 2026-11-24: a lean client; a later quick
   transport or reset to the garage needs no client change): R is only
-  `DriverInput::reset`; `Shadow` holds the `Rescue`, calls it by its `ResetRule`
+  `DriverInput::reset` (a press in an input that came too late for its step is pressed in
+  the next, `Shadow::late`: at a few frames a second R got lost); `Shadow` holds the
+  `Rescue`, calls it by its `ResetRule`
   (`Round::reset_rule`, `Shadow::rule`; `Rescue::press`), drives the car as nobody's at
   the wheel while it has it, runs `rescue::fly` after the collisions
   (`Shadow::finish_step`) and refuses placements meanwhile. While it has the car
@@ -602,10 +604,11 @@ anywhere; `Chase`, the hunt's flight) and `rescue.rs`.
   so it lags, overshoots a hard stop and turns back; wanders ±6 m over a slow target) and
   sends `ToClient::Heli` 15/s to everyone in the round, wherever they are
   (`Connection::hunt_heli`; drawn only in a running round).
-- Shots: `STEP=0.05` steps game time per frame (needed: lavapipe's frame times jump),
-  `TOPPLE="side,frame"` moves the car off the road onto its roof, `HELICAM="side,height,along"`
-  looks at the car and helicopter, key `r` is R; e.g. `LINEUP=3,1 STEP=0.05 TOPPLE="14,20"
-  HELICAM="-40,6,-30" bash tools/dev/shot.sh out.png 195 r` (the car in a forest, lifted).
+- Shots: the rescue runs on the game's own server, on real time (not `STEP`), so tap R
+  at a frame and shoot soon after: `TAPS="KeyR@30" HELICAM="-40,12,-30" bash
+  tools/dev/shot.sh out.png 44` (the car carried over the houses; the server has it from
+  frame ~30 to ~54 at lavapipe's pace). `TOPPLE="side,frame"` (the car onto its roof off
+  the road) is a placement the server refuses now, and `OFFLINE=1` has no rescue.
 
 ## Server authority (agreed with the user, 2026-11-24; branch `server-physics`)
 

@@ -347,6 +347,9 @@ fn receive(
 ) {
     let now = now(&time);
     let connection = &mut *connection;
+    // Cars new to us, with their states, spawned once everything's read (several states
+    // of one can come in a frame).
+    let mut fresh: Vec<(CarId, VecDeque<CarState>)> = Vec::new();
     while let Some(bytes) = connection.link.receive() {
         let Some(message) = decode::<ToClient>(&bytes) else {
             if bytes.first() == Some(&ToClient::LOOKS) {
@@ -441,28 +444,18 @@ fn receive(
                         continue;
                     }
                     // A car new to us (or back in range).
-                    let mut entity = commands.spawn((
-                        RemoteCar {
-                            id,
-                            states: VecDeque::from([state]),
-                            heard: now,
-                            body: None,
-                            drawn: Drawn::default(),
-                        },
-                        Transform::from_translation(state.position).with_rotation(state.rotation),
-                        state.motion,
-                    ));
-                    if let Some(known) = connection.known.get(&id) {
-                        if let Some(looks) = &known.looks {
-                            entity.insert(looks.clone());
+                    match fresh.iter_mut().find(|(fresh, _)| *fresh == id) {
+                        Some((_, states)) => {
+                            if states.back().is_none_or(|last| state.time > last.time) {
+                                states.push_back(state);
+                            }
                         }
-                        if let Some(name) = &known.tag {
-                            entity.insert(Tag(name.clone()));
-                        }
+                        None => fresh.push((id, VecDeque::from([state]))),
                     }
                 }
             }
             ToClient::Gone { car } => {
+                fresh.retain(|(id, _)| *id != car);
                 for (entity, remote, ..) in &cars {
                     if remote.id == car {
                         commands.entity(entity).despawn();
@@ -532,6 +525,29 @@ fn receive(
         connection.status = Status::Lost(why);
         for (entity, ..) in &cars {
             commands.entity(entity).despawn();
+        }
+    }
+    let joined = matches!(connection.status, Status::Joined { .. });
+    for (id, states) in fresh.into_iter().filter(|_| joined) {
+        let state = *states.back().expect("a state");
+        let mut entity = commands.spawn((
+            RemoteCar {
+                id,
+                states,
+                heard: now,
+                body: None,
+                drawn: Drawn::default(),
+            },
+            Transform::from_translation(state.position).with_rotation(state.rotation),
+            state.motion,
+        ));
+        if let Some(known) = connection.known.get(&id) {
+            if let Some(looks) = &known.looks {
+                entity.insert(looks.clone());
+            }
+            if let Some(name) = &known.tag {
+                entity.insert(Tag(name.clone()));
+            }
         }
     }
 }

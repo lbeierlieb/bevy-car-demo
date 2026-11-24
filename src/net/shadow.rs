@@ -10,7 +10,8 @@
 //! worst (or much too early). How early they come is told back to the player
 //! (`ToClient::Pace`), whose game then runs its clock a little faster or slower to keep
 //! them coming just in time. An input that isn't there in time is guessed (the one
-//! before).
+//! before, with nothing pressed); the buttons pressed in it, if it comes after all, are
+//! pressed in the next step (R, a shift: none is lost).
 //!
 //! The server moves the car itself where the game's rules do (`put`: on joining, to an
 //! event's spots, onto the grid, back after a round), telling the player's game, which
@@ -26,7 +27,7 @@
 //! A car built of an engine whose maps don't come with the game is baked on a thread of
 //! its own (seconds); meanwhile the player's own word is shown.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -115,6 +116,10 @@ pub struct Shadow {
     inputs: BTreeMap<u32, DriverInput>,
     /// The latest step an input came for.
     latest: Option<u32>,
+    /// The steps driven with a guess for their input, and the buttons pressed in ones that
+    /// came after all, for the next step.
+    guesses: BTreeSet<u32>,
+    late: DriverInput,
     /// When the step under way began (between `step` and `finish_step`).
     started: Option<Instant>,
     /// How early their inputs came lately: the least, in steps (for `ToClient::Pace`).
@@ -226,7 +231,11 @@ impl Shadow {
     pub fn take_inputs(&mut self, last: u32, inputs: &[DriverInput], tick: u32) {
         let first = last.wrapping_sub(inputs.len() as u32 - 1);
         for (i, input) in inputs.iter().enumerate() {
-            self.inputs.insert(first.wrapping_add(i as u32), *input);
+            let step = first.wrapping_add(i as u32);
+            if self.guesses.remove(&step) {
+                press_later(&mut self.late, input);
+            }
+            self.inputs.insert(step, *input);
         }
         // The first step new in this message (none: nothing new).
         let new = match self.latest {
@@ -404,9 +413,13 @@ impl Shadow {
                 self.report.guessed += 1;
                 let input = guess(&self.inputs, self.latest, step);
                 self.inputs.insert(step, input);
+                self.guesses.insert(step);
                 input
             }
         };
+        // What was pressed in steps that had to be guessed.
+        let mut input = input;
+        press_later(&mut input, &std::mem::take(&mut self.late));
         // R calls the rescue (as the rules say); nobody at the wheel lets it go.
         if input.away {
             self.rescue.let_go();
@@ -452,6 +465,7 @@ impl Shadow {
         self.inputs
             .retain(|&kept, _| after(step, kept) < KEPT as i32);
         self.ours.retain(|&kept, _| after(step, kept) < KEPT as i32);
+        self.guesses.retain(|&kept| after(step, kept) < KEPT as i32);
     }
 
     /// Between server frames, `tick` the last server step: finishes baking, gives a copy
@@ -669,6 +683,14 @@ impl Shadow {
     }
 }
 
+/// Adds the buttons pressed in `from` to `to`.
+fn press_later(to: &mut DriverInput, from: &DriverInput) {
+    to.reset |= from.reset;
+    to.ignition |= from.ignition;
+    to.handbrake_toggle |= from.handbrake_toggle;
+    to.shift = to.shift.saturating_add(from.shift);
+}
+
 /// A stand-in for the input of `step`, which didn't come in time: the one before, with
 /// nothing pressed (presses count once); nobody at the wheel if the player's been silent.
 fn guess(inputs: &BTreeMap<u32, DriverInput>, latest: Option<u32>, step: u32) -> DriverInput {
@@ -714,4 +736,38 @@ fn bake(hardware: crate::physics::engine::hardware::EngineHardware) -> Baking {
         }
     });
     baking
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::car::CarSetup;
+
+    #[test]
+    fn a_press_in_an_input_that_came_late_is_pressed_in_the_next_step() {
+        let terrain = Terrain::flat();
+        let setup = CarSetup::default();
+        let spec = CarSpec::of(&setup);
+        let mut shadow = Shadow {
+            car: Some(spec_car(&spec, spec.stock_maps().unwrap())),
+            offset: Some(0),
+            ..default()
+        };
+        shadow.take_inputs(1, &[DriverInput::default()], 0);
+        // Step 2's input isn't there in time: guessed, without R.
+        for tick in 1..=2 {
+            shadow.step(tick, &terrain);
+            shadow.finish_step(&terrain);
+        }
+        assert!(!shadow.taken());
+        // It comes after all, R pressed: pressed in step 3.
+        let pressed = DriverInput {
+            reset: true,
+            ..default()
+        };
+        shadow.take_inputs(3, &[pressed, DriverInput::default()], 2);
+        shadow.step(3, &terrain);
+        shadow.finish_step(&terrain);
+        assert!(shadow.taken(), "R was lost");
+    }
 }
