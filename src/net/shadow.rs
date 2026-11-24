@@ -166,13 +166,18 @@ impl Shadow {
         for (i, input) in inputs.iter().enumerate() {
             self.inputs.insert(first.wrapping_add(i as u32), *input);
         }
-        if self.latest.is_none_or(|latest| after(last, latest) > 0) {
-            self.latest = Some(last);
-        }
-        // How early the latest came: the steps until it's driven.
+        // The first step new in this message (none: nothing new).
+        let new = match self.latest {
+            Some(latest) if after(last, latest) <= 0 => return,
+            Some(latest) if after(last, latest) <= inputs.len() as i32 => latest.wrapping_add(1),
+            _ => last,
+        };
+        self.latest = Some(last);
+        // How early the first new one came: the steps until it's driven (a game whose
+        // frames are long sends many at once, and the server mustn't run out between).
         let early = self
             .offset
-            .map(|offset| after(last.wrapping_sub(offset), tick));
+            .map(|offset| after(new.wrapping_sub(offset), tick));
         match early {
             Some(early) if (-TOO_LATE..=TOO_EARLY).contains(&early) => {
                 self.early = Some(self.early.map_or(early, |least| least.min(early)));
