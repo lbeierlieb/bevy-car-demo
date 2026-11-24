@@ -39,6 +39,7 @@ impl Plugin for RaceEditorPlugin {
             ..default()
         })
         .insert_resource(Draft::default())
+        .insert_resource(crate::editor::camera::SpeedScale(3.0))
         .insert_resource(OpenAtStart(self.open.clone()))
         .add_plugins((
             crate::terrain::TerrainPlugin,

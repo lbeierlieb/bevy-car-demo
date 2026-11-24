@@ -532,7 +532,7 @@ starts, a minimap.
 
 **Race editor** (asked for by the user, 2026-11-24, instead of recording a route while
 driving; `src/race_editor/`, `src/bin/races.rs`, `cargo run --bin races [FILE]`): the
-map editor's fly camera (`editor::camera`; Shift+wheel no longer sets its speed) and
+map editor's fly camera (`editor::camera`, 3× as fast: `SpeedScale`; Shift+wheel no longer sets its speed) and
 ground hit (`editor::overlay::ground_hit`), no cars. `mod.rs`: `Draft` (the `Plan`:
 looped, grid in placement order, checkpoints; undo/redo of whole plans, `touch` while
 dragging/turning and `commit` at the end, `change_merged` for wheel notches; the route

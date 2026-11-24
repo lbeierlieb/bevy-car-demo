@@ -21,9 +21,21 @@ const CLEARANCE: f32 = 0.5;
 
 pub struct FlyCameraPlugin;
 
+/// What an app multiplies the flying speeds by (the race editor's 3: its routes are
+/// kilometres long).
+#[derive(Resource, Clone, Copy)]
+pub struct SpeedScale(pub f32);
+
+impl Default for SpeedScale {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
 impl Plugin for FlyCameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn)
+        app.init_resource::<SpeedScale>()
+            .add_systems(Startup, spawn)
             .add_systems(Update, (teleport, fly).chain());
     }
 }
@@ -99,6 +111,7 @@ fn fly(
     egui: Res<EguiWantsInput>,
     view: Res<MapView>,
     terrain: Res<Terrain>,
+    scale: Res<SpeedScale>,
     mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut cameras: Query<(&mut FlyCamera, &mut Transform)>,
 ) {
@@ -166,7 +179,7 @@ fn fly(
         1.0
     };
     let mut position = transform.translation
-        + wish.normalize_or_zero() * camera.speed() * fast * time.delta_secs();
+        + wish.normalize_or_zero() * camera.speed() * scale.0 * fast * time.delta_secs();
     let half = terrain.half_size();
     position.x = position.x.clamp(-half.x, half.x);
     position.z = position.z.clamp(-half.y, half.y);
