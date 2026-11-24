@@ -52,14 +52,18 @@ const SQUEAL_FLUTTER: (f32, f32) = (0.5, 28.0);
 /// Broadband scrub under the tone, relative to it, and its low-pass (Hz).
 const SCRUB: (f32, f32) = (0.25, 2500.0);
 /// Level of one wheel squealing all out.
-const SQUEAL: f32 = 0.16;
+const SQUEAL: f32 = 0.08;
 /// Slip, relative to the peak (combined, as the tire model has it), where the squeal
 /// starts and where it's full.
 const SQUEAL_FROM: f32 = 0.55;
 const SQUEAL_FULL: f32 = 1.4;
 /// Speed the tread slides over the road at (m/s) for a full squeal: less only scuffs.
 const SQUEAL_SLIDE: f32 = 2.0;
-/// How quickly a squeal swells and dies (s).
+/// How quickly a squeal swells and dies (s), and how quickly its pitch and place follow.
+/// Swelling, the scrub comes in first and the tone fades in over it (the tone's level
+/// goes with the square of the squeal's).
+const SQUEAL_SWELL: f32 = 0.25;
+const SQUEAL_DIE: f32 = 0.15;
 const SQUEAL_GLIDE: f32 = 0.03;
 
 /// Dog teeth meeting per revolution of the difference, the clash rate's range (Hz), the
@@ -946,7 +950,13 @@ impl EffectsVoice {
                 // Silent: it starts where it is, at its pitch.
                 (squeal.pitch, squeal.pan) = (pitch, pan);
             }
-            glide(&mut squeal.level, level.clamp(0.0, 1.0), SQUEAL_GLIDE);
+            let level = level.clamp(0.0, 1.0);
+            let swell = if level > squeal.level {
+                SQUEAL_SWELL
+            } else {
+                SQUEAL_DIE
+            };
+            glide(&mut squeal.level, level, swell);
             glide(&mut squeal.pitch, pitch, SQUEAL_GLIDE);
             glide(&mut squeal.pan, pan, SQUEAL_GLIDE);
             if squeal.level < 1e-4 {
@@ -974,7 +984,10 @@ impl EffectsVoice {
             let share = 1.0 - (-TAU * SCRUB.1 / rate).exp();
             squeal.scrub += share * (scrub_noise - squeal.scrub);
             let flutter = (1.0 + SQUEAL_FLUTTER.0 * squeal.flutter.clamp(-1.0, 1.0)).max(0.0);
-            let out = SQUEAL * squeal.level * flutter * (tone + SCRUB.0 * 3.0 * squeal.scrub);
+            let out = SQUEAL
+                * squeal.level
+                * flutter
+                * (squeal.level * tone + SCRUB.0 * 3.0 * squeal.scrub);
             let angle = (squeal.pan + 1.0) * PI / 4.0;
             left += out * angle.cos() * 2f32.sqrt();
             right += out * angle.sin() * 2f32.sqrt();
@@ -1123,10 +1136,12 @@ mod tests {
         assert!(right > 0.1 && left < 0.01 * right, "{left} {right}");
         let (loud, _) = run(&mut voice, 1.0);
         assert!(loud > 0.03, "{loud}");
-        // It stops when the tires grip again.
+        // It dies away when the tires grip again.
         cues.set_squeal(1, 0.0, 1.0, 1.0);
         cues.set_squeal(3, 0.0, 1.0, 1.0);
-        run(&mut voice, 0.5);
+        let (dying, _) = run(&mut voice, 0.2);
+        assert!(dying < loud);
+        run(&mut voice, 1.2);
         assert!(run(&mut voice, 0.2).1 < 1e-3);
     }
 
