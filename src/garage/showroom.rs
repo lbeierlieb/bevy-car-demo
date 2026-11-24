@@ -760,7 +760,7 @@ fn show(
     let engine = EngineRun {
         running: hall.running,
         rpm: hall.rpm,
-        load: if hall.clock < BLIP_HELD { 0.8 } else { 0.05 },
+        fill: crate::physics::drivetrain::fill_for(if hall.clock < BLIP_HELD { 0.8 } else { 0.05 }),
         turbo_speed: 0.0,
     };
     for (entity, shown, looks, motion, mut transform, visibility) in &mut shown {

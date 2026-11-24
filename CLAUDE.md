@@ -1521,7 +1521,17 @@ the body's width and the roof over the floor; how much comes through and how bri
 engine's distance from the eyes (the mid-engined cars and the V12 supercar brightest);
 open cars (cabin outline of two points or none) get a third of the cabin. One
 `paths::Listener` (inside or not, the cabin) shared by every synth (`Listening`
-resource). Synthetic (no recorded IR). The render writes `<code>-inside.wav`
+resource). Synthetic (no recorded IR).
+**Loudness from the gas** (branch `engine-gas-flow`, protocol 17, tried by the user before
+merging, 2026-11-24): each pulse's strength is the gas a firing pushes out, displacement
+per cylinder (`EngineCharacter::displacement`, in `Looks`) × how full it got
+(`Drivetrain::fill`, air per cycle over the displacement, above 1 on boost; sent as
+`EngineRun::fill` in `load`'s old slot, so no extra bytes per snapshot; the 0–1 tone load
+is `drivetrain::firing_load(fill)` on the receiver; traffic and the showroom send
+`fill_for(load)`). The factor making fewer cylinders louder is gone; `CYLINDER` (0.5 L at
+full fill = strength 1) leaves the big engines room under the limiter. A-weighted at full
+throttle: three −27.5 dB, 1.6 four −24.2, V8 −22.6/−21.3, V10/V12 −20 (the V12 was 2.4 dB
+under the 1.6 before); the whole game ~4 dB quieter. The render writes `<code>-inside.wav`
 too. Idle is ~4 dB louder inside (the boom), a V12's pull 5 dB quieter (its energy is
 where the body blocks). Measured from the renders with numpy (order levels over the pull, envelope
 modulation at half orders); the user judges by ear. Not done: displacement in the level

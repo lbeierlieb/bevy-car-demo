@@ -297,7 +297,7 @@ impl Shifter {
         EngineRun {
             running: true,
             rpm: self.rpm,
-            load: self.load,
+            fill: crate::physics::drivetrain::fill_for(self.load),
             turbo_speed: self.turbo,
         }
     }
@@ -308,7 +308,7 @@ pub fn idling(chassis: usize) -> EngineRun {
     EngineRun {
         running: true,
         rpm: Powertrain::factory(chassis).idle,
-        load: 0.0,
+        fill: crate::physics::drivetrain::fill_for(0.0),
         turbo_speed: 0.0,
     }
 }
@@ -317,6 +317,7 @@ pub fn idling(chassis: usize) -> EngineRun {
 mod tests {
     use super::*;
     use crate::chassis::CHASSIS;
+    use crate::physics::drivetrain::firing_load;
 
     /// A driver wanting `wanted` (m/s²) up to `top` (m/s) on a `grade` for `seconds`:
     /// the speeds it reached each second, and the gears it shifted into on the way.
@@ -398,7 +399,7 @@ mod tests {
                     run.high,
                     shifter.gear + 1,
                     cruise.rpm,
-                    cruise.load,
+                    firing_load(cruise.fill),
                     climb.speed * 3.6,
                     climber.gear + 1,
                 );
@@ -414,7 +415,8 @@ mod tests {
                 );
                 assert!(run.to_100.is_some_and(|t| t < 40.0), "{}", model.name);
                 assert!(shifter.gear + 3 >= p.gears.len(), "{}", model.name);
-                assert!(cruise.load > 0.05 && cruise.load < 0.5, "{}", model.name);
+                let load = firing_load(cruise.fill);
+                assert!(load > 0.05 && load < 0.5, "{}", model.name);
                 assert!(climb.speed > 50.0 / 3.6, "{}", model.name);
                 times.push((model.name, eager, run.to_100.unwrap()));
             }
