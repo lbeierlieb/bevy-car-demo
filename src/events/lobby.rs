@@ -15,15 +15,14 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use super::hunt::{CAUGHT_TIME, Cars, Catch};
 use super::race::{COUNTDOWN, Course};
 use super::round::{Action, Game, Phase, Play, Round};
-use super::{EventKind, Events};
+use super::{EventKind, Events, marker_spot, start_spot};
 use crate::car::{ActiveCar, Car, CarSetup, Held, ResetRule};
 use crate::chassis::CHASSIS;
 use crate::menu::kit::{self, Panel, Place};
 use crate::menu::nav::MenuInput;
 use crate::net::protocol::PlayerId;
 use crate::net::{Connection, GhostPlayers, Status, Touching, WantsGhost};
-use crate::online::lane_spots;
-use crate::shops::{MARKER_RADIUS, kerb};
+use crate::shops::MARKER_RADIUS;
 use crate::terrain::Terrain;
 use crate::traffic::network::Network;
 
@@ -38,9 +37,6 @@ const TOUCHES_EVERY: f64 = 0.2;
 /// The nearest hunter's distance is shown red and yellow within these (m).
 const HUNTER_CLOSE: f32 = 50.0;
 const HUNTER_NEAR: f32 = 200.0;
-/// The players' spots by the marker: within this far of it (m), at most this many.
-const SPOT_RANGE: f32 = 300.0;
-const SPOTS: usize = 32;
 /// The cars lent for "muscle vs rally": the hunters', the hunted's (their base engines:
 /// the muscle car's smaller V8).
 const MUSCLE: &str = "Harrow";
@@ -282,32 +278,30 @@ pub(super) fn follow(
     // Our spot by the round's marker: (where, yaw).
     let spot = |round: &Round| {
         let event = connection.events.get(usize::from(round.event))?;
-        // Without the traffic network, by the nearest road.
-        let (marker, yaw) = kerb(&terrain, event.at);
-        let spots = network
-            .as_deref()
-            .map(|network| lane_spots(network, event.at, SPOT_RANGE, SPOTS))
-            .unwrap_or_default();
-        let slot = round.slot(you);
-        Some(
-            spots
-                .get(slot % spots.len().max(1))
-                .copied()
-                .unwrap_or((marker, yaw)),
-        )
+        Some(marker_spot(
+            &terrain,
+            network.as_deref(),
+            event.at,
+            round.slot(you),
+        ))
     };
     if running && start != start_of(state.seen.as_ref()) {
         let round = round.as_ref().unwrap();
         state.started = now;
         state.gate_times.clear();
         state.wrong_way = None;
-        let place = match &round.game {
-            Game::Hunt(_) => spot(round),
-            Game::Race(_) | Game::Trial(_) => {
-                let slot = round.slot(you);
-                (state.course(&connection, round)).map(|course| course.grid(slot))
-            }
-        };
+        let at = (connection.events.get(usize::from(round.event))).map(|event| event.at);
+        let course = state.course(&connection, round).cloned();
+        let place = at.and_then(|at| {
+            start_spot(
+                round,
+                course.as_ref(),
+                &terrain,
+                network.as_deref(),
+                at,
+                you,
+            )
+        });
         if let (Some((p, yaw)), Some((entity, mut car))) = (
             place,
             cars.iter_mut().find(|(_, car)| car.index == active.0),

@@ -10,13 +10,14 @@ use bevy::prelude::*;
 use super::hunt::{self, CAUGHT_SPEED, CAUGHT_TIME, Catch, Ending, TAG_RANGE};
 use super::race::{self, BEST_KEPT, Best, COUNTDOWN, Course, FINISH_GRACE, MAX_RACERS, Racer};
 use super::round::{Action, Game, Outcome, Phase, Play, Round};
-use super::{Event, EventKind};
+use super::{Event, EventKind, marker_spot, start_spot};
 use crate::car::ResetRule;
 use crate::heli::{Chase, HeliPose};
 use crate::net::protocol::CarId;
 use crate::net::protocol::{CarState, PlayerId, ToClient};
 use crate::net::server::{Peer, Server};
 use crate::terrain::Terrain;
+use crate::traffic::network::Network;
 use crate::traffic::{Realm, Traffic};
 
 /// How often the hunt's helicopter is sent to the players in the round (per second).
@@ -49,6 +50,9 @@ pub struct Rounds {
     in_realms: HashSet<PlayerId>,
     /// The time trials' best times, this session.
     best: HashMap<BestKey, Vec<Best>>,
+    /// Each player in a running round: its event, when it started and their slot in it
+    /// (their car was put on its start spot then).
+    started: HashMap<PlayerId, (u16, f64, usize)>,
 }
 
 impl Rounds {
@@ -129,6 +133,7 @@ pub fn run_rounds(
     server: Res<Server>,
     mut traffic: ResMut<Traffic>,
     (time, fixed, terrain): (Res<Time<Real>>, Res<Time<Fixed>>, Res<Terrain>),
+    network: Option<Res<Network>>,
     mut actions: MessageReader<EventAction>,
     mut peers: Query<(Entity, &mut Peer, Option<&Realm>)>,
 ) {
@@ -553,6 +558,9 @@ pub fn run_rounds(
     rounds
         .told_busy
         .retain(|player| present.contains_key(player));
+    rounds
+        .started
+        .retain(|player, _| present.contains_key(player));
     for (entity, mut peer, realm) in &mut peers {
         let wanted = realm_of.get(&peer.id).copied();
         let ours = wanted.is_some() || rounds.in_realms.contains(&peer.id);
@@ -563,11 +571,53 @@ pub fn run_rounds(
             };
         }
         // What R does with their car.
-        peer.shadow.rule = (rounds.list.iter())
-            .find(|live| live.round.running() && live.has(peer.id))
-            .map_or(ResetRule::Road, |live| {
-                live.round.reset_rule(live.course.as_ref(), peer.id)
-            });
+        let running = (rounds.list.iter()).find(|live| live.round.running() && live.has(peer.id));
+        peer.shadow.rule = running.map_or(ResetRule::Road, |live| {
+            live.round.reset_rule(live.course.as_ref(), peer.id)
+        });
+        // Their car onto its start spot when the round starts (or a time trial starts
+        // again), back by the marker when it's over for them (by the marker of the lobby
+        // they're in, else of the round they were in).
+        let network = network.as_deref();
+        let at = |event: u16| events.get(usize::from(event)).map(|event| event.at);
+        let running = running.and_then(|live| match live.round.phase {
+            Phase::Running { start, .. } => Some((live, start)),
+            Phase::Lobby { .. } => None,
+        });
+        match running {
+            Some((live, start)) => {
+                let event = live.round.event;
+                let key = (event, start, live.round.slot(peer.id));
+                if rounds
+                    .started
+                    .get(&peer.id)
+                    .is_none_or(|k| (k.0, k.1) != (event, start))
+                {
+                    rounds.started.insert(peer.id, key);
+                    let course = live.course.as_ref();
+                    let spot = (at(event)).and_then(|at| {
+                        start_spot(&live.round, course, &terrain, network, at, peer.id)
+                    });
+                    if let Some((p, yaw)) = spot {
+                        // On a race's grid, the countdown holds the car.
+                        let parked = live.round.game.race().is_none();
+                        peer.shadow.put(&terrain, p, yaw, parked);
+                    }
+                }
+            }
+            None => {
+                if let Some((event, _, slot)) = rounds.started.remove(&peer.id) {
+                    let lobby = (rounds.list.iter()).find(|live| live.has(peer.id));
+                    let (event, slot) = lobby.map_or((event, slot), |live| {
+                        (live.round.event, live.round.slot(peer.id))
+                    });
+                    if let Some(at) = at(event) {
+                        let (p, yaw) = marker_spot(&terrain, network, at, slot);
+                        peer.shadow.put(&terrain, p, yaw, true);
+                    }
+                }
+            }
+        }
         if peer.name.is_none() {
             continue;
         }

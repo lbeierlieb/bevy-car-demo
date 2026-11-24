@@ -23,6 +23,7 @@ use crate::net::wire::{Reader, Wire};
 use crate::net::{Connection, Status};
 use crate::shops::{float_label, spawn_marker};
 use crate::terrain::Terrain;
+use crate::traffic::network::Network;
 
 /// The repo's list (`assets/events.cfg`), for tests: the server has none of its own.
 #[cfg(test)]
@@ -394,6 +395,43 @@ fn labels(
         float_label(&painter, camera, &terrain, label);
     }
     Ok(())
+}
+
+/// The players' spots by an event's marker: within this far of it (m), at most this many.
+const SPOT_RANGE: f32 = 300.0;
+const SPOTS: usize = 32;
+
+/// Where the car of the player in `slot` waits by an event's marker at `at`: a lane spot
+/// nearby (by the nearest road without the road network). The same in the player's game
+/// and on the server.
+pub fn marker_spot(
+    terrain: &Terrain,
+    network: Option<&Network>,
+    at: Vec2,
+    slot: usize,
+) -> (Vec2, f32) {
+    let (marker, yaw) = crate::shops::kerb(terrain, at);
+    let spots = network
+        .map(|network| crate::online::lane_spots(network, at, SPOT_RANGE, SPOTS))
+        .unwrap_or_default();
+    (spots.get(slot % spots.len().max(1)).copied()).unwrap_or((marker, yaw))
+}
+
+/// Where `player`'s car goes when `round` starts at an event's marker at `at`: by the
+/// marker in a hunt, on the grid in a race (`course`).
+pub fn start_spot(
+    round: &round::Round,
+    course: Option<&race::Course>,
+    terrain: &Terrain,
+    network: Option<&Network>,
+    at: Vec2,
+    player: crate::net::protocol::PlayerId,
+) -> Option<(Vec2, f32)> {
+    let slot = round.slot(player);
+    match round.game {
+        round::Game::Hunt(_) => Some(marker_spot(terrain, network, at, slot)),
+        round::Game::Race(_) | round::Game::Trial(_) => course.map(|course| course.grid(slot)),
+    }
 }
 
 #[cfg(test)]

@@ -224,14 +224,25 @@ fn place_on_joining(
         return;
     }
     *placed = Some(you);
-    let (start, _) = terrain.road_spawns(&connection.spawn, 1, 0.0)[0];
-    let spots = lane_spots(&network, start, SPOT_RANGE, SPOTS);
-    let Some(&(p, yaw)) = spots.get(you as usize % spots.len().max(1)) else {
+    let Some((p, yaw)) = join_spot(&terrain, &network, &connection.spawn, you) else {
         return;
     };
     for mut car in cars.iter_mut().filter(|car| car.index == active.0) {
         car.place(&terrain, p, yaw);
     }
+}
+
+/// Where player `you` starts on joining a server whose players start at `spawn`: a lane
+/// spot near it by their number (the server puts their car there too).
+pub fn join_spot(
+    terrain: &Terrain,
+    network: &Network,
+    spawn: &crate::terrain::Spawn,
+    you: net::protocol::PlayerId,
+) -> Option<(Vec2, f32)> {
+    let (start, _) = terrain.road_spawns(spawn, 1, 0.0)[0];
+    let spots = lane_spots(network, start, SPOT_RANGE, SPOTS);
+    spots.get(you as usize % spots.len().max(1)).copied()
 }
 
 /// The other players the server tells us of, on the map.

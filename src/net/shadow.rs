@@ -12,10 +12,14 @@
 //! them coming just in time. An input that isn't there in time is guessed (the one
 //! before).
 //!
-//! Where the player's game moves or changes the car outside the simulation (put on the
-//! road, carried by the rescue helicopter, built anew in a shop, refuelled), it says so
+//! The server moves the car itself where the game's rules do (`put`: on joining, to an
+//! event's spots, onto the grid, back after a round), telling the player's game, which
+//! takes the state up whatever it had (`ToClient::Yours::moved`). Where the player's game
+//! changes the car outside the simulation (built anew in a shop, refuelled), it says so
 //! (`place`): the server takes up that state and drives the steps since again (trusted,
-//! until the server does those things itself). Once a second the player's game also sends
+//! until the server does those things itself), but never where it would move the car:
+//! a placement more than `REACH` from where the server has the car is refused (a car built
+//! anew goes where the old one was, or where the server put it). Once a second the player's game also sends
 //! its car's state after a numbered step (`check`), which is only compared with the
 //! server's for the log (how many matched to the bit, how far off the others were).
 //!
@@ -29,7 +33,8 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 
 use super::client::CHECK_STEPS;
-use crate::car::{Car, DriverInput, ResetRule};
+use super::protocol::Yours;
+use crate::car::{Car, DriverInput, ResetRule, heading};
 use crate::heli::rescue::fly;
 use crate::physics::engine::maps::{EngineMaps, fingerprint};
 use crate::sim::{STEP, step_car};
@@ -63,6 +68,10 @@ const YOURS_STEPS: u32 = 12;
 const REPORT: f64 = 10.0;
 /// The most checks waiting for the copy to get to their step.
 const MOST_WAITING: usize = 4;
+/// How far a player's placement may be from where the server has the car (m), and how
+/// much farther for each m/s it moves per second the placement is old.
+const REACH: f32 = 2.0;
+const REACH_PER_SPEED: f32 = 1.5;
 
 /// The server's simulation step, counted.
 #[derive(Resource, Default)]
@@ -113,9 +122,13 @@ pub struct Shadow {
     /// and the latest taken up.
     placements: BTreeMap<u32, Vec<u8>>,
     placed: Option<u32>,
-    /// The car's latest state to send the player: the step, the latest placement taken
-    /// up then, the state.
-    yours: Option<(u32, Option<u32>, Vec<u8>)>,
+    /// The car's latest state to send the player.
+    yours: Option<Yours>,
+    /// How many times the server moved the car (`put`).
+    moved: u32,
+    /// Where a car without a state yet goes when it gets one, if it's elsewhere: where the
+    /// server put it (or the car it replaces was), facing which way, and whether parked.
+    anchor: Option<(Vec2, f32, bool)>,
     /// What R does with the car (the player's round's rules).
     pub rule: ResetRule,
     report: Report,
@@ -146,6 +159,11 @@ impl Shadow {
     pub fn set_spec(&mut self, spec: CarSpec, baked: &mut BakedMaps) {
         if self.spec.as_ref() == Some(&spec) {
             return;
+        }
+        // The new car goes where the old one is.
+        if let Some(car) = &self.car {
+            let at = (car.body.position.xz(), heading(car.body.rotation));
+            self.anchor = Some((at.0, at.1, car.parking_brake));
         }
         self.car = None;
         self.built = None;
@@ -231,10 +249,35 @@ impl Shadow {
         self.placements.insert(step, state);
     }
 
-    /// The car's latest state for the player, if there's a new one: the step, the latest
-    /// placement taken up then, the state.
-    pub fn take_yours(&mut self) -> Option<(u32, Option<u32>, Vec<u8>)> {
+    /// The car's latest state for the player, if there's a new one.
+    pub fn take_yours(&mut self) -> Option<Yours> {
         self.yours.take()
+    }
+
+    /// Moves the car: at rest at `p` (map x, z) facing `yaw`, as it was otherwise, with
+    /// the parking brake on if `parked` (else off: on a race's grid). A car without a state
+    /// yet goes there when it gets one.
+    pub fn put(&mut self, terrain: &Terrain, p: Vec2, yaw: f32, parked: bool) {
+        match &mut self.car {
+            Some(car) => {
+                car.place(terrain, p, yaw);
+                car.parking_brake = parked;
+                self.moved = self.moved.wrapping_add(1);
+                self.ours.clear();
+                self.yours = Some(Yours {
+                    step: self.done,
+                    placed: self.placed,
+                    moved: self.moved,
+                    state: snapshot::save(car),
+                });
+            }
+            None => self.anchor = Some((p, yaw, parked)),
+        }
+    }
+
+    /// Where the car is, as the server has it (none before it has a state).
+    pub fn position(&self) -> Option<Vec3> {
+        self.car.as_ref().map(|car| car.body.position)
     }
 
     /// The car as the server drives it, while the player's inputs come (a game that
@@ -291,7 +334,12 @@ impl Shadow {
             self.ours.insert(step, snapshot::save(car));
         }
         if step.is_multiple_of(YOURS_STEPS) {
-            self.yours = Some((step, self.placed, snapshot::save(car)));
+            self.yours = Some(Yours {
+                step,
+                placed: self.placed,
+                moved: self.moved,
+                state: snapshot::save(car),
+            });
         }
         let report = &mut self.report;
         report.steps += 1;
@@ -341,6 +389,7 @@ impl Shadow {
         let Some(mut car) = self.car.take().or_else(|| self.built.take()) else {
             return;
         };
+        let was = (!fresh).then(|| car.clone());
         if !snapshot::load(&mut car, &state) {
             // Not a state of this car (from before it changed).
             if fresh {
@@ -351,12 +400,40 @@ impl Shadow {
             return;
         }
         self.placed = Some(step);
+        let mut moved = false;
+        if let Some(was) = was {
+            // Not moved: where the server has it, give or take how far it went since.
+            let age = after(done, step).max(0) as f32 * STEP;
+            let speed = was.body.velocity.length().max(car.body.velocity.length());
+            let reach = REACH + REACH_PER_SPEED * speed * age;
+            if was.body.position.distance(car.body.position) > reach {
+                warn!("A player's game moved their car: refused");
+                self.car = Some(was);
+                return;
+            }
+        } else if let Some((p, yaw, parked)) = self.anchor.take()
+            && car.body.position.xz().distance(p) > REACH
+        {
+            // Where the server has it.
+            car.place(terrain, p, yaw);
+            car.parking_brake = parked;
+            self.moved = self.moved.wrapping_add(1);
+            moved = true;
+        }
         // Driven on to where it's due from the inputs kept (a placement from long ago, a
         // car whose engine was baking: from where it was put).
         let since = after(done, step);
         if (0..=KEPT as i32).contains(&since) {
             self.ours.retain(|&kept, _| after(kept, step) <= 0);
             self.redrive(&mut car, step, done, terrain);
+        }
+        if moved {
+            self.yours = Some(Yours {
+                step: done,
+                placed: self.placed,
+                moved: self.moved,
+                state: snapshot::save(&car),
+            });
         }
         self.car = Some(car);
         self.done = done;

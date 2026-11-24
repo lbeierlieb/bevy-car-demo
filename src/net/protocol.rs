@@ -37,7 +37,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 21;
+pub const PROTOCOL: u32 = 22;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -158,13 +158,20 @@ pub enum ToClient {
     Pace {
         early: i16,
     },
-    /// Our car's whole state as the server drives it, after our step `step`, with the
-    /// latest of our placements it had taken up then; ten times a second.
-    Yours {
-        step: u32,
-        placed: Option<u32>,
-        state: Vec<u8>,
-    },
+    /// Our car's whole state as the server drives it, ten times a second, and at once
+    /// when the server moved it.
+    Yours(Yours),
+}
+
+/// A player's car's whole state as the server drives it: after their step `step`, with
+/// the latest of their placements the server had taken up then and how many times it had
+/// moved the car itself.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Yours {
+    pub step: u32,
+    pub placed: Option<u32>,
+    pub moved: u32,
+    pub state: Vec<u8>,
 }
 
 impl ToServer {
@@ -189,7 +196,7 @@ impl ToClient {
                 | ToClient::Pings(_)
                 | ToClient::Heli(_)
                 | ToClient::Pace { .. }
-                | ToClient::Yours { .. }
+                | ToClient::Yours(_)
         )
     }
 }
@@ -409,15 +416,12 @@ impl Wire for ToClient {
                 16u8.put(out);
                 early.put(out);
             }
-            ToClient::Yours {
-                step,
-                placed,
-                state,
-            } => {
+            ToClient::Yours(yours) => {
                 17u8.put(out);
-                step.put(out);
-                placed.put(out);
-                state.put(out);
+                yours.step.put(out);
+                yours.placed.put(out);
+                yours.moved.put(out);
+                yours.state.put(out);
             }
         }
     }
@@ -457,11 +461,12 @@ impl Wire for ToClient {
             14 => ToClient::Busy(r.get()?),
             15 => ToClient::Heli(r.get()?),
             16 => ToClient::Pace { early: r.get()? },
-            17 => ToClient::Yours {
+            17 => ToClient::Yours(Yours {
                 step: r.get()?,
                 placed: r.get()?,
+                moved: r.get()?,
                 state: r.get()?,
-            },
+            }),
             _ => return None,
         })
     }

@@ -349,6 +349,52 @@ mod tests {
         );
     }
 
+    /// Anna's car on the server, as it drives it.
+    fn on_server(server: &mut App, name: &str) -> Option<Vec3> {
+        let mut peers = server.world_mut().query::<&super::server::Peer>();
+        (peers.iter(server.world()))
+            .find(|peer| peer.name.as_deref() == Some(name))
+            .and_then(|peer| Some(peer.shadow.car()?.body.position))
+    }
+
+    #[test]
+    fn a_players_game_cant_move_their_car_but_the_server_can() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let mut anna = driver(&listener, "Anna");
+        run(&mut [&mut server, &mut anna], 120);
+        let start = on_server(&mut server, "Anna").expect("Anna's car on the server");
+        // Her game puts her car 50 m on: refused, and her game takes up the server's word.
+        car(&mut anna).body.position.x += 50.0;
+        run(&mut [&mut server, &mut anna], 60);
+        let there = on_server(&mut server, "Anna").unwrap();
+        assert!(there.distance(start) < 1.0, "moved to {there}");
+        let ours = car(&mut anna).body.position;
+        assert!(ours.distance(start) < 1.0, "her game kept it at {ours}");
+        // The server moves it 30 m to the side: her game takes that up.
+        let terrain = Terrain::flat();
+        let mut peers = server.world_mut().query::<&mut super::server::Peer>();
+        let mut peer = peers.single_mut(server.world_mut()).unwrap();
+        peer.shadow.put(&terrain, Vec2::new(30.0, 0.0), 0.0, true);
+        run(&mut [&mut server, &mut anna], 30);
+        let ours = car(&mut anna).body.position.xz();
+        assert!(
+            ours.distance(Vec2::new(30.0, 0.0)) < 0.5,
+            "her car is at {ours}"
+        );
+        // And stays there, as the server has it.
+        run(&mut [&mut server, &mut anna], 60);
+        let there = on_server(&mut server, "Anna").unwrap().xz();
+        assert!(
+            there.distance(Vec2::new(30.0, 0.0)) < 0.5,
+            "on the server at {there}"
+        );
+        let (_, compared) = (anna.world())
+            .resource::<super::predict::Prediction>()
+            .corrections();
+        assert!(compared > 3);
+    }
+
     #[test]
     fn players_cars_meet_on_the_server() {
         let listener = LoopbackListener::default();

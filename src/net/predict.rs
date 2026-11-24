@@ -6,11 +6,14 @@
 //! to the bit, so that only happens where the server knew more (other cars it met).
 //!
 //! The rescue helicopter is part of the car's state and its steps (`heli::rescue`), so it's
-//! predicted like the driving. Whatever else changes our car between steps (put somewhere
-//! by an event, built anew in a shop, refuelled) is noticed by comparing its state with
-//! what the last step left, and told to the server as a placement (`Place`), which it
-//! takes up (trusted, until the server does those things itself). The server says with
-//! each state the latest placement it had taken up; a state from before ours is stale.
+//! predicted like the driving. Where the server moves our car (on joining, to an event's
+//! spots and back), it says so with the state (`Yours::moved`), which is then taken up
+//! whatever we had (our game moves the car alike, but the server's word goes). Whatever
+//! else changes our car between steps (built anew in a shop, refuelled) is noticed by
+//! comparing its state with what the last step left, and told to the server as a
+//! placement (`Place`), which it takes up (trusted, until the server does those things
+//! itself, but not where it would move the car). The server says with each state the
+//! latest placement it had taken up; a state from before ours is stale.
 
 use std::collections::VecDeque;
 
@@ -18,6 +21,7 @@ use bevy::prelude::*;
 
 use super::Connection;
 use super::client::Status;
+use super::protocol::Yours;
 use crate::car::{ActiveCar, Car, Correction, DriverInput, ResetRule, StepInput};
 use crate::heli::rescue::fly;
 use crate::sim::{STEP, step_car};
@@ -40,9 +44,9 @@ pub struct Prediction {
     /// The latest step after which our car was put somewhere, and the placement to tell.
     placed: Option<u32>,
     pub(super) place: Option<(u32, Vec<u8>)>,
-    /// The server's latest state of our car: its step, the latest placement it had taken
-    /// up, and the state.
-    pub(super) yours: Option<(u32, Option<u32>, Vec<u8>)>,
+    /// The server's latest state of our car, and how many of its moves we took up.
+    pub(super) yours: Option<Yours>,
+    moved: u32,
     report: Report,
 }
 
@@ -119,8 +123,8 @@ pub fn note_step(
 }
 
 /// Takes up the server's latest state of our car if it differs from ours for its step,
-/// driving the steps since again. Not while nobody's at the wheel (our game moves the car
-/// then, and tells the server where).
+/// driving the steps since again. Not while nobody's at the wheel (our game changes the
+/// car then, and tells the server), unless the server moved it.
 pub fn reconcile(
     mut prediction: ResMut<Prediction>,
     connection: Res<Connection>,
@@ -132,21 +136,23 @@ pub fn reconcile(
 ) {
     let prediction = &mut *prediction;
     log(&mut prediction.report, time.elapsed_secs_f64());
-    let Some((at, placed, state)) = prediction.yours.take() else {
+    let Some(yours) = prediction.yours.take() else {
         return;
     };
-    if !matches!(connection.status, Status::Joined { .. })
-        || placed != prediction.placed
-        || step.input.away
-    {
+    if !matches!(connection.status, Status::Joined { .. }) {
         return;
     }
-    // Ours for the same step.
-    let Some(i) = (prediction.history.iter()).position(|(kept, ..)| *kept == at) else {
+    let moved = yours.moved != prediction.moved;
+    if !moved && (yours.placed != prediction.placed || step.input.away) {
         return;
-    };
-    if prediction.history[i].2 == state {
+    }
+    // Ours for the same step (a move from before what we kept: from now on).
+    let i = (prediction.history.iter()).position(|(kept, ..)| *kept == yours.step);
+    if !moved && i.is_some_and(|i| prediction.history[i].2 == yours.state) {
         prediction.report.agreed += 1;
+        return;
+    }
+    if !moved && i.is_none() {
         return;
     }
     let Some(mut car) = active(cars.iter_mut(), &chosen) else {
@@ -154,11 +160,26 @@ pub fn reconcile(
     };
     let rule = rule.as_deref().copied().unwrap_or_default();
     let (was, turned) = (car.body.position, car.body.rotation);
-    if !snapshot::load(&mut *car, &state) {
-        warn!("The server sent a state that isn't our car's");
+    if !snapshot::load(&mut *car, &yours.state) {
+        // (A car the server moved that we haven't got yet, a lent one: again with its next
+        // state.)
+        if !moved {
+            warn!("The server sent a state that isn't our car's");
+        }
         return;
     }
-    prediction.history[i].2 = state;
+    if moved {
+        prediction.moved = yours.moved;
+    }
+    let i = match i {
+        Some(i) => i,
+        None => {
+            prediction.history.clear();
+            prediction.end = Some(yours.state);
+            return;
+        }
+    };
+    prediction.history[i].2 = yours.state;
     for (_, input, kept) in prediction.history.iter_mut().skip(i + 1) {
         car.steer(input, rule, &terrain, STEP);
         step_car(&mut car, &terrain, STEP);

@@ -31,10 +31,12 @@ use crate::events::Event;
 use crate::events::rounds::{EventAction, Rounds, run_rounds};
 use crate::heli::HeliPose;
 use crate::looks::{Looks, Motion};
+use crate::online::join_spot;
 use crate::physics::collision::{self, OBSTACLE};
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
 use crate::terrain::{Spawn, Terrain};
+use crate::traffic::network::Network;
 use crate::traffic::{Anchor, CarNumbers, Realm, Traffic, TrafficCar, Visitor};
 
 /// A player not heard from for this long is frozen for the others, and for this long
@@ -262,6 +264,7 @@ fn accept(
 fn receive(
     mut commands: Commands,
     (server, terrain, mut baked, tick): (Res<Server>, Res<Terrain>, ResMut<BakedMaps>, Res<Tick>),
+    network: Option<Res<Network>>,
     time: Res<Time<Real>>,
     mut peers: Query<(Entity, &mut Peer, Option<&mut Transform>, Option<&Realm>)>,
     mut presence: MessageWriter<Presence>,
@@ -334,6 +337,12 @@ fn receive(
                     let name = name.trim().to_string();
                     info!("{name} joined (player {})", peer.id);
                     let id = peer.id;
+                    // Their car starts where their game puts it, by the spawn.
+                    let spot = (network.as_deref())
+                        .and_then(|network| join_spot(&terrain, network, &server.spawn, id));
+                    if let Some((p, yaw)) = spot {
+                        peer.shadow.put(&terrain, p, yaw, true);
+                    }
                     peer.tell(&ToClient::Welcome {
                         you: id,
                         chat: server.chat,
@@ -602,12 +611,8 @@ fn run_shadows(
         if let Some(name) = &peer.name {
             peer.shadow.update(&terrain, &mut baked, tick.0, now, name);
         }
-        if let Some((step, placed, state)) = peer.shadow.take_yours() {
-            peer.tell(&ToClient::Yours {
-                step,
-                placed,
-                state,
-            });
+        if let Some(yours) = peer.shadow.take_yours() {
+            peer.tell(&ToClient::Yours(yours));
         }
         if pace && let Some(early) = peer.shadow.take_early() {
             let early = early.clamp(i16::MIN.into(), i16::MAX.into()) as i16;

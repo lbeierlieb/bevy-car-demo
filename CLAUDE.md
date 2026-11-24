@@ -672,10 +672,21 @@ Built (phases 0, 1, 2 and the start of 3):
   `Rounds::players_collide`), push themselves off traffic, and traffic reacts to the
   server's car (`Visitor` body). The client still pushes itself off remote cars, as its
   prediction (`players_cars_meet_on_the_server`).
-- Phase 3 (protocol 21): the rescue helicopter is the server's (see "Helicopters"): no
-  placements for it. Still placed by the client (trusted): joining, an event's spots, grid
-  and lent cars, shops' changes (refuelling, builds). Holds, ghosts and the parking brake
-  at markers are still the client's word.
+- Phase 3: the rescue helicopter is the server's (protocol 21, see "Helicopters"): no
+  placements for it. **The server moves cars** (protocol 22): `Shadow::put` on joining
+  (`online::join_spot`, needs the server's `Network`), at a round's start
+  (`events::start_spot`: by the marker or on the grid; again when a time trial restarts)
+  and when it's over for a player (`events::marker_spot`, the lobby's slot, else the
+  round's), tracked in `Rounds::started`; `Yours::moved` counts the moves and the client
+  takes such a state up whatever it had (even away, `reconcile`; a lent car not yet
+  spawned retries with the next state). The client still moves its car alike (the same
+  shared functions). A placement may not move the car: more than `REACH` (2 m, plus
+  1.5 × speed × its age) from the server's car is refused (acknowledged, so the client
+  takes up the server's state); a car built anew (`set_spec`) goes where the old one
+  was or where the server put it (`Shadow::anchor`)
+  (`a_players_game_cant_move_their_car_but_the_server_can`). Still the client's word
+  (trusted): the car's condition and build (shops' changes, lent cars' builds), holds,
+  ghosts, the parking brake at markers.
 - Not done: hunt tags from the server's contacts (clients still send `Touched`), the rest
   of phase 3 (placements are trusted: a modified client can teleport), checking a
   client's inputs (rates, ranges are clamped by the encoding).

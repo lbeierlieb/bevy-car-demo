@@ -472,11 +472,7 @@ fn receive(
             ToClient::Busy(busy) => connection.busy = busy.into_iter().collect(),
             ToClient::Heli(pose) => connection.hunt_heli = Some((pose, now)),
             ToClient::Pace { early } => connection.early = Some((early, now)),
-            ToClient::Yours {
-                step,
-                placed,
-                state,
-            } => prediction.yours = Some((step, placed, state)),
+            ToClient::Yours(yours) => prediction.yours = Some(yours),
             ToClient::Pings(pings) => {
                 connection.pings = pings.into_iter().collect();
             }
