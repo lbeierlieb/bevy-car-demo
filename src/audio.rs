@@ -449,7 +449,7 @@ impl Targets {
 
     fn set_heard(&self, inside: bool, ground: f32) {
         store(&self.inside, if inside { 1.0 } else { 0.0 });
-        store(&self.ground, if inside { 0.0 } else { ground });
+        store(&self.ground, ground);
     }
 
     fn heard(&self) -> (f32, f32) {
@@ -1083,10 +1083,14 @@ fn update_engine(
     };
     let volume = if engine.hushed { 0.0 } else { sound.master() };
     engine.targets.hear(&looks.engine, &motion.engine, volume);
-    let ground = cameras.single().map_or(0.0, |camera| {
-        paths::ground_delay(transform.translation(), camera.translation())
-    });
-    engine.targets.set_heard(inside(&chase), ground);
+    // From the driver's seat the road's reflection keeps its delay from outside (the
+    // cabin fades it with the rest): dropping it at once clicked.
+    let inside = inside(&chase);
+    let ground = match cameras.single() {
+        Ok(camera) if !inside => paths::ground_delay(transform.translation(), camera.translation()),
+        _ => engine.targets.heard().1,
+    };
+    engine.targets.set_heard(inside, ground);
 }
 
 /// How loud another car's engine is at `distance`, its low-pass's cutoff, and the Doppler
@@ -1323,6 +1327,22 @@ mod tests {
                 });
                 let path = std::path::Path::new(&dir);
                 write_wav(path.join(format!("{}-inside.wav", version.code)), &heard[1]);
+                // Switching between the views every 0.75 s, idling, then cruising: there
+                // should be no clicks.
+                let targets = Arc::new(Targets::new());
+                let mut voice = EngineVoice::new(targets.clone());
+                let mut switching = Vec::new();
+                for tick in 0..(6.0 / TICK) as usize {
+                    let t = tick as f32 * TICK;
+                    let (rpm, load) = if t < 3.0 { (IDLE, 0.12) } else { (2500.0, 0.3) };
+                    targets.hear(&character, &run(rpm, load), 1.0);
+                    targets.set_heard((t / 0.75) as usize % 2 == 1, chase);
+                    switching.extend((0..per_tick).map(|_| voice.frame()));
+                }
+                write_wav(
+                    path.join(format!("{}-switch.wav", version.code)),
+                    &switching,
+                );
                 let frames = &mut heard[0];
 
                 // The pass-by: in fourth at 4000 rpm and a little gas, along x past a

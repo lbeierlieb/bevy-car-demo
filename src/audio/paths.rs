@@ -53,8 +53,8 @@ const CABIN_LINE: usize = 512;
 const WIDTH: f32 = 0.35;
 /// Overall level inside, relative to outside.
 const INSIDE_LEVEL: f32 = 0.8;
-/// How long switching views takes (s).
-const CROSSFADE: f32 = 0.15;
+/// How long switching views takes (s), along an S-curve.
+const CROSSFADE: f32 = 0.3;
 
 /// Keeps a sample within -1 to 1, unchanged below 0.8 and bending smoothly towards 1 above.
 pub(super) fn limit(x: f32) -> f32 {
@@ -151,7 +151,7 @@ struct Ear {
 /// What the cabin does to a stereo sound, crossfaded in and out as the view changes.
 pub(super) struct Cabin {
     ears: [Ear; 2],
-    /// 0 outside, 1 inside, gliding.
+    /// 0 outside, 1 inside, moving steadily over `CROSSFADE`; heard along an S-curve.
     inside: f32,
 }
 
@@ -176,7 +176,8 @@ impl Cabin {
     /// it crossfades).
     pub(super) fn process(&mut self, (left, right): (f32, f32), inside: f32) -> (f32, f32) {
         let rate = SAMPLE_RATE as f32;
-        self.inside += (inside.clamp(0.0, 1.0) - self.inside) / (CROSSFADE * rate);
+        let step = 1.0 / (CROSSFADE * rate);
+        self.inside += (inside.clamp(0.0, 1.0) - self.inside).clamp(-step, step);
         if self.inside < 1e-4 && inside <= 0.0 {
             return (left, right);
         }
@@ -206,7 +207,7 @@ impl Cabin {
         let middle = 0.5 * (heard[0] + heard[1]);
         let side = 0.5 * WIDTH * (heard[0] - heard[1]);
         let inside = (middle + side, middle - side);
-        let fade = self.inside;
+        let fade = self.inside * self.inside * (3.0 - 2.0 * self.inside);
         (
             left + (inside.0 - left) * fade,
             right + (inside.1 - right) * fade,
