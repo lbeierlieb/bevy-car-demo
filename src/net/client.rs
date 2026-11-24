@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use bevy::prelude::*;
 
 use super::link::Link;
+use super::predict::Prediction;
 use super::protocol::{
     CarId, CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, clean_chat,
 };
@@ -81,6 +82,10 @@ const PACE_GAIN: f64 = 0.004;
 const MOST_PACE: f64 = 0.03;
 /// Without word from the server for this long, our clock runs at its own pace (s).
 const PACE_GONE: f64 = 1.0;
+/// The most game time a frame may move on by (s). Bevy's own limit (0.25 s) let a game
+/// at a few frames a second fall behind the server's clock for good; a step costs a
+/// fraction of a millisecond, so catching up a second is cheap.
+const MOST_FRAME: f64 = 1.0;
 
 pub struct ClientPlugin;
 
@@ -88,12 +93,20 @@ impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (receive, pace, dress_cars, send, (move_cars, remove_cars))
+            (
+                receive,
+                super::predict::reconcile,
+                pace,
+                dress_cars,
+                send,
+                (move_cars, remove_cars),
+            )
                 .chain()
                 .after(crate::looks::show_cars)
                 .run_if(resource_exists::<Connection>),
         )
         .init_resource::<StepInput>()
+        .init_resource::<Prediction>()
         .init_resource::<WantsGhost>()
         .init_resource::<GhostPlayers>()
         .init_resource::<Touching>()
@@ -102,12 +115,18 @@ impl Plugin for ClientPlugin {
         .add_systems(
             FixedUpdate,
             (
-                record_input.after(crate::car::take_input),
+                (record_input, super::predict::notice_placing)
+                    .after(crate::car::take_input)
+                    .before(crate::car::drive),
                 push_off_remote_cars.after(crate::sim::simulate),
+                super::predict::note_simulated.after(push_off_remote_cars),
             )
                 .run_if(resource_exists::<Connection>),
         )
-        .add_systems(FixedLast, take_check.run_if(resource_exists::<Connection>));
+        .add_systems(
+            FixedLast,
+            (super::predict::note_step, take_check).run_if(resource_exists::<Connection>),
+        );
     }
 }
 
@@ -320,6 +339,7 @@ fn now(time: &Time<Real>) -> f64 {
 fn receive(
     mut commands: Commands,
     mut connection: ResMut<Connection>,
+    mut prediction: ResMut<Prediction>,
     time: Res<Time<Real>>,
     mut cars: Query<(Entity, &mut RemoteCar, Option<&Looks>, Option<&Tag>)>,
 ) {
@@ -454,6 +474,11 @@ fn receive(
             ToClient::Busy(busy) => connection.busy = busy.into_iter().collect(),
             ToClient::Heli(pose) => connection.hunt_heli = Some((pose, now)),
             ToClient::Pace { early } => connection.early = Some((early, now)),
+            ToClient::Yours {
+                step,
+                placed,
+                state,
+            } => prediction.yours = Some((step, placed, state)),
             ToClient::Pings(pings) => {
                 connection.pings = pings.into_iter().collect();
             }
@@ -510,8 +535,17 @@ fn receive(
 /// Runs our simulation's clock a little faster when our inputs come to the server late,
 /// slower when they come too early, so they come just in time (the server drives our car
 /// on its own clock). Each step simulates `sim::STEP` all the same: only how many there
-/// are a second changes, by a few percent at most.
-fn pace(connection: Res<Connection>, time: Res<Time<Real>>, mut fixed: ResMut<Time<Fixed>>) {
+/// are a second changes, by a few percent at most. A slow frame catches up to a second.
+fn pace(
+    connection: Res<Connection>,
+    time: Res<Time<Real>>,
+    mut fixed: ResMut<Time<Fixed>>,
+    mut virtual_time: ResMut<Time<Virtual>>,
+) {
+    let most = std::time::Duration::from_secs_f64(MOST_FRAME);
+    if virtual_time.max_delta() != most {
+        virtual_time.set_max_delta(most);
+    }
     let now = now(&time);
     let pace = match connection.early {
         Some((early, at)) if now - at < PACE_GONE => {
@@ -548,6 +582,10 @@ fn dress_cars(
 /// Keeps the driver's input in each simulation step, to send.
 fn record_input(mut connection: ResMut<Connection>, input: Res<StepInput>) {
     let inputs = &mut connection.inputs;
+    // (A game that doesn't simulate its car, a test's, has no steps.)
+    if inputs.back().is_some_and(|&(step, _)| step == input.step) {
+        return;
+    }
     inputs.push_back((input.step, input.input));
     while inputs.len() > MOST_INPUTS {
         inputs.pop_front();
@@ -578,6 +616,7 @@ fn send(
     fixed: Res<Time<Fixed>>,
     active: Res<ActiveCar>,
     rescue: Option<Res<Rescue>>,
+    mut prediction: ResMut<Prediction>,
     cars: Query<(&Car, &Looks, &Motion, Has<Ghost>)>,
 ) {
     let now = now(&time);
@@ -596,6 +635,9 @@ fn send(
     if connection.sent_spec.as_ref() != Some(&spec) {
         connection.say(&ToServer::Car(Box::new(spec.clone())));
         connection.sent_spec = Some(spec);
+    }
+    if let Some((step, state)) = prediction.place.take() {
+        connection.say(&ToServer::Place { step, state });
     }
     if let Some(&(last, _)) = connection.inputs.back()
         && connection.inputs_sent != Some(last)

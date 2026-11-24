@@ -8,6 +8,7 @@ pub mod client;
 pub mod link;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod local;
+pub mod predict;
 pub mod protocol;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod quic;
@@ -275,11 +276,7 @@ mod tests {
     fn the_server_drives_a_players_car_as_they_do() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
-        anna.add_plugins((crate::sim::SimPlugin, crate::car::CarPlugin))
-            .init_resource::<crate::input::WheelInput>();
-        let engine = car(&mut anna).setup.engine.clone();
-        car(&mut anna).drivetrain.shift_to(&engine, 1);
+        let mut anna = driver(&listener, "Anna");
         // Anna drives off, steering this way and that, braking now and then, shifting up.
         for frame in 0..900 {
             let t = frame as f32 * FRAME as f32;
@@ -297,6 +294,53 @@ mod tests {
         assert!(
             car(&mut anna).fuel.distance > 50.0,
             "Anna should have driven off"
+        );
+    }
+
+    /// A player whose game drives their car, joined to the server behind `listener`.
+    fn driver(listener: &LoopbackListener, name: &str) -> App {
+        let mut app = player(listener, name, 3, 0.0);
+        app.add_plugins((crate::sim::SimPlugin, crate::car::CarPlugin))
+            .init_resource::<crate::input::WheelInput>();
+        let engine = car(&mut app).setup.engine.clone();
+        car(&mut app).drivetrain.shift_to(&engine, 1);
+        app
+    }
+
+    #[test]
+    fn the_server_is_in_charge_of_a_players_car() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let mut anna = driver(&listener, "Anna");
+        anna.world_mut()
+            .resource_mut::<crate::input::WheelInput>()
+            .throttle = Some(0.4);
+        run(&mut [&mut server, &mut anna], 300);
+        let (corrected, compared) = (anna.world())
+            .resource::<super::predict::Prediction>()
+            .corrections();
+        assert!(compared > 10, "{compared} of the server's states compared");
+        assert_eq!(corrected, 0, "driven alike, the server agrees");
+        // Something only the server knew of shoves her car sideways.
+        let mut peers = server.world_mut().query::<&mut super::server::Peer>();
+        let mut peer = peers.single_mut(server.world_mut()).unwrap();
+        let shoved = peer.shadow.car_mut().expect("the server's car");
+        shoved.body.velocity += shoved.body.rotation * Vec3::new(3.0, 0.0, 0.0);
+        let corrections = |anna: &App| {
+            (anna.world())
+                .resource::<super::predict::Prediction>()
+                .corrections()
+        };
+        run(&mut [&mut server, &mut anna], 30);
+        let (corrected, compared) = corrections(&anna);
+        assert!(corrected > 0, "her game should take up the server's word");
+        // From then on they agree again.
+        run(&mut [&mut server, &mut anna], 60);
+        let (again, more) = corrections(&anna);
+        assert_eq!(again, corrected, "corrected again and again");
+        assert!(
+            more > compared + 3,
+            "the server's states should keep coming"
         );
     }
 

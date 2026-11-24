@@ -37,7 +37,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 19;
+pub const PROTOCOL: u32 = 20;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -85,8 +85,15 @@ pub enum ToServer {
         last: u32,
         inputs: Vec<DriverInput>,
     },
-    /// Our car's whole state (`snapshot`) after simulation step `step`, now and then.
+    /// Our car's whole state (`snapshot`) after simulation step `step`, now and then (for
+    /// the server's log of how well it follows).
     Check {
+        step: u32,
+        state: Vec<u8>,
+    },
+    /// Our car was put somewhere (or changed) outside the simulation after step `step`:
+    /// its whole state then.
+    Place {
         step: u32,
         state: Vec<u8>,
     },
@@ -151,6 +158,13 @@ pub enum ToClient {
     Pace {
         early: i16,
     },
+    /// Our car's whole state as the server drives it, after our step `step`, with the
+    /// latest of our placements it had taken up then; ten times a second.
+    Yours {
+        step: u32,
+        placed: Option<u32>,
+        state: Vec<u8>,
+    },
 }
 
 impl ToServer {
@@ -175,6 +189,7 @@ impl ToClient {
                 | ToClient::Pings(_)
                 | ToClient::Heli(_)
                 | ToClient::Pace { .. }
+                | ToClient::Yours { .. }
         )
     }
 }
@@ -280,6 +295,11 @@ impl Wire for ToServer {
                 step.put(out);
                 state.put(out);
             }
+            ToServer::Place { step, state } => {
+                8u8.put(out);
+                step.put(out);
+                state.put(out);
+            }
         }
     }
 
@@ -300,6 +320,10 @@ impl Wire for ToServer {
                 inputs: r.get()?,
             },
             7 => ToServer::Check {
+                step: r.get()?,
+                state: r.get()?,
+            },
+            8 => ToServer::Place {
                 step: r.get()?,
                 state: r.get()?,
             },
@@ -385,6 +409,16 @@ impl Wire for ToClient {
                 16u8.put(out);
                 early.put(out);
             }
+            ToClient::Yours {
+                step,
+                placed,
+                state,
+            } => {
+                17u8.put(out);
+                step.put(out);
+                placed.put(out);
+                state.put(out);
+            }
         }
     }
 
@@ -423,6 +457,11 @@ impl Wire for ToClient {
             14 => ToClient::Busy(r.get()?),
             15 => ToClient::Heli(r.get()?),
             16 => ToClient::Pace { early: r.get()? },
+            17 => ToClient::Yours {
+                step: r.get()?,
+                placed: r.get()?,
+                state: r.get()?,
+            },
             _ => return None,
         })
     }

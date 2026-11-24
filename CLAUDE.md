@@ -614,7 +614,7 @@ purchases). Plan agreed (Rocket League's way, not sim racing's trust-the-client)
   and rescue, holds, ghosts, lending cars, parking, fuel); 4 car changes as requests;
   5 shops on the server, generic client.
 
-Built (phases 0 and 1):
+Built (phases 0, 1 and the start of 2):
 - `car::DriverInput`: a step's input (axes, buttons pressed since the last step,
   `away`/`held`), ~10 bytes on the wire; `DriverInput::take` passes it through its
   encoding so the client drives with exactly what the server gets. `Car::drive` applies
@@ -646,8 +646,23 @@ Built (phases 0 and 1):
   here: every check to the bit, ~178 µs a step (the VPS ~4–5× slower: ~10 % of its vCPU
   per player). `step_cost` (ignored) prints one car's cost on the map (147 µs a step; it
   was 715 before the relief fix, which sped up the clients too).
-- Not done: phase 2 on. Time-based things still inside a step on the client (rescue,
-  push-off from remote cars) make the server's copy differ; the checks resync it.
+- Authority (protocol 20): the server's car is the truth. `ToClient::Yours { step,
+  placed, state }` every 12th step; `net/predict.rs` keeps each step's input and state
+  (240), takes up a differing state and re-drives the steps since (`reconcile`, Update
+  after `receive`), not while `away`, and not states from before our latest placement.
+  Anything changing our car outside the simulation (between steps, or after the
+  simulation within one: the rescue helicopter) is noticed by comparing snapshots and sent
+  as `ToServer::Place { step, state }`, which the server takes up (trusted for now; phase
+  3 removes that). Checks are only logged. Others see the server's car (`Shadow::car`,
+  only while the player's inputs come; else the player's own state). The driver's aids
+  are part of the input; `knocks` isn't in the snapshot (the crash sounds clear it).
+  Server margin: moved once a second by the worst lateness (a game at 4 fps sends 30
+  steps at once); the client's frames may catch up 1 s of game time (Bevy's 0.25 s let
+  a slow game fall behind the server's clock for good).
+- Not done: smoothing what's drawn after a correction (it snaps; the camera follows
+  `car.body`), collisions on the server (players' cars against each other and traffic;
+  the client still pushes itself off remote cars), hunt tags from the server's contacts,
+  phase 3 on.
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 

@@ -527,7 +527,6 @@ impl crate::snapshot::Snapshot for Car {
         self.abs.save(out);
         self.abs_pressure.save(out);
         self.fuel.save(out);
-        self.knocks.save(out);
         self.parking_brake.save(out);
         self.switching_off.save(out);
     }
@@ -543,7 +542,6 @@ impl crate::snapshot::Snapshot for Car {
         self.abs.load(r)?;
         self.abs_pressure.load(r)?;
         self.fuel.load(r)?;
-        self.knocks.load(r)?;
         self.parking_brake.load(r)?;
         self.switching_off.load(r)?;
         // What another build's state could hold that this one hasn't got.
@@ -751,6 +749,9 @@ pub struct DriverInput {
     pub away: bool,
     /// Held at the start: the brakes are on whatever the driver does.
     pub held: bool,
+    /// The driver's aids (`DriverAids`).
+    pub traction_control: bool,
+    pub abs: bool,
 }
 
 impl DriverInput {
@@ -774,6 +775,8 @@ impl DriverInput {
             ignition_held: wheel.ignition_held,
             away: false,
             held: false,
+            traction_control: true,
+            abs: true,
         };
         *presses = Presses::default();
         input.sent()
@@ -811,6 +814,8 @@ impl Wire for DriverInput {
             self.held,
             self.steer_keys > 0.0,
             self.steer_keys < 0.0,
+            self.traction_control,
+            self.abs,
         ];
         let flags = (bits.iter().enumerate()).fold(0u16, |f, (i, &b)| f | (u16::from(b) << i));
         flags.put(out);
@@ -873,6 +878,8 @@ impl Wire for DriverInput {
             ignition_held: bit(7),
             away: bit(8),
             held: bit(9),
+            traction_control: bit(12),
+            abs: bit(13),
         })
     }
 }
@@ -907,32 +914,31 @@ pub fn take_input(
     wheel: Res<WheelInput>,
     mut presses: ResMut<Presses>,
     (away, held, rescued): (Res<Away>, Res<Held>, Res<Rescued>),
+    aids: Res<DriverAids>,
     mut input: ResMut<StepInput>,
 ) {
     let mut taken = DriverInput::take(&wheel, &mut presses);
     taken.away = away.0 || rescued.0;
     taken.held = held.0;
+    taken.traction_control = aids.traction_control;
+    taken.abs = aids.abs;
     input.step = input.step.wrapping_add(1);
     input.input = taken;
 }
 
-/// The step's input drives the active car, with the driver's aids; any other car holds
-/// all brakes.
+/// The step's input drives the active car; any other car holds all brakes.
 pub fn drive(
     input: Res<StepInput>,
     active: Res<ActiveCar>,
-    aids: Res<DriverAids>,
     mut cars: Query<&mut Car>,
     mut refused: MessageWriter<ReverseRefused>,
 ) {
     let idle = DriverInput {
         away: true,
-        ..default()
+        ..input.input
     };
     for mut car in &mut cars {
         let input = if car.index == active.0 {
-            car.traction_control = aids.traction_control;
-            car.abs = aids.abs;
             &input.input
         } else {
             &idle
@@ -950,6 +956,8 @@ impl Car {
     /// rate-limited, the handbrake button works the parking brake (`parking_brake_rule`).
     /// Says whether reverse was asked for while rolling (and refused).
     pub fn drive(&mut self, input: &DriverInput, dt: f32) -> bool {
+        self.traction_control = input.traction_control;
+        self.abs = input.abs;
         if input.away {
             self.controls = Controls {
                 brake: 1.0,
@@ -1197,6 +1205,8 @@ mod tests {
             ignition_held: true,
             away: false,
             held: true,
+            traction_control: false,
+            abs: true,
         };
         let sent = input.sent();
         assert!((sent.steer.unwrap() - input.steer.unwrap()).abs() < 1e-4);

@@ -383,6 +383,7 @@ fn receive(
                     }
                 }
                 ToServer::Check { step, state } => peer.shadow.check(step, state),
+                ToServer::Place { step, state } => peer.shadow.place(step, state),
                 ToServer::State(state) => {
                     peer.clock.heard(state.time, now);
                     if peer.state.is_none_or(|old| state.time > old.time) {
@@ -550,6 +551,13 @@ fn run_shadows(
         if let Some(name) = &peer.name {
             peer.shadow.update(&terrain, &mut baked, tick.0, now, name);
         }
+        if let Some((step, placed, state)) = peer.shadow.take_yours() {
+            peer.tell(&ToClient::Yours {
+                step,
+                placed,
+                state,
+            });
+        }
         if pace && let Some(early) = peer.shadow.take_early() {
             let early = early.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
             peer.tell(&ToClient::Pace { early });
@@ -620,13 +628,27 @@ fn send(
                 time: heli.time + (time - state.time),
                 ..heli
             });
-            Some(Car {
-                id: peer.car,
-                state: CarState {
+            // Their car as we drive it (where we have it), whether it's a ghost as they say.
+            let state = match peer.shadow.car() {
+                Some(car) => CarState {
+                    time: stamp,
+                    position: car.body.position,
+                    rotation: car.body.rotation,
+                    velocity: car.body.velocity,
+                    angular_velocity: car.body.angular_velocity,
+                    motion: Motion::of(car),
+                    ghost: state.ghost,
+                    heli,
+                },
+                None => CarState {
                     time,
                     heli,
                     ..state
                 },
+            };
+            Some(Car {
+                id: peer.car,
+                state,
                 looks: peer.looks.clone()?,
                 revision: peer.revision,
                 // In an event's round, everyone shows their name.

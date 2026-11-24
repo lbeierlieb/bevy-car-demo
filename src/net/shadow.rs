@@ -1,23 +1,26 @@
-//! The server's own copy of each player's car, driven by the inputs the player sends,
-//! to see how closely it follows the car the player drives (shadow mode: the player's
-//! game is still in charge, nobody sees the copy).
+//! Each player's car as the server drives it, from the inputs the player sends: the
+//! server is in charge of it. Ten times a second the player is sent its state
+//! (`ToClient::Yours`); their game drives the car too, at once, and takes the server's
+//! state up where it differs (see `predict`). Everyone else sees the server's car.
 //!
-//! The copies run on the server's clock, one step per server step (`Tick`), all at once,
-//! as they will once the server is in charge and cars meet on it. A player's steps are
-//! numbered by their game: the copy drives step `tick + offset`, the offset set when their
-//! inputs first come so that they come `MARGIN` steps before they're needed. How early
-//! they come is told back to the player (`ToClient::Pace`), whose game then runs its
-//! clock a little faster or slower to keep them coming just in time. An input that isn't
-//! there in time is guessed (the one before), as it will be when the server's in charge.
+//! The cars run on the server's clock, one step per server step (`Tick`), all at once. A
+//! player's steps are numbered by their game: the car is driven through step
+//! `tick + offset`, the offset set when their inputs first come so that they come `MARGIN`
+//! steps before they're needed, and moved once a second by however late they came at the
+//! worst (or much too early). How early they come is told back to the player
+//! (`ToClient::Pace`), whose game then runs its clock a little faster or slower to keep
+//! them coming just in time. An input that isn't there in time is guessed (the one
+//! before).
 //!
-//! Once a second the player sends their car's whole state after a numbered step
-//! (`client::CHECK_STEPS`); the copy's state after the same step is compared with it and
-//! logged now and then (how many matched to the bit, how far off the others were), then
-//! the copy takes the player's state and the steps since are driven again from the inputs
-//! kept (the real ones, where some came too late).
+//! Where the player's game moves or changes the car outside the simulation (put on the
+//! road, carried by the rescue helicopter, built anew in a shop, refuelled), it says so
+//! (`place`): the server takes up that state and drives the steps since again (trusted,
+//! until the server does those things itself). Once a second the player's game also sends
+//! its car's state after a numbered step (`check`), which is only compared with the
+//! server's for the log (how many matched to the bit, how far off the others were).
 //!
 //! A car built of an engine whose maps don't come with the game is baked on a thread of
-//! its own (seconds); meanwhile there's no copy.
+//! its own (seconds); meanwhile the player's own word is shown.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -42,11 +45,20 @@ const KEPT: u32 = 2 * CHECK_STEPS;
 pub const MARGIN: i32 = 4;
 /// Inputs coming this many steps late, or this many early, set the offset afresh (a game
 /// that stalled, or a clock that ran away).
-const TOO_LATE: i32 = 30;
-const TOO_EARLY: i32 = 120;
+const TOO_LATE: i32 = 120;
+const TOO_EARLY: i32 = 240;
+/// Every this many server steps, the offset moves by however late the player's inputs
+/// came at the worst (a game whose frames are long sends many steps at once, and needs a
+/// margin of a frame), or however much earlier than `MARGIN` they came at the least if
+/// that's more than `SLACK` (the frames got quicker).
+const WINDOW: i32 = 120;
+const SLACK: i32 = 12;
 /// Without any input for this many steps, the copy is driven as if nobody's at the wheel.
 const SILENT: u32 = 30;
-/// How often each copy's report is logged (s).
+/// The car's state goes to its player after every step whose number is a multiple of
+/// this (ten times a second).
+const YOURS_STEPS: u32 = 12;
+/// How often each car's report is logged (s).
 const REPORT: f64 = 10.0;
 /// The most checks waiting for the copy to get to their step.
 const MOST_WAITING: usize = 4;
@@ -87,10 +99,20 @@ pub struct Shadow {
     latest: Option<u32>,
     /// How early their inputs came lately: the least, in steps (for `ToClient::Pace`).
     early: Option<i32>,
+    /// The server step the window for moving the offset began at, and how early the
+    /// inputs came in it at the least.
+    window: Option<(u32, i32)>,
     /// The copy's state after each check step it's driven through, not yet compared.
     ours: BTreeMap<u32, Vec<u8>>,
-    /// The player's checks for steps the copy hasn't got to yet.
+    /// The player's checks for steps the car hasn't got to yet.
     waiting: BTreeMap<u32, Vec<u8>>,
+    /// The player's placements (their car put somewhere after a step), not taken up yet,
+    /// and the latest taken up.
+    placements: BTreeMap<u32, Vec<u8>>,
+    placed: Option<u32>,
+    /// The car's latest state to send the player: the step, the latest placement taken
+    /// up then, the state.
+    yours: Option<(u32, Option<u32>, Vec<u8>)>,
     report: Report,
 }
 
@@ -125,6 +147,7 @@ impl Shadow {
         self.baking = None;
         self.ours.clear();
         self.waiting.clear();
+        self.placements.clear();
         let hardware = spec.parts.hardware();
         let print = fingerprint(&hardware);
         if let Some(maps) = (spec.stock_maps()).or_else(|| baked.0.get(&print).cloned()) {
@@ -153,18 +176,30 @@ impl Shadow {
         match early {
             Some(early) if (-TOO_LATE..=TOO_EARLY).contains(&early) => {
                 self.early = Some(self.early.map_or(early, |least| least.min(early)));
+                let (start, least) = self.window.get_or_insert((tick, early));
+                *least = (*least).min(early);
+                if after(tick, *start) >= WINDOW {
+                    let least = *least;
+                    if !(0..=MARGIN + SLACK).contains(&least) {
+                        // The car takes up the server's new numbering of its steps.
+                        let offset = self
+                            .offset
+                            .expect("an offset")
+                            .wrapping_add_signed(least - MARGIN);
+                        self.offset = Some(offset);
+                        self.report.anchored += 1;
+                    }
+                    self.window = None;
+                }
             }
             _ => {
                 // First inputs, or a game far off: from now on they come just in time.
                 if early.is_some() {
                     self.report.anchored += 1;
-                    // The copy's steps jump: it waits for the next check.
-                    if let Some(car) = self.car.take() {
-                        self.built = Some(car);
-                    }
                 }
                 self.offset = Some(last.wrapping_sub(tick.wrapping_add(MARGIN as u32)));
                 self.early = Some(MARGIN);
+                self.window = None;
             }
         }
         // Without a copy to drive, only the latest are any use.
@@ -178,7 +213,30 @@ impl Shadow {
         self.early.take()
     }
 
-    /// The player's car's whole state after `step`.
+    /// The player's car was put somewhere after `step`: its whole state then.
+    pub fn place(&mut self, step: u32, state: Vec<u8>) {
+        if self.placements.len() >= MOST_WAITING {
+            self.placements.pop_first();
+        }
+        self.placements.insert(step, state);
+    }
+
+    /// The car's latest state for the player, if there's a new one: the step, the latest
+    /// placement taken up then, the state.
+    pub fn take_yours(&mut self) -> Option<(u32, Option<u32>, Vec<u8>)> {
+        self.yours.take()
+    }
+
+    /// The car as the server drives it, while the player's inputs come (a game that
+    /// stopped sending them, a browser tab hidden, isn't driving it).
+    pub fn car(&self) -> Option<&Car> {
+        let latest = self.latest?;
+        self.car
+            .as_ref()
+            .filter(|_| after(self.done, latest) <= SILENT as i32)
+    }
+
+    /// The player's car's whole state after `step`, as their game has it (for the log).
     pub fn check(&mut self, step: u32, state: Vec<u8>) {
         if self.waiting.len() >= MOST_WAITING {
             self.waiting.pop_first();
@@ -192,11 +250,8 @@ impl Shadow {
             return;
         };
         let step = tick.wrapping_add(offset);
-        if after(step, self.done) != 1 {
-            // Not the step after the last (the offset changed): wait for a check.
-            self.built = self.car.take();
-            return;
-        }
+        // (Not the step after the last when the offset was set afresh: the car goes on,
+        // and the player's game takes up the server's numbering of its state.)
         let started = Instant::now();
         let input = match self.inputs.get(&step) {
             Some(&input) => input,
@@ -212,6 +267,9 @@ impl Shadow {
         self.done = step;
         if step.is_multiple_of(CHECK_STEPS) {
             self.ours.insert(step, snapshot::save(car));
+        }
+        if step.is_multiple_of(YOURS_STEPS) {
+            self.yours = Some((step, self.placed, snapshot::save(car)));
         }
         let report = &mut self.report;
         report.steps += 1;
@@ -233,47 +291,57 @@ impl Shadow {
         who: &str,
     ) {
         self.finish_baking(baked);
-        self.start(tick, terrain);
-        self.compare(terrain);
+        self.take_up_placement(tick, terrain);
+        self.compare();
         self.log(now, who);
     }
 
-    /// A copy waiting for a state takes the latest check, and is driven from it to the
-    /// step it's due at (from the inputs kept, guessing the ones not here).
-    fn start(&mut self, tick: u32, terrain: &Terrain) {
-        if self.car.is_some() || self.built.is_none() {
-            return;
-        }
-        // The step the copy should have been driven through by now.
-        let Some(done) = self.offset.map(|offset| tick.wrapping_add(offset)) else {
+    /// Takes up the player's latest placement the car has got to (or any, for a car
+    /// without a state yet), driving the steps since again.
+    fn take_up_placement(&mut self, tick: u32, terrain: &Terrain) {
+        let Some(offset) = self.offset else {
             return;
         };
-        // The latest check the copy's due step has got to (later ones wait for it).
-        self.waiting
-            .retain(|&step, _| after(done, step) <= KEPT as i32);
-        let Some(&step) = (self.waiting.keys())
+        // The step the car is (or should be) through by now.
+        let done = match &self.car {
+            Some(_) => self.done,
+            None => tick.wrapping_add(offset),
+        };
+        let fresh = self.car.is_none();
+        let Some(&step) = (self.placements.keys())
             .rev()
             .find(|&&step| after(done, step) >= 0)
         else {
             return;
         };
-        let state = self.waiting.remove(&step).expect("the check");
-        self.waiting.retain(|&later, _| after(later, step) > 0);
-        let mut car = self.built.take().expect("a car built");
+        let state = self.placements.remove(&step).expect("the placement");
+        self.placements.retain(|&later, _| after(later, step) > 0);
+        let Some(mut car) = self.car.take().or_else(|| self.built.take()) else {
+            return;
+        };
         if !snapshot::load(&mut car, &state) {
-            // Not a state of this car (it changed meanwhile): wait for another.
-            self.built = Some(car);
+            // Not a state of this car (from before it changed).
+            if fresh {
+                self.built = Some(car);
+            } else {
+                self.car = Some(car);
+            }
             return;
         }
-        self.ours.clear();
-        self.redrive(&mut car, step, done, terrain);
+        self.placed = Some(step);
+        // Driven on to where it's due from the inputs kept (a placement from long ago, a
+        // car whose engine was baking: from where it was put).
+        let since = after(done, step);
+        if (0..=KEPT as i32).contains(&since) {
+            self.ours.retain(|&kept, _| after(kept, step) <= 0);
+            self.redrive(&mut car, step, done, terrain);
+        }
         self.car = Some(car);
         self.done = done;
     }
 
-    /// Compares the checks the copy has got to with its own states, and takes up the
-    /// player's state from the latest, driving the steps since again.
-    fn compare(&mut self, terrain: &Terrain) {
+    /// Compares the player's checks the car has got to with its own states, for the log.
+    fn compare(&mut self) {
         let Some(car) = &self.car else {
             return;
         };
@@ -282,7 +350,6 @@ impl Shadow {
             .copied()
             .filter(|&step| after(done, step) >= 0)
             .collect();
-        let mut latest = None;
         for step in ready {
             let theirs = self.waiting.remove(&step).expect("a waiting check");
             let Some(ours) = self.ours.remove(&step) else {
@@ -292,28 +359,16 @@ impl Shadow {
             report.checks += 1;
             if ours == theirs {
                 report.exact += 1;
-            } else {
-                let mut a = car.clone();
-                let mut b = car.clone();
-                if snapshot::load(&mut a, &ours) && snapshot::load(&mut b, &theirs) {
-                    let off = |x: Vec3, y: Vec3| x.distance(y);
-                    report.position = (report.position).max(off(a.body.position, b.body.position));
-                    report.velocity = (report.velocity).max(off(a.body.velocity, b.body.velocity));
-                    let rpm = (a.drivetrain.rpm - b.drivetrain.rpm).abs();
-                    report.rpm = report.rpm.max(rpm);
-                }
-                latest = Some((step, theirs));
+                continue;
+            }
+            let (mut a, mut b) = (car.clone(), car.clone());
+            if snapshot::load(&mut a, &ours) && snapshot::load(&mut b, &theirs) {
+                let off = |x: Vec3, y: Vec3| x.distance(y);
+                report.position = (report.position).max(off(a.body.position, b.body.position));
+                report.velocity = (report.velocity).max(off(a.body.velocity, b.body.velocity));
+                report.rpm = (report.rpm).max((a.drivetrain.rpm - b.drivetrain.rpm).abs());
             }
         }
-        // The player's game is in charge: the copy goes on from its state.
-        let Some((step, state)) = latest else {
-            return;
-        };
-        let mut car = self.car.take().expect("a copy");
-        if snapshot::load(&mut car, &state) {
-            self.redrive(&mut car, step, done, terrain);
-        }
-        self.car = Some(car);
     }
 
     /// Drives `car` from after step `from` through step `to` again, from the inputs kept.
@@ -362,7 +417,7 @@ impl Shadow {
             info!(
                 "{who}'s car on the server: {} of {} checks to the bit, the others up to \
                  {:.3} m, {:.3} m/s and {:.0} rpm off; {} steps ({cost:.0} µs each), {} \
-                 without their input in time, the offset set afresh {} times",
+                 without their input in time, the offset moved {} times",
                 report.exact,
                 report.checks,
                 report.position,
@@ -377,6 +432,12 @@ impl Shadow {
             since: now,
             ..Report::default()
         };
+    }
+
+    /// The car as the server drives it, to change (for tests).
+    #[cfg(test)]
+    pub fn car_mut(&mut self) -> Option<&mut Car> {
+        self.car.as_mut()
     }
 
     /// How many of the checks so far matched to the bit, of how many (for tests).
@@ -398,7 +459,13 @@ fn guess(inputs: &BTreeMap<u32, DriverInput>, latest: Option<u32>, step: u32) ->
             ignition: false,
             ..input
         },
-        _ => DriverInput {
+        Some(input) => DriverInput {
+            away: true,
+            traction_control: input.traction_control,
+            abs: input.abs,
+            ..default()
+        },
+        None => DriverInput {
             away: true,
             ..default()
         },
