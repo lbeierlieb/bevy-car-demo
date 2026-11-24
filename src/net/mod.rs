@@ -6,6 +6,8 @@
 
 pub mod client;
 pub mod link;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod local;
 pub mod protocol;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod quic;

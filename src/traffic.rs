@@ -33,7 +33,7 @@ use powertrain::{Powertrain, Shifter};
 const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
 
 /// How many traffic cars there are around the player by default.
-const DEFAULT_CARS: usize = 20;
+pub const DEFAULT_CARS: usize = 20;
 pub const MOST_CARS: usize = 60;
 /// Cars appear this far from the player (closer only when the game starts, before
 /// anything is seen), and go once they're farther than this, or this when crashed (m).
