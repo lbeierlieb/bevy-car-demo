@@ -124,7 +124,7 @@ pub struct CorePlugin;
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(GlobalAmbientLight {
-            brightness: 250.0,
+            brightness: grade::AMBIENT,
             ..default()
         })
         .add_plugins((
@@ -157,7 +157,7 @@ fn setup(mut commands: Commands) {
 pub fn spawn_sun(commands: &mut Commands) {
     commands.spawn((
         DirectionalLight {
-            illuminance: 5_000.0,
+            illuminance: grade::SUN,
             shadow_maps_enabled: true,
             ..default()
         },

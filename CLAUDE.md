@@ -1437,11 +1437,18 @@ apply live.
   added by `GraphicsPlugin`), a colour grade as bevy's `FullscreenMaterial` (one
   full-screen pass, `src/shaders/grade.wesl`, embedded as
   `embedded://car_sim/shaders/grade.wesl`): exposure/tint, the sky (bright pixels high
-  on screen) held down, saturation, contrast, shadow lift, vignette, grain. Settings
-  `post on|off` (default on natively, off on the web) and `time day|dusk|night|cycle`
-  (`TimeOfDay`; cycle = day, dusk, night, dawn over `grade::CYCLE`, 24 min). Only the
-  picture changes ("day for night"): sun, ambient, fog and sky texture stay as they are,
-  so switching it off is always day. Uniform fields are `Vec4`s (WebGL 2 padding).
+  on screen) held down, saturation, black crush, S-curve, split toning (teal shadows,
+  warm highlights), shadow lift, vignette, grain, colour fringes at the corners. The day
+  is graded like a modern Bond film (asked for by the user, 2026-11-24). Settings
+  `post on|off` (default on natively, off on the web), `time day|dusk|night|cycle`
+  (`TimeOfDay`, default cycle) and `day_length` (minutes, `DAY_LENGTHS`, default 24).
+  A `grade::Look` per time of day (DAWN, DAY, DUSK, NIGHT) is the grade plus the sun's
+  colour/strength and the ambient light's (shares of `grade::SUN`, `AMBIENT`); the cycle
+  (`grade::Clock`, 0 sunrise, 0.25 noon, 0.5 sunset, 0.75 midnight, starting at 0.12)
+  blends them. Sun direction, fog colour and the sky texture don't change ("day for
+  night"); with post-processing off the lights are the plain day's, in a shop's scene
+  (`car::Away`) it's always day. The clock is local, not shared online. Uniform fields
+  are `Vec4`s (WebGL 2 padding).
 
 ## Sky
 

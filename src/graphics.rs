@@ -95,7 +95,7 @@ pub enum TimeOfDay {
     Day,
     Dusk,
     Night,
-    /// Day, dusk, night and dawn in turn, a day in `grade::CYCLE`.
+    /// Dawn, day, dusk and night in turn, blended, a day in `Graphics::day_minutes`.
     Cycle,
 }
 
@@ -121,6 +121,9 @@ impl TimeOfDay {
     }
 }
 
+/// The lengths of a day in the cycle offered (minutes).
+pub const DAY_LENGTHS: [u32; 5] = [4, 12, 24, 48, 96];
+
 /// The frame rate limits offered (frames per second; none: as fast as it goes).
 pub const FRAME_CAPS: [Option<u32>; 6] = [None, Some(30), Some(60), Some(90), Some(120), Some(144)];
 
@@ -143,6 +146,8 @@ pub struct Graphics {
     /// The colour grade pass (`grade`).
     pub post: bool,
     pub time_of_day: TimeOfDay,
+    /// How long a day of the cycle takes (minutes).
+    pub day_minutes: u32,
 }
 
 impl Default for Graphics {
@@ -173,7 +178,8 @@ impl Graphics {
         vsync: true,
         frame_cap: None,
         post: true,
-        time_of_day: TimeOfDay::Day,
+        time_of_day: TimeOfDay::Cycle,
+        day_minutes: 24,
     };
 
     fn load() -> Self {
@@ -210,6 +216,13 @@ impl Graphics {
                         graphics.time_of_day = time;
                     }
                 }
+                ("day_length", minutes) => {
+                    if let Ok(minutes) = minutes.parse()
+                        && DAY_LENGTHS.contains(&minutes)
+                    {
+                        graphics.day_minutes = minutes;
+                    }
+                }
                 ("vsync", "on") => graphics.vsync = true,
                 ("vsync", "off") => graphics.vsync = false,
                 ("frame_cap", "off") => graphics.frame_cap = None,
@@ -244,13 +257,15 @@ impl Graphics {
         let vsync = if self.vsync { "on" } else { "off" };
         let post = if self.post { "on" } else { "off" };
         let time = self.time_of_day.key();
+        let day = self.day_minutes;
         let cap = self.frame_cap.map_or("off".into(), |fps| fps.to_string());
         let resolution = self
             .resolution
             .map_or(String::new(), |p| format!("resolution {p}\n"));
         format!(
             "shadows {shadows}\nantialiasing {antialiasing}\nview {view}\n{resolution}\
-             vsync {vsync}\nframe_cap {cap}\npost {post}\ntime {time}\n"
+             vsync {vsync}\nframe_cap {cap}\npost {post}\ntime {time}\n\
+             day_length {day}\n"
         )
     }
 }
@@ -517,6 +532,7 @@ mod tests {
             frame_cap: Some(60),
             post: false,
             time_of_day: TimeOfDay::Night,
+            day_minutes: 48,
         };
         assert_eq!(Graphics::parse(&graphics.text()), graphics);
         assert_eq!(Graphics::parse(&Graphics::NICEST.text()), Graphics::NICEST);

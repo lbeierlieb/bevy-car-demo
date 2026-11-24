@@ -17,7 +17,7 @@ use super::{Display, SIZES};
 use crate::audio::SoundSettings;
 use crate::car::{ActiveCar, Away, Car, DriverAids, ResetRule};
 use crate::graphics::{
-    Antialiasing, FRAME_CAPS, Graphics, RESOLUTIONS, Shadows, TimeOfDay, ViewDistance,
+    Antialiasing, DAY_LENGTHS, FRAME_CAPS, Graphics, RESOLUTIONS, Shadows, TimeOfDay, ViewDistance,
 };
 use crate::heli::rescue::Rescue;
 use crate::input::{
@@ -861,12 +861,22 @@ fn graphics(ui: &mut egui::Ui, graphics: &mut ResMut<Graphics>) {
             &TimeOfDay::ALL,
             |t| t.name().into(),
         );
+        if new.time_of_day == TimeOfDay::Cycle {
+            kit::pick(
+                ui,
+                "Length of a day",
+                &mut new.day_minutes,
+                &DAY_LENGTHS,
+                |m| format!("{m} min"),
+            );
+        }
     }
     kit::note(
         ui,
         "Shadows, multisampling, a far view and a high resolution cost the most. FXAA \
-         smooths edges cheaply. Post-processing (the time of day's colours) is one \
-         cheap pass; switch it off if the browser struggles.",
+         smooths edges cheaply. Post-processing (the time of day's colours and light) \
+         is one cheap pass; switch it off if the browser struggles (it's then always \
+         day).",
     );
     if new != **graphics {
         **graphics = new;
