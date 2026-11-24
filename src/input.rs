@@ -314,6 +314,8 @@ pub struct WheelConfig {
     pub base_range: Option<f32>,
     /// Dead zone at either end of pedal travel (0..0.5).
     pub deadzone: f32,
+    /// How a stick's push becomes steering (an exponent, 1 linear, see `stick_steer`).
+    pub stick_curve: f32,
     /// Force feedback strength and on/off, and whether its direction is flipped.
     pub ffb_gain: f32,
     /// How much stronger the quick part of the force feedback (bumps, the driven front
@@ -331,6 +333,7 @@ impl Default for WheelConfig {
             range: 540.0,
             base_range: None,
             deadzone: 0.02,
+            stick_curve: STICK_CURVE,
             ffb_gain: 0.5,
             ffb_road: 2.5,
             ffb_enabled: true,
@@ -342,6 +345,9 @@ impl Default for WheelConfig {
 /// How many profiles there are, and how many inputs a control takes in one.
 pub const PROFILES: usize = 4;
 pub const PER_ACTION: usize = 2;
+/// The stick steering curve's default: a quarter push turns the wheels 8 % of full lock,
+/// half 29 %.
+pub const STICK_CURVE: f32 = 1.8;
 /// The keyboard defaults' version written to `wheel.cfg` (2: no arrows; see `from_text`).
 const KEYS_VERSION: u32 = 2;
 
@@ -471,7 +477,7 @@ impl WheelConfig {
 
     fn to_text(&self) -> String {
         let mut text = format!(
-            "# car-sim wheel settings\nkeys {KEYS_VERSION}\nrange {}\ndeadzone {}\nffb_gain {}\nffb_road {}\nffb_enabled {}\nffb_invert {}\nactive {}\n",
+            "# car-sim wheel settings\nkeys {KEYS_VERSION}\nrange {}\ndeadzone {}\nffb_gain {}\nffb_road {}\nffb_enabled {}\nffb_invert {}\nactive {}\nstick_curve {}\n",
             self.range,
             self.deadzone,
             self.ffb_gain,
@@ -479,6 +485,7 @@ impl WheelConfig {
             self.ffb_enabled,
             self.ffb_invert,
             self.active,
+            self.stick_curve,
         );
         if let Some(base_range) = self.base_range {
             text += &format!("base_range {base_range}\n");
@@ -525,6 +532,9 @@ impl WheelConfig {
                 "range" => config.range = value.parse().unwrap_or(config.range),
                 "base_range" => config.base_range = value.parse().ok().or(config.base_range),
                 "deadzone" => config.deadzone = value.parse().unwrap_or(config.deadzone),
+                "stick_curve" => {
+                    config.stick_curve = value.parse().unwrap_or(config.stick_curve);
+                }
                 "ffb_gain" => config.ffb_gain = value.parse().unwrap_or(config.ffb_gain),
                 "ffb_road" => config.ffb_road = value.parse().unwrap_or(config.ffb_road),
                 "ffb_enabled" => config.ffb_enabled = value.parse().unwrap_or(config.ffb_enabled),
@@ -988,6 +998,12 @@ pub fn action_value(config: &WheelConfig, gamepads: &Gamepads, action: Action) -
     value_of(config, gamepads, action, |_| true)
 }
 
+/// A stick's push (-1 to 1) as steering on a curve: fine around the centre, quicker
+/// towards the end, full lock all the way out.
+pub fn stick_steer(push: f32, curve: f32) -> f32 {
+    push.signum() * push.abs().clamp(0.0, 1.0).powf(curve.max(1.0))
+}
+
 fn read_wheel(
     config: Res<WheelConfig>,
     base: Res<WheelBase>,
@@ -1008,12 +1024,15 @@ fn read_wheel(
     };
     let axis = |action| value_of(&config, &gamepads, action, |b| b.input.is_axis());
     // A wheel base's axis covers the base's range, which may be wider than the game's; any
-    // other axis (a stick) covers the game's.
+    // other axis (a stick) covers the game's, on a curve.
     let angle = (config.profile().bindings_of(Action::Steer))
         .filter(|b| b.input.is_axis())
         .filter_map(|b| {
-            let range = base.axis_range(&config, ffb.as_deref(), &b.device);
-            Some(binding_value(&config, &gamepads, Action::Steer, b)? * range / 2.0)
+            let value = binding_value(&config, &gamepads, Action::Steer, b)?;
+            Some(match base.axis_range(&config, ffb.as_deref(), &b.device) {
+                Some(range) => value * range / 2.0,
+                None => stick_steer(value, config.stick_curve) * config.range / 2.0,
+            })
         })
         .reduce(|a, b| if b.abs() > a.abs() { b } else { a });
     // A handbrake bound to a button or key works the parking brake (and brakes while held
@@ -1252,6 +1271,7 @@ mod tests {
             base_range: Some(2520.0),
             ffb_gain: 0.35,
             ffb_road: 4.0,
+            stick_curve: 2.4,
             ffb_invert: true,
             active: 2,
             ..default()
@@ -1301,6 +1321,17 @@ mod tests {
         );
         profile.bind(Action::Brake, Binding::key(KeyCode::KeyK));
         assert_eq!(profile.bindings_of(Action::Throttle).count(), 1);
+    }
+
+    #[test]
+    fn a_stick_steers_finely_around_the_centre() {
+        assert_eq!(stick_steer(0.0, STICK_CURVE), 0.0);
+        assert_eq!(stick_steer(1.0, STICK_CURVE), 1.0);
+        assert_eq!(stick_steer(-1.0, STICK_CURVE), -1.0);
+        let half = stick_steer(0.5, STICK_CURVE);
+        assert!((0.25..0.35).contains(&half), "{half}");
+        assert_eq!(stick_steer(-0.5, STICK_CURVE), -half);
+        assert_eq!(stick_steer(0.4, 1.0), 0.4);
     }
 
     #[test]

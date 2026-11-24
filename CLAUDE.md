@@ -811,7 +811,9 @@ and plays force feedback, both through hid-fanatecff on Linux.
   force 10° past; stays on with the tire forces switched off). Only the force feedback
   device's axis covers the base's range (`WheelBase::axis_range`; on Linux the device
   taking a constant force): any other steering axis, a pad's stick, covers the game's
-  (it snapped to full lock at a small push with the base plugged in, 2026-11-24).
+  (it snapped to full lock at a small push with the base plugged in, 2026-11-24), on a
+  curve (asked for by the user: fine around the centre; `input::stick_steer`,
+  |push|^`stick_curve`, default 1.8, "Stick steering curve" under Controls, Gamepad).
 - Starter (asked for by the user, 2026-11-22): the ignition button (I or bound) held
   runs the starter (`Drivetrain::starter`: `STARTER_TORQUE` falling to nothing at
   `STARTER_SPEED`, ignition on); the ECU fires after `SYNC_TURNS` revolutions and the

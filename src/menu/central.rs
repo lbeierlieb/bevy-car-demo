@@ -631,6 +631,25 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) {
         0.01,
         |v| format!("{:.0} %", v * 100.0),
     );
+    kit::section(ui, "Gamepad");
+    kit::slider(
+        ui,
+        "Stick steering curve",
+        &mut config.stick_curve,
+        1.0..=3.0,
+        0.1,
+        |v| {
+            if v < 1.05 {
+                "linear".into()
+            } else {
+                format!("{v:.1}")
+            }
+        },
+    );
+    kit::note(
+        ui,
+        "Higher steers finer around the centre and quicker towards the end of the stick.",
+    );
 }
 
 fn force_feedback(ui: &mut egui::Ui, wheel: &mut Wheel) {

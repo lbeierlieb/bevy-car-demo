@@ -103,25 +103,21 @@ impl WheelBase {
 
     /// The rotation range a steering axis on this device covers (degrees): the base's for
     /// the wheel base force feedback plays on (on Linux, the device that takes a constant
-    /// force; elsewhere any, as the settings say), the game's for anything else (a pad's
-    /// stick pushed all the way is full lock).
+    /// force; elsewhere any, as the settings say); none for anything else (a pad's stick,
+    /// pushed all the way for full lock).
     pub fn axis_range(
         &self,
         config: &WheelConfig,
         ffb: Option<&ForceFeedback>,
         device: &str,
-    ) -> f32 {
+    ) -> Option<f32> {
         let base = if cfg!(target_os = "linux") {
             ffb.and_then(|ffb| ffb.device.as_deref())
                 .is_some_and(|wheel| wheel.trim() == device.trim())
         } else {
             true
         };
-        if base {
-            self.range(config)
-        } else {
-            config.range
-        }
+        base.then(|| self.range(config))
     }
 }
 
@@ -491,13 +487,13 @@ mod tests {
         };
         assert_eq!(
             base.axis_range(&config, Some(&ffb), "FANATEC Wheel "),
-            2520.0
+            Some(2520.0)
         );
         assert_eq!(
             base.axis_range(&config, Some(&ffb), "Xbox Controller"),
-            540.0
+            None
         );
-        assert_eq!(base.axis_range(&config, None, "FANATEC Wheel"), 540.0);
+        assert_eq!(base.axis_range(&config, None, "FANATEC Wheel"), None);
     }
 
     #[test]
