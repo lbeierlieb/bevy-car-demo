@@ -1,6 +1,6 @@
 //! The graphics settings (central menu, Settings, Graphics), kept in
 //! `~/.config/car-sim/settings/graphics.cfg`: shadows, antialiasing and how far the land
-//! is seen. The web starts on the quick settings, native on the nice ones. Only the
+//! is seen; natively also vsync and a frame rate limit. The web starts on the quick settings, native on the nice ones. Only the
 //! driving apps have them; the editors always draw at the nicest.
 
 use bevy::anti_alias::fxaa::Fxaa;
@@ -15,6 +15,9 @@ impl Plugin for GraphicsPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Graphics::load())
             .add_systems(PostUpdate, (apply, save));
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(PostUpdate, present)
+            .add_systems(Last, limit_frame_rate);
     }
 }
 
@@ -62,12 +65,19 @@ impl ViewDistance {
     }
 }
 
+/// The frame rate limits offered (frames per second; none: as fast as it goes).
+pub const FRAME_CAPS: [Option<u32>; 6] = [None, Some(30), Some(60), Some(90), Some(120), Some(144)];
+
 /// The graphics settings.
 #[derive(Resource, Clone, Copy, PartialEq, Debug)]
 pub struct Graphics {
     pub shadows: Shadows,
     pub antialiasing: Antialiasing,
     pub view: ViewDistance,
+    /// Native only (the browser paces the page itself): wait for the display's refresh.
+    pub vsync: bool,
+    /// Native only: at most this many frames per second.
+    pub frame_cap: Option<u32>,
 }
 
 impl Default for Graphics {
@@ -78,6 +88,7 @@ impl Default for Graphics {
                 shadows: Shadows::Low,
                 antialiasing: Antialiasing::Fxaa,
                 view: ViewDistance::Near,
+                ..Self::NICEST
             }
         } else {
             Self::NICEST
@@ -91,6 +102,8 @@ impl Graphics {
         shadows: Shadows::High,
         antialiasing: Antialiasing::Msaa,
         view: ViewDistance::Far,
+        vsync: true,
+        frame_cap: None,
     };
 
     fn load() -> Self {
@@ -113,6 +126,16 @@ impl Graphics {
                 ("antialiasing", "msaa") => graphics.antialiasing = Antialiasing::Msaa,
                 ("view", "near") => graphics.view = ViewDistance::Near,
                 ("view", "far") => graphics.view = ViewDistance::Far,
+                ("vsync", "on") => graphics.vsync = true,
+                ("vsync", "off") => graphics.vsync = false,
+                ("frame_cap", "off") => graphics.frame_cap = None,
+                ("frame_cap", fps) => {
+                    if let Ok(fps) = fps.parse()
+                        && FRAME_CAPS.contains(&Some(fps))
+                    {
+                        graphics.frame_cap = Some(fps);
+                    }
+                }
                 _ => {}
             }
         }
@@ -134,7 +157,12 @@ impl Graphics {
             ViewDistance::Near => "near",
             ViewDistance::Far => "far",
         };
-        format!("shadows {shadows}\nantialiasing {antialiasing}\nview {view}\n")
+        let vsync = if self.vsync { "on" } else { "off" };
+        let cap = self.frame_cap.map_or("off".into(), |fps| fps.to_string());
+        format!(
+            "shadows {shadows}\nantialiasing {antialiasing}\nview {view}\nvsync {vsync}\n\
+             frame_cap {cap}\n"
+        )
     }
 }
 
@@ -212,6 +240,47 @@ fn apply(
     }
 }
 
+/// Vsync on the window, when it changes.
+#[cfg(not(target_arch = "wasm32"))]
+fn present(
+    graphics: Res<Graphics>,
+    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+) {
+    use bevy::window::PresentMode;
+    let mode = if graphics.vsync {
+        PresentMode::AutoVsync
+    } else {
+        PresentMode::AutoNoVsync
+    };
+    for mut window in &mut windows {
+        if window.present_mode != mode {
+            window.present_mode = mode;
+        }
+    }
+}
+
+/// Holds each frame back until the limit's interval since the last one is over.
+#[cfg(not(target_arch = "wasm32"))]
+fn limit_frame_rate(graphics: Res<Graphics>, mut next: Local<Option<std::time::Instant>>) {
+    use std::time::{Duration, Instant};
+    let Some(fps) = graphics.frame_cap else {
+        *next = None;
+        return;
+    };
+    let interval = Duration::from_secs_f64(1.0 / f64::from(fps));
+    let now = Instant::now();
+    if let Some(due) = *next
+        && due > now
+    {
+        std::thread::sleep(due - now);
+    }
+    // From when this frame was due, so the rate holds on average, but never more than a
+    // frame behind (after a slow frame it doesn't race to catch up).
+    let now = Instant::now();
+    *next =
+        Some(next.map_or(now, |due| due.max(now.checked_sub(interval).unwrap_or(now))) + interval);
+}
+
 fn save(graphics: Res<Graphics>) {
     if graphics.is_changed()
         && !graphics.is_added()
@@ -231,6 +300,8 @@ mod tests {
             shadows: Shadows::Off,
             antialiasing: Antialiasing::Fxaa,
             view: ViewDistance::Near,
+            vsync: false,
+            frame_cap: Some(60),
         };
         assert_eq!(Graphics::parse(&graphics.text()), graphics);
         assert_eq!(Graphics::parse(&Graphics::NICEST.text()), Graphics::NICEST);

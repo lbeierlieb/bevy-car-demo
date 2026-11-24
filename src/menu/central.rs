@@ -15,7 +15,7 @@ use super::nav::{MenuInput, MenuSet};
 use super::{Display, SIZES};
 use crate::audio::SoundSettings;
 use crate::car::{ActiveCar, Away, Car, DriverAids, ResetRule};
-use crate::graphics::{Antialiasing, Graphics, Shadows, ViewDistance};
+use crate::graphics::{Antialiasing, FRAME_CAPS, Graphics, Shadows, ViewDistance};
 use crate::heli::rescue::Rescue;
 use crate::input::{
     Action, Capture, Capturing, Gamepads, MenuPresses, Nav, Profile, WheelConfig, action_value,
@@ -784,6 +784,16 @@ fn graphics(ui: &mut egui::Ui, graphics: &mut ResMut<Graphics>) {
             .into()
         },
     );
+    if !cfg!(target_arch = "wasm32") {
+        kit::toggle(ui, "Vsync", &mut new.vsync);
+        kit::pick(
+            ui,
+            "Frame rate limit",
+            &mut new.frame_cap,
+            &FRAME_CAPS,
+            |cap| cap.map_or("Off".into(), |fps| format!("{fps} fps")),
+        );
+    }
     kit::note(
         ui,
         "Shadows, multisampling and a far view cost the most. FXAA smooths edges cheaply.",
