@@ -1508,7 +1508,16 @@ pull (was ~2). Upper harmonics: the pulse's front sharpens with load (20° to 4�
 with a kink), and what's above 1 kHz bypasses the broad resonances (`BRIGHT`, set by the
 muffling; the stock exhaust counts as ~0.89 muffled): the V8 falls ~4–6 dB per octave of
 orders at 5000 rpm (was ~10). Tried and dropped: steepening in the header as a
-pressure-dependent delay (skipped samples lost the pulse's peak: −2–3 dB in the pull). Measured from the renders with numpy (order levels over the pull, envelope
+pressure-dependent delay (skipped samples lost the pulse's peak: −2–3 dB in the pull). Tire squeal at half its level, swelling over 0.25 s (scuff first, the tone over it).
+**Inside and outside** (`audio/paths.rs`): outside, the road's reflection of the exhaust
+(`ground_delay` from the car's and the camera's places: ~0.6 ms behind our car, sweeping as
+a car passes), scaled so the lows keep their level; from the driver's view (`ChaseCamera::
+driver`) every car sound but the race's trumpet goes through `Cabin` (body transmission
+two-pole at 450 Hz plus a 15 % leak, three cabin modes 72/118/155 Hz, four early
+reflections per ear, narrow stereo), crossfading over 0.15 s. Same cabin for every car
+(not per chassis yet), synthetic (no recorded IR). The render writes `<code>-inside.wav`
+too. Idle is ~4 dB louder inside (the boom), a V12's pull 5 dB quieter (its energy is
+where the body blocks). Measured from the renders with numpy (order levels over the pull, envelope
 modulation at half orders); the user judges by ear. Not done: displacement in the level
 (needs it in `EngineCharacter`: protocol bump), the road reflection outside, the cabin
 inside, the whistle (now ~34 dB under the exhaust at 4000 rpm) never tuned.
