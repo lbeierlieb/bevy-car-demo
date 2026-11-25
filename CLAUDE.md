@@ -20,7 +20,7 @@ repo, so everything worth knowing between sessions belongs here.
 The game is a library (`src/lib.rs`) and apps, each the list of plugins it adds: the
 **sandbox** (`src/main.rs`: the shared `CorePlugin` (`WorldPlugin` (terrain, obstacles,
 simulation, traffic: all the server has too), scenery, input, driving, visuals, camera,
-HUD, map, sound, egui), help (quick start, hints), the Vireo hot hatch (B16),
+HUD, map, sound, egui), help (quick start, hints), the car the server gives (its catalogue's start: the Vireo hot hatch, B16),
 gizmos, 2 telemetry, the central menu (Esc), shops (online), F11 fullscreen in all apps). The career was removed for the multiplayer work (see
 "Multiplayer"). Keep it that way: no mode flags; something only one app has is a plugin
 of its own (e.g. `ui::PanelPlugin`), and
@@ -202,13 +202,15 @@ As built (`src/menu/`):
   (commands in README, "The map and baking it"; a bake takes about 20 s). The native
 apps load `assets/gerach.terrain` at startup, so they see a re-bake at once (tests use
 the embedded copy, `Terrain::baked`, the fallback otherwise); commit the re-baked file.
-- Engine maps of every factory engine (22, see `families.rs`) are baked into
-  `src/physics/engine/baked/<code>.maps`. After changing `cycle.rs`, `maps.rs` (outside
+- Engine maps of every factory engine of the built-in catalogue (22, see
+  `catalogue/engines.rs`) are baked into `src/physics/engine/baked/<code>.maps` (listed
+  in `engine/store.rs`'s `BAKED`). After changing `cycle.rs`, `maps.rs` (outside
   their tests; any edit counts, their text is in the fingerprint) or a factory engine's
   cylinder side, re-bake all of them (about 40 s, 1.5 MB of text changes) or
   `stock_maps_are_current` and the tests that expect baked maps fail:
   `nix develop -c bash -c 'CARGO_TARGET_DIR=/repo/target/sandbox cargo test --profile release-dev bake_stock_maps -- --ignored'`.
-  A new factory version needs an (empty) file there first, for `include_str!`.
+  A new factory version needs an (empty) file there first, for `include_str!`, and a
+  line in `BAKED`.
 
 ### Screenshots (`tools/dev`)
 
@@ -220,8 +222,11 @@ src/bin/*.rs` prints 0 for each before committing. Keys are pressed from a third
 the frames until the shot (`m` opens the map, `2` shows the telemetry panel, `f` shows the gizmos (off by default), `c` the driver's view, `b` looks back; keys stay held through the shot's frame),
 so clicks on a window must come after that (`T` presses the key T, `E` Enter).
 Shots play alone (on the game's own server, with the repo's shops and events) unless
-`JOIN`, `MENU=1`, `OFFLINE=1` (no server, no traffic) or `LINEUP` (likewise, as a join
-would move the car). Shops need `PLACE` at the building's point
+`JOIN`, `MENU=1`, `OFFLINE=1` (no server, no traffic; the shot spawns the built-in
+catalogue's first car itself, as no server gives one) or `LINEUP` (likewise, as a join
+would move the car). `PLACE` works because `shot.sh` sets `CAR_SIM_TRUST_PLACEMENTS=1`
+(the game's own server then takes up placements however far they move the car).
+Shops need `PLACE` at the building's point
 (the car lands on the marker and goes in): gas `-2603,-1736`, car dealer
 `-1476,-1213`, alignment `-1480,-1305`, paint `3500,-63`, parts `-1950,-3160`, dyno
 `-2601,-3784` (the shop's window takes the focus on its first row, so
@@ -472,8 +477,8 @@ markers, map marks: `MapMarks`/`MapLegend` are keyed by owner now), `hunt.rs` (r
 `Rounds`, `run_rounds` in `ServerPlugin` between `receive` and `send`; gives and takes
 only the realms it manages; one lobby per event, a round over merges into the waiting
 one), `lobby.rs` (client: `arrive` asks to enter when stopped on a marker, drive 8 m or
-Esc leaves; `follow` places the car at `online::lane_spots` near the marker by slot,
-lends via despawn/spawn and keeps our `Car` in `EventState::lent`, sets `Car::hold` and
+Esc leaves; `follow` places the car at `online::lane_spots` near the marker by slot
+(a lent car and our own back come from the server as `YourCar`), sets `Car::hold` and
 `car::ResetRule`; `window`: lobby window and the bar at the top). Protocol 7:
 `ToClient::Events`, `Round(Option<Round>)`, `Busy`, `ToServer::Event(Action)`; protocol 8
 added `Settings::catch`, `Ending::Tagged`, `Action::Touched`. Times are
@@ -713,14 +718,63 @@ Built (phases 0, 1, 2 and the start of 3):
   (`a_car_is_only_filled_up_at_a_gas_station`). **Lent cars**: the server lends them
   itself (`Shadow::lend`, `Round::lent_chassis`, a factory build with stock maps), keeps
   the player's own car (`Shadow::own`) and gives it back as it was (`give_back`) when the
-  round's over for them; meanwhile `set_spec` is ignored (the game builds the same lent
-  car and sends its spec, which matches). Still the client's word (trusted, phase 4/5):
+  round's over for them, telling the player each (`ToClient::YourCar`, which the game
+  builds); meanwhile `set_spec` is ignored. Still the client's word (trusted, phase 4/5):
   a car built anew in a shop (`ToServer::Car` + its first placement: build, fuel, wear),
   repairs and tires, the parking brake pulled at markers (harmless: it only stops our
   own car).
 - Not done: hunt tags from the server's contacts (clients still send `Touched`), the rest
   of phase 3 (placements are trusted: a modified client can teleport), checking a
   client's inputs (rates, ranges are clamped by the encoding).
+
+## Server catalogue (agreed with the user, 2026-11-24; built the night after)
+
+The game knows no cars or parts by itself: the server defines which exist and tells
+players on joining, like shops and events. Later players buy cars and parts, which the
+server keeps for good (accounts, money, saved cars by string ids: not built); for now
+the server gives the start car and the showroom and garage give cars and parts away.
+Decisions (the user's answers): car changes become requests to the server as part of
+this work; the server sends engine maps (the client doesn't bake factory engines); the
+catalogue stays Rust data in the server for now (a `--catalogue FILE` later).
+
+As built:
+- `src/catalogue.rs`: `Catalogue` (chassis, gearboxes, clutches, suspensions, paints
+  with a `shop` flag, compounds (`TireCompound`: name, about, the `tire::Compound`
+  rubber), engine families (`Version`: code, name, `block: EngineHardware`, `Preset`),
+  part slots, `start`), compared by a fingerprint; `catalogue::Current` resource (the
+  server's; on the client inserted when `ToClient::Catalogue` comes). `builtin()` (from
+  `catalogue/{chassis,engines,parts}.rs`, the old statics) is the server's default; it
+  and the baked maps (`engine/store.rs`) aren't compiled for wasm outside tests, which
+  proves the web client needs neither. The convenience `CarSetup::factory`,
+  `CarBuild::factory`, `Parts::factory`/`stock`, `CarSetup::default` are builtin's
+  (tests, server, dev tools); game code uses the `_in` versions with a catalogue.
+- `CarBuild` and `Parts` carry their catalogue (`Shared` = `Arc<Catalogue>`) and refer to
+  entries by place, so the simulation, looks and shops never read a global. Engine
+  parts are data: `Part { name, effects }`, `Effect` = change a hardware `Field` (times,
+  over, plus, to, at least, rounded to a step), remove the cat/silencer, regrind cams,
+  switching cams, a `TurboKit`; a slot has a `Readout` (its label's detail) and
+  `needs_turbo`. Every factory car and part came out bit for bit as before (dumped and
+  compared). Traffic's chassis weights are `Chassis::traffic`.
+- Wire (`catalogue/wire.rs`): the whole catalogue, checked to hold together on reading
+  (18 kB built-in). `Reader::with(bytes, catalogue)`/`decode_with`: cars (`CarBuild`,
+  `Parts`, `Looks`, `CarSpec`) only read with a catalogue.
+- Protocol 26: after `Welcome` the server sends `Catalogue` and `YourCar(spec)` (the start
+  car, built in its shadow); lent cars and the own car given back come as `YourCar`
+  too. The client (`client::take_your_car`) builds what it's told (in place of the
+  active car, or the first one by the spawn); there's no car before joining (the camera
+  looks down the spawn's road under the start menu); shops open once there's a car
+  (`garage::open`). `ToServer::Buy { chassis, engine }`: the showroom's "Drive it" asks,
+  the server builds it and answers `YourCar`. `ToServer::Maps { fingerprint }` →
+  `ToClient::Maps { fingerprint, text }` (zlib, `wire::Blob`, none if the server hasn't
+  got them: only the stock ones for now): `take_your_car` waits for them when they're not
+  in the maps cache (`workshop::keep_text`), and bakes only if the server has none.
+  `CarSetup::to_look_at` (blank maps and ECU, `EngineMaps::blank`, `Ecu::blank`) is for
+  cars only looked at: the showroom's and traffic's looks.
+- Not done: the garage, paint and alignment shops still change the car in the game and
+  send `ToServer::Car` (the server validates it against its catalogue, free); the
+  garage on the web bakes factory engines itself instead of asking for their maps;
+  `ToServer::Looks` (the server could work them out); the race editor uses the built-in
+  catalogue (biggest car box); stable string ids for saved cars; a catalogue file.
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 
@@ -829,11 +883,10 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   fingerprint, so client-only changes (driving physics, engine, tires, FFB, aids, UI)
   need no server update, and old and new clients play together. Bump `PROTOCOL`
   whenever a message's content changes (`protocol.rs`: `CarState`, `Looks`, `Motion`,
-  a new message). The server needs updating too for: catalogue changes
-  (chassis, paints, gearboxes, clutches, suspensions, compounds, bar sizes: sent as
-  indices and checked against the reader's catalogues; a car the server can't read gets
-  "The server doesn't know your car…", a client skips a car it can't read (traffic's or
-  another player's) with a warning), traffic behaviour
+  a new message). Catalogue changes (cars, parts, paints…) need only a server update
+  since the server sends its catalogue (see "Server catalogue"); a new kind of part
+  effect or a catalogue field the game reads needs both. The server needs updating
+  too for: traffic behaviour
   (simulated on the server), and a re-bake (fingerprint). With `web.enable` the web
   build updates with the server (`nixos-rebuild` restarts it, dropping everyone).
   A browser left on an old page (its cache) is refused with "Press Ctrl+F5 to reload
@@ -1046,14 +1099,15 @@ all-wheel drive exist. One car at a time, picked from a menu. Later this becomes
 with a campaign, upgrades and personal cars, so a car is an instance built from
 catalogue entries, and things like swap subframes are named so they can be priced.
 
-- **Catalogues** (statics, entries referred to by their place; engine versions also by
-  code): `chassis.rs` has `CHASSIS` (13: Minim city car, Vireo hot hatch (the default, B16), Linnet
+- **Catalogues** (data in a `catalogue::Catalogue`, the server's, see "Server
+  catalogue"; entries referred to by their place; engine versions also by code). The
+  built-in one (`src/catalogue/`): `chassis.rs` has the chassis (13: Minim city car, Vireo hot hatch (the default, B16), Linnet
   roadster, Tarn coupé, Halden saloon, Skarn rally car, Harrow muscle car,
   Calder mid-engined, Rheon rear-engined, Vespera supercar, Wisp track-day special,
-  Drover pickup, Carrow van; names are made up, no real cars), `GEARBOXES` (8, of three
+  Drover pickup, Carrow van; names are made up, no real cars), gearboxes (8, of three
   kinds: transverse, inline, transaxle), clutches, suspension kits and paints (the tire
-  compounds are in `physics/tire.rs`).
-  `physics/engine/families.rs` has `FAMILIES` (12 families, 22 factory versions, codes
+  compounds' rubber is `physics/tire.rs`'s `COMPOUNDS`, named in `catalogue/parts.rs`).
+  `engines.rs` has the families (12 families, 22 factory versions, codes
   like W20T; W is today's 2-litre four, R the high-revving four with switching cams).
 - **A car** is a `CarBuild` (chassis, paint, gearbox, clutch, final drive, limited-slip,
   suspension, a `Wheel` per axle) plus its engine's `Parts` (family, version, a part per slot, ECU).
@@ -1334,9 +1388,10 @@ phasing, VTEC-style cam switching).
   local storage on the web) with the build they were made for; loading reads over the
   engine's factory tune and warns if the build differs. Swapping the engine build in
   the setup panel replaces the tune with the new build's factory tune.
-- Garage (parts shops, `src/garage/`): parts from a catalogue (`parts.rs`: a slot per kind of
-  part, each part a function fitting it onto the engine's hardware, relative to it; a
-  factory version is a block and a selection); cam-gear timing and wastegate spring are
+- Garage (parts shops, `src/garage/`): parts from the catalogue (`engine/parts.rs`: a
+  slot per kind of part, each part a list of `Effect`s on the engine's hardware, relative
+  to it; the built-in ones in `catalogue/parts.rs`; a factory version is a block and a
+  `Preset`); cam-gear timing and wastegate spring are
   set in the dyno's room (`dyno::cams`). The car's `EngineSetup.parts` says
   what it's built from. Building bakes the maps if the fingerprint changed (native: a
   thread; wasm: 12 ms slices per frame), with the old engine running meanwhile, and caches
