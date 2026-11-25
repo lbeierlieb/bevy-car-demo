@@ -132,6 +132,9 @@ impl Plugin for ClientPlugin {
     }
 }
 
+/// The most changes of our car kept waiting for the server's answer.
+const MOST_UNANSWERED: usize = 16;
+
 /// Builds the car the server said ours is now: in place of the active car (where it is,
 /// keeping the driver's settings), or the first one, by the spawn. The server's state of
 /// it follows (`Yours`).
@@ -256,6 +259,9 @@ pub struct Connection {
     sent: f64,
     /// What our car was built of when last sent (or as the server built it).
     sent_spec: Option<CarSpec>,
+    /// What our car was built of in messages the server hasn't answered yet (it answers
+    /// each with the car it has), the latest last.
+    unanswered: VecDeque<CarSpec>,
     /// What cars and parts there are, as the server told us (none before it has).
     pub catalogue: Option<Shared>,
     /// The car the server said ours is now, until it's built (`take_your_car`).
@@ -313,6 +319,7 @@ impl Connection {
             sent_looks: None,
             sent: f64::NEG_INFINITY,
             sent_spec: None,
+            unanswered: VecDeque::new(),
             catalogue: None,
             your_car: None,
             maps_asked: HashSet::new(),
@@ -542,9 +549,16 @@ fn receive(
                 connection.catalogue = Some(catalogue);
             }
             ToClient::YourCar(spec) => {
-                // Built as told: nothing to tell the server of it.
-                connection.sent_spec = Some((*spec).clone());
-                connection.your_car = Some(*spec);
+                match connection.unanswered.iter().position(|sent| *sent == *spec) {
+                    // The server took a change of ours: nothing to do.
+                    Some(answered) => drop(connection.unanswered.drain(..=answered)),
+                    // Its own (or ours refused): built as told, nothing to tell it.
+                    None => {
+                        connection.unanswered.clear();
+                        connection.sent_spec = Some((*spec).clone());
+                        connection.your_car = Some(*spec);
+                    }
+                }
             }
             ToClient::Maps { fingerprint, text } => {
                 let text = text.and_then(|text| crate::physics::engine::store::unpack(&text.0));
@@ -740,6 +754,10 @@ fn send(
     let spec = CarSpec::of(&car.setup);
     if connection.sent_spec.as_ref() != Some(&spec) {
         connection.say(&ToServer::Car(Box::new(spec.clone())));
+        if connection.unanswered.len() >= MOST_UNANSWERED {
+            connection.unanswered.pop_front();
+        }
+        connection.unanswered.push_back(spec.clone());
         connection.sent_spec = Some(spec);
     }
     if let Some((step, state)) = prediction.place.take() {

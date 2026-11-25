@@ -311,6 +311,11 @@ impl Shadow {
         self.yours.take()
     }
 
+    /// What the car is built of, as the server has it.
+    pub fn spec(&self) -> Option<&CarSpec> {
+        self.spec.as_ref()
+    }
+
     /// Moves the car to `spot`, as it was otherwise (a rescue under way lets go). A car
     /// without a state yet goes there when it gets one.
     pub fn put(&mut self, terrain: &Terrain, spot: Spot) {

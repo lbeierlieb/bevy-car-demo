@@ -275,6 +275,28 @@ mod tests {
         peer.shadow.matched()
     }
 
+    /// A car changed in a shop goes to the server, which keeps it and says so; the game
+    /// doesn't build it again.
+    #[test]
+    fn the_server_takes_a_car_changed_in_a_shop() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let mut anna = driver(&listener, "Anna");
+        run(&mut [&mut server, &mut anna], 30);
+        let setup = car(&mut anna).setup.clone();
+        let mut build = setup.build.clone();
+        build.paint = (build.paint + 1) % build.catalogue.paints.len();
+        let painted = CarSetup::new(build.clone(), setup.engine.parts, setup.engine.build);
+        let rebuilt = car(&mut anna).rebuilt(painted);
+        *car(&mut anna) = rebuilt;
+        run(&mut [&mut server, &mut anna], 10);
+        let mut peers = server.world_mut().query::<&super::server::Peer>();
+        let peer = peers.single(server.world()).unwrap();
+        assert_eq!(peer.shadow.spec().map(|spec| &spec.build), Some(&build));
+        assert_eq!(car(&mut anna).setup.build, build);
+        assert!(connection(&anna).your_car.is_none());
+    }
+
     #[test]
     fn the_server_drives_a_players_car_as_they_do() {
         let listener = LoopbackListener::default();
@@ -1408,7 +1430,20 @@ mod tests {
             ResetRule::Never,
             "hunters can't reset"
         );
-        run(&mut all, 150);
+        // A lent car can't be changed: the server puts the hunter's paint job right.
+        let lent = car(all[k]).setup.clone();
+        let mut build = lent.build.clone();
+        build.paint = (build.paint + 1) % build.catalogue.paints.len();
+        let painted = CarSetup::new(build, lent.engine.parts.clone(), lent.engine.build.clone());
+        let rebuilt = car(all[k]).rebuilt(painted);
+        *car(all[k]) = rebuilt;
+        run(&mut all, 10);
+        assert_eq!(
+            car(all[k]).setup.build,
+            lent.build,
+            "the lent car as it was"
+        );
+        run(&mut all, 140);
         assert!(!all[k].world().resource::<Held>().0, "off they go");
         // The hunted stands still and is caught; both have their own cars back.
         run(&mut all, 60 * 11);

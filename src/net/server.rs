@@ -406,7 +406,14 @@ fn receive(
                     peer.looks = Some(*looks);
                     peer.revision += 1;
                 }
-                ToServer::Car(spec) => peer.shadow.set_spec(*spec, &mut baked),
+                ToServer::Car(spec) => {
+                    // The car the server has now, whether it took the change or not (a
+                    // lent car stays).
+                    peer.shadow.set_spec(*spec, &mut baked);
+                    if let Some(spec) = peer.shadow.spec().cloned() {
+                        peer.tell(&ToClient::YourCar(Box::new(spec)));
+                    }
+                }
                 ToServer::Maps { fingerprint } => {
                     let text = crate::physics::engine::store::packed(fingerprint);
                     peer.tell(&ToClient::Maps {

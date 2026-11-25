@@ -770,8 +770,13 @@ As built:
   in the maps cache (`workshop::keep_text`), and bakes only if the server has none.
   `CarSetup::to_look_at` (blank maps and ECU, `EngineMaps::blank`, `Ecu::blank`) is for
   cars only looked at: the showroom's and traffic's looks.
-- Not done: the garage, paint and alignment shops still change the car in the game and
-  send `ToServer::Car` (the server validates it against its catalogue, free); the
+- Shops (garage, paint, alignment, the dyno's tune and cams) still change the car in the
+  game, which sends `ToServer::Car`; the server answers each with the car it has
+  (`YourCar`): the game keeps the specs it sent until answered (`unanswered`), ignores
+  an answer that is one of them and builds anything else (a change refused, e.g. while
+  a car is lent) (`the_server_takes_a_car_changed_in_a_shop`, the hunt test).
+- Not done: the shops' changes as requests (the game builds first, the server's word is
+  checked after; free, validated against the catalogue); the
   garage on the web bakes factory engines itself instead of asking for their maps;
   `ToServer::Looks` (the server could work them out); the race editor uses the built-in
   catalogue (biggest car box); stable string ids for saved cars; a catalogue file.
