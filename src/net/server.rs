@@ -35,6 +35,7 @@ use crate::heli::HeliPose;
 use crate::looks::{Looks, Motion};
 use crate::online::join_spot;
 use crate::physics::collision::{self, OBSTACLE};
+use crate::physics::engine::maps::EngineMaps;
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
 use crate::spec::CarSpec;
@@ -209,9 +210,11 @@ pub struct Peer {
     pub name: Option<String>,
     /// When they were last heard from (s).
     heard: f64,
-    /// Their car's latest state and looks (with a revision counting the changes).
+    /// Their car's latest state and looks (with a revision counting the changes), and what
+    /// it was built of when the looks were worked out.
     pub state: Option<CarState>,
     pub looks: Option<Looks>,
+    looks_of: Option<CarSpec>,
     /// Our clock less theirs: their states are passed on stamped on ours, so that every
     /// car a player is sent is on one clock.
     clock: ClockOffset,
@@ -263,6 +266,7 @@ fn accept(
             heard: now(&time),
             state: None,
             looks: None,
+            looks_of: None,
             clock: ClockOffset::default(),
             revision: 0,
             told: HashMap::new(),
@@ -294,6 +298,18 @@ fn receive(
     // Who wrote too much at once.
     let mut too_fast = HashSet::new();
     for (entity, mut peer, mut transform, realm) in &mut peers {
+        // Their car's looks, from what the server has it built of (only the hardware
+        // matters to them, not the engine's maps).
+        if let Some(spec) = peer
+            .shadow
+            .spec()
+            .filter(|&spec| peer.looks_of.as_ref() != Some(spec))
+        {
+            let spec = spec.clone();
+            peer.looks = Some(Looks::of(&spec.setup_with(EngineMaps::blank())));
+            peer.revision += 1;
+            peer.looks_of = Some(spec);
+        }
         while let Some(bytes) = peer.link.receive() {
             let Some(message) = decode_with::<ToServer>(&bytes, Some(&catalogue)) else {
                 let why = "Your game sent something the server couldn't read";
@@ -401,10 +417,6 @@ fn receive(
                             text,
                         },
                     ));
-                }
-                ToServer::Looks(looks) => {
-                    peer.looks = Some(*looks);
-                    peer.revision += 1;
                 }
                 ToServer::Car(spec) => {
                     // The car the server has now, whether it took the change or not (a

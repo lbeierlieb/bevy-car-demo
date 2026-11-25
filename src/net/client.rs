@@ -254,8 +254,7 @@ pub struct Connection {
     known: HashMap<CarId, Known>,
     /// The other players the server shows on our map, and when each was heard of (s).
     map: HashMap<PlayerId, (MapPlayer, f64)>,
-    /// The looks last sent of our car, and when its state was (s).
-    sent_looks: Option<Looks>,
+    /// When our car's state was last sent (s).
     sent: f64,
     /// What our car was built of when last sent (or as the server built it).
     sent_spec: Option<CarSpec>,
@@ -316,7 +315,6 @@ impl Connection {
             clock: ClockOffset::default(),
             known: HashMap::new(),
             map: HashMap::new(),
-            sent_looks: None,
             sent: f64::NEG_INFINITY,
             sent_spec: None,
             unanswered: VecDeque::new(),
@@ -737,20 +735,15 @@ fn send(
     fixed: Res<Time<Fixed>>,
     active: Res<ActiveCar>,
     mut prediction: ResMut<Prediction>,
-    cars: Query<(&Car, &Looks, &Motion, Has<Ghost>)>,
+    cars: Query<(&Car, &Motion, Has<Ghost>)>,
 ) {
     let now = now(&time);
     if !matches!(connection.status, Status::Joined { .. }) {
         return;
     }
-    let Some((car, looks, motion, ghost)) = cars.iter().find(|(car, ..)| car.index == active.0)
-    else {
+    let Some((car, motion, ghost)) = cars.iter().find(|(car, ..)| car.index == active.0) else {
         return;
     };
-    if connection.sent_looks.as_ref() != Some(looks) {
-        connection.sent_looks = Some(looks.clone());
-        connection.say(&ToServer::Looks(Box::new(looks.clone())));
-    }
     let spec = CarSpec::of(&car.setup);
     if connection.sent_spec.as_ref() != Some(&spec) {
         connection.say(&ToServer::Car(Box::new(spec.clone())));

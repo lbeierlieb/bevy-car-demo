@@ -778,7 +778,7 @@ As built:
 - Not done: the shops' changes as requests (the game builds first, the server's word is
   checked after; free, validated against the catalogue); the
   garage on the web bakes factory engines itself instead of asking for their maps;
-  `ToServer::Looks` (the server could work them out); the race editor uses the built-in
+  the race editor uses the built-in
   catalogue (biggest car box); stable string ids for saved cars; a catalogue file.
 
 ## Multiplayer (agreed with the user, 2026-11-19)
@@ -804,9 +804,10 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   unreliable datagrams). Other players' cars are **remote cars** (model, wheels, sound),
   dead reckoned like traffic (see "Every car from the server alike"); each client
   collides its own car against them and applies the impulse only to itself.
-- A client sends what others **see and hear**: chassis, paint, wheels, ride height and a
-  sound description (layout, cylinders, `ExhaustSound`, turbo), not the engine's parts;
-  re-sent when it changes (e.g. a swap in the garage, 4).
+- What others **see and hear** of a car (`Looks`: chassis, paint, wheels, ride height and
+  a sound description: layout, cylinders, `ExhaustSound`, turbo) the server works out
+  from what it has the car built of (since protocol 27; players sent them before), and
+  sends again when that changes.
 - **The server owns** the session (players, names, looks), **shared traffic** (one
   traffic world: spawned 260–550 m from the nearest player and out of everyone's view,
   removed past 700 m from everyone, density per area, not per player; sent like player

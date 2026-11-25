@@ -39,7 +39,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 26;
+pub const PROTOCOL: u32 = 27;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -72,7 +72,6 @@ pub enum ToServer {
         map: u64,
         name: String,
     },
-    Looks(Box<Looks>),
     State(CarState),
     /// A chat message for everyone.
     Chat(String),
@@ -205,9 +204,6 @@ pub struct Yours {
 }
 
 impl ToServer {
-    /// The first byte of a `Looks` message.
-    pub const LOOKS: u8 = 1;
-
     /// Whether it must arrive (else a newer one will do).
     pub fn reliable(&self) -> bool {
         !matches!(self, ToServer::State(_) | ToServer::Inputs { .. })
@@ -305,10 +301,6 @@ impl Wire for ToServer {
                 map.put(out);
                 name.put(out);
             }
-            ToServer::Looks(looks) => {
-                Self::LOOKS.put(out);
-                looks.put(out);
-            }
             ToServer::State(state) => {
                 2u8.put(out);
                 state.put(out);
@@ -359,7 +351,6 @@ impl Wire for ToServer {
                 map: r.get()?,
                 name: r.get()?,
             },
-            Self::LOOKS => ToServer::Looks(Box::new(r.get()?)),
             2 => ToServer::State(r.get()?),
             3 => ToServer::Chat(r.get()?),
             4 => ToServer::Event(r.get()?),
@@ -873,9 +864,6 @@ mod tests {
     fn every_factory_car_looks_the_same_after_the_trip() {
         for chassis in 0..crate::catalogue::builtin().chassis.len() {
             let looks = Looks::of(&CarSetup::factory(chassis, 0));
-            let message = ToServer::Looks(Box::new(looks.clone()));
-            let bytes = encode(&message);
-            assert_eq!(decode::<ToServer>(&bytes), Some(message), "{chassis}");
             let reply = ToClient::Looks {
                 car: 3,
                 looks: Box::new(looks),
@@ -1003,9 +991,10 @@ mod tests {
     fn looks_out_of_the_catalogues_are_refused() {
         let mut looks = Looks::of(&CarSetup::default());
         looks.build.chassis = crate::catalogue::builtin().chassis.len();
-        assert_eq!(
-            decode::<ToServer>(&encode(&ToServer::Looks(Box::new(looks)))),
-            None
-        );
+        let message = ToClient::Looks {
+            car: 3,
+            looks: Box::new(looks),
+        };
+        assert_eq!(decode::<ToClient>(&encode(&message)), None);
     }
 }
