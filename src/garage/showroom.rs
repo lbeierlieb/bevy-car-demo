@@ -131,20 +131,25 @@ enum Shown {
     Outside,
 }
 
-/// Where a chassis (in the catalogue) stands on the floor, and which way it faces (rad about
-/// up; 0 faces the glass front): three along the left wall facing in, seven along the back
-/// at an angle, three along the right wall facing in.
-fn place(chassis: usize) -> (Vec3, f32) {
-    match chassis {
-        0..3 => (
-            Vec3::new(-13.5, 0.0, -8.0 + 5.0 * chassis as f32),
-            -FRAC_PI_2 + 0.35,
-        ),
-        3..10 => (Vec3::new(-13.8 + 4.6 * (chassis - 3) as f32, 0.0, 7.5), 0.5),
-        _ => (
-            Vec3::new(13.5, 0.0, -8.0 + 5.0 * (chassis - 10) as f32),
-            FRAC_PI_2 - 0.35,
-        ),
+/// Where chassis `chassis` of `count` stands on the floor, and which way it faces (rad
+/// about up; 0 faces the glass front): along the left wall facing in, along the back at
+/// an angle, along the right wall facing in (three, seven and three of thirteen).
+fn place(chassis: usize, count: usize) -> (Vec3, f32) {
+    let side = (count * 3 + 6) / 13;
+    let back = count - 2 * side;
+    // The `i`th of `n` from `from` over `span` (m).
+    let along = |i: usize, n: usize, from: f32, span: f32| {
+        from + span * i as f32 / n.saturating_sub(1).max(1) as f32
+    };
+    if chassis < side {
+        let z = along(chassis, side, -8.0, 10.0);
+        (Vec3::new(-13.5, 0.0, z), -FRAC_PI_2 + 0.35)
+    } else if chassis < side + back {
+        let x = along(chassis - side, back, -13.8, 27.6);
+        (Vec3::new(x, 0.0, 7.5), 0.5)
+    } else {
+        let z = along(chassis - side - back, side, -8.0, 10.0);
+        (Vec3::new(13.5, 0.0, z), FRAC_PI_2 - 0.35)
     }
 }
 
@@ -685,7 +690,7 @@ fn build_hall(
     let catalogue = car.setup.build.catalogue.clone();
     for (chassis, made) in catalogue.chassis.iter().enumerate() {
         let looks = factory.get(&catalogue, chassis, made.paint);
-        let (at, yaw) = place(chassis);
+        let (at, yaw) = place(chassis, catalogue.chassis.len());
         let motion = at_rest(&looks);
         let transform = placed(origin, at, yaw, &looks);
         b.commands.spawn((
@@ -1029,4 +1034,36 @@ fn window(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thirteen_cars_stand_where_they_always_did() {
+        let old = |chassis: usize| match chassis {
+            0..3 => (-13.5, -8.0 + 5.0 * chassis as f32),
+            3..10 => (-13.8 + 4.6 * (chassis - 3) as f32, 7.5),
+            _ => (13.5, -8.0 + 5.0 * (chassis - 10) as f32),
+        };
+        for chassis in 0..13 {
+            let (at, _) = place(chassis, 13);
+            let (x, z) = old(chassis);
+            assert!(
+                (at.x - x).abs() < 1e-4 && (at.z - z).abs() < 1e-4,
+                "{chassis}"
+            );
+        }
+        // Fewer or more spread out over the same walls.
+        for count in [1, 5, 20] {
+            for chassis in 0..count {
+                let (at, _) = place(chassis, count);
+                assert!(
+                    at.x.abs() <= 13.8 && (-8.0..=7.5).contains(&at.z),
+                    "{count}"
+                );
+            }
+        }
+    }
 }
