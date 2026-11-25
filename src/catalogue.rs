@@ -20,6 +20,7 @@ use crate::physics::tire::Compound;
 mod chassis;
 mod engines;
 mod parts;
+mod wire;
 
 pub use chassis::DEFAULT_CHASSIS;
 pub use parts::{HEADERS, INTERCOOLER, PISTONS, TURBO};
@@ -27,6 +28,7 @@ pub use parts::{HEADERS, INTERCOOLER, PISTONS, TURBO};
 /// A catalogue shared by the cars built from it.
 pub type Shared = Arc<Catalogue>;
 
+#[derive(Clone)]
 pub struct Catalogue {
     pub chassis: Vec<Chassis>,
     pub gearboxes: Vec<Gearbox>,
