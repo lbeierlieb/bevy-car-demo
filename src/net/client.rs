@@ -11,7 +11,7 @@
 //! The other players the server puts on our map are kept apart from all that
 //! (`Connection::on_map`), and so is the chat (`Connection::chat`).
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use bevy::prelude::*;
 
@@ -150,11 +150,25 @@ fn take_your_car(
         return;
     }
     let hardware = spec.parts.hardware();
-    let maps = crate::workshop::at_hand(&hardware).unwrap_or_else(|| {
-        let maps = EngineMaps::bake(&hardware);
-        crate::workshop::keep(&hardware, &maps);
-        maps
-    });
+    let print = crate::physics::engine::maps::fingerprint(&hardware);
+    let maps = match crate::workshop::at_hand(&hardware) {
+        Some(maps) => maps,
+        None if connection.maps_missing.contains(&print) => {
+            // Not the server's to give: baked here (a car built in a shop here before
+            // would have them kept already).
+            let maps = EngineMaps::bake(&hardware);
+            crate::workshop::keep(&hardware, &maps);
+            maps
+        }
+        None => {
+            // From the server; till then the car waits.
+            if connection.maps_asked.insert(print) {
+                connection.say(&ToServer::Maps { fingerprint: print });
+            }
+            connection.your_car = Some(spec);
+            return;
+        }
+    };
     let setup = spec.setup_with(maps);
     match cars.iter_mut().find(|(_, car)| car.index == active.0) {
         Some((_, mut car)) if car.setup.build == setup.build => {
@@ -246,6 +260,9 @@ pub struct Connection {
     pub catalogue: Option<Shared>,
     /// The car the server said ours is now, until it's built (`take_your_car`).
     pub your_car: Option<CarSpec>,
+    /// Engine maps asked the server for (by fingerprint), and those it hasn't got.
+    maps_asked: HashSet<u64>,
+    maps_missing: HashSet<u64>,
     /// The driver's latest inputs by step, the latest last, and the last step sent.
     inputs: VecDeque<(u32, DriverInput)>,
     inputs_sent: Option<u32>,
@@ -298,6 +315,8 @@ impl Connection {
             sent_spec: None,
             catalogue: None,
             your_car: None,
+            maps_asked: HashSet::new(),
+            maps_missing: HashSet::new(),
             inputs: VecDeque::new(),
             inputs_sent: None,
             check: None,
@@ -526,6 +545,16 @@ fn receive(
                 // Built as told: nothing to tell the server of it.
                 connection.sent_spec = Some((*spec).clone());
                 connection.your_car = Some(*spec);
+            }
+            ToClient::Maps { fingerprint, text } => {
+                let text = text.and_then(|text| crate::physics::engine::store::unpack(&text.0));
+                // Kept with the maps baked here, if they're what was asked for.
+                match text.filter(|text| EngineMaps::from_text(text, fingerprint).is_some()) {
+                    Some(text) => crate::workshop::keep_text(fingerprint, &text),
+                    None => {
+                        connection.maps_missing.insert(fingerprint);
+                    }
+                }
             }
             ToClient::Shops(shops) => connection.shops = shops,
             ToClient::Events(events) => connection.events = events,

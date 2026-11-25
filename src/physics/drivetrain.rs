@@ -189,6 +189,7 @@ pub struct EngineSetup {
     pub centre: Differential,
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 impl Default for EngineSetup {
     /// A 2-litre petrol four with a six-speed gearbox.
     fn default() -> Self {

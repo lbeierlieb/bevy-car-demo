@@ -11,7 +11,7 @@
 use bevy::prelude::*;
 
 use crate::body::{Body, Wheels};
-use crate::catalogue::{self, Catalogue, Paint, Shared, Suspension};
+use crate::catalogue::{Catalogue, Paint, Shared, Suspension};
 use crate::physics::drivetrain::Drive;
 use crate::physics::engine::parts::Parts;
 use crate::physics::fuel::Tank;
@@ -274,8 +274,9 @@ pub struct CarBuild {
 
 impl CarBuild {
     /// The chassis as it leaves the factory (of the built-in catalogue).
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub fn factory(chassis: usize) -> Self {
-        Self::factory_in(&catalogue::builtin(), chassis)
+        Self::factory_in(&crate::catalogue::builtin(), chassis)
     }
 
     /// `catalogue`'s `chassis` as it leaves the factory.

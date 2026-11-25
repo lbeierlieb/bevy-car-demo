@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 
-use crate::catalogue::{self, Shared};
+use crate::catalogue::Shared;
 use crate::chassis::{CarBuild, Chassis};
 use crate::input::WheelInput;
 use crate::net::wire::{Reader, Wire, decode, encode};
@@ -221,8 +221,9 @@ impl CarSetup {
 
     /// A chassis of the built-in catalogue as it leaves the factory, with the factory's
     /// engine `option` for it.
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub fn factory(chassis: usize, option: usize) -> Self {
-        Self::factory_in(&catalogue::builtin(), chassis, option)
+        Self::factory_in(&crate::catalogue::builtin(), chassis, option)
     }
 
     /// `catalogue`'s `chassis` as it leaves the factory, with the factory's engine
@@ -231,6 +232,23 @@ impl CarSetup {
         let build = CarBuild::factory_in(catalogue, chassis);
         let parts = build.factory_engine(option);
         let engine = EngineBuild::new(parts.hardware(), parts.ecu);
+        Self::new(build, parts, engine)
+    }
+
+    /// `catalogue`'s `chassis` as it leaves the factory with its engine `option`, only to
+    /// be looked at (in a showroom, in traffic): its engine's maps and tune are blank, so
+    /// it must never be driven.
+    pub fn to_look_at(catalogue: &Shared, chassis: usize, option: usize) -> Self {
+        use crate::physics::engine::{ecu::Ecu, maps::EngineMaps};
+        let build = CarBuild::factory_in(catalogue, chassis);
+        let parts = build.factory_engine(option);
+        let hardware = parts.hardware();
+        let engine = EngineBuild {
+            ecu: Ecu::blank(&hardware, parts.ecu),
+            hardware,
+            maps: EngineMaps::blank(),
+            octane: crate::physics::fuel::PUMP_OCTANE,
+        };
         Self::new(build, parts, engine)
     }
 
@@ -302,10 +320,11 @@ pub fn body_box(chassis: &Chassis, fitted: &[Wheel; 2]) -> Obb {
     }
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 impl Default for CarSetup {
-    /// The car the game starts with, with its base engine.
+    /// The built-in catalogue's first car, with its base engine.
     fn default() -> Self {
-        Self::factory(catalogue::DEFAULT_CHASSIS, 0)
+        Self::factory(crate::catalogue::DEFAULT_CHASSIS, 0)
     }
 }
 

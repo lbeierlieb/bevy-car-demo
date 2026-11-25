@@ -751,7 +751,7 @@ fn show(
     let picked = (garage.showroom.chassis, garage.showroom.engine);
     let new = hall.on_table != Some(picked);
     let table_looks = new.then(|| {
-        let setup = CarSetup::factory_in(&catalogue, picked.0, picked.1);
+        let setup = CarSetup::to_look_at(&catalogue, picked.0, picked.1);
         hall.on_table = Some(picked);
         hall.idle = setup.engine.build.ecu.idle_rpm;
         hall.rev_limit = setup.engine.build.ecu.rev_limit;

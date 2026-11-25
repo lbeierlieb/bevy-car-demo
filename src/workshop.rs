@@ -32,7 +32,13 @@ pub fn at_hand(hardware: &EngineHardware) -> Option<EngineMaps> {
 
 /// Caches the maps baked for `hardware`.
 pub fn keep(hardware: &EngineHardware, maps: &EngineMaps) {
-    let _ = MAPS.save(&cache_name(hardware), &maps.to_text(hardware));
+    keep_text(maps::fingerprint(hardware), &maps.to_text(hardware));
+}
+
+/// Caches maps' text (`EngineMaps::to_text`) for the hardware with `fingerprint` (as the
+/// server sent them).
+pub fn keep_text(fingerprint: u64, text: &str) {
+    let _ = MAPS.save(&format!("{fingerprint:016x}"), text);
 }
 
 fn cache_name(hardware: &EngineHardware) -> String {

@@ -114,6 +114,25 @@ impl Wire for usize {
     }
 }
 
+/// Bytes of a big message (engine maps), up to `MAX_BLOB`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Blob(pub Vec<u8>);
+
+/// The most bytes in a `Blob`.
+pub const MAX_BLOB: usize = 8 << 20;
+
+impl Wire for Blob {
+    fn put(&self, out: &mut Vec<u8>) {
+        u32::try_from(self.0.len()).expect("too long").put(out);
+        out.extend_from_slice(&self.0);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        let n = r.get::<u32>()? as usize;
+        (n <= MAX_BLOB).then_some(())?;
+        Some(Self(r.take(n)?.to_vec()))
+    }
+}
+
 /// Text up to `MAX_TEXT` bytes.
 pub const MAX_TEXT: usize = 200;
 

@@ -144,6 +144,8 @@ pub struct TrafficPlugin;
 
 impl Plugin for TrafficPlugin {
     fn build(&self, app: &mut App) {
+        // The built-in catalogue, unless the server was given another.
+        #[cfg(not(target_arch = "wasm32"))]
         if !app.world().contains_resource::<Current>() {
             app.insert_resource(Current(crate::catalogue::builtin()));
         }
@@ -205,7 +207,7 @@ impl FactoryLooks {
             *self = Self(catalogue.fingerprint(), vec![None; catalogue.chassis.len()]);
         }
         let mut looks = self.1[chassis]
-            .get_or_insert_with(|| Looks::of(&CarSetup::factory_in(catalogue, chassis, 0)))
+            .get_or_insert_with(|| Looks::of(&CarSetup::to_look_at(catalogue, chassis, 0)))
             .clone();
         looks.build.paint = paint;
         looks

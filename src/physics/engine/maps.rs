@@ -87,6 +87,22 @@ pub struct EngineMaps {
 }
 
 impl EngineMaps {
+    /// Maps with nothing in them (zero everywhere), for a car only to be looked at: its
+    /// engine never runs on them.
+    pub fn blank() -> Self {
+        let table = |axes: usize| Table::bake(vec![vec![0.0]; axes], |_| 0.0);
+        Self {
+            ve: vec![table(5)],
+            mbt: table(2),
+            efficiency: table(2),
+            knock_limit: table(2),
+            exhaust_temperature: table(2),
+            heat_to_coolant: table(2),
+            peak_pressure: table(2),
+            friction: table(1),
+        }
+    }
+
     /// Bakes the maps by simulating cycles all over the grid (on all cores, where there
     /// are threads).
     pub fn bake(hardware: &EngineHardware) -> Self {

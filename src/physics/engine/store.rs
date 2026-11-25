@@ -1,5 +1,6 @@
 //! Where engine maps come from without baking: the maps of the built-in catalogue's
-//! factory engines come baked with the game (`baked/`), found by their fingerprint. After
+//! factory engines come baked with the game (`baked/`), found by their fingerprint; not on
+//! the web, which only plays on a server and gets them from it. After
 //! changing the cycle simulation, the maps' code or a factory engine, bake them again with
 //! `cargo test --profile release-dev bake_stock_maps -- --ignored` (a test checks they're
 //! current).
@@ -8,6 +9,7 @@ use super::hardware::EngineHardware;
 use super::maps::{EngineMaps, fingerprint};
 
 /// The maps baked with the game, by the factory code of their engine.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 const BAKED: [(&str, &str); 22] = [
     ("A10", include_str!("baked/a10.maps")),
     ("A10T", include_str!("baked/a10t.maps")),
@@ -33,8 +35,15 @@ const BAKED: [(&str, &str); 22] = [
     ("X25T", include_str!("baked/x25t.maps")),
 ];
 
+/// None on the web, which has no maps baked with it.
+#[cfg(all(not(test), target_arch = "wasm32"))]
+fn stock_text(_: u64) -> Option<&'static str> {
+    None
+}
+
 /// The text of the maps baked with the game for the hardware with `fingerprint`, if it's
 /// a factory engine's: found by the fingerprint in the text's first lines.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 fn stock_text(fingerprint: u64) -> Option<&'static str> {
     let tag = format!("fingerprint {fingerprint:016x}");
     (BAKED.iter())
@@ -45,6 +54,22 @@ fn stock_text(fingerprint: u64) -> Option<&'static str> {
 /// Whether the maps for `hardware` come baked with the game.
 pub fn is_stock(hardware: &EngineHardware) -> bool {
     stock_text(fingerprint(hardware)).is_some()
+}
+
+/// The maps baked with the game for the hardware with `fingerprint`, as compressed text
+/// for the network (see `unpack`).
+pub fn packed(fingerprint: u64) -> Option<Vec<u8>> {
+    let text = stock_text(fingerprint)?;
+    Some(miniz_oxide::deflate::compress_to_vec_zlib(
+        text.as_bytes(),
+        6,
+    ))
+}
+
+/// Maps' text from `packed`.
+pub fn unpack(bytes: &[u8]) -> Option<String> {
+    let text = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(bytes, 16 << 20).ok()?;
+    String::from_utf8(text).ok()
 }
 
 impl EngineMaps {
@@ -96,6 +121,18 @@ mod tests {
             let text = EngineMaps::bake(&hardware).to_text(&hardware);
             std::fs::write(&path, text).unwrap();
         }
+    }
+
+    #[test]
+    fn the_server_sends_the_stock_maps_packed() {
+        let hardware = Parts::stock().hardware();
+        let print = fingerprint(&hardware);
+        let bytes = packed(print).expect("a factory engine's");
+        let text = unpack(&bytes).expect("unpacks");
+        println!("{} bytes packed, {} as text", bytes.len(), text.len());
+        assert!(bytes.len() * 2 < text.len());
+        assert!(EngineMaps::from_text(&text, print).is_some());
+        assert_eq!(packed(print ^ 1), None);
     }
 
     #[test]

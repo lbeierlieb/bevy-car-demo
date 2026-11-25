@@ -122,6 +122,18 @@ pub struct Ecu {
     pub cams: CamControl,
 }
 
+/// The factory's idle speed for `hardware`: wild cams (on the profile it idles on) run too
+/// roughly for a low idle.
+fn idle_rpm(hardware: &EngineHardware) -> f32 {
+    850.0 + 12.5 * (hardware.cams[0].intake_duration - 240.0).max(0.0)
+}
+
+/// The factory's rev limit for `hardware` with a `model` ECU: without cam control, the
+/// valvetrain stays on the first profile.
+fn rev_limit(hardware: &EngineHardware, model: EcuModel) -> f32 {
+    hardware.safe_rpm(if model.cam_control() { usize::MAX } else { 0 })
+}
+
 /// When to switch cam profiles, and where to put the phasers.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CamControl {
@@ -149,6 +161,30 @@ pub struct EcuState {
 }
 
 impl Ecu {
+    /// A `model` ECU with nothing in its tables, for an engine only to be looked at (or
+    /// heard, by its idle speed and rev limit): it never runs one.
+    pub fn blank(hardware: &EngineHardware, model: EcuModel) -> Self {
+        let table = || Table::bake(vec![vec![0.0]; 2], |_| 0.0);
+        Self {
+            model,
+            displacement: hardware.displacement(),
+            cylinders: hardware.cylinders,
+            ve: table(),
+            lambda: table(),
+            spark: table(),
+            idle_rpm: idle_rpm(hardware),
+            rev_limit: rev_limit(hardware, model),
+            limiter_cut: 0.08,
+            limiter_fuel: 0.04,
+            cams: CamControl {
+                switch_rpm: f32::INFINITY,
+                switch_map: f32::INFINITY,
+                intake_phase: table(),
+                exhaust_phase: table(),
+            },
+        }
+    }
+
     /// A factory tune of a `model` ECU for the hardware: its VE table matches the engine,
     /// it runs λ = 1 at part load and richer towards full load, and the spark just short
     /// of MBT or of the knock limit on `octane` fuel, whichever comes first. With a turbo,
@@ -247,10 +283,8 @@ impl Ecu {
             lambda,
             ve,
             spark,
-            // Wild cams (on the profile it idles on) run too roughly for a low idle.
-            idle_rpm: 850.0 + 12.5 * (hardware.cams[0].intake_duration - 240.0).max(0.0),
-            // Without cam control, the valvetrain stays on the first profile.
-            rev_limit: hardware.safe_rpm(if model.cam_control() { usize::MAX } else { 0 }),
+            idle_rpm: idle_rpm(hardware),
+            rev_limit: rev_limit(hardware, model),
             limiter_cut: 0.08,
             limiter_fuel: 0.04,
         }

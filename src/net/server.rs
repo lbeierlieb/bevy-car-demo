@@ -74,6 +74,8 @@ pub struct ServerPlugin;
 
 impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
+        // The built-in catalogue, unless the server was given another.
+        #[cfg(not(target_arch = "wasm32"))]
         if !app.world().contains_resource::<Current>() {
             app.insert_resource(Current(crate::catalogue::builtin()));
         }
@@ -405,6 +407,13 @@ fn receive(
                     peer.revision += 1;
                 }
                 ToServer::Car(spec) => peer.shadow.set_spec(*spec, &mut baked),
+                ToServer::Maps { fingerprint } => {
+                    let text = crate::physics::engine::store::packed(fingerprint);
+                    peer.tell(&ToClient::Maps {
+                        fingerprint,
+                        text: text.map(super::wire::Blob),
+                    });
+                }
                 ToServer::Buy { chassis, engine } => {
                     let made = catalogue.chassis.get(chassis);
                     if let Some(made) = made.filter(|made| engine < made.engines.len()) {

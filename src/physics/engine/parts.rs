@@ -11,7 +11,7 @@ use super::families::{Family, Version, relative_size};
 use super::hardware::{
     CamProfile, Compressor, Diverter, EngineHardware, Intercooler, Turbine, Turbo, Wastegate,
 };
-use crate::catalogue::{self, Catalogue, Shared};
+use crate::catalogue::{Catalogue, Shared};
 
 /// A kind of part, and the parts there are of it (the first is stock).
 #[derive(Clone, Debug, PartialEq)]
@@ -441,11 +441,13 @@ impl Parts {
     }
 
     /// The factory version with the code `code` in the built-in catalogue.
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub fn factory(code: &str) -> Option<Self> {
-        Self::factory_in(&catalogue::builtin(), code)
+        Self::factory_in(&crate::catalogue::builtin(), code)
     }
 
     /// The stock naturally aspirated 2-litre four (of the built-in catalogue).
+    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub fn stock() -> Self {
         Self::factory("W20").expect("the 2-litre four")
     }

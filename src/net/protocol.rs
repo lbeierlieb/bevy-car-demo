@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 
-use super::wire::{Reader, Wire};
+use super::wire::{Blob, Reader, Wire};
 use crate::audio::{EngineCharacter, EngineRun, ExhaustSound};
 use crate::car::DriverInput;
 use crate::catalogue::Shared;
@@ -39,7 +39,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 25;
+pub const PROTOCOL: u32 = 26;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -86,6 +86,11 @@ pub enum ToServer {
     Buy {
         chassis: usize,
         engine: usize,
+    },
+    /// The maps of the engine whose hardware has `fingerprint` (`maps::fingerprint`), if
+    /// the server has them (a factory engine's).
+    Maps {
+        fingerprint: u64,
     },
     /// The driver's input in the simulation steps up to `last`, the latest last (the
     /// last few each time, so a lost message loses nothing).
@@ -177,6 +182,12 @@ pub enum ToClient {
     /// Our car is now built as this (on joining, lent for a round or given back, bought);
     /// its state comes in `Yours`.
     YourCar(Box<CarSpec>),
+    /// The engine maps asked for (`maps::EngineMaps::to_text`, zlib-compressed), or none
+    /// if the server hasn't got them.
+    Maps {
+        fingerprint: u64,
+        text: Option<Blob>,
+    },
 }
 
 /// A player's car's whole state as the server drives it: after their step `step`, with
@@ -334,6 +345,10 @@ impl Wire for ToServer {
                 chassis.put(out);
                 engine.put(out);
             }
+            ToServer::Maps { fingerprint } => {
+                10u8.put(out);
+                fingerprint.put(out);
+            }
         }
     }
 
@@ -364,6 +379,9 @@ impl Wire for ToServer {
             9 => ToServer::Buy {
                 chassis: r.get()?,
                 engine: r.get()?,
+            },
+            10 => ToServer::Maps {
+                fingerprint: r.get()?,
             },
             _ => return None,
         })
@@ -469,6 +487,11 @@ impl Wire for ToClient {
                 19u8.put(out);
                 spec.put(out);
             }
+            ToClient::Maps { fingerprint, text } => {
+                20u8.put(out);
+                fingerprint.put(out);
+                text.put(out);
+            }
         }
     }
 
@@ -517,6 +540,10 @@ impl Wire for ToClient {
             }),
             Self::CATALOGUE => ToClient::Catalogue(Arc::new(r.get()?)),
             19 => ToClient::YourCar(Box::new(r.get()?)),
+            20 => ToClient::Maps {
+                fingerprint: r.get()?,
+                text: r.get()?,
+            },
             _ => return None,
         })
     }

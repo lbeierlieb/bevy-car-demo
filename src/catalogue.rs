@@ -8,21 +8,28 @@
 //! have the same catalogue.
 //!
 //! The catalogue made with the game is `builtin`: the server's, unless it's given another
-//! (see `chassis`, `engines` and `parts` for its entries).
+//! (see `chassis`, `engines` and `parts` for its entries). It isn't in the web build: a
+//! browser only ever joins a server, so it has no use for it, and leaving it out shows
+//! that the game's code needs no catalogue of its own.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use crate::chassis::{Chassis, Gearbox};
 use crate::physics::engine::families::Family;
 use crate::physics::engine::parts::Slot;
 use crate::physics::tire::Compound;
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 mod chassis;
+#[cfg(any(test, not(target_arch = "wasm32")))]
 mod engines;
+#[cfg(any(test, not(target_arch = "wasm32")))]
 mod parts;
 mod wire;
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub use chassis::DEFAULT_CHASSIS;
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub use parts::{HEADERS, INTERCOOLER, PISTONS, TURBO};
 
 /// A catalogue shared by the cars built from it.
@@ -188,7 +195,9 @@ impl std::fmt::Debug for Catalogue {
 }
 
 /// The catalogue made with the game.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub fn builtin() -> Shared {
+    use std::sync::LazyLock;
     static BUILTIN: LazyLock<Shared> = LazyLock::new(|| {
         Arc::new(Catalogue::new(
             chassis::chassis(),
