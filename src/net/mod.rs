@@ -198,9 +198,12 @@ mod tests {
         terrain: Terrain,
     ) -> App {
         let car = Car::spawn_at(0, CarSetup::factory(chassis, 0), &terrain, at.x, at.y, 0.0);
-        let connection = Connection::new(listener.connect(), name, &terrain);
+        let mut connection = Connection::new(listener.connect(), name, &terrain);
+        // That car, from the showroom (the server gives everyone its first car).
+        connection.say(&protocol::ToServer::Buy { chassis, engine: 0 });
         let mut app = app_on(terrain);
-        app.add_plugins(ClientPlugin)
+        app.add_systems(Update, crate::looks::show_cars)
+            .add_plugins(ClientPlugin)
             .init_resource::<ActiveCar>()
             .insert_resource(connection);
         app.world_mut().spawn((
@@ -1347,8 +1350,7 @@ mod tests {
         // Driving, so the server has their cars too.
         let driving = |mut app: App| {
             app.add_plugins((crate::sim::SimPlugin, crate::car::CarPlugin))
-                .init_resource::<crate::input::WheelInput>()
-                .add_systems(Update, crate::looks::show_cars);
+                .init_resource::<crate::input::WheelInput>();
             app
         };
         let mut anna = driving(hunter(&listener, "Anna", 0.0));
@@ -1673,27 +1675,6 @@ mod tests {
         assert_eq!(round(all[2]).unwrap().best, after.best);
     }
 
-    /// A car the server's catalogues don't have (a newer game's) gets a clear refusal.
-    #[test]
-    fn a_car_the_server_doesnt_know_is_refused_with_a_reason() {
-        let listener = LoopbackListener::default();
-        let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
-        let entity = (anna.world_mut().query_filtered::<Entity, With<Car>>())
-            .single(anna.world())
-            .unwrap();
-        anna.world_mut()
-            .get_mut::<Looks>(entity)
-            .unwrap()
-            .build
-            .chassis = crate::catalogue::builtin().chassis.len();
-        run(&mut [&mut server, &mut anna], 10);
-        let Status::Refused(why) = &connection(&anna).status else {
-            panic!("{:?}", connection(&anna).status);
-        };
-        assert!(why.contains("doesn't know your car"), "{why}");
-    }
-
     /// A link that hands over what came in with the datagrams first (states and traffic
     /// overtaking the stream, as they may on the internet).
     struct Overtaking {
@@ -1741,7 +1722,8 @@ mod tests {
         let mut ben = app();
         let terrain = Terrain::flat();
         let car = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, 30.0, 0.0, 0.0);
-        ben.add_plugins(ClientPlugin)
+        ben.add_systems(Update, crate::looks::show_cars)
+            .add_plugins(ClientPlugin)
             .init_resource::<ActiveCar>()
             .insert_resource(Connection::new(link, "Ben", &terrain));
         ben.world_mut().spawn((

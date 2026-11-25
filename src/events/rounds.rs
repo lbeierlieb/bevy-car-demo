@@ -12,6 +12,7 @@ use super::race::{self, BEST_KEPT, Best, COUNTDOWN, Course, FINISH_GRACE, MAX_RA
 use super::round::{Action, Game, Outcome, Phase, Play, Round};
 use super::{Event, EventKind, marker_spot, start_spot};
 use crate::car::{CarSetup, ResetRule};
+use crate::catalogue::Current;
 use crate::heli::{Chase, HeliPose};
 use crate::net::protocol::CarId;
 use crate::net::protocol::{CarState, PlayerId, ToClient};
@@ -135,7 +136,7 @@ pub fn run_rounds(
     server: Res<Server>,
     mut traffic: ResMut<Traffic>,
     (time, fixed, terrain): (Res<Time<Real>>, Res<Time<Fixed>>, Res<Terrain>),
-    network: Option<Res<Network>>,
+    (network, catalogue): (Option<Res<Network>>, Res<Current>),
     mut actions: MessageReader<EventAction>,
     mut peers: Query<(Entity, &mut Peer, Option<&Realm>)>,
 ) {
@@ -608,10 +609,13 @@ pub fn run_rounds(
                             parked: live.round.game.race().is_none(),
                             hold: live.round.hold(peer.id),
                         };
-                        match (live.round).lent_chassis(&crate::catalogue::builtin(), peer.id) {
+                        match live.round.lent_chassis(&catalogue, peer.id) {
                             Some(chassis) => {
-                                let spec = CarSpec::of(&CarSetup::factory(chassis, 0));
-                                peer.shadow.lend(spec, &terrain, spot);
+                                let car = CarSetup::factory_in(&catalogue, chassis, 0);
+                                let spec = CarSpec::of(&car);
+                                if let Some(lent) = peer.shadow.lend(spec, &terrain, spot) {
+                                    peer.tell(&ToClient::YourCar(Box::new(lent)));
+                                }
                             }
                             None => peer.shadow.put(&terrain, spot),
                         }
@@ -632,7 +636,9 @@ pub fn run_rounds(
                             parked: true,
                             hold: 0.0,
                         };
-                        peer.shadow.give_back(&terrain, spot);
+                        if let Some(own) = peer.shadow.give_back(&terrain, spot) {
+                            peer.tell(&ToClient::YourCar(Box::new(own)));
+                        }
                     }
                 }
             }

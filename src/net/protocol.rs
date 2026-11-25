@@ -17,11 +17,14 @@
 //! server has chat on (it says so in its welcome), players' chat messages go to everyone,
 //! with the server's own lines (who joined and left) among them.
 
+use std::sync::Arc;
+
 use bevy::prelude::*;
 
 use super::wire::{Reader, Wire};
 use crate::audio::{EngineCharacter, EngineRun, ExhaustSound};
 use crate::car::DriverInput;
+use crate::catalogue::Shared;
 use crate::chassis::{CarBuild, FACTORY_TOE};
 use crate::events::Event;
 use crate::events::round::{Action, Round};
@@ -36,7 +39,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 24;
+pub const PROTOCOL: u32 = 25;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -75,9 +78,15 @@ pub enum ToServer {
     Chat(String),
     /// About the events: into a lobby, out, the hunted's settings and choices.
     Event(Action),
-    /// What our car is built of, whole, whenever it changes (for the server to drive the
-    /// same car).
+    /// What our car is built of, whole, whenever it changes in a shop (for the server to
+    /// drive the same car).
     Car(Box<CarSpec>),
+    /// A car from the showroom: the catalogue's `chassis` with its factory engine
+    /// `engine`, as it leaves the factory.
+    Buy {
+        chassis: usize,
+        engine: usize,
+    },
     /// The driver's input in the simulation steps up to `last`, the latest last (the
     /// last few each time, so a lost message loses nothing).
     Inputs {
@@ -163,6 +172,11 @@ pub enum ToClient {
     /// Our car's whole state as the server drives it, ten times a second, and at once
     /// when the server moved it.
     Yours(Yours),
+    /// What cars and parts there are, told after the welcome: every car is built from it.
+    Catalogue(Shared),
+    /// Our car is now built as this (on joining, lent for a round or given back, bought);
+    /// its state comes in `Yours`.
+    YourCar(Box<CarSpec>),
 }
 
 /// A player's car's whole state as the server drives it: after their step `step`, with
@@ -192,6 +206,8 @@ impl ToServer {
 impl ToClient {
     /// The first byte of a `Looks` message.
     pub const LOOKS: u8 = 4;
+    /// The first byte of a `Catalogue` message.
+    pub const CATALOGUE: u8 = 18;
 
     pub fn reliable(&self) -> bool {
         !matches!(
@@ -313,6 +329,11 @@ impl Wire for ToServer {
                 step.put(out);
                 state.put(out);
             }
+            ToServer::Buy { chassis, engine } => {
+                9u8.put(out);
+                chassis.put(out);
+                engine.put(out);
+            }
         }
     }
 
@@ -339,6 +360,10 @@ impl Wire for ToServer {
             8 => ToServer::Place {
                 step: r.get()?,
                 state: r.get()?,
+            },
+            9 => ToServer::Buy {
+                chassis: r.get()?,
+                engine: r.get()?,
             },
             _ => return None,
         })
@@ -436,6 +461,14 @@ impl Wire for ToClient {
                 yours.notice.put(out);
                 yours.state.put(out);
             }
+            ToClient::Catalogue(catalogue) => {
+                Self::CATALOGUE.put(out);
+                catalogue.put(out);
+            }
+            ToClient::YourCar(spec) => {
+                19u8.put(out);
+                spec.put(out);
+            }
         }
     }
 
@@ -482,6 +515,8 @@ impl Wire for ToClient {
                 notice: r.get()?,
                 state: r.get()?,
             }),
+            Self::CATALOGUE => ToClient::Catalogue(Arc::new(r.get()?)),
+            19 => ToClient::YourCar(Box::new(r.get()?)),
             _ => return None,
         })
     }

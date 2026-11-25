@@ -22,14 +22,15 @@ use super::protocol::{
 };
 use super::wire::{decode_with, encode};
 use super::{ClockOffset, SEND_RATE};
-use crate::car::{ActiveCar, Car, DriverInput, ServerDriven, Spectating, StepInput};
-use crate::catalogue::Current;
+use crate::car::{ActiveCar, Car, DriverInput, ServerDriven, Spectating, StepInput, heading};
+use crate::catalogue::{Current, Shared};
 use crate::events::Event;
 use crate::events::round::{Action, Round};
 use crate::heli::HeliPose;
 use crate::looks::{Ghost, Looks, Motion};
 use crate::physics::collision::Obb;
 use crate::physics::collision::{self, OBSTACLE};
+use crate::physics::engine::maps::EngineMaps;
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
 use crate::spec::CarSpec;
@@ -91,13 +92,11 @@ pub struct ClientPlugin;
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
-        if !app.world().contains_resource::<Current>() {
-            app.insert_resource(Current(crate::catalogue::builtin()));
-        }
         app.add_systems(
             Update,
             (
                 receive,
+                take_your_car,
                 super::predict::reconcile,
                 pace,
                 dress_cars,
@@ -130,6 +129,53 @@ impl Plugin for ClientPlugin {
             FixedLast,
             (super::predict::note_step, take_check).run_if(resource_exists::<Connection>),
         );
+    }
+}
+
+/// Builds the car the server said ours is now: in place of the active car (where it is,
+/// keeping the driver's settings), or the first one, by the spawn. The server's state of
+/// it follows (`Yours`).
+fn take_your_car(
+    mut commands: Commands,
+    mut connection: ResMut<Connection>,
+    terrain: Res<Terrain>,
+    active: Res<ActiveCar>,
+    mut cars: Query<(Entity, &mut Car)>,
+) {
+    let Some(spec) = connection.your_car.take() else {
+        return;
+    };
+    let ours = cars.iter_mut().find(|(_, car)| car.index == active.0);
+    if ours.is_some_and(|(_, car)| CarSpec::of(&car.setup) == spec) {
+        return;
+    }
+    let hardware = spec.parts.hardware();
+    let maps = crate::workshop::at_hand(&hardware).unwrap_or_else(|| {
+        let maps = EngineMaps::bake(&hardware);
+        crate::workshop::keep(&hardware, &maps);
+        maps
+    });
+    let setup = spec.setup_with(maps);
+    match cars.iter_mut().find(|(_, car)| car.index == active.0) {
+        Some((_, mut car)) if car.setup.build == setup.build => {
+            let rebuilt = car.rebuilt(setup);
+            *car = rebuilt;
+        }
+        Some((entity, car)) => {
+            // The body and wheels are the old entity's children: a new car takes its place.
+            let (at, yaw) = (car.body.position, heading(car.body.rotation));
+            let mut new = Car::spawn_at(car.index, setup, &terrain, at.x, at.z, yaw);
+            new.keep_settings(&car);
+            new.drivetrain.neutral();
+            commands.entity(entity).despawn();
+            commands.spawn((Transform::from_translation(new.body.position), new));
+        }
+        None => {
+            let (p, yaw) = terrain.road_spawns(&connection.spawn, 1, 0.0)[0];
+            let mut car = Car::spawn_at(active.0, setup, &terrain, p.x, p.y, yaw);
+            car.drivetrain.neutral();
+            commands.spawn((Transform::from_translation(car.body.position), car));
+        }
     }
 }
 
@@ -194,8 +240,12 @@ pub struct Connection {
     /// The looks last sent of our car, and when its state was (s).
     sent_looks: Option<Looks>,
     sent: f64,
-    /// What our car was built of when last sent.
+    /// What our car was built of when last sent (or as the server built it).
     sent_spec: Option<CarSpec>,
+    /// What cars and parts there are, as the server told us (none before it has).
+    pub catalogue: Option<Shared>,
+    /// The car the server said ours is now, until it's built (`take_your_car`).
+    pub your_car: Option<CarSpec>,
     /// The driver's latest inputs by step, the latest last, and the last step sent.
     inputs: VecDeque<(u32, DriverInput)>,
     inputs_sent: Option<u32>,
@@ -246,6 +296,8 @@ impl Connection {
             sent_looks: None,
             sent: f64::NEG_INFINITY,
             sent_spec: None,
+            catalogue: None,
+            your_car: None,
             inputs: VecDeque::new(),
             inputs_sent: None,
             check: None,
@@ -260,7 +312,7 @@ impl Connection {
         connection
     }
 
-    fn say(&mut self, message: &ToServer) {
+    pub fn say(&mut self, message: &ToServer) {
         self.link.send(message.reliable(), encode(message));
     }
 
@@ -346,7 +398,7 @@ fn receive(
     mut commands: Commands,
     mut connection: ResMut<Connection>,
     mut prediction: ResMut<Prediction>,
-    (time, catalogue): (Res<Time<Real>>, Option<Res<Current>>),
+    time: Res<Time<Real>>,
     mut cars: Query<(Entity, &mut RemoteCar, Option<&Looks>, Option<&Tag>)>,
 ) {
     let now = now(&time);
@@ -355,16 +407,8 @@ fn receive(
     // of one can come in a frame).
     let mut fresh: Vec<(CarId, VecDeque<CarState>)> = Vec::new();
     while let Some(bytes) = connection.link.receive() {
-        let catalogue = catalogue.as_ref().map(|catalogue| &catalogue.0);
-        let Some(message) = decode_with::<ToClient>(&bytes, catalogue) else {
-            if bytes.first() == Some(&ToClient::LOOKS) {
-                warn!(
-                    "The server sent a car this game doesn't know (it's from a newer \
-                     version): it isn't shown"
-                );
-            } else {
-                warn!("The server sent something unreadable");
-            }
+        let Some(message) = decode_with::<ToClient>(&bytes, connection.catalogue.as_ref()) else {
+            warn!("The server sent something unreadable");
             continue;
         };
         match message {
@@ -473,6 +517,15 @@ fn receive(
                 for player in players {
                     connection.map.insert(player.id, (player, now));
                 }
+            }
+            ToClient::Catalogue(catalogue) => {
+                commands.insert_resource(Current(catalogue.clone()));
+                connection.catalogue = Some(catalogue);
+            }
+            ToClient::YourCar(spec) => {
+                // Built as told: nothing to tell the server of it.
+                connection.sent_spec = Some((*spec).clone());
+                connection.your_car = Some(*spec);
             }
             ToClient::Shops(shops) => connection.shops = shops,
             ToClient::Events(events) => connection.events = events,

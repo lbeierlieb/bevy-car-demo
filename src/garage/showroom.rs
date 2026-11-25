@@ -17,7 +17,7 @@ use bevy::prelude::*;
 use bevy_egui::egui::{self, Align2, Color32, FontId, Stroke};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
-use super::{Garage, Showroom, brochure, start};
+use super::{Garage, Showroom, brochure};
 use crate::audio::{EngineAudio, EngineRun};
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car, CarSetup};
@@ -25,6 +25,8 @@ use crate::catalogue::Current;
 use crate::chassis::CarBuild;
 use crate::looks::{Looks, Motion};
 use crate::menu::kit::{self, Panel, Place};
+use crate::net::client::Connection;
+use crate::net::protocol::ToServer;
 use crate::shops::{AtShop, SceneBack, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
 use crate::traffic::FactoryLooks;
@@ -78,11 +80,12 @@ impl Plugin for ShowroomPlugin {
                     leave_when_gone,
                     (show, run_engine, look.after(crate::camera::follow)).run_if(in_hall),
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(resource_exists::<Garage>),
             )
             .add_systems(
                 EguiPrimaryContextPass,
-                (shop, (sign, window).run_if(in_hall)),
+                (shop, (sign, window).run_if(in_hall)).run_if(resource_exists::<Garage>),
             );
     }
 }
@@ -106,8 +109,9 @@ struct Hall {
     running: bool,
     rpm: f32,
     clock: f32,
-    /// A car bought, its engine's maps still baking: out of the showroom once it's built.
-    buying: bool,
+    /// A car asked the server for (chassis, engine option): out of the showroom once ours is
+    /// built as it.
+    buying: Option<(usize, usize)>,
 }
 
 fn in_hall(hall: Res<Hall>) -> bool {
@@ -941,15 +945,15 @@ fn sign(
 fn window(
     mut commands: Commands,
     mut contexts: EguiContexts,
-    terrain: Res<Terrain>,
+    connection: Option<ResMut<Connection>>,
     (mut hall, mut garage): (ResMut<Hall>, ResMut<Garage>),
     things: Query<Entity, With<InHall>>,
     active: Res<ActiveCar>,
-    mut cars: Query<(Entity, &mut Car)>,
+    cars: Query<&Car>,
     (mut away, mut audio): (ResMut<Away>, ResMut<EngineAudio>),
     (mut cameras, mut back): (Query<(&ChaseCamera, &mut Projection)>, ResMut<SceneBack>),
 ) -> Result {
-    let Some((entity, mut car)) = super::active(&mut cars, active.0) else {
+    let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return Ok(());
     };
     let catalogue = car.setup.build.catalogue.clone();
@@ -975,10 +979,10 @@ fn window(
                 .collect();
             kit::choice(ui, "Engine", &mut shown.engine, &engines);
             drive = ui
-                .add_enabled_ui(!hall.buying, |ui| kit::button(ui, "Drive it"))
+                .add_enabled_ui(hall.buying.is_none(), |ui| kit::button(ui, "Drive it"))
                 .inner
                 .clicked();
-            if hall.buying {
+            if hall.buying.is_some() {
                 kit::note(ui, "Getting it ready…");
             } else if !garage.status.is_empty() {
                 kit::note(ui, &garage.status);
@@ -997,19 +1001,23 @@ fn window(
                 out = true;
             }
         });
-    if drive {
-        let build = CarBuild::factory_in(&catalogue, shown.chassis);
-        let parts = build.factory_engine(shown.engine);
-        garage.draft = (build, parts);
-        garage.car = Some(car.index);
-        garage.retune = true;
-        start(&mut commands, &terrain, &mut garage, entity, &mut car);
-        hall.buying = true;
+    if drive && let Some(mut connection) = connection {
+        // The server builds it, and tells us (`YourCar`).
+        connection.say(&ToServer::Buy {
+            chassis: shown.chassis,
+            engine: shown.engine,
+        });
+        hall.buying = Some((shown.chassis, shown.engine));
     }
     garage.showroom = shown;
-    // Bought: straight into the new car, once it's built (at once, unless its maps bake).
-    if hall.buying && garage.job.is_none() {
-        out = true;
+    // Bought: straight into the new car, once it's ours.
+    if let Some((chassis, engine)) = hall.buying {
+        let build = CarBuild::factory_in(&catalogue, chassis);
+        let parts = build.factory_engine(engine);
+        if car.setup.build == build && car.setup.engine.parts == parts {
+            hall.buying = None;
+            out = true;
+        }
     }
     if out {
         leave(

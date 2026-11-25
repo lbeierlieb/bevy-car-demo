@@ -67,9 +67,13 @@ impl Plugin for BayPlugin {
                     leave_when_gone,
                     (show, refit, look.after(crate::camera::follow)).run_if(in_bay),
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(resource_exists::<Garage>),
             )
-            .add_systems(EguiPrimaryContextPass, (shop, window.run_if(in_bay)));
+            .add_systems(
+                EguiPrimaryContextPass,
+                (shop, window.run_if(in_bay)).run_if(resource_exists::<Garage>),
+            );
     }
 }
 

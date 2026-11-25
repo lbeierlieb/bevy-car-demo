@@ -27,6 +27,7 @@ use super::protocol::{
 use super::shadow::{BakedMaps, Shadow, Spot, Tick};
 use super::wire::{decode_with, encode};
 use super::{ClockOffset, NEAR, RATES, SEND_RATE};
+use crate::car::CarSetup;
 use crate::catalogue::Current;
 use crate::events::Event;
 use crate::events::rounds::{EventAction, Rounds, run_rounds};
@@ -36,6 +37,7 @@ use crate::online::join_spot;
 use crate::physics::collision::{self, OBSTACLE};
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
+use crate::spec::CarSpec;
 use crate::terrain::{Spawn, Terrain};
 use crate::traffic::network::Network;
 use crate::traffic::{Anchor, CarNumbers, Realm, Traffic, TrafficCar, Visitor};
@@ -292,14 +294,7 @@ fn receive(
     for (entity, mut peer, mut transform, realm) in &mut peers {
         while let Some(bytes) = peer.link.receive() {
             let Some(message) = decode_with::<ToServer>(&bytes, Some(&catalogue)) else {
-                // Looks out of our catalogues come from a newer game (a car or part the
-                // server's version doesn't have yet): say so.
-                let why = if bytes.first() == Some(&ToServer::LOOKS) {
-                    "The server doesn't know your car: it runs an older version of the game \
-                     and needs updating"
-                } else {
-                    "Your game sent something the server couldn't read"
-                };
+                let why = "Your game sent something the server couldn't read";
                 warn!("Player {}: {why}; dropped", peer.id);
                 peer.tell(&ToClient::Refused(why.to_string()));
                 peer.link.close();
@@ -366,6 +361,11 @@ fn receive(
                         chat: server.chat,
                         spawn: server.spawn,
                     });
+                    // What there is, and the car they start in.
+                    peer.tell(&ToClient::Catalogue(catalogue.0.clone()));
+                    let spec = CarSpec::of(&CarSetup::factory_in(&catalogue, catalogue.start, 0));
+                    peer.shadow.set_spec(spec.clone(), &mut baked);
+                    peer.tell(&ToClient::YourCar(Box::new(spec)));
                     peer.tell(&ToClient::Shops(server.shops.clone()));
                     peer.tell(&ToClient::Events(server.events.clone()));
                     joined.push((id, name.clone()));
@@ -405,6 +405,16 @@ fn receive(
                     peer.revision += 1;
                 }
                 ToServer::Car(spec) => peer.shadow.set_spec(*spec, &mut baked),
+                ToServer::Buy { chassis, engine } => {
+                    let made = catalogue.chassis.get(chassis);
+                    if let Some(made) = made.filter(|made| engine < made.engines.len()) {
+                        let car = CarSetup::factory_in(&catalogue, chassis, engine);
+                        let spec = CarSpec::of(&car);
+                        info!("Player {} took a {} from the showroom", peer.id, made.name);
+                        peer.shadow.set_spec(spec.clone(), &mut baked);
+                        peer.tell(&ToClient::YourCar(Box::new(spec)));
+                    }
+                }
                 ToServer::Inputs { last, inputs } => {
                     if !inputs.is_empty() {
                         peer.shadow.take_inputs(last, &inputs, tick.0);

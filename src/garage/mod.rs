@@ -14,7 +14,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::car::{Car, CarSetup, heading};
+use crate::car::{ActiveCar, Car, CarSetup, heading};
 use crate::catalogue::{Catalogue, Shared};
 use crate::chassis::{BRAKE_BALANCES, BRAKE_FORCES, CarBuild, PRESSURES, TOES};
 use crate::menu::kit;
@@ -36,9 +36,8 @@ pub struct GaragePlugin;
 
 impl Plugin for GaragePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Garage>()
-            .add_plugins((bay::BayPlugin, showroom::ShowroomPlugin))
-            .add_systems(Update, bake);
+        app.add_plugins((bay::BayPlugin, showroom::ShowroomPlugin))
+            .add_systems(Update, (open, bake.run_if(resource_exists::<Garage>)));
     }
 }
 
@@ -64,21 +63,38 @@ struct Showroom {
     engine: usize,
 }
 
-impl Default for Garage {
-    fn default() -> Self {
-        let stock = CarSetup::default();
+impl Garage {
+    /// The shops, the draft taken from `car`.
+    fn new(car: &Car) -> Self {
+        let setup = &car.setup;
         Self {
             showroom: Showroom {
-                chassis: stock.build.chassis,
+                chassis: setup.build.chassis,
                 engine: 0,
             },
             car: None,
-            same_wheels: stock.build.wheels[0] == stock.build.wheels[1],
-            draft: (stock.build, stock.engine.parts),
+            same_wheels: setup.build.wheels[0] == setup.build.wheels[1],
+            draft: (setup.build.clone(), setup.engine.parts.clone()),
             retune: true,
             job: None,
             status: String::new(),
         }
+    }
+}
+
+/// The shops open once there's a car (the server's first, in its catalogue): again when
+/// the catalogue changes (another server).
+fn open(
+    mut commands: Commands,
+    garage: Option<Res<Garage>>,
+    active: Res<ActiveCar>,
+    cars: Query<&Car>,
+) {
+    let Some(car) = cars.iter().find(|car| car.index == active.0) else {
+        return;
+    };
+    if garage.is_none_or(|garage| garage.draft.0.catalogue != car.setup.build.catalogue) {
+        commands.insert_resource(Garage::new(car));
     }
 }
 

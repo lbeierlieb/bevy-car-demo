@@ -19,8 +19,7 @@ fn main() {
             shops::ShopsPlugin,
             // The events a server puts on the map: a car hunt (none alone).
             events::EventsPlugin,
-            // Starts in the coupé; R puts the car back on the nearest road.
-            car::DefaultCarPlugin,
+            // (The car is the server's to give: `net::client::take_your_car`.)
             // 1: gizmos, 2: the panel with telemetry, driving aids and bindings (hidden
             // at first).
             debug::DebugPlugin,

@@ -16,7 +16,7 @@ use super::hunt::{CAUGHT_TIME, Cars, Catch};
 use super::race::{COUNTDOWN, Course};
 use super::round::{Action, Game, Phase, Play, Round};
 use super::{EventKind, Events, marker_spot, start_spot};
-use crate::car::{ActiveCar, Car, CarSetup, Held};
+use crate::car::{ActiveCar, Car, Held};
 use crate::menu::kit::{self, Panel, Place};
 use crate::menu::nav::MenuInput;
 use crate::net::protocol::PlayerId;
@@ -63,8 +63,6 @@ type CourseKey = (u16, u8, u8);
 pub struct EventState {
     /// The round as last seen, to notice it starting and ending.
     seen: Option<Round>,
-    /// Our own car while a lent one is driven.
-    lent: Option<Car>,
     /// An event left while on its marker: not gone into again until the car is off it.
     pub(super) left: Option<usize>,
     /// When we last asked to go in (s, `Time<Real>`).
@@ -93,7 +91,6 @@ impl Default for EventState {
     fn default() -> Self {
         Self {
             seen: None,
-            lent: None,
             left: None,
             asked: f64::NEG_INFINITY,
             stood: None,
@@ -249,13 +246,12 @@ fn report_touches(
 /// ends (or we left), our own car is back by the marker.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn follow(
-    mut commands: Commands,
     connection: Res<Connection>,
     mut state: ResMut<EventState>,
     terrain: Res<Terrain>,
     network: Option<Res<Network>>,
     active: Res<ActiveCar>,
-    mut cars: Query<(Entity, &mut Car)>,
+    mut cars: Query<&mut Car>,
     (mut held, mut ghost_players): (ResMut<Held>, ResMut<GhostPlayers>),
     time: Res<Time<Real>>,
 ) {
@@ -293,43 +289,25 @@ pub(super) fn follow(
                 you,
             )
         });
-        if let (Some((p, yaw)), Some((entity, mut car))) = (
-            place,
-            cars.iter_mut().find(|(_, car)| car.index == active.0),
-        ) {
-            if let Some(chassis) = round.lent_chassis(&crate::catalogue::builtin(), you) {
-                // A factory car for the round; ours waits (the server builds the same).
-                let setup = CarSetup::factory(chassis, 0);
-                let mut lent = Car::spawn_at(car.index, setup, &terrain, p.x, p.y, yaw);
-                lent.drivetrain.neutral();
-                lent.keep_settings(&car);
-                lent.hold = round.hold(you);
-                state.lent = Some(car.clone());
-                commands.entity(entity).despawn();
-                commands.spawn((Transform::from_translation(lent.body.position), lent));
-            } else {
-                car.place(&terrain, p, yaw);
-                car.hold = round.hold(you);
-                // On a grid, held for the countdown: off at the green light.
-                if round.game.race().is_some() {
-                    car.parking_brake = false;
-                }
+        // (A car lent for the round comes from the server, `YourCar`, built where ours is.)
+        if let (Some((p, yaw)), Some(mut car)) =
+            (place, cars.iter_mut().find(|car| car.index == active.0))
+        {
+            car.place(&terrain, p, yaw);
+            car.hold = round.hold(you);
+            // On a grid, held for the countdown: off at the green light.
+            if round.game.race().is_some() {
+                car.parking_brake = false;
             }
         }
     }
     if was_running && !running {
         // Back by the marker of the round we were in.
         let back = round.as_ref().or(state.seen.as_ref()).and_then(spot);
-        let active_car = cars.iter_mut().find(|(_, car)| car.index == active.0);
-        if let Some((entity, mut car)) = active_car {
+        // (Our own car instead of a lent one comes from the server, `YourCar`.)
+        if let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) {
             let (p, yaw) = back.unwrap_or((car.body.position.xz(), 0.0));
-            if let Some(mut own) = state.lent.take() {
-                own.place(&terrain, p, yaw);
-                commands.entity(entity).despawn();
-                commands.spawn((Transform::from_translation(own.body.position), own));
-            } else {
-                car.place(&terrain, p, yaw);
-            }
+            car.place(&terrain, p, yaw);
         }
     }
     if running != was_running {

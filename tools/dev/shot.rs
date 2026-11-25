@@ -127,7 +127,8 @@ fn say(mut frame: Local<u32>, connection: Option<ResMut<crate::net::Connection>>
 /// The controls screen is closed unless INTRO=1, the start menu unless MENU=1;
 /// JOIN="address" joins that server as NAME (or "Shot") at once, else the shot plays
 /// alone (on the game's own server), unless OFFLINE=1 or LINEUP (no server at all: a
-/// join would move the car).
+/// join would move the car; OFFLINE drives the built-in catalogue's first car, as no
+/// server gives one).
 fn start_online(
     mut commands: Commands,
     mut done: Local<bool>,
@@ -154,10 +155,12 @@ fn start_online(
         let link = crate::net::connect(&address);
         commands.insert_resource(crate::net::Connection::new(link, &name, &terrain));
         menu.open = false;
-    } else if std::env::var("MENU").is_err()
-        && std::env::var("OFFLINE").is_err()
-        && std::env::var("LINEUP").is_err()
-    {
+    } else if std::env::var("OFFLINE").is_ok() {
+        let (p, yaw) = terrain.road_spawns(&crate::terrain::Spawn::DEFAULT, 1, 0.0)[0];
+        let setup = crate::car::CarSetup::default();
+        let car = crate::car::Car::spawn_at(0, setup, &terrain, p.x, p.y, yaw);
+        commands.spawn((Transform::from_translation(car.body.position), car));
+    } else if std::env::var("MENU").is_err() && std::env::var("LINEUP").is_err() {
         crate::online::play_alone(&mut commands, &mut menu, &terrain);
     }
 }
@@ -266,11 +269,13 @@ fn key(c: char) -> KeyCode {
     }
 }
 
-/// CAR="chassis[,engine]": start in that car of the catalogue (its place in `CHASSIS`, and
-/// the factory's engine option for it).
+/// CAR="chassis[,engine]": start in that car of the catalogue (its place in it, and the
+/// factory's engine option for it): from the server's showroom, or offline the built-in
+/// catalogue's.
 fn pick_car(
     mut commands: Commands,
     terrain: Res<crate::terrain::Terrain>,
+    connection: Option<ResMut<crate::net::Connection>>,
     cars: Query<(Entity, &crate::car::Car)>,
     mut done: Local<bool>,
 ) {
@@ -284,6 +289,13 @@ fn pick_car(
         return;
     }
     let v: Vec<usize> = spec.split(',').map(|s| s.parse().unwrap()).collect();
+    if let Some(mut connection) = connection {
+        connection.say(&crate::net::protocol::ToServer::Buy {
+            chassis: v[0],
+            engine: *v.get(1).unwrap_or(&0),
+        });
+        return;
+    }
     let setup = crate::car::CarSetup::factory(v[0], *v.get(1).unwrap_or(&0));
     let p = car.body.position;
     let new = crate::car::Car::spawn_at(

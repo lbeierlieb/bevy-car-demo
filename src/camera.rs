@@ -146,12 +146,28 @@ fn orbit(
 pub fn follow(
     time: Res<Time>,
     active: Res<ActiveCar>,
-    terrain: Res<Terrain>,
+    (terrain, spawn): (Res<Terrain>, Option<Res<crate::terrain::Spawn>>),
     cars: Query<(&Car, &Transform), Without<ChaseCamera>>,
     mut cameras: Query<(&mut ChaseCamera, &mut Transform)>,
+    mut idle: Local<Option<Transform>>,
 ) {
     // Where the car is drawn (see `car::Correction`).
     let Some((car, drawn)) = cars.iter().find(|(car, _)| car.index == active.0) else {
+        // No car yet (the server gives it): down the road where players start.
+        let view = idle.get_or_insert_with(|| {
+            let spawn = spawn
+                .as_deref()
+                .copied()
+                .unwrap_or(crate::terrain::Spawn::DEFAULT);
+            let (p, yaw) = terrain.road_spawns(&spawn, 1, 0.0)[0];
+            let ahead = Vec2::new(-yaw.sin(), -yaw.cos());
+            let at = |p: Vec2, up: f32| Vec3::new(p.x, terrain.sample(p.x, p.y).0 + up, p.y);
+            let (eye, target) = (at(p - ahead * 9.0, 3.0), at(p + ahead * 10.0, 0.5));
+            Transform::from_translation(eye).looking_at(target, Vec3::Y)
+        });
+        for (_, mut transform) in &mut cameras {
+            *transform = *view;
+        }
         return;
     };
     let target = drawn.translation + Vec3::Y * 0.5;

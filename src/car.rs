@@ -16,7 +16,7 @@ use crate::physics::suspension::{ArmGeometry, AxleSetup, Corner};
 use crate::physics::tire::TireParams;
 
 use crate::storage::Folder;
-use crate::terrain::{Spawn, Terrain};
+use crate::terrain::Terrain;
 use crate::wheels::{HUB_INERTIA, Wheel};
 
 /// Everything the simulation needs to know about a car, worked out from what it's built
@@ -671,24 +671,6 @@ impl Plugin for CarPlugin {
     }
 }
 
-/// Starts in the coupé with its base engine, on the road at the map's spawn point.
-pub struct DefaultCarPlugin;
-
-impl Plugin for DefaultCarPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_default_car);
-    }
-}
-
-fn spawn_default_car(mut commands: Commands, terrain: Res<Terrain>, spawn: Res<Spawn>) {
-    // On the road at the spawn point.
-    let (p, yaw) = terrain.road_spawns(&spawn, 1, 0.0)[0];
-    let mut car = Car::spawn_at(0, CarSetup::default(), &terrain, p.x, p.y, yaw);
-    // In neutral with the parking brake on, as joining a server or R leaves it.
-    car.drivetrain.neutral();
-    commands.spawn((Transform::from_translation(car.body.position), car));
-}
-
 /// How fast the keys turn the front wheels towards full lock, in full locks per second.
 const KEY_STEER_RATE: f32 = 1.0;
 /// How fast they come back towards the middle (released, or steering the other way).
@@ -1140,7 +1122,7 @@ mod tests {
     #[test]
     fn the_road_spot_is_on_the_nearest_road() {
         let terrain = Terrain::baked();
-        let (spawn, yaw) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
+        let (spawn, yaw) = terrain.road_spawns(&crate::terrain::Spawn::DEFAULT, 1, 0.0)[0];
         // 40 m off the road to the side, lying on its roof.
         let side = Vec2::new(yaw.cos(), -yaw.sin());
         let off = spawn + 40.0 * side;
@@ -1191,7 +1173,7 @@ mod tests {
     fn a_loaded_car_drives_on_as_the_saved_one() {
         use crate::snapshot::{load, save};
         let terrain = Terrain::baked();
-        let (p, yaw) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
+        let (p, yaw) = terrain.road_spawns(&crate::terrain::Spawn::DEFAULT, 1, 0.0)[0];
         let setup = CarSetup::factory(5, 0);
         let mut car = Car::spawn_at(0, setup.clone(), &terrain, p.x, p.y, yaw);
         car.drivetrain.shift_to(&car.setup.engine, 1);

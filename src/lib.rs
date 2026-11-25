@@ -111,13 +111,12 @@ pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(catalogue::Current(catalogue::builtin()))
-            .add_plugins((
-                terrain::TerrainPlugin,
-                obstacles::ObstaclesPlugin,
-                sim::SimPlugin,
-                traffic::NetworkPlugin,
-            ));
+        app.add_plugins((
+            terrain::TerrainPlugin,
+            obstacles::ObstaclesPlugin,
+            sim::SimPlugin,
+            traffic::NetworkPlugin,
+        ));
     }
 }
 
