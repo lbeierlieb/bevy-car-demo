@@ -2,15 +2,10 @@
 //! hardware by the cycle simulation (`cycle`), and curves that are the same for every
 //! engine.
 //!
-//! Baking takes a few seconds, so the factory engines' maps (every version of every family
-//! in `families`) come baked with the game (`baked/`), each with a fingerprint of the
-//! hardware and of the simulation's code; any other build is baked when it's needed. After
-//! changing the simulation or a factory engine,
-//! bake them again with `cargo test --profile release-dev bake_stock_maps -- --ignored`
-//! (a test checks they're current).
+//! Baking takes a few seconds, so maps are kept (see `store`), each with a fingerprint of
+//! the hardware and of the simulation's code.
 
 use super::cycle::{Conditions, Cylinder};
-use super::families::FAMILIES;
 use super::hardware::EngineHardware;
 use super::table::{self, Table, curve};
 use super::{AMBIENT_PRESSURE, AMBIENT_TEMPERATURE, R_AIR};
@@ -22,35 +17,6 @@ const REFERENCE_COOLANT: f64 = 363.0;
 const REFERENCE_OCTANE: f64 = 95.0;
 /// Exhaust pressures simulated (Pa): the ratio axis reaches pressures no engine sees.
 const EXHAUST_RANGE: (f64, f64) = (10e3, 800e3);
-
-/// The factory engines' maps, baked: the hardware, the file the maps are in, and its text.
-#[cfg(test)]
-fn stock() -> Vec<(EngineHardware, String, &'static str)> {
-    let mut stock = Vec::new();
-    for (f, family) in FAMILIES.iter().enumerate() {
-        for (v, version) in family.versions.iter().enumerate() {
-            let hardware = super::families::Version::parts(f, v).hardware();
-            let file = format!("{}.maps", version.code.to_lowercase());
-            stock.push((hardware, file, version.maps));
-        }
-    }
-    stock
-}
-
-/// The text of the maps baked with the game for the hardware with `fingerprint`, if it's
-/// a factory engine's: found by the fingerprint in the text's first lines.
-fn stock_text(fingerprint: u64) -> Option<&'static str> {
-    let tag = format!("fingerprint {fingerprint:016x}");
-    let mut versions = FAMILIES.iter().flat_map(|family| family.versions);
-    versions
-        .find(|version| version.maps.lines().take(3).any(|line| line == tag))
-        .map(|version| version.maps)
-}
-
-/// Whether the maps for `hardware` come baked with the game.
-pub fn is_stock(hardware: &EngineHardware) -> bool {
-    stock_text(fingerprint(hardware)).is_some()
-}
 
 /// Grid of the baked maps, in rpm.
 fn rpm_axis() -> Vec<f32> {
@@ -121,18 +87,6 @@ pub struct EngineMaps {
 }
 
 impl EngineMaps {
-    /// The maps for `hardware`: baked with the game for the stock builds, or baked now.
-    pub fn for_hardware(hardware: &EngineHardware) -> Self {
-        Self::stock(hardware).unwrap_or_else(|| Self::bake(hardware))
-    }
-
-    /// The maps baked with the game, if `hardware` is (on the cylinder side) a factory
-    /// engine.
-    pub fn stock(hardware: &EngineHardware) -> Option<Self> {
-        let fingerprint = fingerprint(hardware);
-        Self::from_text(stock_text(fingerprint)?, fingerprint)
-    }
-
     /// Bakes the maps by simulating cycles all over the grid (on all cores, where there
     /// are threads).
     pub fn bake(hardware: &EngineHardware) -> Self {
@@ -581,31 +535,6 @@ pub fn exhaust_temperature_shift(offset: f32, lambda: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    #[ignore = "bakes the stock maps into src/physics/engine/baked"]
-    fn bake_stock_maps() {
-        for (hardware, file, _) in stock() {
-            let path = format!(
-                "{}/src/physics/engine/baked/{file}",
-                env!("CARGO_MANIFEST_DIR")
-            );
-            let text = EngineMaps::bake(&hardware).to_text(&hardware);
-            std::fs::write(&path, text).unwrap();
-        }
-    }
-
-    #[test]
-    fn stock_maps_are_current() {
-        for (hardware, file, text) in stock() {
-            let maps = EngineMaps::from_text(text, fingerprint(&hardware));
-            assert!(
-                maps.is_some(),
-                "{file} is out of date: cargo test --profile release-dev bake_stock_maps -- --ignored"
-            );
-            assert_eq!(maps.unwrap().to_text(&hardware), text);
-        }
-    }
 
     #[test]
     fn maps_for_other_hardware_are_not_taken_from_the_stock() {

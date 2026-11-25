@@ -1,40 +1,373 @@
 //! Parts to build an engine from, as a garage stocks them: a slot per kind of part, each
-//! with a few to choose from, fitted onto a factory version of an engine family. The
-//! parts are made relative to the engine they go onto (a stroker crank for any block,
-//! turbos sized for its displacement). Some slots change the cylinder side, so fitting
-//! their parts means baking the maps again; the rest act live.
+//! with a few to choose from, fitted onto a factory version of an engine family. A part is
+//! data, a list of `Effect`s on the engine's hardware, so a catalogue can describe parts
+//! the game's code has never heard of, as long as they do what effects can. The effects
+//! are relative to the engine they go onto (a stroker crank for any block, turbos sized
+//! for its displacement). Some slots change the cylinder side, so fitting their parts
+//! means baking the maps again; the rest act live.
 
 use super::ecu::EcuModel;
-use super::families::{FAMILIES, Family, Version, WORKHORSE, relative_size};
+use super::families::{Family, Version, relative_size};
 use super::hardware::{
     CamProfile, Compressor, Diverter, EngineHardware, Intercooler, Turbine, Turbo, Wastegate,
 };
+use crate::catalogue::{self, Catalogue, Shared};
 
 /// A kind of part, and the parts there are of it (the first is stock).
+#[derive(Clone, Debug, PartialEq)]
 pub struct Slot {
-    pub name: &'static str,
-    pub about: &'static str,
-    pub parts: &'static [Part],
+    pub name: String,
+    pub about: String,
+    pub parts: Vec<Part>,
     /// What the slot's part comes to on an engine, e.g. "92 mm, 2.1 l" for a crank.
-    detail: fn(&EngineHardware) -> String,
+    pub readout: Readout,
+    /// Its parts only do something with a turbo (an intercooler).
+    pub needs_turbo: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct Part {
-    pub name: &'static str,
-    fit: fn(&mut EngineHardware),
+    pub name: String,
+    pub effects: Vec<Effect>,
 }
 
-const fn part(name: &'static str, fit: fn(&mut EngineHardware)) -> Part {
-    Part { name, fit }
+/// What a part does to an engine's hardware.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Effect {
+    /// Changes a number, then rounds it to a whole number of `step`s (a power of ten;
+    /// none for 0). A number that's missing (no turbo, no catalyst) stays missing.
+    Change {
+        field: Field,
+        change: Change,
+        step: f32,
+    },
+    /// Takes the catalyst or the silencer out.
+    Remove(Field),
+    /// Regrinds every cam profile.
+    Regrind(Regrind),
+    /// Cams that switch between two profiles: a single profile becomes `mild` and `wild`
+    /// made from it; on an engine switching already, the wild profile becomes `wilder`.
+    Switching {
+        mild: Regrind,
+        wild: Regrind,
+        wilder: Regrind,
+    },
+    /// A turbo kit (see `TurboKit`).
+    Turbo(TurboKit),
 }
 
-fn no_detail(_: &EngineHardware) -> String {
-    String::new()
+/// A number in the hardware a part can change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    CompressionRatio,
+    Stroke,
+    RodLength,
+    RodStrength,
+    RodMass,
+    PistonMass,
+    PistonToughness,
+    HeadGasket,
+    IntakePhasing,
+    ExhaustPhasing,
+    SeatForce,
+    SpringRate,
+    ValveMass,
+    PortFlow,
+    FilterArea,
+    ThrottleDiameter,
+    RunnerLength,
+    TractVolume,
+    HeaderLength,
+    PipeArea,
+    CatArea,
+    SilencerArea,
+    IntercoolerEffectiveness,
+    IntercoolerArea,
+    RadiatorArea,
+    RadiatorEffectiveness,
+    Inertia,
+}
+
+impl Field {
+    pub const ALL: [Field; 27] = [
+        Field::CompressionRatio,
+        Field::Stroke,
+        Field::RodLength,
+        Field::RodStrength,
+        Field::RodMass,
+        Field::PistonMass,
+        Field::PistonToughness,
+        Field::HeadGasket,
+        Field::IntakePhasing,
+        Field::ExhaustPhasing,
+        Field::SeatForce,
+        Field::SpringRate,
+        Field::ValveMass,
+        Field::PortFlow,
+        Field::FilterArea,
+        Field::ThrottleDiameter,
+        Field::RunnerLength,
+        Field::TractVolume,
+        Field::HeaderLength,
+        Field::PipeArea,
+        Field::CatArea,
+        Field::SilencerArea,
+        Field::IntercoolerEffectiveness,
+        Field::IntercoolerArea,
+        Field::RadiatorArea,
+        Field::RadiatorEffectiveness,
+        Field::Inertia,
+    ];
+
+    /// The number in `h`, if it has it.
+    fn of(self, h: &mut EngineHardware) -> Option<&mut f32> {
+        Some(match self {
+            Field::CompressionRatio => &mut h.compression_ratio,
+            Field::Stroke => &mut h.stroke,
+            Field::RodLength => &mut h.rod_length,
+            Field::RodStrength => &mut h.bottom_end.rod_strength,
+            Field::RodMass => &mut h.bottom_end.rod_mass,
+            Field::PistonMass => &mut h.bottom_end.piston_mass,
+            Field::PistonToughness => &mut h.bottom_end.piston_toughness,
+            Field::HeadGasket => &mut h.head_gasket,
+            Field::IntakePhasing => &mut h.intake_phasing,
+            Field::ExhaustPhasing => &mut h.exhaust_phasing,
+            Field::SeatForce => &mut h.valves.seat_force,
+            Field::SpringRate => &mut h.valves.rate,
+            Field::ValveMass => &mut h.valves.mass,
+            Field::PortFlow => &mut h.port_flow,
+            Field::FilterArea => &mut h.intake.filter_area,
+            Field::ThrottleDiameter => &mut h.intake.throttle_diameter,
+            Field::RunnerLength => &mut h.intake.runner_length,
+            Field::TractVolume => &mut h.intake.tract_volume,
+            Field::HeaderLength => &mut h.exhaust.header_length,
+            Field::PipeArea => &mut h.exhaust.pipe_area,
+            Field::CatArea => h.exhaust.cat_area.as_mut()?,
+            Field::SilencerArea => h.exhaust.silencer_area.as_mut()?,
+            Field::IntercoolerEffectiveness => &mut h.turbo.as_mut()?.intercooler.effectiveness,
+            Field::IntercoolerArea => &mut h.turbo.as_mut()?.intercooler.area,
+            Field::RadiatorArea => &mut h.cooling.radiator_area,
+            Field::RadiatorEffectiveness => &mut h.cooling.radiator_effectiveness,
+            Field::Inertia => &mut h.inertia,
+        })
+    }
+}
+
+/// How a number changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Change {
+    Times(f32),
+    Over(f32),
+    Plus(f32),
+    To(f32),
+    AtLeast(f32),
+}
+
+impl Change {
+    fn apply(self, x: f32) -> f32 {
+        match self {
+            Change::Times(by) => x * by,
+            Change::Over(by) => x / by,
+            Change::Plus(by) => x + by,
+            Change::To(value) => value,
+            Change::AtLeast(value) => x.max(value),
+        }
+    }
+}
+
+/// A cam profile reground: `duration` more crank degrees, the lobes `separation` cam
+/// degrees further apart, and `lift` times the lift.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Regrind {
+    pub duration: f32,
+    pub separation: f32,
+    pub lift: f32,
+}
+
+impl Regrind {
+    fn apply(&self, cam: &CamProfile) -> CamProfile {
+        CamProfile {
+            intake_duration: cam.intake_duration + self.duration,
+            exhaust_duration: cam.exhaust_duration + self.duration,
+            lobe_separation: cam.lobe_separation + self.separation,
+            lift: round_to(cam.lift * self.lift, 1e-4),
+        }
+    }
+}
+
+/// A turbo kit: the turbo with compressor and turbine wheels of these diameters (m), the
+/// turbine's flow area (m²), the shaft's inertia (kg·m²) and the wastegate's flow area
+/// (m²; a small turbine needs a big one to let the excess exhaust past), a diverter valve,
+/// an intercooler, and the piping to it (more volume ahead of the throttle). The numbers
+/// are for a 2-litre engine: the kit is scaled to the engine's displacement (flow areas
+/// with it, so wheel diameters with its root).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TurboKit {
+    pub compressor: f32,
+    pub turbine: f32,
+    pub turbine_area: f32,
+    pub inertia: f32,
+    pub wastegate: f32,
+}
+
+impl TurboKit {
+    fn fit(&self, hardware: &mut EngineHardware) {
+        let size = relative_size(hardware);
+        let wheel = size.sqrt();
+        hardware.intake.tract_volume *= 3.0;
+        hardware.turbo = Some(Turbo {
+            compressor: Compressor {
+                diameter: self.compressor * wheel,
+                head: 0.7,
+                choke: 0.29,
+                efficiency: 0.75,
+            },
+            turbine: Turbine {
+                diameter: self.turbine * wheel,
+                area: self.turbine_area * size,
+                efficiency: 0.7,
+            },
+            inertia: self.inertia * wheel.powi(5),
+            wastegate: Wastegate {
+                area: self.wastegate * size,
+                spring: 0.6e5,
+                span: 0.12e5,
+            },
+            intercooler: Intercooler {
+                effectiveness: 0.7,
+                area: 3e-3 * size,
+            },
+            diverter: Some(Diverter {
+                area: 5e-4 * size,
+                opens: 0.3e5,
+                span: 0.2e5,
+            }),
+        });
+    }
+}
+
+impl Effect {
+    pub fn apply(&self, h: &mut EngineHardware) {
+        match self {
+            Effect::Change {
+                field,
+                change,
+                step,
+            } => {
+                if let Some(x) = field.of(h) {
+                    let changed = change.apply(*x);
+                    *x = if *step > 0.0 {
+                        round_to(changed, *step)
+                    } else {
+                        changed
+                    };
+                }
+            }
+            Effect::Remove(field) => match field {
+                Field::CatArea => h.exhaust.cat_area = None,
+                Field::SilencerArea => h.exhaust.silencer_area = None,
+                _ => {}
+            },
+            Effect::Regrind(regrind) => {
+                for cam in &mut h.cams {
+                    *cam = regrind.apply(cam);
+                }
+            }
+            Effect::Switching { mild, wild, wilder } => {
+                h.cams = match h.cams[..] {
+                    [cam] => vec![mild.apply(&cam), wild.apply(&cam)],
+                    [first, second, ..] => vec![first, wilder.apply(&second)],
+                    [] => vec![],
+                };
+            }
+            Effect::Turbo(kit) => kit.fit(h),
+        }
+    }
+}
+
+/// What a slot's part comes to on an engine, shown with its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Readout {
+    Nothing,
+    Compression,
+    Crank,
+    RodLength,
+    HeadGasket,
+    Cams,
+    ValveFloat,
+    Phasers,
+    Runners,
+    Headers,
+    Throttle,
+    Pipe,
+    Flywheel,
+    PortFlow,
+}
+
+impl Readout {
+    pub const ALL: [Readout; 14] = [
+        Readout::Nothing,
+        Readout::Compression,
+        Readout::Crank,
+        Readout::RodLength,
+        Readout::HeadGasket,
+        Readout::Cams,
+        Readout::ValveFloat,
+        Readout::Phasers,
+        Readout::Runners,
+        Readout::Headers,
+        Readout::Throttle,
+        Readout::Pipe,
+        Readout::Flywheel,
+        Readout::PortFlow,
+    ];
+
+    /// E.g. "92 mm, 2.1 l" for a crank.
+    pub fn of(self, h: &EngineHardware) -> String {
+        match self {
+            Readout::Nothing => String::new(),
+            Readout::Compression => format!("{:.1}:1", h.compression_ratio),
+            Readout::Crank => {
+                let litres = h.displacement() * 1e3;
+                format!("{:.1} mm, {litres:.1} l", h.stroke * 1e3)
+            }
+            Readout::RodLength => format!("{:.0} mm", h.rod_length * 1e3),
+            Readout::HeadGasket => format!("{:.0} bar", h.head_gasket / 1e5),
+            Readout::Cams => {
+                let durations: Vec<String> = (h.cams.iter())
+                    .map(|cam| format!("{:.0}°", cam.intake_duration))
+                    .collect();
+                let lift = h.cams.last().map_or(0.0, |cam| cam.lift * 1e3);
+                format!("{}, {lift:.1} mm", durations.join(" / "))
+            }
+            Readout::ValveFloat => match h.cams.last() {
+                Some(cam) => format!(
+                    "float at {:.0} rpm",
+                    round_to(h.valves.float_rpm(cam), 100.0)
+                ),
+                None => String::new(),
+            },
+            Readout::Phasers => match (h.intake_phasing, h.exhaust_phasing) {
+                (0.0, 0.0) => "none".to_string(),
+                (intake, 0.0) => format!("intake {intake:.0}°"),
+                (intake, exhaust) => format!("{intake:.0}° / {exhaust:.0}°"),
+            },
+            Readout::Runners => format!("{:.0} mm runners", h.intake.runner_length * 1e3),
+            Readout::Headers => format!("{:.0} mm", h.exhaust.header_length * 1e3),
+            Readout::Throttle => format!("{:.0} mm", h.intake.throttle_diameter * 1e3),
+            Readout::Pipe => {
+                let diameter = (h.exhaust.pipe_area * 4.0 / std::f32::consts::PI).sqrt();
+                format!("{:.0} mm", diameter * 1e3)
+            }
+            Readout::Flywheel => format!("{:.2} kg·m²", h.inertia),
+            Readout::PortFlow => format!("{:.0} % flow", h.port_flow * 100.0),
+        }
+    }
 }
 
 /// `value` rounded to a whole number of `step`s (a power of ten), to the nearest f32
 /// there, so that 0.6 m comes out as 0.6.
-pub(super) fn round_to(value: f32, step: f32) -> f32 {
+pub fn round_to(value: f32, step: f32) -> f32 {
     if step >= 1.0 {
         (value / step).round() * step
     } else {
@@ -43,402 +376,37 @@ pub(super) fn round_to(value: f32, step: f32) -> f32 {
     }
 }
 
-pub const PISTONS: usize = 0;
-/// The exhaust manifold's slot: how long its primaries can be depends on the car.
-pub const HEADERS: usize = 9;
-pub const TURBO: usize = 12;
-/// The intercooler's slot: it only matters with a turbo.
-pub const INTERCOOLER: usize = 13;
-
-pub const SLOTS: [Slot; 20] = [
-    Slot {
-        name: "Pistons",
-        about: "Compression ratio: more is more efficient, but knocks earlier",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Low compression", |h| compression(h, -1.7)),
-            part("High compression", |h| compression(h, 1.0)),
-            part("Race", |h| compression(h, 2.0)),
-        ],
-        detail: |h| format!("{:.1}:1", h.compression_ratio),
-    },
-    Slot {
-        name: "Crankshaft",
-        about: "Stroke: a longer one makes a bigger engine; the pistons move faster, so it \
-                revs less",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Short stroke", |h| {
-                h.stroke = round_to(h.stroke * 0.93, 1e-4)
-            }),
-            part("Stroker", |h| h.stroke = round_to(h.stroke * 1.07, 1e-4)),
-        ],
-        detail: |h| {
-            let litres = h.displacement() * 1e3;
-            format!("{:.1} mm, {litres:.1} l", h.stroke * 1e3)
-        },
-    },
-    Slot {
-        name: "Connecting rods",
-        about: "Longer rods keep the piston near top dead centre longer, with less friction",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Short", |h| {
-                h.rod_length = round_to(h.rod_length * 0.95, 1e-3)
-            }),
-            part("Long", |h| {
-                h.rod_length = round_to(h.rod_length * 1.05, 1e-3)
-            }),
-        ],
-        detail: |h| format!("{:.0} mm", h.rod_length * 1e3),
-    },
-    Slot {
-        name: "Internals",
-        about: "Forged rods take more pull at high rpm and more push under boost; forged \
-                pistons are lighter (easing the rods) and take more knock",
-        parts: &[
-            part("Stock (cast)", |_| {}),
-            part("Forged rods", forged_rods),
-            part("Forged rods and pistons", |h| {
-                forged_rods(h);
-                h.bottom_end.piston_mass = round_to(h.bottom_end.piston_mass * 0.857, 1e-3);
-                h.bottom_end.piston_toughness = 2.0;
-            }),
-        ],
-        detail: no_detail,
-    },
-    Slot {
-        name: "Head gasket",
-        about: "Seals the cylinder pressure: boost and knock lift a weak one",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Multi-layer steel, head studs", |h| h.head_gasket = 180e5),
-        ],
-        detail: |h| format!("{:.0} bar", h.head_gasket / 1e5),
-    },
-    Slot {
-        name: "Camshafts",
-        about: "Longer duration and more lift breathe better high up, worse low down and at \
-                idle (more lift needs stiffer valve springs). A switching cam has a mild and a wild profile, and \
-                needs an ECU to switch between them",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Sport", |h| {
-                for cam in &mut h.cams {
-                    *cam = reground(cam, 16.0, -2.0, 1.105);
-                }
-            }),
-            part("Race", |h| {
-                for cam in &mut h.cams {
-                    *cam = reground(cam, 36.0, -4.0, 1.21);
-                }
-            }),
-            part("Switching", |h| {
-                // On an engine that switches cams already, a wilder second profile.
-                h.cams = match h.cams[..] {
-                    [cam] => vec![
-                        reground(&cam, -4.0, 2.0, 0.947),
-                        reground(&cam, 24.0, -2.0, 1.158),
-                    ],
-                    [mild, wild, ..] => vec![mild, reground(&wild, 12.0, -1.0, 1.06)],
-                    [] => vec![],
-                };
-            }),
-        ],
-        detail: |h| {
-            let durations: Vec<String> = h
-                .cams
-                .iter()
-                .map(|cam| format!("{:.0}°", cam.intake_duration))
-                .collect();
-            let lift = h.cams.last().map_or(0.0, |cam| cam.lift * 1e3);
-            format!("{}, {lift:.1} mm", durations.join(" / "))
-        },
-    },
-    Slot {
-        name: "Valve springs",
-        about: "Stiffer springs keep the valves on the cams to higher rpm (where they'd \
-                float and could meet the pistons), at a little more friction",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Uprated", |h| springs(h, 1.33, 1.4, 1.0)),
-            part("Race, titanium retainers", |h| springs(h, 1.56, 1.7, 0.85)),
-        ],
-        detail: |h| {
-            let cam = h.cams.last().expect("a cam");
-            format!(
-                "float at {:.0} rpm",
-                round_to(h.valves.float_rpm(cam), 100.0)
-            )
-        },
-    },
-    Slot {
-        name: "Cam phasers",
-        about: "Turn the cams against the crank while running: more overlap and earlier \
-                intake closing where they help",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Intake", |h| h.intake_phasing = h.intake_phasing.max(40.0)),
-            part("Intake and exhaust", |h| {
-                h.intake_phasing = h.intake_phasing.max(40.0);
-                h.exhaust_phasing = h.exhaust_phasing.max(30.0);
-            }),
-        ],
-        detail: |h| match (h.intake_phasing, h.exhaust_phasing) {
-            (0.0, 0.0) => "none".to_string(),
-            (intake, 0.0) => format!("intake {intake:.0}°"),
-            (intake, exhaust) => format!("{intake:.0}° / {exhaust:.0}°"),
-        },
-    },
-    Slot {
-        name: "Intake manifold",
-        about: "Runner length tunes the intake: long runners fill best low, short ones high",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Long runners", |h| {
-                h.intake.runner_length = round_to(h.intake.runner_length * 1.43, 0.01)
-            }),
-            part("Short runners", |h| {
-                h.intake.runner_length = round_to(h.intake.runner_length * 0.63, 0.01)
-            }),
-        ],
-        detail: |h| format!("{:.0} mm runners", h.intake.runner_length * 1e3),
-    },
-    Slot {
-        name: "Exhaust manifold",
-        about: "Header length tunes the scavenging during the valve overlap. Long primaries \
-                need room around the engine: what fits depends on the car",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Short headers", |h| {
-                h.exhaust.header_length = round_to(h.exhaust.header_length * 0.56, 0.01)
-            }),
-            part("Long-tube headers", |h| {
-                h.exhaust.header_length = round_to(h.exhaust.header_length * 1.375, 0.01)
-            }),
-        ],
-        detail: |h| format!("{:.0} mm", h.exhaust.header_length * 1e3),
-    },
-    Slot {
-        name: "Air filter",
-        about: "Less restriction ahead of the throttle (or the compressor)",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Sport panel", |h| h.intake.filter_area *= 1.28),
-            part("Open cone", |h| h.intake.filter_area *= 1.8),
-        ],
-        detail: no_detail,
-    },
-    Slot {
-        name: "Throttle body",
-        about: "A bigger throttle flows more when wide open, and is touchier part-open",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Bigger", |h| {
-                h.intake.throttle_diameter = round_to(h.intake.throttle_diameter * 1.09, 1e-3)
-            }),
-            part("Biggest", |h| {
-                h.intake.throttle_diameter = round_to(h.intake.throttle_diameter * 1.18, 1e-3)
-            }),
-        ],
-        detail: |h| format!("{:.0} mm", h.intake.throttle_diameter * 1e3),
-    },
-    Slot {
-        name: "Turbocharger",
-        about: "A small turbo spools early; a big one can hold more boost at high rpm. Big \
-                engines get two, sized to match",
-        parts: &[
-            part("None", |_| {}),
-            part("Small", |h| {
-                fit_turbo(h, 0.044, 0.048, 4.5e-4, 1.6e-5, 6e-4)
-            }),
-            part("Medium", |h| fit_turbo(h, 0.05, 0.054, 6e-4, 2.5e-5, 3e-4)),
-            part("Large", |h| fit_turbo(h, 0.058, 0.062, 8e-4, 4.2e-5, 3e-4)),
-        ],
-        detail: no_detail,
-    },
-    Slot {
-        name: "Intercooler",
-        about: "Cools the charge after the compressor (only with a turbo)",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Large", |h| {
-                if let Some(turbo) = &mut h.turbo {
-                    turbo.intercooler.effectiveness = 0.8;
-                    turbo.intercooler.area *= 1.5;
-                }
-            }),
-            part("None", |h| {
-                if let Some(turbo) = &mut h.turbo {
-                    turbo.intercooler = Intercooler {
-                        effectiveness: 0.0,
-                        area: 1.0,
-                    };
-                }
-            }),
-        ],
-        detail: no_detail,
-    },
-    Slot {
-        name: "Catalyst",
-        about: "The catalytic converter's restriction",
-        parts: &[
-            part("Stock", |_| {}),
-            part("High-flow", |h| {
-                h.exhaust.cat_area = h.exhaust.cat_area.map(|area| area * 1.5)
-            }),
-            part("None", |h| h.exhaust.cat_area = None),
-        ],
-        detail: no_detail,
-    },
-    Slot {
-        name: "Silencer",
-        about: "The silencer's restriction",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Sport", |h| {
-                h.exhaust.silencer_area = h.exhaust.silencer_area.map(|area| area * 1.5)
-            }),
-            part("None (straight pipe)", |h| h.exhaust.silencer_area = None),
-        ],
-        detail: no_detail,
-    },
-    Slot {
-        name: "Exhaust pipe",
-        about: "Pipe diameter after the manifold",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Big bore", |h| h.exhaust.pipe_area *= 1.37),
-        ],
-        detail: |h| {
-            let diameter = (h.exhaust.pipe_area * 4.0 / std::f32::consts::PI).sqrt();
-            format!("{:.0} mm", diameter * 1e3)
-        },
-    },
-    Slot {
-        name: "Radiator",
-        about: "How much heat the cooling system can get rid of",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Race", |h| {
-                h.cooling.radiator_area *= 4.0 / 3.0;
-                h.cooling.radiator_effectiveness = 0.7;
-            }),
-        ],
-        detail: no_detail,
-    },
-    Slot {
-        name: "Flywheel",
-        about: "A lighter flywheel revs up and down quicker",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Lightweight", |h| {
-                h.inertia = round_to(h.inertia / 1.5, 0.01)
-            }),
-        ],
-        detail: |h| format!("{:.2} kg·m²", h.inertia),
-    },
-    Slot {
-        name: "Cylinder head",
-        about: "Ported runners and bigger valves flow more air at high rpm",
-        parts: &[
-            part("Stock", |_| {}),
-            part("Ported", |h| {
-                h.port_flow = round_to(h.port_flow * 1.1, 0.01)
-            }),
-            part("Race, big valves", |h| {
-                h.port_flow = round_to(h.port_flow * 1.2, 0.01)
-            }),
-        ],
-        detail: |h| format!("{:.0} % flow", h.port_flow * 100.0),
-    },
-];
-
-fn compression(hardware: &mut EngineHardware, change: f32) {
-    hardware.compression_ratio = round_to(hardware.compression_ratio + change, 0.1);
+/// What the factory fits to a version of an engine: a part per slot (by its place in the
+/// slot), the wastegate's spring and the ECU.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Preset {
+    pub chosen: Vec<usize>,
+    pub boost: f32,
+    pub ecu: EcuModel,
 }
 
-fn forged_rods(hardware: &mut EngineHardware) {
-    let bottom_end = &mut hardware.bottom_end;
-    bottom_end.rod_strength = round_to(bottom_end.rod_strength * 1.4, 100.0);
-    bottom_end.rod_mass = round_to(bottom_end.rod_mass * 0.917, 1e-3);
-}
-
-/// A cam profile with `duration` more crank degrees, the lobes `separation` cam degrees
-/// further apart, and `lift` times the lift.
-fn reground(cam: &CamProfile, duration: f32, separation: f32, lift: f32) -> CamProfile {
-    CamProfile {
-        intake_duration: cam.intake_duration + duration,
-        exhaust_duration: cam.exhaust_duration + duration,
-        lobe_separation: cam.lobe_separation + separation,
-        lift: round_to(cam.lift * lift, 1e-4),
+impl Preset {
+    /// The stock part in every one of `slots` slots.
+    pub fn stock(slots: usize) -> Self {
+        Self {
+            chosen: vec![0; slots],
+            boost: 0.6,
+            ecu: EcuModel::Stock,
+        }
     }
-}
-
-/// Valve springs with this many times the seat force and rate, and moving mass.
-fn springs(hardware: &mut EngineHardware, seat_force: f32, rate: f32, mass: f32) {
-    let valves = &mut hardware.valves;
-    valves.seat_force = (valves.seat_force * seat_force).round();
-    valves.rate = round_to(valves.rate * rate, 100.0);
-    valves.mass = round_to(valves.mass * mass, 1e-3);
-}
-
-/// A turbo kit: the turbo with compressor and turbine wheels of these diameters, the
-/// turbine's flow area, the shaft's inertia and the wastegate's flow area (a small turbine
-/// needs a big one to let the excess exhaust past), a diverter valve, an intercooler, and
-/// the piping to it (more volume ahead of the throttle). The numbers are for a 2-litre
-/// engine: the kit is scaled to the engine's displacement (flow areas with it, so wheel
-/// diameters with its root).
-fn fit_turbo(
-    hardware: &mut EngineHardware,
-    compressor: f32,
-    turbine: f32,
-    turbine_area: f32,
-    inertia: f32,
-    wastegate: f32,
-) {
-    let size = relative_size(hardware);
-    let wheel = size.sqrt();
-    hardware.intake.tract_volume *= 3.0;
-    hardware.turbo = Some(Turbo {
-        compressor: Compressor {
-            diameter: compressor * wheel,
-            head: 0.7,
-            choke: 0.29,
-            efficiency: 0.75,
-        },
-        turbine: Turbine {
-            diameter: turbine * wheel,
-            area: turbine_area * size,
-            efficiency: 0.7,
-        },
-        inertia: inertia * wheel.powi(5),
-        wastegate: Wastegate {
-            area: wastegate * size,
-            spring: 0.6e5,
-            span: 0.12e5,
-        },
-        intercooler: Intercooler {
-            effectiveness: 0.7,
-            area: 3e-3 * size,
-        },
-        diverter: Some(Diverter {
-            area: 5e-4 * size,
-            opens: 0.3e5,
-            span: 0.2e5,
-        }),
-    });
 }
 
 /// The parts an engine is built from: the factory version of an engine family it started
 /// as, a part per slot, the cam gears' timing, the wastegate's spring, and the ECU.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Parts {
-    /// The engine family (in `FAMILIES`) and its version.
+    /// What the family and the parts are in.
+    pub catalogue: Shared,
+    /// The engine family (in the catalogue's `families`) and its version.
     pub family: usize,
     pub version: usize,
-    /// The part fitted in each slot of `SLOTS`, by index.
-    pub chosen: [usize; SLOTS.len()],
+    /// The part fitted in each of the catalogue's `slots`, by its place in the slot.
+    pub chosen: Vec<usize>,
     /// Cam timing (crank degrees; intake advanced, exhaust retarded).
     pub intake_timing: f32,
     pub exhaust_timing: f32,
@@ -450,54 +418,69 @@ pub struct Parts {
 }
 
 impl Parts {
-    /// A block with the stock part in every slot (which isn't what the factory builds for
-    /// every version: see `Version::parts`).
-    pub fn all_stock(family: usize, version: usize) -> Self {
+    /// Version `version` of `family` as the factory builds it (wherever it's fitted).
+    pub fn of_version(catalogue: &Shared, family: usize, version: usize) -> Self {
+        let preset = &catalogue.families[family].versions[version].preset;
         Self {
+            catalogue: catalogue.clone(),
             family,
             version,
-            chosen: [0; SLOTS.len()],
+            chosen: preset.chosen.clone(),
             intake_timing: 0.0,
             exhaust_timing: 0.0,
-            boost: 0.6,
-            ecu: EcuModel::Stock,
+            boost: preset.boost,
+            ecu: preset.ecu,
             header_room: f32::INFINITY,
         }
     }
 
-    /// The stock naturally aspirated 2-litre four.
+    /// The factory version with the code `code` in `catalogue`.
+    pub fn factory_in(catalogue: &Shared, code: &str) -> Option<Self> {
+        let (family, version) = catalogue.find_engine(code)?;
+        Some(Self::of_version(catalogue, family, version))
+    }
+
+    /// The factory version with the code `code` in the built-in catalogue.
+    pub fn factory(code: &str) -> Option<Self> {
+        Self::factory_in(&catalogue::builtin(), code)
+    }
+
+    /// The stock naturally aspirated 2-litre four (of the built-in catalogue).
     pub fn stock() -> Self {
-        Version::parts(WORKHORSE, 0)
+        Self::factory("W20").expect("the 2-litre four")
     }
 
     /// The stock turbo 2-litre four: low compression pistons and the medium turbo.
     #[cfg(test)]
     pub fn turbo() -> Self {
-        Version::parts(WORKHORSE, 1)
+        Self::factory("W20T").expect("the 2-litre turbo four")
     }
 
-    /// The factory version with the code `code`.
-    pub fn factory(code: &str) -> Option<Self> {
-        Family::find(code).map(|(family, version)| Version::parts(family, version))
+    pub fn family(&self) -> &Family {
+        &self.catalogue.families[self.family]
     }
 
-    pub fn family(&self) -> &'static Family {
-        &FAMILIES[self.family]
-    }
-
-    fn version(&self) -> &'static Version {
+    fn version(&self) -> &Version {
         &self.family().versions[self.version]
     }
 
+    /// The part fitted in each slot.
+    pub fn fitted(&self) -> impl Iterator<Item = &Part> {
+        let slots = &self.catalogue.slots;
+        (slots.iter().zip(&self.chosen)).map(|(slot, &chosen)| &slot.parts[chosen])
+    }
+
     pub fn has_turbo(&self) -> bool {
-        self.chosen[TURBO] != 0
+        let turbo = |effect: &Effect| matches!(effect, Effect::Turbo(_));
+        self.fitted().any(|part| part.effects.iter().any(turbo))
+            || self.version().block.turbo.is_some()
     }
 
     /// Just as the factory builds this version (wherever it's fitted).
     pub fn is_factory(&self) -> bool {
         let factory = Self {
             header_room: self.header_room,
-            ..Version::parts(self.family, self.version)
+            ..Self::of_version(&self.catalogue, self.family, self.version)
         };
         *self == factory
     }
@@ -505,9 +488,11 @@ impl Parts {
     /// The engine these parts make.
     pub fn hardware(&self) -> EngineHardware {
         let version = self.version();
-        let mut hardware = version.block();
-        for (slot, &chosen) in SLOTS.iter().zip(&self.chosen) {
-            (slot.parts[chosen.min(slot.parts.len() - 1)].fit)(&mut hardware);
+        let mut hardware = version.block.clone();
+        for part in self.fitted() {
+            for effect in &part.effects {
+                effect.apply(&mut hardware);
+            }
         }
         // Where the primaries the manifold should have don't fit, shorter ones are made.
         let room = round_to(self.header_room, 0.01);
@@ -535,8 +520,9 @@ impl Parts {
     pub fn label(&self, slot: usize, part: usize) -> String {
         let mut fitted = self.clone();
         fitted.chosen[slot] = part;
-        let detail = (SLOTS[slot].detail)(&fitted.hardware());
-        let name = SLOTS[slot].parts[part].name;
+        let slot = &self.catalogue.slots[slot];
+        let detail = slot.readout.of(&fitted.hardware());
+        let name = &slot.parts[part].name;
         if detail.is_empty() {
             name.to_string()
         } else {
@@ -545,9 +531,16 @@ impl Parts {
     }
 }
 
+/// Whether `catalogue`'s parts all fit `parts`' slots.
+pub fn fits(catalogue: &Catalogue, chosen: &[usize]) -> bool {
+    chosen.len() == catalogue.slots.len()
+        && (chosen.iter().zip(&catalogue.slots)).all(|(&part, slot)| part < slot.parts.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalogue::{HEADERS, INTERCOOLER, TURBO, builtin};
 
     #[test]
     fn the_presets_are_the_stock_engines() {
@@ -631,12 +624,13 @@ mod tests {
 
     #[test]
     fn every_part_fits_every_engine() {
-        for (f, family) in FAMILIES.iter().enumerate() {
+        let catalogue = builtin();
+        for (f, family) in catalogue.families.iter().enumerate() {
             for (v, version) in family.versions.iter().enumerate() {
-                let factory = Version::parts(f, v);
+                let factory = Parts::of_version(&catalogue, f, v);
                 let stock = factory.hardware();
                 assert_eq!(stock.name, format!("{} {}", version.code, version.name));
-                for (i, slot) in SLOTS.iter().enumerate() {
+                for (i, slot) in catalogue.slots.iter().enumerate() {
                     for (j, part) in slot.parts.iter().enumerate() {
                         let mut parts = factory.clone();
                         parts.chosen[i] = j;

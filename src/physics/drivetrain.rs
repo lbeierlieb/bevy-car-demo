@@ -177,7 +177,7 @@ pub struct EngineSetup {
     /// Most torque the clutch can pass while slipping (N·m).
     pub clutch_torque: f32,
     /// Forward gear ratios from first, the reverse ratio, and the final drive.
-    pub gears: &'static [f32],
+    pub gears: Vec<f32>,
     pub reverse: f32,
     pub final_drive: f32,
     /// Time the clutch stays open for a gear change, and then takes to close again (s).
@@ -196,7 +196,7 @@ impl Default for EngineSetup {
             parts: Parts::stock(),
             build: EngineBuild::default(),
             clutch_torque: 350.0,
-            gears: &[3.3, 2.1, 1.5, 1.17, 0.95, 0.8],
+            gears: vec![3.3, 2.1, 1.5, 1.17, 0.95, 0.8],
             reverse: 3.3,
             final_drive: 3.7,
             shift_time: 0.25,
@@ -1038,11 +1038,11 @@ mod tests {
 
     #[test]
     fn every_factory_engine_starts_on_the_starter() {
-        use crate::physics::engine::families::{FAMILIES, Version};
+        let catalogue = crate::catalogue::builtin();
         let dt = 1.0 / 120.0;
-        for (f, family) in FAMILIES.iter().enumerate() {
+        for (f, family) in catalogue.families.iter().enumerate() {
             for (v, version) in family.versions.iter().enumerate() {
-                let parts = Version::parts(f, v);
+                let parts = crate::physics::engine::parts::Parts::of_version(&catalogue, f, v);
                 let engine = EngineSetup {
                     build: EngineBuild::new(parts.hardware(), parts.ecu),
                     parts,

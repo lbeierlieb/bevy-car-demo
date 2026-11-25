@@ -23,7 +23,7 @@ use bevy::prelude::*;
 
 use crate::body::Wheels;
 use crate::car::{CarSetup, body_box};
-use crate::chassis::{CHASSIS, SHOP_PAINTS};
+use crate::catalogue::{Current, Shared};
 use crate::looks::{Looks, Motion, WheelMotion};
 use crate::physics::collision::{self, Contact, GROUND, OBSTACLE, Obb};
 use crate::physics::rigid_body::RigidBody;
@@ -77,10 +77,6 @@ const ONCOMING: f32 = 1.0;
 const KEEN: (f32, f32) = (0.88, 1.1);
 /// The share of traffic cars painted at a paint shop (the rest in their factory paint).
 const PAINTED: f32 = 0.2;
-/// How often each chassis turns up in traffic (in `CHASSIS` order).
-const COMMON: [f32; 13] = [
-    4.0, 3.0, 0.7, 3.0, 4.0, 0.8, 1.0, 0.4, 0.8, 0.2, 0.15, 2.0, 3.0,
-];
 /// Masses of an engine and gearbox, added to a chassis' (kg).
 const DRIVETRAIN_MASS: f32 = 230.0;
 /// A crashed car stops being simulated once it's been this still for this long (m/s,
@@ -148,6 +144,9 @@ pub struct TrafficPlugin;
 
 impl Plugin for TrafficPlugin {
     fn build(&self, app: &mut App) {
+        if !app.world().contains_resource::<Current>() {
+            app.insert_resource(Current(crate::catalogue::builtin()));
+        }
         if !app.is_plugin_added::<NetworkPlugin>() {
             app.add_plugins(NetworkPlugin);
         }
@@ -197,16 +196,16 @@ impl CarNumbers {
 /// What each chassis looks like as it leaves the factory (with its base engine), made
 /// when first needed.
 #[derive(Resource, Default)]
-pub struct FactoryLooks(Vec<Option<Looks>>);
+pub struct FactoryLooks(u64, Vec<Option<Looks>>);
 
 impl FactoryLooks {
-    /// The factory's `chassis` (in `CHASSIS`) in `paint` (in `PAINTS`).
-    pub fn get(&mut self, chassis: usize, paint: usize) -> Looks {
-        if self.0.is_empty() {
-            self.0 = vec![None; CHASSIS.len()];
+    /// `catalogue`'s `chassis` as it leaves the factory, in `paint`.
+    pub fn get(&mut self, catalogue: &Shared, chassis: usize, paint: usize) -> Looks {
+        if self.1.is_empty() || self.0 != catalogue.fingerprint() {
+            *self = Self(catalogue.fingerprint(), vec![None; catalogue.chassis.len()]);
         }
-        let mut looks = self.0[chassis]
-            .get_or_insert_with(|| Looks::of(&CarSetup::factory(chassis, 0)))
+        let mut looks = self.1[chassis]
+            .get_or_insert_with(|| Looks::of(&CarSetup::factory_in(catalogue, chassis, 0)))
             .clone();
         looks.build.paint = paint;
         looks
@@ -218,12 +217,13 @@ impl FactoryLooks {
 /// and steering on a suspension at rest, and its engine idling.
 fn show(
     mut commands: Commands,
+    catalogue: Res<Current>,
     mut factory: ResMut<FactoryLooks>,
     mut new: Query<(Entity, &TrafficCar, &mut Transform), Without<Looks>>,
     mut cars: Query<(&TrafficCar, &Looks, &mut Transform, &mut Motion)>,
 ) {
     for (entity, car, mut transform) in &mut new {
-        let looks = factory.get(car.chassis, car.paint);
+        let looks = factory.get(&catalogue, car.chassis, car.paint);
         *transform = car.transform(&looks);
         commands.entity(entity).insert((car.motion(&looks), looks));
     }
@@ -243,7 +243,7 @@ pub struct Anchor;
 pub struct TrafficCar {
     /// Its number (from `CarNumbers`), for the server to tell players which is which.
     pub id: u32,
-    /// What it looks like: its chassis (in `CHASSIS`) and paint (in `PAINTS`).
+    /// What it looks like: its chassis and paint (in the catalogue).
     pub chassis: usize,
     pub paint: usize,
     /// Its reference point is the body's design origin (on the ground midway between the
@@ -518,6 +518,7 @@ fn populate(
     terrain: Res<Terrain>,
     mut spawner: ResMut<Spawner>,
     mut numbers: ResMut<CarNumbers>,
+    catalogue: Res<Current>,
     players: Query<(&Transform, Option<&Realm>), With<Anchor>>,
     others: Query<(Entity, &TrafficCar, Option<&Realm>)>,
 ) {
@@ -549,6 +550,7 @@ fn populate(
         };
         started &= around.populate(
             &mut commands,
+            &catalogue,
             &network,
             &terrain,
             &mut spawner,
@@ -573,6 +575,7 @@ impl Around<'_> {
     fn populate(
         &self,
         commands: &mut Commands,
+        catalogue: &Shared,
         network: &Network,
         terrain: &Terrain,
         spawner: &mut Spawner,
@@ -649,17 +652,19 @@ impl Around<'_> {
         let rng = &mut spawner.rng;
         let (leg, s, _) =
             spawner.spots[free[(rng.next() * free.len() as f32) as usize % free.len()]];
-        let chassis = rng.pick(COMMON.iter().copied());
+        let chassis = rng.pick(catalogue.chassis.iter().map(|chassis| chassis.traffic));
         // Mostly the dull factory paint, now and then one from a paint shop, as players'
         // cars might be.
-        let paint = if rng.next() < PAINTED {
-            (rng.next() * SHOP_PAINTS as f32) as usize % SHOP_PAINTS
+        let shop = catalogue.shop_paints();
+        let paint = if rng.next() < PAINTED && !shop.is_empty() {
+            shop[(rng.next() * shop.len() as f32) as usize % shop.len()]
         } else {
-            CHASSIS[chassis].paint
+            catalogue.chassis[chassis].paint
         };
         let keen = rng.range(KEEN);
         let seed = rng.0;
-        let mut car = TrafficCar::new(network, terrain, chassis, paint, leg, s, keen, seed);
+        let cars = (catalogue, network, terrain);
+        let mut car = TrafficCar::new(cars, chassis, paint, leg, s, keen, seed);
         car.id = numbers.take();
         commands.spawn((
             Transform::from_translation(car.body.position).with_rotation(car.body.rotation),
@@ -671,12 +676,10 @@ impl Around<'_> {
 }
 
 impl TrafficCar {
-    /// A car of `chassis` (in `CHASSIS`) and `paint` with its front axle `s` along `leg`'s
-    /// lane, driving off at a little under the limit.
-    #[allow(clippy::too_many_arguments)]
+    /// A car of `chassis` and `paint` (in `catalogue`) with its front axle `s` along
+    /// `leg`'s lane, driving off at a little under the limit.
     fn new(
-        network: &Network,
-        terrain: &Terrain,
+        (catalogue, network, terrain): (&Shared, &Network, &Terrain),
         chassis: usize,
         paint: usize,
         leg: Leg,
@@ -684,7 +687,7 @@ impl TrafficCar {
         keen: f32,
         seed: u64,
     ) -> Self {
-        let mut car = Self::parked(chassis, paint);
+        let mut car = Self::parked(catalogue, chassis, paint);
         let wheels = car.wheels;
         let mut driver = Driver {
             route: VecDeque::from([leg]),
@@ -696,7 +699,7 @@ impl TrafficCar {
             rng: Rng(seed | 1),
             path: Path::default(),
             shifter: Shifter::new(
-                Powertrain::factory(chassis),
+                Powertrain::factory(catalogue, chassis),
                 (keen - KEEN.0) / (KEEN.1 - KEEN.0),
             ),
         };
@@ -723,9 +726,9 @@ impl TrafficCar {
         car
     }
 
-    /// A car of `chassis` (in `CHASSIS`) and `paint` without a driver, at the origin.
-    fn parked(chassis: usize, paint: usize) -> Self {
-        let model = &CHASSIS[chassis];
+    /// A car of `chassis` and `paint` (in `catalogue`) without a driver, at the origin.
+    fn parked(catalogue: &Shared, chassis: usize, paint: usize) -> Self {
+        let model = &catalogue.chassis[chassis];
         let wheels = model.wheels();
         let mut hull = body_box(model, &model.wheels);
         let top = hull.center.y + hull.half.y;
@@ -774,8 +777,10 @@ impl TrafficCar {
                     spin: self.rolled / axle.radius,
                 }
             }),
-            engine: (self.driver.as_ref())
-                .map_or_else(|| powertrain::idling(self.chassis), |d| d.shifter.run()),
+            engine: (self.driver.as_ref()).map_or_else(
+                || powertrain::idling(&looks.build.catalogue, self.chassis),
+                |d| d.shifter.run(),
+            ),
         }
     }
 
@@ -1138,11 +1143,11 @@ mod tests {
                 .iter()
                 .all(|car| car.body.position.xz().distance(p) > SPAWN_GAP)
             {
-                let chassis = rng.pick(COMMON.iter().copied());
+                let catalogue = crate::catalogue::builtin();
+                let chassis = rng.pick(catalogue.chassis.iter().map(|c| c.traffic));
                 let keen = rng.range(KEEN);
-                cars.push(TrafficCar::new(
-                    &network, &terrain, chassis, 0, leg, s, keen, rng.0,
-                ));
+                let world = (&catalogue, &network, &terrain);
+                cars.push(TrafficCar::new(world, chassis, 0, leg, s, keen, rng.0));
             }
         }
         let dt = 1.0 / 120.0;

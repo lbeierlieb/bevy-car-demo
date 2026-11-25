@@ -758,7 +758,7 @@ fn readings(car: &Car, looks: &Looks, motion: &Motion) -> [[Reading; 3]; 4] {
         let wheel = &build.wheels[axle];
         let suited = wheel
             .tire
-            .params(wheel.compound)
+            .params(build.rubber(axle))
             .suited_pressure(loads[axle]);
         [
             Reading {

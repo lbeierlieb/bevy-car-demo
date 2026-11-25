@@ -1294,21 +1294,22 @@ mod tests {
     #[test]
     #[ignore]
     fn write_engine_wavs() {
-        use crate::physics::engine::families::{FAMILIES, Version};
+        let catalogue = crate::catalogue::builtin();
         let dir = std::env::var("ENGINE_WAV").unwrap_or("engine-wav".into());
         let only = std::env::var("ENGINES").ok();
         std::fs::create_dir_all(&dir).unwrap();
         // Targets change at the game's frame rate; the synth glides between them.
         const TICK: f32 = 1.0 / 60.0;
         const IDLE: f32 = 850.0;
-        for (f, family) in FAMILIES.iter().enumerate() {
+        for (f, family) in catalogue.families.iter().enumerate() {
             for (v, version) in family.versions.iter().enumerate() {
                 if let Some(only) = &only
                     && !only.split(',').any(|code| code.trim() == version.code)
                 {
                     continue;
                 }
-                let hardware = Version::parts(f, v).hardware();
+                let hardware =
+                    crate::physics::engine::parts::Parts::of_version(&catalogue, f, v).hardware();
                 let redline = hardware.safe_rpm(usize::MAX);
                 let character = EngineCharacter {
                     layout: family.layout,
@@ -1362,7 +1363,8 @@ mod tests {
                 let per_tick = (TICK * SAMPLE_RATE as f32) as usize;
                 let chase = paths::ground_delay(Vec3::ZERO, Vec3::new(0.0, 2.5, 9.0));
                 // Inside the first car the factory puts this engine in.
-                let cabin = crate::chassis::CHASSIS
+                let cabin = crate::catalogue::builtin()
+                    .chassis
                     .iter()
                     .find(|chassis| chassis.engines.contains(&version.code))
                     .map_or(paths::CabinShape::DEFAULT, paths::CabinShape::of);
@@ -1456,10 +1458,10 @@ mod tests {
 
     #[test]
     fn every_layout_fires_each_cylinder_once_a_cycle() {
-        use crate::physics::engine::families::FAMILIES;
-        for family in &FAMILIES {
+        let catalogue = crate::catalogue::builtin();
+        for family in &catalogue.families {
             let sound = sound(family.layout);
-            let cylinders = family.versions[0].block().cylinders as usize;
+            let cylinders = family.versions[0].block.cylinders as usize;
             assert_eq!(sound.banks.len(), cylinders, "{}", family.name);
             assert!(LAYOUTS.contains(&family.layout));
             // Two exhausts need two banks, each with half the cylinders.
@@ -1515,9 +1517,10 @@ mod tests {
 
     /// The stock 2-litre four with `part` in the slot called `slot`.
     fn with(slot: &str, part: usize) -> EngineHardware {
-        use crate::physics::engine::parts::{Parts, SLOTS};
+        use crate::physics::engine::parts::Parts;
         let mut parts = Parts::stock();
-        let slot = SLOTS.iter().position(|s| s.name == slot).unwrap();
+        let slots = &parts.catalogue.slots;
+        let slot = slots.iter().position(|s| s.name == slot).unwrap();
         parts.chosen[slot] = part;
         parts.hardware()
     }
@@ -1540,10 +1543,13 @@ mod tests {
         assert!(short.header > stock.header && stock.header > long.header);
         assert_eq!(ExhaustSound::of(&with("Turbocharger", 2)).turbine, 1.0);
         // Every factory engine has a silencer and its pipes sized for it.
-        for family in 0..crate::physics::engine::families::FAMILIES.len() {
-            let versions = crate::physics::engine::families::FAMILIES[family].versions;
+        let catalogue = crate::catalogue::builtin();
+        for family in 0..catalogue.families.len() {
+            let versions = &catalogue.families[family].versions;
             for version in 0..versions.len() {
-                let hardware = Parts::all_stock(family, version).hardware();
+                let mut parts = Parts::of_version(&catalogue, family, version);
+                parts.chosen.fill(0);
+                let hardware = parts.hardware();
                 let sound = ExhaustSound::of(&hardware);
                 assert!(
                     (sound.bore - 1.0).abs() < 0.05,

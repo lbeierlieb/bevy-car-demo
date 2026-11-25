@@ -16,7 +16,6 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use crate::audio::{EngineAudio, EngineRun};
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car, CarSetup};
-use crate::chassis::PAINTS;
 use crate::looks::{Looks, Motion};
 use crate::menu::kit::{self, Panel, Place};
 use crate::shops::{AtShop, SceneBack, ShopKind, Shops, shop_window};
@@ -319,7 +318,7 @@ fn build_forecourt(
     let bark = material(Color::srgb(0.30, 0.22, 0.15), 1.0, 0.0);
     let leaves = material(Color::srgb(0.16, 0.30, 0.10), 1.0, 0.0);
     let flap = material(
-        Color::srgb_from_array(PAINTS[car.setup.build.paint].1),
+        Color::srgb_from_array(car.setup.build.paint().color),
         0.3,
         0.4,
     );
@@ -1027,7 +1026,7 @@ mod tests {
 
     #[test]
     fn every_filler_is_on_the_body_over_a_wheel() {
-        for chassis in 0..crate::chassis::CHASSIS.len() {
+        for chassis in 0..crate::catalogue::builtin().chassis.len() {
             let setup = CarSetup::factory(chassis, 0);
             let at = filler(&setup);
             let wheels = setup.build.chassis().wheels();

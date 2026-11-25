@@ -5,11 +5,13 @@
 //! driver a `Shifter` that picks the gear by its own shift points and turns the force the
 //! car needs at the wheels into rpm and load.
 
+use std::collections::HashMap;
 use std::f32::consts::PI;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 
 use crate::audio::EngineRun;
 use crate::car::CarSetup;
+use crate::catalogue::Shared;
 use crate::physics::drivetrain::Drive;
 use crate::physics::engine::Engine;
 use crate::physics::engine::table::curve;
@@ -56,7 +58,7 @@ const LEAST_PULL: f32 = 0.6;
 
 /// A chassis' factory drivetrain, as far as its sound needs.
 pub struct Powertrain {
-    gears: &'static [f32],
+    gears: Vec<f32>,
     final_drive: f32,
     /// Rolling radius of the driven wheels (m).
     radius: f32,
@@ -73,10 +75,24 @@ pub struct Powertrain {
 }
 
 impl Powertrain {
-    /// The factory drivetrain of `chassis` (in `CHASSIS`) with its base engine.
-    pub fn factory(chassis: usize) -> &'static Self {
-        static FACTORY: [OnceLock<Powertrain>; 13] = [const { OnceLock::new() }; 13];
-        FACTORY[chassis].get_or_init(|| Self::of(&CarSetup::factory(chassis, 0)))
+    /// The factory drivetrain of `catalogue`'s `chassis` with its base engine (worked out
+    /// once).
+    pub fn factory(catalogue: &Shared, chassis: usize) -> Arc<Self> {
+        type Made = HashMap<(u64, usize), Arc<Powertrain>>;
+        static FACTORY: Mutex<Option<Made>> = Mutex::new(None);
+        let key = (catalogue.fingerprint(), chassis);
+        if let Some(made) = FACTORY
+            .lock()
+            .ok()
+            .and_then(|made| made.as_ref()?.get(&key).cloned())
+        {
+            return made;
+        }
+        let made = Arc::new(Self::of(&CarSetup::factory_in(catalogue, chassis, 0)));
+        if let Ok(mut all) = FACTORY.lock() {
+            all.get_or_insert_default().insert(key, made.clone());
+        }
+        made
     }
 
     fn of(setup: &CarSetup) -> Self {
@@ -101,7 +117,7 @@ impl Powertrain {
             Drive::All { .. } => (setup.front.tire.radius + setup.rear.tire.radius) / 2.0,
         };
         Self {
-            gears: engine.gears,
+            gears: engine.gears.clone(),
             final_drive: engine.final_drive,
             radius,
             idle: build.ecu.idle_rpm,
@@ -138,7 +154,7 @@ impl Powertrain {
 
 /// A traffic driver's gear and what the engine does.
 pub struct Shifter {
-    powertrain: &'static Powertrain,
+    powertrain: Arc<Powertrain>,
     /// How keen the driver is (0 to 1): shifts later, pulls away at higher rpm.
     eager: f32,
     gear: usize,
@@ -150,13 +166,13 @@ pub struct Shifter {
 }
 
 impl Shifter {
-    pub fn new(powertrain: &'static Powertrain, eager: f32) -> Self {
+    pub fn new(powertrain: Arc<Powertrain>, eager: f32) -> Self {
         Self {
+            rpm: powertrain.idle,
             powertrain,
             eager: eager.clamp(0.0, 1.0),
             gear: 0,
             since: SHIFT_HOLD,
-            rpm: powertrain.idle,
             load: 0.0,
             turbo: 0.0,
         }
@@ -164,7 +180,7 @@ impl Shifter {
 
     /// Starts off in the gear for `speed` (m/s), as if it had been driving.
     pub fn cruise(&mut self, speed: f32) {
-        let p = self.powertrain;
+        let p = self.powertrain.clone();
         while self.gear + 1 < p.gears.len() && p.locked(self.gear, speed) > self.up_rpm(0.2) {
             self.gear += 1;
         }
@@ -173,7 +189,7 @@ impl Shifter {
 
     /// Where it shifts up with the engine making `demand` of what it could.
     fn up_rpm(&self, demand: f32) -> f32 {
-        let p = self.powertrain;
+        let p = self.powertrain.clone();
         let share = SHIFT_UP.0 + (SHIFT_UP.1 - SHIFT_UP.0) * self.eager;
         let band = p.redline - p.idle;
         let hard = p.idle + share * band;
@@ -206,7 +222,7 @@ impl Shifter {
     /// uses: less up hills and in heavy, weak or tall-geared cars, and nothing pulls
     /// while it shifts (m/s², negative when it slows down even so).
     pub fn most_acceleration(&self, mass: f32, speed: f32, grade: f32) -> f32 {
-        let p = self.powertrain;
+        let p = self.powertrain.clone();
         let drag = p.force(mass, speed, 0.0, grade);
         if self.since < p.shift_time {
             return -drag / mass;
@@ -232,7 +248,7 @@ impl Shifter {
         grade: f32,
         dt: f32,
     ) {
-        let p = self.powertrain;
+        let p = self.powertrain.clone();
         let force = p.force(mass, speed, acceleration, grade);
         let wanted = p.force(mass, speed, wanted, grade);
         self.since += dt;
@@ -304,10 +320,10 @@ impl Shifter {
 }
 
 /// An engine idling, for a car whose driver's gone.
-pub fn idling(chassis: usize) -> EngineRun {
+pub fn idling(catalogue: &Shared, chassis: usize) -> EngineRun {
     EngineRun {
         running: true,
-        rpm: Powertrain::factory(chassis).idle,
+        rpm: Powertrain::factory(catalogue, chassis).idle,
         fill: crate::physics::drivetrain::fill_for(0.0),
         turbo_speed: 0.0,
     }
@@ -316,7 +332,6 @@ pub fn idling(chassis: usize) -> EngineRun {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chassis::CHASSIS;
     use crate::physics::drivetrain::firing_load;
 
     /// A driver wanting `wanted` (m/s²) up to `top` (m/s) on a `grade` for `seconds`:
@@ -372,21 +387,28 @@ mod tests {
     #[test]
     fn traffic_shifts_through_the_gears() {
         let start = std::time::Instant::now();
-        for chassis in 0..CHASSIS.len() {
-            Powertrain::factory(chassis);
+        let catalogue = crate::catalogue::builtin();
+        for chassis in 0..catalogue.chassis.len() {
+            Powertrain::factory(&catalogue, chassis);
         }
         println!("torque curves in {:?}", start.elapsed());
         let mut times = Vec::new();
-        for (chassis, model) in CHASSIS.iter().enumerate() {
-            let p = Powertrain::factory(chassis);
+        for (chassis, model) in catalogue.chassis.iter().enumerate() {
+            let p = Powertrain::factory(&catalogue, chassis);
             let mass = model.mass + 230.0;
             let peak = p.torque.iter().map(|t| t.1).fold(0.0, f32::max);
             for eager in [0.0, 1.0] {
-                let run = drive(&mut Shifter::new(p, eager), mass, 0.0, 130.0 / 3.6, 50.0);
-                let mut shifter = Shifter::new(p, eager);
+                let run = drive(
+                    &mut Shifter::new(p.clone(), eager),
+                    mass,
+                    0.0,
+                    130.0 / 3.6,
+                    50.0,
+                );
+                let mut shifter = Shifter::new(p.clone(), eager);
                 drive(&mut shifter, mass, 0.0, 100.0 / 3.6, 80.0);
                 let cruise = shifter.run();
-                let mut climber = Shifter::new(p, eager);
+                let mut climber = Shifter::new(p.clone(), eager);
                 let climb = drive(&mut climber, mass, 0.1, 60.0 / 3.6, 40.0);
                 println!(
                     "{:10} {peak:4.0} N·m, eager {eager}: 0–100 in {:4.1} s, shifts {:?}, \
@@ -418,7 +440,7 @@ mod tests {
                 let load = firing_load(cruise.fill);
                 assert!(load > 0.05 && load < 0.5, "{}", model.name);
                 assert!(climb.speed > 50.0 / 3.6, "{}", model.name);
-                times.push((model.name, eager, run.to_100.unwrap()));
+                times.push((model.name.as_str(), eager, run.to_100.unwrap()));
             }
         }
         let time = |name, eager| {

@@ -47,14 +47,14 @@ pub enum Tone {
 /// A box on the body: its centre (`x` from the nose, `y` above the ground, and how far
 /// off the centreline), its size (along the car, up, across), and its colour. A box off
 /// the centreline comes as a pair, one each side.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Detail {
     pub at: [f32; 3],
     pub size: [f32; 3],
     pub tone: Tone,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Body {
     pub length: f32,
     pub width: f32,
@@ -63,12 +63,12 @@ pub struct Body {
     /// Height of the floor above the ground.
     pub floor: f32,
     /// The top of the lower body from nose to tail, as (x, y) points.
-    pub deck: &'static [[f32; 2]],
+    pub deck: Vec<[f32; 2]>,
     /// The cabin's outline above the deck from the base of the windscreen to the base of
     /// the rear window, as (x, y, glazed) points: the side from a point to the next is
     /// glass if it's glazed (1), else a painted panel (0). Two points are the base and the
     /// top of an open car's windscreen; none, no windscreen at all.
-    pub cabin: &'static [[f32; 3]],
+    pub cabin: Vec<[f32; 3]>,
     /// Width at the nose and at the tail, relative to the full width.
     pub nose: f32,
     pub tail: f32,
@@ -77,8 +77,8 @@ pub struct Body {
     /// The wheels stand outside the body, which has no wheel wells.
     pub open_wheels: bool,
     /// Dark openings in the deck (a cockpit, a pickup's bed): from x, to x, half-width.
-    pub openings: &'static [[f32; 3]],
-    pub details: &'static [Detail],
+    pub openings: Vec<[f32; 3]>,
+    pub details: Vec<Detail>,
 }
 
 /// The wheels the body is built around: front and rear.
@@ -250,7 +250,7 @@ impl Body {
 
     /// Height of the deck (the lower body's top) at `x`.
     pub fn deck_height(&self, x: f32) -> f32 {
-        height(self.deck, x)
+        height(&self.deck, x)
     }
 
     /// Half the cabin's width at its base at `x`.
@@ -291,7 +291,7 @@ impl Body {
             _ => self.greenhouse(&mut builder, wheels, paint),
         }
         let at = |x: f32, y: f32, across: f32| Vec3::new(across, y, self.z(x, wheels));
-        for opening in self.openings {
+        for opening in &self.openings {
             let [from, to, half_width] = *opening;
             let mut xs: Vec<f32> = self.deck.iter().map(|p| p[0]).collect();
             xs.retain(|&x| x > from && x < to);
@@ -501,7 +501,7 @@ impl Body {
 
     /// The cabin above the deck: glass (or panels), a painted roof, and pillars.
     fn greenhouse(&self, builder: &mut Builder, wheels: &Wheels, paint: [f32; 3]) {
-        let cabin = self.cabin;
+        let cabin = &self.cabin;
         let last = cabin.len() - 1;
         let tallest = cabin
             .iter()
@@ -572,11 +572,10 @@ impl Body {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chassis::CHASSIS;
 
     #[test]
     fn bodies_are_closed_and_within_their_size() {
-        for chassis in &CHASSIS {
+        for chassis in &crate::catalogue::builtin().chassis {
             let (body, wheels) = (&chassis.body, chassis.wheels());
             let mesh = body.mesh(&wheels, Color::WHITE);
             let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
@@ -632,7 +631,7 @@ mod tests {
     fn faces_point_outwards() {
         // The signed volume of a closed, outward-facing mesh is positive: the lower
         // body and the greenhouse are closed, and the details are closed boxes.
-        for chassis in &CHASSIS {
+        for chassis in &crate::catalogue::builtin().chassis {
             let mesh = chassis.body.mesh(&chassis.wheels(), Color::WHITE);
             let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
                 mesh.attribute(Mesh::ATTRIBUTE_POSITION)

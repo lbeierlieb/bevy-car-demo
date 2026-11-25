@@ -306,7 +306,6 @@ fn apply_controls(car: &mut Car, dt: f32) {
 mod tests {
     use super::*;
     use crate::car::{CarSetup, Controls, heading};
-    use crate::chassis::{CHASSIS, SUSPENSIONS};
     use crate::physics::tire::RACE;
     use crate::terrain::Spawn;
     use std::f32::consts::{PI, TAU};
@@ -370,13 +369,13 @@ mod tests {
     fn every_car_stands_on_its_wheels_and_pulls_away() {
         let terrain = Terrain::baked();
         let (p, yaw) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
-        for (index, chassis) in CHASSIS.iter().enumerate() {
+        for (index, chassis) in crate::catalogue::builtin().chassis.iter().enumerate() {
             for option in 0..chassis.engines.len() {
                 let setup = CarSetup::factory(index, option);
                 let name = format!("{} {}", chassis.name, chassis.engines[option]);
                 // The engine's place shows in the balance.
                 let front = setup.front_weight_with(setup.tank.litres);
-                let expected = match chassis.bay.place {
+                let expected = match chassis.bay.place.as_str() {
                     "middle" => 0.38..0.47,
                     "rear" => 0.34..0.42,
                     _ => 0.46..0.66,
@@ -675,8 +674,8 @@ mod tests {
 
     #[test]
     fn abs_keeps_the_wheels_turning() {
-        for (chassis, spec) in CHASSIS.iter().enumerate() {
-            let name = spec.name;
+        for (chassis, spec) in crate::catalogue::builtin().chassis.iter().enumerate() {
+            let name = &spec.name;
             let (with, turning, _) = emergency_stop(chassis, true, 0.0);
             let (without, locked, _) = emergency_stop(chassis, false, 0.0);
             println!(
@@ -709,14 +708,15 @@ mod tests {
         let terrain = Terrain::flat();
         let (p, yaw) = (Vec2::new(0.0, 300.0), 0.0);
         // Every car as it leaves the factory, and on the track suspension and tires.
-        let factory = (0..CHASSIS.len()).map(|chassis| CarSetup::factory(chassis, 0));
-        let track = (0..CHASSIS.len()).map(|chassis| {
+        let factory = (0..crate::catalogue::builtin().chassis.len())
+            .map(|chassis| CarSetup::factory(chassis, 0));
+        let track = (0..crate::catalogue::builtin().chassis.len()).map(|chassis| {
             let stock = CarSetup::factory(chassis, 0);
             let build = stock.build.clone().with_suspension(2).on_compound(RACE);
             CarSetup::new(build, stock.engine.parts, stock.engine.build)
         });
         for setup in factory.chain(track) {
-            let name = format!("{} ({})", setup.name, SUSPENSIONS[setup.build.suspension].0);
+            let name = format!("{} ({})", setup.name, setup.build.suspension().name);
             let mut car = Car::spawn_at(0, setup, &terrain, p.x, p.y, yaw);
             car.warm_tires();
             // The brakes' balance on its own.

@@ -10,6 +10,7 @@ pub mod body;
 pub mod buildings;
 pub mod camera;
 pub mod car;
+pub mod catalogue;
 pub mod chassis;
 pub mod chat;
 pub mod cockpit;
@@ -110,12 +111,13 @@ pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            terrain::TerrainPlugin,
-            obstacles::ObstaclesPlugin,
-            sim::SimPlugin,
-            traffic::NetworkPlugin,
-        ));
+        app.insert_resource(catalogue::Current(catalogue::builtin()))
+            .add_plugins((
+                terrain::TerrainPlugin,
+                obstacles::ObstaclesPlugin,
+                sim::SimPlugin,
+                traffic::NetworkPlugin,
+            ));
     }
 }
 

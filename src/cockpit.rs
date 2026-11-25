@@ -134,7 +134,7 @@ fn add_interior(
             );
             // Under a roof (the cabin's points between the windscreen's top and the rear
             // window's): its lining, just below the lowest of it, and the rear-view mirror.
-            if let [_, roof @ .., _] = body.cabin
+            if let [_, roof @ .., _] = &body.cabin[..]
                 && let [first, .., last] = roof
             {
                 let lowest = roof.iter().map(|point| point[1]).fold(f32::MAX, f32::min);

@@ -20,9 +20,10 @@ use super::predict::Prediction;
 use super::protocol::{
     CarId, CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, clean_chat,
 };
-use super::wire::{decode, encode};
+use super::wire::{decode_with, encode};
 use super::{ClockOffset, SEND_RATE};
 use crate::car::{ActiveCar, Car, DriverInput, ServerDriven, Spectating, StepInput};
+use crate::catalogue::Current;
 use crate::events::Event;
 use crate::events::round::{Action, Round};
 use crate::heli::HeliPose;
@@ -90,6 +91,9 @@ pub struct ClientPlugin;
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
+        if !app.world().contains_resource::<Current>() {
+            app.insert_resource(Current(crate::catalogue::builtin()));
+        }
         app.add_systems(
             Update,
             (
@@ -342,7 +346,7 @@ fn receive(
     mut commands: Commands,
     mut connection: ResMut<Connection>,
     mut prediction: ResMut<Prediction>,
-    time: Res<Time<Real>>,
+    (time, catalogue): (Res<Time<Real>>, Option<Res<Current>>),
     mut cars: Query<(Entity, &mut RemoteCar, Option<&Looks>, Option<&Tag>)>,
 ) {
     let now = now(&time);
@@ -351,7 +355,8 @@ fn receive(
     // of one can come in a frame).
     let mut fresh: Vec<(CarId, VecDeque<CarState>)> = Vec::new();
     while let Some(bytes) = connection.link.receive() {
-        let Some(message) = decode::<ToClient>(&bytes) else {
+        let catalogue = catalogue.as_ref().map(|catalogue| &catalogue.0);
+        let Some(message) = decode_with::<ToClient>(&bytes, catalogue) else {
             if bytes.first() == Some(&ToClient::LOOKS) {
                 warn!(
                     "The server sent a car this game doesn't know (it's from a newer \

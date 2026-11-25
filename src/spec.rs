@@ -9,9 +9,8 @@ use crate::chassis::{BRAKE_BALANCES, BRAKE_FORCES, CarBuild, PRESSURES, TOES};
 use crate::net::wire::{Reader, Wire};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::ecu::{CamControl, Ecu, EcuModel};
-use crate::physics::engine::families::FAMILIES;
 use crate::physics::engine::maps::EngineMaps;
-use crate::physics::engine::parts::{Parts, SLOTS};
+use crate::physics::engine::parts::Parts;
 use crate::physics::engine::table::Table;
 use crate::physics::fuel::PUMP_OCTANE;
 
@@ -105,7 +104,10 @@ impl Wire for Parts {
     fn put(&self, out: &mut Vec<u8>) {
         self.family.put(out);
         self.version.put(out);
-        self.chosen.put(out);
+        // As many as the catalogue has slots.
+        for chosen in &self.chosen {
+            chosen.put(out);
+        }
         self.intake_timing.put(out);
         self.exhaust_timing.put(out);
         self.boost.put(out);
@@ -114,22 +116,25 @@ impl Wire for Parts {
 
     /// Their header room is the car's to say (`CarBuild::install`).
     fn get(r: &mut Reader) -> Option<Self> {
+        let catalogue = r.catalogue()?;
         let family: usize = r.get()?;
         let version: usize = r.get()?;
+        let chosen = (0..catalogue.slots.len())
+            .map(|_| r.get())
+            .collect::<Option<_>>()?;
         let parts = Self {
+            catalogue: catalogue.clone(),
             family,
             version,
-            chosen: r.get()?,
+            chosen,
             intake_timing: r.get()?,
             exhaust_timing: r.get()?,
             boost: r.get()?,
             ecu: r.get()?,
             header_room: 0.0,
         };
-        let fine = FAMILIES
-            .get(family)
-            .is_some_and(|f| version < f.versions.len())
-            && (parts.chosen.iter().zip(&SLOTS)).all(|(&part, slot)| part < slot.parts.len())
+        let fine = (catalogue.families.get(family)).is_some_and(|f| version < f.versions.len())
+            && crate::physics::engine::parts::fits(catalogue, &parts.chosen)
             && within(parts.intake_timing, &(-10.0..=10.0))
             && within(parts.exhaust_timing, &(-10.0..=10.0))
             && within(parts.boost, &(0.3..=1.5));
@@ -223,15 +228,19 @@ impl Wire for Table {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chassis::CHASSIS;
-    use crate::net::wire::{decode, encode};
+    use crate::net::wire::encode;
+
+    /// Reads a message with cars of the built-in catalogue.
+    fn decode<T: Wire>(bytes: &[u8]) -> Option<T> {
+        crate::net::wire::decode_with(bytes, Some(&crate::catalogue::builtin()))
+    }
     use crate::snapshot::save;
     use crate::terrain::Terrain;
 
     #[test]
     fn every_factory_car_reads_back_as_the_same_car() {
         let terrain = Terrain::flat();
-        for (chassis, model) in CHASSIS.iter().enumerate() {
+        for (chassis, model) in crate::catalogue::builtin().chassis.iter().enumerate() {
             for option in 0..model.engines.len() {
                 let setup = CarSetup::factory(chassis, option);
                 let spec = CarSpec::of(&setup);

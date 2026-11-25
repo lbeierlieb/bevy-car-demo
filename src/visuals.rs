@@ -73,9 +73,9 @@ struct Shared {
     materials: Option<[Materials; 2]>,
     wheel: Handle<Mesh>,
     bar: Handle<Mesh>,
-    bodies: HashMap<(usize, usize), Handle<Mesh>>,
+    bodies: HashMap<(u64, usize, usize), Handle<Mesh>>,
     /// Each chassis' lamp lenses, head and tail (lit at night, `night::Glow`).
-    lamps: HashMap<usize, [Handle<Mesh>; 2]>,
+    lamps: HashMap<(u64, usize), [Handle<Mesh>; 2]>,
 }
 
 impl Shared {
@@ -161,17 +161,17 @@ fn add_car_meshes(
         }
         let build = &looks.build;
         let body = (shared.bodies)
-            .entry((build.chassis, build.paint))
+            .entry((build.catalogue.fingerprint(), build.chassis, build.paint))
             .or_insert_with(|| {
                 let chassis = build.chassis();
-                meshes.add(chassis.body.mesh(&chassis.wheels(), build.paint()))
+                meshes.add(chassis.body.mesh(&chassis.wheels(), build.color()))
             })
             .clone();
         // A ghost's lamps aren't lit (they'd be solid on a see-through car).
         let lamps = glow.as_ref().filter(|_| !ghost).map(|glow| {
             let [head, tail] = shared
                 .lamps
-                .entry(build.chassis)
+                .entry((build.catalogue.fingerprint(), build.chassis))
                 .or_insert_with(|| {
                     let chassis = build.chassis();
                     let (head, tail, _) = chassis.body.lamps(&chassis.wheels());

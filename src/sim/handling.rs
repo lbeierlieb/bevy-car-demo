@@ -186,8 +186,7 @@ fn a_power_slide_can_be_caught() {
 #[test]
 #[ignore]
 fn power_slides() {
-    use crate::chassis::CHASSIS;
-    for (chassis, made) in CHASSIS.iter().enumerate() {
+    for (chassis, made) in crate::catalogue::builtin().chassis.iter().enumerate() {
         for option in 0..made.engines.len() {
             for traction_control in [false, true] {
                 let slide = power_slide(CarSetup::factory(chassis, option), traction_control);
@@ -245,8 +244,8 @@ fn circle(setup: CarSetup, speed: f32, seconds: usize, mut each: impl FnMut(usiz
 #[test]
 #[ignore]
 fn tire_temperatures() {
-    use crate::physics::tire::COMPOUNDS;
-    for (tires, compound) in COMPOUNDS.iter().enumerate() {
+    let catalogue = crate::catalogue::builtin();
+    for (tires, compound) in catalogue.compounds.iter().enumerate() {
         for speed in [8.0, 14.0, 17.0, 19.0] {
             let factory = CarSetup::factory(3, 0);
             let build = factory.build.clone().on_compound(tires);
@@ -330,8 +329,7 @@ fn cruising_consumption_is_plausible() {
 #[test]
 #[ignore]
 fn consumption() {
-    use crate::chassis::CHASSIS;
-    for (chassis, made) in CHASSIS.iter().enumerate() {
+    for (chassis, made) in crate::catalogue::builtin().chassis.iter().enumerate() {
         for option in 0..made.engines.len() {
             let at = |kmh: f32| cruising_consumption(CarSetup::factory(chassis, option), kmh / 3.6);
             println!(
@@ -518,7 +516,6 @@ fn cornering_heat(setup: CarSetup, radius: f32, share: f32, seconds: f32) -> [f3
 /// the light car's stay cool and the heavy car's cook.
 #[test]
 fn tires_are_sized_for_their_cars() {
-    use crate::chassis::CHASSIS;
     use crate::physics::tire::STREET;
     let spread = |sized: bool| {
         let temperatures: Vec<f32> = [0, 3, 11]
@@ -527,10 +524,12 @@ fn tires_are_sized_for_their_cars() {
                 let factory = CarSetup::factory(chassis, 0);
                 let mut build = factory.build.clone().on_compound(STREET);
                 if !sized {
-                    build.wheels = CHASSIS[3].wheels.map(|wheel| wheel.with_compound(STREET));
+                    build.wheels = crate::catalogue::builtin().chassis[3]
+                        .wheels
+                        .map(|wheel| wheel.with_compound(STREET));
                 }
                 let setup = CarSetup::new(build, factory.engine.parts, factory.engine.build);
-                let name = setup.name;
+                let name = setup.name.clone();
                 let [front, rear] = cornering_heat(setup, 40.0, 0.7, 60.0);
                 println!("{name} (sized {sized}): outside treads {front:.0} °C, {rear:.0} °C");
                 front.max(rear)
@@ -553,17 +552,19 @@ fn tires_are_sized_for_their_cars() {
 #[test]
 #[ignore]
 fn cornering_temperatures() {
-    use crate::chassis::CHASSIS;
-    for chassis in 0..CHASSIS.len() {
+    for chassis in 0..crate::catalogue::builtin().chassis.len() {
         let setup = CarSetup::factory(chassis, 0);
-        let (name, compound) = (setup.name, setup.front.tire.compound);
+        let compound_name = setup.build.catalogue.compounds[setup.build.wheels[0].compound]
+            .name
+            .clone();
+        let (name, compound) = (setup.name.clone(), setup.front.tire.compound);
         let grip = grip_at_rest(&setup);
         let [front, rear] = cornering_heat(setup, 40.0, 0.7, 60.0);
         let warmth = |t: f32| compound.warmth(t) * 100.0;
         println!(
             "{name:<8} {:<8} grip {grip:.2}: front {front:3.0} °C ({:3.0} %), rear {rear:3.0} °C \
              ({:3.0} %)",
-            compound.name,
+            compound_name,
             warmth(front),
             warmth(rear)
         );
@@ -573,8 +574,7 @@ fn cornering_temperatures() {
 /// The factory's tire pressures suit its tires under the car's weight.
 #[test]
 fn factory_pressures_suit_the_tires() {
-    use crate::chassis::CHASSIS;
-    for chassis in 0..CHASSIS.len() {
+    for chassis in 0..crate::catalogue::builtin().chassis.len() {
         let setup = CarSetup::factory(chassis, 0);
         for (axle, front) in [true, false].into_iter().enumerate() {
             let load = (setup.corner_mass(front) + setup.axle(front).unsprung_mass) * 9.81;
@@ -666,9 +666,8 @@ fn steady_roll(setup: CarSetup, lateral: f32) -> (f32, f32) {
 /// the front than the front carries, so they push a little rather than step out.
 #[test]
 fn factory_cars_roll_like_real_ones() {
-    use crate::chassis::CHASSIS;
     use crate::physics::drivetrain::Drive;
-    for (chassis, made) in CHASSIS.iter().enumerate() {
+    for (chassis, made) in crate::catalogue::builtin().chassis.iter().enumerate() {
         let setup = CarSetup::factory(chassis, 0);
         let weight = front_weight(&setup);
         let (roll, moved) = steady_roll(setup, 0.5);
@@ -706,10 +705,9 @@ fn front_weight(setup: &CarSetup) -> f32 {
 #[test]
 #[ignore]
 fn roll_stiffness() {
-    use crate::chassis::CHASSIS;
-    for (chassis, made) in CHASSIS.iter().enumerate() {
+    for (chassis, made) in crate::catalogue::builtin().chassis.iter().enumerate() {
         let setup = CarSetup::factory(chassis, 0);
-        let name = setup.name;
+        let name = setup.name.clone();
         let weight = front_weight(&setup);
         let deg = std::f32::consts::PI / 180.0;
         // Roll stiffness of the springs and of the bars on each axle (N·m per degree).

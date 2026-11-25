@@ -23,7 +23,7 @@
 use bevy::prelude::*;
 
 use crate::car::CarSetup;
-use crate::chassis::{GEARBOXES, GearboxKind};
+use crate::chassis::GearboxKind;
 use crate::physics::suspension::{AxleSetup, Corner};
 
 /// Distance the front tires' contact points trail the steering axes (from caster, m).
@@ -110,7 +110,7 @@ impl Rack {
 
     /// The front corners' moments in a car built as `setup`.
     pub fn of(setup: &CarSetup, corners: &[Corner], position: Vec3, rotation: Quat) -> Self {
-        let differential = match GEARBOXES[setup.build.gearbox].kind {
+        let differential = match setup.build.gearbox().kind {
             GearboxKind::Transverse => TRANSVERSE_DIFFERENTIAL,
             GearboxKind::Inline | GearboxKind::Transaxle => 0.0,
         };
@@ -160,7 +160,6 @@ crate::snapshot::snapshot!(Rack {
 mod tests {
     use super::*;
     use crate::car::Car;
-    use crate::chassis::CHASSIS;
     use crate::physics::drivetrain::Drive;
     use crate::sim::{CHASSIS_HZ, step_car};
     use crate::terrain::Terrain;
@@ -277,7 +276,7 @@ mod tests {
     #[test]
     #[ignore]
     fn steering_feel() {
-        for (index, chassis) in CHASSIS.iter().enumerate() {
+        for (index, chassis) in crate::catalogue::builtin().chassis.iter().enumerate() {
             let setup = CarSetup::factory(index, 0);
             let drive = match setup.engine.drive {
                 Drive::Front => "FWD",

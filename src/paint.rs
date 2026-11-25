@@ -20,7 +20,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use crate::audio::{EngineAudio, EngineRun};
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car};
-use crate::chassis::{PAINTS, SHOP_PAINTS};
+use crate::catalogue::Current;
 use crate::looks::{Looks, Motion};
 use crate::menu::kit::{self, Panel, Place};
 use crate::shops::{self, AtShop, SceneBack, ShopKind, Shops, shop_window};
@@ -81,7 +81,7 @@ struct Booth {
     swing: f32,
     zoom: f32,
     eye: Option<Vec3>,
-    /// The paint picked in the window (in `PAINTS`).
+    /// The paint picked in the window (in the catalogue's `paints`).
     picked: usize,
     /// In the colour picker: the paint picked before it opened (back to it on cancel).
     choosing: Option<usize>,
@@ -198,7 +198,7 @@ fn shop(
     let ctx = contexts.ctx_mut()?;
     shop_window(ctx, &shops, &mut at, ShopKind::Paint, |ui, _| {
         enter = kit::button(ui, "Into the paint booth").clicked();
-        kit::note(ui, &format!("Now: {}", PAINTS[car.setup.build.paint].0));
+        kit::note(ui, &format!("Now: {}", car.setup.build.paint().name));
     });
     let Some(marker) = marker.filter(|_| enter) else {
         return Ok(());
@@ -218,10 +218,16 @@ fn shop(
         target: Vec3::new(0.0, LOOK_UP, hull.center.z),
         zoom: 1.0,
         // The paint now, if it's one of the shop's (not a dull factory one).
-        picked: if car.setup.build.paint < SHOP_PAINTS {
+        picked: if car.setup.build.paint().shop {
             car.setup.build.paint
         } else {
-            0
+            car.setup
+                .build
+                .catalogue
+                .shop_paints()
+                .first()
+                .copied()
+                .unwrap_or(0)
         },
         ..default()
     };
@@ -349,11 +355,17 @@ fn build_booth(
     let red = material(Color::srgb(0.8, 0.08, 0.06), 0.4, 0.0);
     let green = material(Color::srgb(0.1, 0.6, 0.2), 0.4, 0.0);
     let tin = material(Color::srgb(0.80, 0.81, 0.83), 0.35, 0.8);
-    let lids: Vec<_> = PAINTS[..SHOP_PAINTS]
-        .iter()
-        .map(|(_, color)| material(rgb(*color), 0.3, 0.3))
+    let catalogue = car.setup.build.catalogue.clone();
+    let shop = catalogue.shop_paints();
+    let lids: Vec<_> = (shop.iter())
+        .map(|&paint| {
+            (
+                paint,
+                material(rgb(catalogue.paints[paint].color), 0.3, 0.3),
+            )
+        })
         .collect();
-    let card = material(rgb(PAINTS[booth.picked].1), 0.25, 0.4);
+    let card = material(rgb(catalogue.paints[booth.picked].color), 0.25, 0.4);
     let glow = |materials: &mut Assets<StandardMaterial>, color: LinearRgba| {
         materials.add(StandardMaterial {
             base_color: Color::from(color),
@@ -367,7 +379,7 @@ fn build_booth(
     let screen = glow(materials, LinearRgba::rgb(0.3, 1.6, 0.6));
     let mut haze = |cull_mode| {
         materials.add(StandardMaterial {
-            base_color: rgb(PAINTS[booth.picked].1).with_alpha(0.0),
+            base_color: rgb(catalogue.paints[booth.picked].color).with_alpha(0.0),
             alpha_mode: AlphaMode::Blend,
             unlit: true,
             cull_mode,
@@ -594,7 +606,7 @@ fn build_booth(
     // its hook with the hose coiled under it.
     let right = w - 0.01;
     let shelf_z = l - 2.4;
-    let shelf_len = 0.2 * SHOP_PAINTS.div_ceil(2) as f32 + 0.2;
+    let shelf_len = 0.2 * shop.len().div_ceil(2) as f32 + 0.2;
     for y in [0.9, 1.4] {
         b.block(
             Vec3::new(right - 0.2, y, shelf_z),
@@ -604,9 +616,10 @@ fn build_booth(
     }
     let can = meshes.add(Cylinder::new(0.075, 0.16));
     let lid = meshes.add(Cylinder::new(0.077, 0.012));
-    for (paint, lid_paint) in lids.iter().enumerate() {
-        let row = paint % 2;
-        let z = shelf_z - shelf_len / 2.0 + 0.2 + 0.2 * (paint / 2) as f32;
+    for (place, (paint, lid_paint)) in lids.iter().enumerate() {
+        let paint = *paint;
+        let row = place % 2;
+        let z = shelf_z - shelf_len / 2.0 + 0.2 + 0.2 * (place / 2) as f32;
         let at = Vec3::new(right - 0.22, [0.995, 1.495][row], z);
         let body = b.put(&can, &tin, Transform::from_translation(at));
         b.commands
@@ -765,7 +778,7 @@ fn spray(
 /// its tin pulled forward.
 #[allow(clippy::type_complexity)]
 fn dress(
-    booth: Res<Booth>,
+    (catalogue, booth): (Res<Current>, Res<Booth>),
     paints: Option<Res<BoothPaints>>,
     active: Res<ActiveCar>,
     cars: Query<&Car>,
@@ -780,7 +793,7 @@ fn dress(
             }
         }
     }
-    let color = Color::srgb_from_array(PAINTS[booth.picked].1);
+    let color = Color::srgb_from_array(catalogue.paints[booth.picked].color);
     if let Some(mut card) = paints.and_then(|paints| materials.get_mut(&paints.card))
         && card.base_color != color
     {
@@ -803,6 +816,7 @@ fn dress(
 /// sinking towards the grates.
 fn mist(
     time: Res<Time>,
+    catalogue: Res<Current>,
     booth: Res<Booth>,
     paints: Option<Res<BoothPaints>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -815,7 +829,7 @@ fn mist(
         Some(coat) => (thickness(coat.time), coat.paint),
         None => (0.0, booth.picked),
     };
-    let color = Color::srgb_from_array(PAINTS[paint].1);
+    let color = Color::srgb_from_array(catalogue.paints[paint].color);
     for (handle, alpha) in [(&paints.shells, SHELL), (&paints.droplets, 0.6)] {
         if let Some(mut material) = materials.get_mut(handle) {
             let color = color.with_alpha(thick * alpha);
@@ -907,6 +921,9 @@ fn window(
         return Ok(());
     };
     let now = car.setup.build.paint;
+    let catalogue = car.setup.build.catalogue.clone();
+    let paints = &catalogue.paints;
+    let shop = catalogue.shop_paints();
     let mut out = back.take();
     let ctx = contexts.ctx_mut()?;
     let back_does = if booth.choosing.is_some() {
@@ -919,12 +936,12 @@ fn window(
         .width(420.0)
         .back(Some(back_does))
         .show(ctx, |ui| {
-            let colors: Vec<(&str, Color32)> = PAINTS[..SHOP_PAINTS]
-                .iter()
-                .map(|(name, [r, g, b])| {
+            let colors: Vec<(&str, Color32)> = (shop.iter())
+                .map(|&paint| {
+                    let [r, g, b] = paints[paint].color;
                     let color =
                         Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
-                    (*name, color)
+                    (paints[paint].name.as_str(), color)
                 })
                 .collect();
             if let Some(before) = booth.choosing {
@@ -934,8 +951,10 @@ fn window(
                     ui,
                     "The arrows pick a colour, choose keeps it, back keeps the one before.",
                 );
-                let grid = kit::swatches(ui, &colors, 5, &mut booth.picked);
-                kit::info(ui, "Picked", PAINTS[booth.picked].0);
+                let mut place = (shop.iter().position(|&paint| paint == booth.picked)).unwrap_or(0);
+                let grid = kit::swatches(ui, &colors, 5, &mut place);
+                booth.picked = shop.get(place).copied().unwrap_or(booth.picked);
+                kit::info(ui, "Picked", &paints[booth.picked].name);
                 let keep = grid.clicked();
                 let cancel = std::mem::take(&mut out) || kit::button(ui, "Cancel").clicked();
                 if keep || cancel {
@@ -952,7 +971,7 @@ fn window(
             let spraying = booth.spray;
             let colour = ui
                 .add_enabled_ui(spraying.is_none(), |ui| {
-                    kit::submenu_with(ui, "Colour", PAINTS[booth.picked].0)
+                    kit::submenu_with(ui, "Colour", &paints[booth.picked].name)
                 })
                 .inner;
             booth.colour_row = Some(colour.id);
@@ -974,7 +993,7 @@ fn window(
                     let picked = booth.picked;
                     let spray = ui
                         .add_enabled_ui(picked != now, |ui| {
-                            kit::button(ui, &format!("Spray it {}", PAINTS[picked].0))
+                            kit::button(ui, &format!("Spray it {}", paints[picked].name))
                         })
                         .inner;
                     if spray.clicked() {
@@ -985,7 +1004,7 @@ fn window(
                     }
                 }
             }
-            kit::info(ui, "Now", PAINTS[now].0);
+            kit::info(ui, "Now", &paints[now].name);
             kit::note(ui, "Drag to look round, the mouse wheel to go nearer.");
             if kit::button(ui, "Back to the car").clicked() {
                 out = true;
@@ -1012,7 +1031,7 @@ mod tests {
     fn a_coat_goes_on_when_the_mist_is_thickest() {
         let terrain = Terrain::flat();
         let mut car = Car::spawn_at(0, CarSetup::default(), &terrain, 0.0, 0.0, 0.0);
-        let paint = (car.setup.build.paint + 1) % SHOP_PAINTS;
+        let paint = (car.setup.build.paint + 1) % car.setup.build.catalogue.shop_paints().len();
         let mut spray = Some(Spray { paint, time: 0.0 });
         let dt = 0.1;
         let mut steps = 0;

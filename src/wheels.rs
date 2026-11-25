@@ -3,9 +3,9 @@
 //!
 //! A tire size is written the usual way, `205/55 R16`: 205 mm wide, its sidewall 55 % of
 //! that high, on a 16" rim. A rim is a diameter and a width (in inches). Each axle of a car
-//! has its own rims and tires, of a compound in `tire::COMPOUNDS`.
+//! has its own rims and tires, of a compound in the catalogue's `compounds`.
 
-use crate::physics::tire::{COMPOUNDS, GRIP, RELAXATION, ROLLING, TireParams};
+use crate::physics::tire::{Compound, GRIP, RELAXATION, ROLLING, TireParams};
 
 /// Metres in an inch.
 const INCH: f32 = 0.0254;
@@ -132,9 +132,9 @@ impl TireSize {
         DESIGN_LOAD * self.width_m() * (diameter / DESIGN_DIAMETER).sqrt()
     }
 
-    /// The tire of this size and `compound` (in `tire::COMPOUNDS`).
-    pub fn params(&self, compound: usize) -> TireParams {
-        let compound = COMPOUNDS[compound];
+    /// The tire of this size in `compound`.
+    pub fn params(&self, compound: &Compound) -> TireParams {
+        let compound = *compound;
         let wider = self.width_m() / REFERENCE_WIDTH;
         let taller = f32::from(self.aspect) / REFERENCE_ASPECT;
         let stiffer = wider.sqrt() * taller.powf(-SIDEWALL_STIFFNESS);
@@ -222,7 +222,7 @@ impl TireSize {
     }
 }
 
-/// An axle's wheels: rims, and tires of a size and a compound (in `tire::COMPOUNDS`).
+/// An axle's wheels: rims, and tires of a size and a compound (in the catalogue's `compounds`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Wheel {
     pub rim: Rim,
@@ -244,16 +244,6 @@ impl Wheel {
     /// The same rims and tires in `compound`.
     pub fn with_compound(self, compound: usize) -> Self {
         Self { compound, ..self }
-    }
-
-    /// E.g. `205/55 R16 street on 16×7.0"`.
-    pub fn label(&self) -> String {
-        format!(
-            "{} {} on {}",
-            self.tire.label(),
-            COMPOUNDS[self.compound].name.to_lowercase(),
-            self.rim.label()
-        )
     }
 }
 
@@ -329,9 +319,12 @@ mod tests {
 
     #[test]
     fn wider_tires_grip_more_but_roll_heavier() {
-        use crate::physics::tire::STREET;
+        use crate::physics::tire::{COMPOUNDS, STREET};
         let (narrow, wide) = (size(205, 45, 17), size(245, 40, 17));
-        let (n, w) = (narrow.params(STREET), wide.params(STREET));
+        let (n, w) = (
+            narrow.params(&COMPOUNDS[STREET]),
+            wide.params(&COMPOUNDS[STREET]),
+        );
         // About 5 % more grip under the same load for a fifth more width.
         let more = w.friction(3500.0) / n.friction(3500.0);
         assert!(more > 1.04 && more < 1.07, "{more}");

@@ -85,7 +85,7 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) 
     let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return Ok(());
     };
-    egui::Window::new(car.setup.name)
+    egui::Window::new(&car.setup.name)
         .default_pos([10.0, 10.0])
         .default_width(340.0)
         .vscroll(true)

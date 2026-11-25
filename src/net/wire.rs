@@ -4,20 +4,37 @@
 
 use bevy::prelude::*;
 
+use crate::catalogue::Shared;
+
 /// Something that goes over the network.
 pub trait Wire: Sized {
     fn put(&self, out: &mut Vec<u8>);
     fn get(r: &mut Reader) -> Option<Self>;
 }
 
-/// Reads values off the front of a message.
+/// Reads values off the front of a message: cars by their places in a catalogue, which
+/// the reader needs then.
 pub struct Reader<'a> {
     bytes: &'a [u8],
+    catalogue: Option<&'a Shared>,
 }
 
 impl<'a> Reader<'a> {
     pub fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes }
+        Self {
+            bytes,
+            catalogue: None,
+        }
+    }
+
+    /// Reads cars as built from `catalogue`.
+    pub fn with(bytes: &'a [u8], catalogue: Option<&'a Shared>) -> Self {
+        Self { bytes, catalogue }
+    }
+
+    /// The catalogue cars are read with, if there's one (a car without one is malformed).
+    pub fn catalogue(&self) -> Option<&'a Shared> {
+        self.catalogue
     }
 
     pub fn take(&mut self, n: usize) -> Option<&'a [u8]> {
@@ -207,7 +224,12 @@ pub fn encode<T: Wire>(value: &T) -> Vec<u8> {
 
 /// Reads a whole message, or nothing if it's malformed.
 pub fn decode<T: Wire>(bytes: &[u8]) -> Option<T> {
-    let mut r = Reader::new(bytes);
+    decode_with(bytes, None)
+}
+
+/// Reads a whole message with cars built from `catalogue`, or nothing if it's malformed.
+pub fn decode_with<T: Wire>(bytes: &[u8], catalogue: Option<&Shared>) -> Option<T> {
+    let mut r = Reader::with(bytes, catalogue);
     let value = r.get()?;
     r.done().then_some(value)
 }

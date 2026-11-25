@@ -15,18 +15,16 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 
 use crate::car::{Car, CarSetup, heading};
-use crate::chassis::{
-    BRAKE_BALANCES, BRAKE_FORCES, CHASSIS, CLUTCHES, CarBuild, GEARBOXES, PAINTS, PRESSURES,
-    SUSPENSIONS, TOES, needs_adapter,
-};
+use crate::catalogue::{Catalogue, Shared};
+use crate::chassis::{BRAKE_BALANCES, BRAKE_FORCES, CarBuild, PRESSURES, TOES};
 use crate::menu::kit;
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::ecu::{Ecu, EcuModel};
-use crate::physics::engine::families::{FAMILIES, Version};
 use crate::physics::engine::hardware::EngineHardware;
 use crate::physics::engine::maps::{self, EngineMaps};
-use crate::physics::engine::parts::{HEADERS, INTERCOOLER, Parts, SLOTS};
-use crate::physics::tire::{COMPOUNDS, Tread};
+use crate::physics::engine::parts::{Parts, Readout};
+use crate::physics::engine::store;
+use crate::physics::tire::Tread;
 use crate::terrain::Terrain;
 use crate::wheels::{self, TireSize, Wheel};
 use crate::workshop::{self, Work};
@@ -216,21 +214,22 @@ fn parts_shop(ui: &mut egui::Ui, garage: &mut Garage, car: &mut Car) -> bool {
 
 /// What's fitted to the chassis.
 fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
-    let chassis = draft.chassis();
+    let catalogue = draft.catalogue.clone();
+    let chassis = &catalogue.chassis[draft.chassis];
     kit::section(
         ui,
         &format!("{} ({})", chassis.name, chassis.class.to_lowercase()),
     );
-    let gearboxes: Vec<usize> = chassis.gearboxes().collect();
+    let gearboxes: Vec<usize> = catalogue.gearboxes_for(chassis).collect();
     kit::pick(ui, "Gearbox", &mut draft.gearbox, &gearboxes, |g| {
-        GEARBOXES[g].name.to_string()
+        catalogue.gearboxes[g].name.clone()
     });
-    let gearbox = draft.gearbox;
-    let clutches: Vec<usize> = (0..CLUTCHES.len()).collect();
+    let gearbox = &catalogue.gearboxes[draft.gearbox];
+    let clutches: Vec<usize> = (0..catalogue.clutches.len()).collect();
     kit::pick(ui, "Clutch", &mut draft.clutch, &clutches, |clutch| {
-        let (name, more) = CLUTCHES[clutch];
-        let torque = GEARBOXES[gearbox].clutch_torque * more;
-        format!("{name} ({torque:.0} N·m)")
+        let clutch = &catalogue.clutches[clutch];
+        let torque = gearbox.clutch_torque * clutch.torque;
+        format!("{} ({torque:.0} N·m)", clutch.name)
     });
     kit::slider(
         ui,
@@ -242,9 +241,9 @@ fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
     );
     kit::toggle(ui, "Limited-slip differentials", &mut draft.limited_slip);
     let mut suspension = draft.suspension;
-    let kits: Vec<usize> = (0..SUSPENSIONS.len()).collect();
+    let kits: Vec<usize> = (0..catalogue.suspensions.len()).collect();
     if kit::pick(ui, "Suspension", &mut suspension, &kits, |k| {
-        SUSPENSIONS[k].0.to_string()
+        catalogue.suspensions[k].name.clone()
     }) {
         draft.set_suspension(suspension);
     }
@@ -275,6 +274,7 @@ fn car_parts(ui: &mut egui::Ui, draft: &mut CarBuild) {
 
 /// The rims and tires on each axle, or the same all round.
 fn wheel_parts(ui: &mut egui::Ui, draft: &mut CarBuild, same: &mut bool) {
+    let catalogue = draft.catalogue.clone();
     kit::section(ui, "Wheels");
     kit::toggle(ui, "Same front and rear", same);
     if *same {
@@ -298,7 +298,7 @@ fn wheel_parts(ui: &mut egui::Ui, draft: &mut CarBuild, same: &mut bool) {
                 wheel.mass()
             ),
         );
-        wheel_picker(ui, wheel);
+        wheel_picker(ui, &catalogue, wheel);
     }
     if *same {
         draft.wheels[1] = draft.wheels[0];
@@ -336,7 +336,7 @@ pub fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, setup: &CarSetup) {
         let wheel = &build.wheels[axle];
         let suited = wheel
             .tire
-            .params(wheel.compound)
+            .params(build.rubber(axle))
             .suited_pressure(loads[axle]);
         kit::slider(
             ui,
@@ -390,7 +390,7 @@ pub fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, setup: &CarSetup) {
 
 /// Rim diameter and width, tire width and sidewall, and compound. Another rim diameter or
 /// tire width keeps the outside diameter as near as it goes, on a rim that suits the tire.
-fn wheel_picker(ui: &mut egui::Ui, wheel: &mut Wheel) {
+fn wheel_picker(ui: &mut egui::Ui, catalogue: &Catalogue, wheel: &mut Wheel) {
     let diameter = 2.0 * wheel.tire.radius();
     let resize = |wheel: &mut Wheel| {
         wheel.tire = TireSize::nearest(wheel.tire.width, wheel.rim.diameter, diameter);
@@ -418,42 +418,42 @@ fn wheel_picker(ui: &mut egui::Ui, wheel: &mut Wheel) {
     kit::pick(ui, "Sidewall", &mut wheel.tire.aspect, &aspects, |a| {
         format!("{a} %")
     });
-    let compounds: Vec<usize> = (0..COMPOUNDS.len()).collect();
+    let compounds: Vec<usize> = (0..catalogue.compounds.len()).collect();
     kit::pick(ui, "Compound", &mut wheel.compound, &compounds, |c| {
-        COMPOUNDS[c].name.to_string()
+        catalogue.compounds[c].name.clone()
     });
-    kit::note(ui, COMPOUNDS[wheel.compound].about);
+    kit::note(ui, &catalogue.compounds[wheel.compound].about);
 }
 
 /// Which engine: any that fits the chassis' bay.
 fn engine(ui: &mut egui::Ui, garage: &mut Garage) {
     let (build, draft) = &mut garage.draft;
+    let catalogue = build.catalogue.clone();
     let chassis = build.chassis();
     kit::section(ui, "Engine");
     // Every version that fits, as the factory builds it in this car.
-    let fitting: Vec<(usize, usize)> = FAMILIES
-        .iter()
+    let fitting: Vec<(usize, usize)> = (catalogue.families.iter())
         .enumerate()
-        .filter(|(f, _)| chassis.fit(*f).is_ok())
+        .filter(|(f, _)| chassis.fit(&catalogue, *f).is_ok())
         .flat_map(|(f, family)| (0..family.versions.len()).map(move |v| (f, v)))
         .collect();
     let mut chosen = (draft.family, draft.version);
     let name = |(f, v): (usize, usize)| {
-        let version = &FAMILIES[f].versions[v];
+        let version = &catalogue.families[f].versions[v];
         format!("{} {}", version.code, version.name)
     };
     if kit::pick(ui, "Engine", &mut chosen, &fitting, name)
-        && let Ok(parts) = build.install(Version::parts(chosen.0, chosen.1))
+        && let Ok(parts) = build.install(Parts::of_version(&catalogue, chosen.0, chosen.1))
     {
         *draft = parts;
     }
     if kit::button(ui, "Factory parts for it").clicked()
-        && let Ok(parts) = build.install(Version::parts(draft.family, draft.version))
+        && let Ok(parts) = build.install(Parts::of_version(&catalogue, draft.family, draft.version))
     {
         *draft = parts;
     }
     let family = draft.family();
-    kit::note(ui, family.about);
+    kit::note(ui, &family.about);
     kit::info(
         ui,
         &format!("{} bay", chassis.bay.place),
@@ -464,9 +464,9 @@ fn engine(ui: &mut egui::Ui, garage: &mut Garage) {
             chassis.bay.height * 100.0,
         ),
     );
-    let others = FAMILIES.len()
-        - (0..FAMILIES.len())
-            .filter(|&f| chassis.fit(f).is_ok())
+    let others = catalogue.families.len()
+        - (0..catalogue.families.len())
+            .filter(|&f| chassis.fit(&catalogue, f).is_ok())
             .count();
     if others > 0 {
         kit::note(
@@ -478,7 +478,7 @@ fn engine(ui: &mut egui::Ui, garage: &mut Garage) {
             ),
         );
     }
-    match chassis.fit(draft.family) {
+    match chassis.fit(&catalogue, draft.family) {
         Ok(fit) => {
             if fit.swap {
                 kit::note(
@@ -489,12 +489,12 @@ fn engine(ui: &mut egui::Ui, garage: &mut Garage) {
                     ),
                 );
             }
-            if needs_adapter(build.gearbox, draft.family) {
+            if catalogue.needs_adapter(build.gearbox, draft.family) {
                 kit::note(
                     ui,
                     &format!(
                         "The {} gearbox needs an adapter plate for it.",
-                        GEARBOXES[build.gearbox].name
+                        build.gearbox().name
                     ),
                 );
             }
@@ -508,17 +508,18 @@ fn engine(ui: &mut egui::Ui, garage: &mut Garage) {
 /// The engine's parts to choose from, a row per slot.
 fn parts(ui: &mut egui::Ui, garage: &mut Garage) {
     let draft = &mut garage.draft.1;
+    let catalogue = draft.catalogue.clone();
     kit::section(ui, "Engine parts");
-    for (i, slot) in SLOTS.iter().enumerate() {
-        let enabled = i != INTERCOOLER || draft.has_turbo();
+    for (i, slot) in catalogue.slots.iter().enumerate() {
+        let enabled = !slot.needs_turbo || draft.has_turbo();
         let labels: Vec<String> = (0..slot.parts.len())
             .map(|part| draft.label(i, part))
             .collect();
         let chosen = &mut draft.chosen[i];
         ui.add_enabled_ui(enabled, |ui| {
-            kit::choice(ui, slot.name, chosen, &labels);
+            kit::choice(ui, &slot.name, chosen, &labels);
         });
-        if i == HEADERS && draft.header_room.is_finite() {
+        if slot.readout == Readout::Headers && draft.header_room.is_finite() {
             kit::note(
                 ui,
                 &format!(
@@ -574,7 +575,7 @@ fn build(ui: &mut egui::Ui, garage: &mut Garage, car: &Car) -> bool {
             "This is the car as it's built."
         } else if !new_engine {
             "The engine stays as it is."
-        } else if rebake && maps::is_stock(&hardware) {
+        } else if rebake && store::is_stock(&hardware) {
             "A factory engine: it fits right away."
         } else if rebake {
             "The cylinder side changes: its maps need baking (a few seconds), unless it was \
@@ -679,10 +680,7 @@ fn start(
     let parts = match build.install(parts) {
         Ok(parts) => parts,
         Err(misfit) => {
-            garage.status = format!(
-                "The {} is {}.",
-                FAMILIES[garage.draft.1.family].name, misfit.0
-            );
+            garage.status = format!("The {} is {}.", garage.draft.1.family().name, misfit.0);
             return;
         }
     };
@@ -714,25 +712,22 @@ fn start(
 
 /// A chassis' page in the showroom: what it is, its engines and paint, and the button
 /// to drive it (true when clicked).
-fn brochure(ui: &mut egui::Ui, shown: &Showroom) {
-    let chassis = &CHASSIS[shown.chassis];
+fn brochure(ui: &mut egui::Ui, catalogue: &Shared, shown: &Showroom) {
+    let chassis = &catalogue.chassis[shown.chassis];
     let body = &chassis.body;
-    kit::section(ui, chassis.class);
-    kit::note(ui, chassis.about);
-    let build = CarBuild::factory(shown.chassis);
+    kit::section(ui, &chassis.class);
+    kit::note(ui, &chassis.about);
+    let build = CarBuild::factory_in(catalogue, shown.chassis);
     let parts = build.factory_engine(shown.engine);
-    kit::note(ui, parts.family().about);
+    kit::note(ui, &parts.family().about);
+    let gearbox = build.gearbox();
     let mass = chassis.mass
         + parts.family().built_mass(&parts.hardware())
-        + GEARBOXES[chassis.gearbox].mass
+        + gearbox.mass
         + 2.0 * (chassis.unsprung(0) + chassis.unsprung(1));
     kit::info(ui, "Engine", &format!("at the {}", chassis.bay.place));
     kit::info(ui, "Drive", chassis.drive.name());
-    kit::info(
-        ui,
-        "Gearbox",
-        &GEARBOXES[chassis.gearbox].name.to_lowercase(),
-    );
+    kit::info(ui, "Gearbox", &gearbox.name.to_lowercase());
     kit::info(ui, "Weight", &format!("{mass:.0} kg"));
     kit::info(
         ui,
@@ -745,13 +740,13 @@ fn brochure(ui: &mut egui::Ui, shown: &Showroom) {
         ),
     );
     kit::info(ui, "Wheelbase", &format!("{:.2} m", chassis.wheelbase));
-    let [front, rear] = chassis.wheels.map(|wheel| wheel.label());
+    let [front, rear] = chassis.wheels.map(|wheel| catalogue.wheel_label(&wheel));
     if front == rear {
         kit::info(ui, "Tires", &front);
     } else {
         kit::info(ui, "Tires", &format!("{front} / {rear}"));
     }
-    kit::info(ui, "Paint", PAINTS[chassis.paint].0);
+    kit::info(ui, "Paint", &catalogue.paints[chassis.paint].name);
     kit::note(
         ui,
         "A parts shop fits any engine there's room for; any paint shop changes the paint.",

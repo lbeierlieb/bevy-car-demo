@@ -608,7 +608,7 @@ pub fn run_rounds(
                             parked: live.round.game.race().is_none(),
                             hold: live.round.hold(peer.id),
                         };
-                        match live.round.lent_chassis(peer.id) {
+                        match (live.round).lent_chassis(&crate::catalogue::builtin(), peer.id) {
                             Some(chassis) => {
                                 let spec = CarSpec::of(&CarSetup::factory(chassis, 0));
                                 peer.shadow.lend(spec, &terrain, spot);

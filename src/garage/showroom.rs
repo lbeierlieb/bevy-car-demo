@@ -21,7 +21,8 @@ use super::{Garage, Showroom, brochure, start};
 use crate::audio::{EngineAudio, EngineRun};
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car, CarSetup};
-use crate::chassis::{CHASSIS, CarBuild};
+use crate::catalogue::Current;
+use crate::chassis::CarBuild;
 use crate::looks::{Looks, Motion};
 use crate::menu::kit::{self, Panel, Place};
 use crate::shops::{AtShop, SceneBack, ShopKind, Shops, shop_window};
@@ -117,7 +118,7 @@ fn in_hall(hall: Res<Hall>) -> bool {
 #[derive(Component)]
 struct InHall;
 
-/// A car shown: on the turntable, on the floor in its place (a chassis in `CHASSIS`,
+/// A car shown: on the turntable, on the floor in its place (a chassis in the catalogue,
 /// hidden while it's on the turntable), or the driven car outside.
 #[derive(Component, Clone, Copy, PartialEq)]
 enum Shown {
@@ -126,7 +127,7 @@ enum Shown {
     Outside,
 }
 
-/// Where a chassis (in `CHASSIS`) stands on the floor, and which way it faces (rad about
+/// Where a chassis (in the catalogue) stands on the floor, and which way it faces (rad about
 /// up; 0 faces the glass front): three along the left wall facing in, seven along the back
 /// at an angle, three along the right wall facing in.
 fn place(chassis: usize) -> (Vec3, f32) {
@@ -677,8 +678,9 @@ fn build_hall(
     }
 
     // The cars on the floor, in their factory paint, each with a stand at its front left.
-    for (chassis, made) in CHASSIS.iter().enumerate() {
-        let looks = factory.get(chassis, made.paint);
+    let catalogue = car.setup.build.catalogue.clone();
+    for (chassis, made) in catalogue.chassis.iter().enumerate() {
+        let looks = factory.get(&catalogue, chassis, made.paint);
         let (at, yaw) = place(chassis);
         let motion = at_rest(&looks);
         let transform = placed(origin, at, yaw, &looks);
@@ -728,7 +730,7 @@ fn build_hall(
 #[allow(clippy::type_complexity)]
 fn show(
     mut commands: Commands,
-    time: Res<Time>,
+    (time, catalogue): (Res<Time>, Res<Current>),
     mut hall: ResMut<Hall>,
     garage: Res<Garage>,
     active: Res<ActiveCar>,
@@ -745,7 +747,7 @@ fn show(
     let picked = (garage.showroom.chassis, garage.showroom.engine);
     let new = hall.on_table != Some(picked);
     let table_looks = new.then(|| {
-        let setup = CarSetup::factory(picked.0, picked.1);
+        let setup = CarSetup::factory_in(&catalogue, picked.0, picked.1);
         hall.on_table = Some(picked);
         hall.idle = setup.engine.build.ecu.idle_rpm;
         hall.rev_limit = setup.engine.build.ecu.rev_limit;
@@ -863,6 +865,7 @@ fn sign_turn() -> Quat {
 /// The sign by the turntable, painted where it is: the car's name, its class and engine.
 fn sign(
     mut contexts: EguiContexts,
+    catalogue: Res<Current>,
     hall: Res<Hall>,
     garage: Res<Garage>,
     cameras: Query<(&Camera, &GlobalTransform), With<ChaseCamera>>,
@@ -922,12 +925,12 @@ fn sign(
             color,
         );
     };
-    let chassis = &CHASSIS[garage.showroom.chassis];
-    let build = CarBuild::factory(garage.showroom.chassis);
+    let chassis = &catalogue.chassis[garage.showroom.chassis];
+    let build = CarBuild::factory_in(&catalogue, garage.showroom.chassis);
     let engine = build.factory_engine(garage.showroom.engine).hardware().name;
     let ink = Color32::from_rgb(25, 25, 30);
-    text(0.2, 0.3, chassis.name, ink);
-    text(0.52, 0.13, chassis.class, ink.gamma_multiply(0.75));
+    text(0.2, 0.3, &chassis.name, ink);
+    text(0.52, 0.13, &chassis.class, ink.gamma_multiply(0.75));
     text(0.72, 0.12, &engine, ink.gamma_multiply(0.75));
     Ok(())
 }
@@ -949,6 +952,7 @@ fn window(
     let Some((entity, mut car)) = super::active(&mut cars, active.0) else {
         return Ok(());
     };
+    let catalogue = car.setup.build.catalogue.clone();
     let mut shown = garage.showroom;
     let mut drive = false;
     let mut out = back.take();
@@ -958,13 +962,15 @@ fn window(
         .width(440.0)
         .back(Some("Back to the car"))
         .show(ctx, |ui| {
-            let names: Vec<String> = CHASSIS.iter().map(|c| c.name.to_string()).collect();
+            let names: Vec<String> = catalogue.chassis.iter().map(|c| c.name.clone()).collect();
             let mut chassis = shown.chassis;
             if kit::choice(ui, "Car", &mut chassis, &names).changed() {
                 shown = Showroom { chassis, engine: 0 };
             }
-            let engines: Vec<String> = (CHASSIS[shown.chassis].engines.iter())
-                .filter_map(|code| crate::physics::engine::parts::Parts::factory(code))
+            let engines: Vec<String> = (catalogue.chassis[shown.chassis].engines.iter())
+                .filter_map(|code| {
+                    crate::physics::engine::parts::Parts::factory_in(&catalogue, code)
+                })
                 .map(|parts| parts.hardware().name.to_string())
                 .collect();
             kit::choice(ui, "Engine", &mut shown.engine, &engines);
@@ -985,14 +991,14 @@ fn window(
             if kit::button(ui, words).clicked() {
                 hall.running = !hall.running;
             }
-            brochure(ui, &shown);
+            brochure(ui, &catalogue, &shown);
             kit::note(ui, "Drag to look round, the mouse wheel to go nearer.");
             if kit::button(ui, "Back to the car").clicked() {
                 out = true;
             }
         });
     if drive {
-        let build = CarBuild::factory(shown.chassis);
+        let build = CarBuild::factory_in(&catalogue, shown.chassis);
         let parts = build.factory_engine(shown.engine);
         garage.draft = (build, parts);
         garage.car = Some(car.index);

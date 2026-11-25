@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::car::{ActiveCar, Car, SETTINGS};
-use crate::chassis::PAINTS;
+use crate::catalogue::Current;
 use crate::help::Intro;
 use crate::map::{MapCar, MapCars};
 use crate::menu::kit::{self, Panel, rank};
@@ -248,10 +248,11 @@ pub fn join_spot(
 /// The other players the server tells us of, on the map.
 fn show_on_map(
     connection: Option<Res<Connection>>,
+    catalogue: Option<Res<Current>>,
     time: Res<Time<Real>>,
     mut map: ResMut<MapCars>,
 ) {
-    let Some(connection) = connection else {
+    let (Some(connection), Some(catalogue)) = (connection, catalogue) else {
         if !map.0.is_empty() {
             map.0.clear();
         }
@@ -261,7 +262,8 @@ fn show_on_map(
     map.0 = connection
         .on_map(now)
         .map(|player| {
-            let [r, g, b] = PAINTS[player.paint].1;
+            let [r, g, b] =
+                (catalogue.paints.get(player.paint)).map_or([0.5; 3], |paint| paint.color);
             MapCar {
                 at: player.position,
                 forward: player.forward,

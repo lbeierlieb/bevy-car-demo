@@ -106,8 +106,6 @@ const CAMBER_SLIP: f32 = 0.06;
 /// A tire's rubber and construction.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Compound {
-    pub name: &'static str,
-    pub about: &'static str,
     /// Grip at its best temperature, relative to the chassis' street tires.
     pub grip: f32,
     /// Slip angle (rad) and slip ratio where the grip peaks, and the Magic Formula shapes:
@@ -147,18 +145,15 @@ impl Compound {
     }
 }
 
-/// The compounds by their place in `COMPOUNDS`.
+/// The built-in catalogue's rubbers by their place in `COMPOUNDS` (see `catalogue`).
 pub const TOURING: usize = 0;
 pub const STREET: usize = 1;
 pub const SPORT: usize = 2;
 pub const RACE: usize = 3;
 
-/// The tires in the catalogue, by their place.
+/// The rubber of the built-in catalogue's compounds (named there), by their place.
 pub const COMPOUNDS: [Compound; 4] = [
     Compound {
-        name: "Touring",
-        about: "Made to last and to roll easily: grips from cold and never overheats on the \
-                road, but has the least grip and lets go early",
         grip: 0.9,
         peak_angle: 0.2,
         peak_ratio: 0.13,
@@ -171,9 +166,6 @@ pub const COMPOUNDS: [Compound; 4] = [
         rolling: 0.8,
     },
     Compound {
-        name: "Street",
-        about: "Grips from cold and lasts, and lets go gently past the limit, but overheats \
-                when driven hard for long",
         grip: 1.0,
         peak_angle: 0.183,
         peak_ratio: 0.12,
@@ -186,8 +178,6 @@ pub const COMPOUNDS: [Compound; 4] = [
         rolling: 1.0,
     },
     Compound {
-        name: "Sport",
-        about: "More grip and sharper, with a higher working temperature and faster wear",
         grip: 1.1,
         peak_angle: 0.131,
         peak_ratio: 0.11,
@@ -200,9 +190,6 @@ pub const COMPOUNDS: [Compound; 4] = [
         rolling: 1.1,
     },
     Compound {
-        name: "Race",
-        about: "The most grip once hot, little when cold; peaks early and drops off past \
-                it, and wears fast",
         grip: 1.25,
         peak_angle: 0.105,
         peak_ratio: 0.09,

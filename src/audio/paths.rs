@@ -384,9 +384,16 @@ mod tests {
 
     #[test]
     fn every_cabin_is_its_own() {
-        use crate::chassis::CHASSIS;
-        let shape = |name: &str| CabinShape::of(CHASSIS.iter().find(|c| c.name == name).unwrap());
-        for chassis in &CHASSIS {
+        let shape = |name: &str| {
+            CabinShape::of(
+                crate::catalogue::builtin()
+                    .chassis
+                    .iter()
+                    .find(|c| c.name == name)
+                    .unwrap(),
+            )
+        };
+        for chassis in &crate::catalogue::builtin().chassis {
             let cabin = CabinShape::of(chassis);
             assert!(cabin.modes.is_sorted(), "{}", chassis.name);
             assert!(

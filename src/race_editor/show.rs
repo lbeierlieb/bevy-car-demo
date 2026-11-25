@@ -11,7 +11,6 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::Draft;
 use super::edit::{EditSet, Pointer, Selected, Target, on_ground};
-use crate::chassis::CHASSIS;
 use crate::editor::camera::FlyCamera;
 use crate::events::race::{self, GridSpot};
 use crate::events::racing::{GateParts, spawn_gate};
@@ -53,7 +52,7 @@ pub struct CarBox {
 
 impl CarBox {
     fn largest() -> Self {
-        let half = (CHASSIS.iter())
+        let half = (crate::catalogue::builtin().chassis.iter())
             .map(|chassis| crate::car::body_box(chassis, &chassis.wheels).half)
             .fold(Vec3::ZERO, Vec3::max);
         Self { half }

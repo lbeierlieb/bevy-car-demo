@@ -481,9 +481,9 @@ mod tests {
 
     #[test]
     fn every_car_gets_through_a_run() {
-        for chassis in 0..crate::chassis::CHASSIS.len() {
+        for chassis in 0..crate::catalogue::builtin().chassis.len() {
             let (mut car, mut rollers) = on_rollers(chassis);
-            let name = car.setup.name;
+            let name = &car.setup.name.clone();
             let mut time = 0.0;
             let mut warm_up = 0.0;
             while rollers.stage != Stage::Done && time < 120.0 {

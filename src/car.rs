@@ -2,7 +2,8 @@
 
 use bevy::prelude::*;
 
-use crate::chassis::{CLUTCHES, CarBuild, Chassis, DEFAULT_CHASSIS, SUSPENSIONS};
+use crate::catalogue::{self, Shared};
+use crate::chassis::{CarBuild, Chassis};
 use crate::input::WheelInput;
 use crate::net::wire::{Reader, Wire, decode, encode};
 use crate::physics::collision::Obb;
@@ -22,7 +23,7 @@ use crate::wheels::{HUB_INERTIA, Wheel};
 /// of: a chassis and what's fitted to it (`build`), and an engine.
 #[derive(Clone, Debug)]
 pub struct CarSetup {
-    pub name: &'static str,
+    pub name: String,
     pub color: Color,
     /// What the car is built of, apart from the engine (see `engine.parts`).
     pub build: CarBuild,
@@ -92,7 +93,7 @@ impl CarSetup {
         let laden = sprung_mass + fuel_mass;
         let front_share =
             (sprung_mass * rear_z + fuel_mass * (rear_z - tank_at.z)) / (laden * chassis.wheelbase);
-        let (_, ride, damping, ..) = SUSPENSIONS[build.suspension];
+        let (ride, damping) = (build.suspension().ride, build.suspension().damping);
         let share = |i: usize| {
             if i == 0 {
                 front_share
@@ -105,9 +106,11 @@ impl CarSetup {
         let static_load = |i: usize| (laden * share(i) / 2.0 + unsprung(i)) * 9.81;
         // The tires' friction at rest (warm and new), averaged over the car by load: of the
         // ones fitted, and of the factory's, which the brakes are made for.
+        let compounds = &build.catalogue.compounds;
         let grip_of = |wheels: &[Wheel; 2]| {
             let load = |i: usize| static_load(i);
-            let friction = |i: usize| wheels[i].tire.params(wheels[i].compound).friction(load(i));
+            let rubber = |i: usize| &compounds[wheels[i].compound].rubber;
+            let friction = |i: usize| wheels[i].tire.params(rubber(i)).friction(load(i));
             (friction(0) * load(0) + friction(1) * load(1)) / (load(0) + load(1))
         };
         let (grip, factory_grip) = (grip_of(&build.wheels), grip_of(&chassis.wheels));
@@ -145,7 +148,7 @@ impl CarSetup {
                 wheel_inertia: wheel.inertia() + HUB_INERTIA * chassis.hub[i],
                 tire: TireParams {
                     inflation: build.pressure[i],
-                    ..wheel.tire.params(wheel.compound)
+                    ..wheel.tire.params(build.rubber(i))
                 },
             };
             axle.tune(
@@ -179,8 +182,8 @@ impl CarSetup {
         let mut hull = body_box(chassis, &build.wheels);
         hull.center += body_offset;
         Self {
-            name: chassis.name,
-            color: build.paint(),
+            name: chassis.name.clone(),
+            color: build.color(),
             sprung_mass,
             inertia,
             tank,
@@ -193,8 +196,9 @@ impl CarSetup {
             engine: EngineSetup {
                 parts,
                 build: engine,
-                clutch_torque: gearbox.clutch_torque * CLUTCHES[build.clutch].1,
-                gears: gearbox.gears,
+                clutch_torque: gearbox.clutch_torque
+                    * build.catalogue.clutches[build.clutch].torque,
+                gears: gearbox.gears.clone(),
                 reverse: gearbox.reverse,
                 final_drive: build.final_drive,
                 shift_time: gearbox.shift_time,
@@ -215,10 +219,16 @@ impl CarSetup {
         }
     }
 
-    /// A chassis (in `CHASSIS`) as it leaves the factory, with the factory's engine
-    /// `option` for it.
+    /// A chassis of the built-in catalogue as it leaves the factory, with the factory's
+    /// engine `option` for it.
     pub fn factory(chassis: usize, option: usize) -> Self {
-        let build = CarBuild::factory(chassis);
+        Self::factory_in(&catalogue::builtin(), chassis, option)
+    }
+
+    /// `catalogue`'s `chassis` as it leaves the factory, with the factory's engine
+    /// `option` for it.
+    pub fn factory_in(catalogue: &Shared, chassis: usize, option: usize) -> Self {
+        let build = CarBuild::factory_in(catalogue, chassis);
         let parts = build.factory_engine(option);
         let engine = EngineBuild::new(parts.hardware(), parts.ecu);
         Self::new(build, parts, engine)
@@ -295,7 +305,7 @@ pub fn body_box(chassis: &Chassis, fitted: &[Wheel; 2]) -> Obb {
 impl Default for CarSetup {
     /// The car the game starts with, with its base engine.
     fn default() -> Self {
-        Self::factory(DEFAULT_CHASSIS, 0)
+        Self::factory(catalogue::DEFAULT_CHASSIS, 0)
     }
 }
 

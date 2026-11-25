@@ -19,6 +19,7 @@ pub mod families;
 pub mod hardware;
 pub mod maps;
 pub mod parts;
+pub mod store;
 pub mod table;
 pub mod thermal;
 pub mod turbo;
@@ -672,10 +673,10 @@ mod tests {
 
     #[test]
     fn every_factory_engine_idles_and_pulls() {
-        use families::{FAMILIES, Version};
-        for (f, family) in FAMILIES.iter().enumerate() {
+        let catalogue = crate::catalogue::builtin();
+        for (f, family) in catalogue.families.iter().enumerate() {
             for (v, version) in family.versions.iter().enumerate() {
-                let parts = Version::parts(f, v);
+                let parts = crate::physics::engine::parts::Parts::of_version(&catalogue, f, v);
                 let hardware = parts.hardware();
                 assert!(EngineMaps::stock(&hardware).is_some(), "baked maps");
                 let build = EngineBuild::new(hardware, parts.ecu);

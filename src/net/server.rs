@@ -25,8 +25,9 @@ use super::protocol::{
     CarId, CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, clean_chat,
 };
 use super::shadow::{BakedMaps, Shadow, Spot, Tick};
-use super::wire::{decode, encode};
+use super::wire::{decode_with, encode};
 use super::{ClockOffset, NEAR, RATES, SEND_RATE};
+use crate::catalogue::Current;
 use crate::events::Event;
 use crate::events::rounds::{EventAction, Rounds, run_rounds};
 use crate::heli::HeliPose;
@@ -71,6 +72,9 @@ pub struct ServerPlugin;
 
 impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
+        if !app.world().contains_resource::<Current>() {
+            app.insert_resource(Current(crate::catalogue::builtin()));
+        }
         app.add_message::<Presence>()
             .add_message::<EventAction>()
             .init_resource::<CarNumbers>()
@@ -270,7 +274,7 @@ fn accept(
 fn receive(
     mut commands: Commands,
     (server, terrain, mut baked, tick): (Res<Server>, Res<Terrain>, ResMut<BakedMaps>, Res<Tick>),
-    network: Option<Res<Network>>,
+    (network, catalogue): (Option<Res<Network>>, Res<Current>),
     time: Res<Time<Real>>,
     mut peers: Query<(Entity, &mut Peer, Option<&mut Transform>, Option<&Realm>)>,
     mut presence: MessageWriter<Presence>,
@@ -287,7 +291,7 @@ fn receive(
     let mut too_fast = HashSet::new();
     for (entity, mut peer, mut transform, realm) in &mut peers {
         while let Some(bytes) = peer.link.receive() {
-            let Some(message) = decode::<ToServer>(&bytes) else {
+            let Some(message) = decode_with::<ToServer>(&bytes, Some(&catalogue)) else {
                 // Looks out of our catalogues come from a newer game (a car or part the
                 // server's version doesn't have yet): say so.
                 let why = if bytes.first() == Some(&ToServer::LOOKS) {

@@ -297,7 +297,7 @@ pub(super) fn follow(
             place,
             cars.iter_mut().find(|(_, car)| car.index == active.0),
         ) {
-            if let Some(chassis) = round.lent_chassis(you) {
+            if let Some(chassis) = round.lent_chassis(&crate::catalogue::builtin(), you) {
                 // A factory car for the round; ours waits (the server builds the same).
                 let setup = CarSetup::factory(chassis, 0);
                 let mut lent = Car::spawn_at(car.index, setup, &terrain, p.x, p.y, yaw);

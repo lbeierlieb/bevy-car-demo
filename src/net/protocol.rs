@@ -22,7 +22,7 @@ use bevy::prelude::*;
 use super::wire::{Reader, Wire};
 use crate::audio::{EngineCharacter, EngineRun, ExhaustSound};
 use crate::car::DriverInput;
-use crate::chassis::{CHASSIS, CLUTCHES, CarBuild, FACTORY_TOE, GEARBOXES, PAINTS, SUSPENSIONS};
+use crate::chassis::{CarBuild, FACTORY_TOE};
 use crate::events::Event;
 use crate::events::round::{Action, Round};
 use crate::heli::HeliPose;
@@ -30,7 +30,6 @@ use crate::looks::{AxleLooks, Looks, Motion, WheelMotion};
 use crate::physics::collision::Obb;
 use crate::physics::engine::families::Layout;
 use crate::physics::suspension::ArmGeometry;
-use crate::physics::tire::COMPOUNDS;
 use crate::shops::Shop;
 use crate::spec::CarSpec;
 use crate::terrain::Spawn;
@@ -226,7 +225,7 @@ pub struct CarState {
 }
 
 /// Another player's car on the map: where it is and goes (xz, on the ground), which way
-/// it points and its paint (in `PAINTS`).
+/// it points and its paint (in the catalogue's `paints`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MapPlayer {
     pub id: PlayerId,
@@ -253,9 +252,10 @@ impl Wire for MapPlayer {
             forward: r.get::<Vec2>()?.normalize_or(Vec2::NEG_Y),
             paint: r.get()?,
         };
-        // A paint a newer server has: the first one.
+        // A paint the catalogue doesn't have: the first one.
+        let paints = r.catalogue().map_or(0, |catalogue| catalogue.paints.len());
         Some(Self {
-            paint: if player.paint < PAINTS.len() {
+            paint: if player.paint < paints {
                 player.paint
             } else {
                 0
@@ -651,7 +651,9 @@ impl Wire for CarBuild {
         self.pressure.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
+        let catalogue = r.catalogue()?;
         let build = Self {
+            catalogue: catalogue.clone(),
             chassis: r.get()?,
             paint: r.get()?,
             gearbox: r.get()?,
@@ -668,14 +670,14 @@ impl Wire for CarBuild {
             brake_force: 1.0,
             brake_balance: 0.0,
         };
-        let chassis = CHASSIS.get(build.chassis)?;
-        let fine = build.paint < PAINTS.len()
-            && build.gearbox < GEARBOXES.len()
-            && build.clutch < CLUTCHES.len()
-            && build.suspension < SUSPENSIONS.len()
+        let chassis = catalogue.chassis.get(build.chassis)?;
+        let fine = build.paint < catalogue.paints.len()
+            && build.gearbox < catalogue.gearboxes.len()
+            && build.clutch < catalogue.clutches.len()
+            && build.suspension < catalogue.suspensions.len()
             && (0..2).all(|i| build.bars[i] < chassis.bars[i].sizes.len())
             && build.wheels.iter().all(|w| {
-                w.compound < COMPOUNDS.len()
+                w.compound < catalogue.compounds.len()
                     && (10..=24).contains(&w.rim.diameter)
                     && (100..=1000).contains(&w.tire.width)
                     && (20..=90).contains(&w.tire.aspect)
@@ -798,11 +800,16 @@ impl Wire for Obb {
 mod tests {
     use super::*;
     use crate::car::CarSetup;
-    use crate::net::wire::{decode, encode};
+    use crate::net::wire::encode;
+
+    /// Reads a message with cars of the built-in catalogue.
+    fn decode<T: Wire>(bytes: &[u8]) -> Option<T> {
+        crate::net::wire::decode_with(bytes, Some(&crate::catalogue::builtin()))
+    }
 
     #[test]
     fn every_factory_car_looks_the_same_after_the_trip() {
-        for chassis in 0..CHASSIS.len() {
+        for chassis in 0..crate::catalogue::builtin().chassis.len() {
             let looks = Looks::of(&CarSetup::factory(chassis, 0));
             let message = ToServer::Looks(Box::new(looks.clone()));
             let bytes = encode(&message);
@@ -933,7 +940,7 @@ mod tests {
     #[test]
     fn looks_out_of_the_catalogues_are_refused() {
         let mut looks = Looks::of(&CarSetup::default());
-        looks.build.chassis = CHASSIS.len();
+        looks.build.chassis = crate::catalogue::builtin().chassis.len();
         assert_eq!(
             decode::<ToServer>(&encode(&ToServer::Looks(Box::new(looks)))),
             None

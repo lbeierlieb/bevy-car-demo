@@ -1340,7 +1340,6 @@ mod tests {
     #[test]
     fn a_hunt_lends_cars_and_gives_them_back() {
         use crate::car::{Held, ResetRule};
-        use crate::chassis::CHASSIS;
         use crate::events::hunt::{Cars, Settings};
         use crate::events::round::{Action, Game};
         let listener = LoopbackListener::default();
@@ -1380,21 +1379,21 @@ mod tests {
         act(all[h], Action::Game(Game::Hunt(settings)));
         act(all[h], Action::Start);
         run(&mut all, 10);
-        let chassis = |app: &mut App| CHASSIS[car(app).setup.build.chassis].name;
+        let chassis = |app: &mut App| car(app).setup.build.chassis().name.clone();
         assert_eq!(chassis(all[h]), "Skarn", "the hunted's rally car");
         assert_eq!(chassis(all[k]), "Harrow", "the hunter's muscle car");
         // The server lends the same.
         let on_server = |server: &mut App| {
             let mut peers = server.world_mut().query::<&super::server::Peer>();
-            let mut names: Vec<&str> = (peers.iter(server.world()))
-                .filter_map(|peer| Some(CHASSIS[peer.shadow.car()?.setup.build.chassis].name))
+            let mut names: Vec<String> = (peers.iter(server.world()))
+                .filter_map(|peer| Some(peer.shadow.car()?.setup.build.chassis().name.clone()))
                 .collect();
             names.sort();
             names
         };
         assert_eq!(on_server(all[0]), ["Harrow", "Skarn"]);
         let parts = car(all[k]).setup.engine.parts.clone();
-        let family = &crate::physics::engine::families::FAMILIES[parts.family];
+        let family = parts.family();
         assert_eq!(family.versions[parts.version].code, "M50", "the smaller V8");
         assert!(
             all[k].world().resource::<Held>().0,
@@ -1687,7 +1686,7 @@ mod tests {
             .get_mut::<Looks>(entity)
             .unwrap()
             .build
-            .chassis = crate::chassis::CHASSIS.len();
+            .chassis = crate::catalogue::builtin().chassis.len();
         run(&mut [&mut server, &mut anna], 10);
         let Status::Refused(why) = &connection(&anna).status else {
             panic!("{:?}", connection(&anna).status);
@@ -1711,7 +1710,8 @@ mod tests {
                 self.held.push_back(message);
             }
             let datagram = self.held.iter().position(|m| {
-                let message = wire::decode::<protocol::ToClient>(m);
+                let catalogue = crate::catalogue::builtin();
+                let message = wire::decode_with::<protocol::ToClient>(m, Some(&catalogue));
                 message.is_some_and(|m| !m.reliable())
             });
             match datagram {
