@@ -76,6 +76,15 @@ const MOST_WAITING: usize = 4;
 /// How far a player's placement may be from where the server has the car (m), and how
 /// much farther for each m/s it moves per second the placement is old.
 const REACH: f32 = 2.0;
+
+/// Whether placements are taken up however far they move the car: only for screenshots
+/// of the game's own server (`CAR_SIM_TRUST_PLACEMENTS=1`, which `tools/dev/shot.sh` sets
+/// for `PLACE`).
+fn trusts_placements() -> bool {
+    static TRUSTS: std::sync::LazyLock<bool> =
+        std::sync::LazyLock::new(|| std::env::var("CAR_SIM_TRUST_PLACEMENTS").is_ok());
+    *TRUSTS
+}
 const REACH_PER_SPEED: f32 = 1.5;
 /// How much more fuel a player's placement may have than the server's car (L), and how
 /// much more for each second it's old (what the engine could burn meanwhile).
@@ -345,34 +354,38 @@ impl Shadow {
 
     /// Lends the player a car of `spec` (a factory build) at `spot`, keeping theirs until
     /// `give_back`. Without a car of theirs yet, or maps for it, it's only put there.
-    pub fn lend(&mut self, spec: CarSpec, terrain: &Terrain, spot: Spot) {
+    pub fn lend(&mut self, spec: CarSpec, terrain: &Terrain, spot: Spot) -> Option<CarSpec> {
         let maps = spec.stock_maps();
         let (Some(maps), Some(own), None) = (maps, self.car.take(), &self.own) else {
-            return self.put(terrain, spot);
+            self.put(terrain, spot);
+            return None;
         };
         let mut lent = spec_car(&spec, maps);
         lent.keep_settings(&own);
-        self.own = Some((self.spec.replace(spec), own));
+        self.own = Some((self.spec.replace(spec.clone()), own));
         self.baking = None;
         self.built = None;
         self.car = Some(lent);
         self.waiting.clear();
         self.placements.clear();
         self.put(terrain, spot);
+        Some(spec)
     }
 
     /// Gives the player their own car back at `spot`, as it was when the lent one came;
     /// without one lent, only puts theirs there.
-    pub fn give_back(&mut self, terrain: &Terrain, spot: Spot) {
-        if let Some((spec, own)) = self.own.take() {
+    pub fn give_back(&mut self, terrain: &Terrain, spot: Spot) -> Option<CarSpec> {
+        let given = self.own.take().map(|(spec, own)| {
             self.spec = spec;
             self.baking = None;
             self.built = None;
             self.car = Some(own);
             self.waiting.clear();
             self.placements.clear();
-        }
+            self.spec.clone()
+        });
         self.put(terrain, spot);
+        given.flatten()
     }
 
     /// Where the car is, as the server has it (none before it has a state).
@@ -531,7 +544,7 @@ impl Shadow {
             let age = after(done, step).max(0) as f32 * STEP;
             let speed = was.body.velocity.length().max(car.body.velocity.length());
             let reach = REACH + REACH_PER_SPEED * speed * age;
-            if was.body.position.distance(car.body.position) > reach {
+            if was.body.position.distance(car.body.position) > reach && !trusts_placements() {
                 warn!("A player's game moved their car: refused");
                 self.car = Some(was);
                 return;
