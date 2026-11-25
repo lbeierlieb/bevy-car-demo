@@ -260,8 +260,8 @@ loops ran for hours, 2026-11-22). Wait for the output file, or `pgrep -x`/a PID.
 `shot.rs`). `shot.sh` fetches Mesa and Xvfb from the pinned nixpkgs on first use.
 A shot takes about 35 s.
 
-For looking at cars: `CAR="chassis[,engine]"` starts in that car (its place in
-`CHASSIS`); `LINEUP="first,count"` parks that many cars one behind the other on an open,
+For looking at cars: `CAR="chassis[,engine]"` starts in that car (its place in the
+catalogue; bought from the server's showroom, `Buy`); `LINEUP="first,count"` parks that many cars one behind the other on an open,
 flat straight (the spawn is in a village, where walls and slopes block the view);
 `CARCAM="side,height,along"` looks at them from that far to their right (negative:
 left, the sunlit side), up, and ahead. Side views of five:
