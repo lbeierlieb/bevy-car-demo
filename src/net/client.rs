@@ -156,7 +156,7 @@ fn take_your_car(
     let print = crate::physics::engine::maps::fingerprint(&hardware);
     let maps = match crate::workshop::at_hand(&hardware) {
         Some(maps) => maps,
-        None if connection.maps_missing.contains(&print) => {
+        None if connection.lacks_maps(print) => {
             // Not the server's to give: baked here (a car built in a shop here before
             // would have them kept already).
             let maps = EngineMaps::bake(&hardware);
@@ -165,9 +165,7 @@ fn take_your_car(
         }
         None => {
             // From the server; till then the car waits.
-            if connection.maps_asked.insert(print) {
-                connection.say(&ToServer::Maps { fingerprint: print });
-            }
+            connection.ask_maps(print);
             connection.your_car = Some(spec);
             return;
         }
@@ -295,6 +293,19 @@ struct Report {
 }
 
 impl Connection {
+    /// Asks the server for the maps of the engine whose hardware has `fingerprint` (once);
+    /// they're kept with the maps baked here when they come (`workshop::at_hand`).
+    pub fn ask_maps(&mut self, fingerprint: u64) {
+        if self.maps_asked.insert(fingerprint) {
+            self.say(&ToServer::Maps { fingerprint });
+        }
+    }
+
+    /// Whether the server said it hasn't got the maps of the engine with `fingerprint`.
+    pub fn lacks_maps(&self, fingerprint: u64) -> bool {
+        self.maps_missing.contains(&fingerprint)
+    }
+
     /// Joins a server over `link` as `name`, playing on `terrain`'s map.
     pub fn new(link: impl Link, name: &str, terrain: &Terrain) -> Self {
         let mut connection = Self {

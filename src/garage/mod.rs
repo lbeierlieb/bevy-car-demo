@@ -18,6 +18,7 @@ use crate::car::{ActiveCar, Car, CarSetup, heading};
 use crate::catalogue::{Catalogue, Shared};
 use crate::chassis::{BRAKE_BALANCES, BRAKE_FORCES, CarBuild, PRESSURES, TOES};
 use crate::menu::kit;
+use crate::net::client::Connection;
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::ecu::{Ecu, EcuModel};
 use crate::physics::engine::hardware::EngineHardware;
@@ -105,7 +106,8 @@ struct Job {
     parts: Parts,
     hardware: EngineHardware,
     retune: bool,
-    work: Work,
+    /// Baking the maps, once the server said it hasn't got them (or there's none).
+    work: Option<Work>,
 }
 
 /// The active car and its entity.
@@ -121,20 +123,40 @@ fn bake(
     mut commands: Commands,
     terrain: Res<Terrain>,
     mut garage: ResMut<Garage>,
+    mut connection: Option<ResMut<Connection>>,
     mut cars: Query<(Entity, &mut Car)>,
 ) {
     let Some(job) = &mut garage.job else {
         return;
     };
-    let Some(baked) = job.work.poll() else {
-        return;
+    let maps = match &mut job.work {
+        Some(work) => {
+            let Some(baked) = work.poll() else {
+                return;
+            };
+            let Some(maps) = baked else {
+                garage.job = None;
+                garage.status = "Baking the maps failed.".to_string();
+                return;
+            };
+            workshop::keep(&job.hardware, &maps);
+            maps
+        }
+        // The server's, if it has them (a factory engine's); else baked here.
+        None => {
+            let print = maps::fingerprint(&job.hardware);
+            if let Some(maps) = workshop::at_hand(&job.hardware) {
+                maps
+            } else {
+                match connection.as_deref_mut() {
+                    Some(connection) if !connection.lacks_maps(print) => connection.ask_maps(print),
+                    _ => job.work = Some(Work::start(&job.hardware)),
+                }
+                return;
+            }
+        }
     };
     let job = garage.job.take().expect("a job");
-    let Some(maps) = baked else {
-        garage.status = "Baking the maps failed.".to_string();
-        return;
-    };
-    workshop::keep(&job.hardware, &maps);
     garage.status = match active(&mut cars, job.car) {
         Some((entity, mut car)) => {
             let made = (job.build, job.parts, job.hardware, maps);
@@ -565,10 +587,15 @@ fn build(ui: &mut egui::Ui, garage: &mut Garage, car: &Car) -> bool {
     let new_engine = *parts != car.setup.engine.parts;
     let changed = new_engine || *draft != car.setup.build;
     let mut build_now = false;
-    if let Some(progress) = garage.job.as_ref().map(|job| job.work.progress()) {
-        kit::progress(ui, "Baking the maps…", progress);
+    if let Some(job) = &garage.job {
+        match &job.work {
+            Some(work) => kit::progress(ui, "Baking the maps…", work.progress()),
+            None => kit::progress(ui, "Getting the maps…", 0.0),
+        }
         if kit::button(ui, "Cancel").clicked() {
-            garage.job.take().expect("a job").work.cancel();
+            if let Some(work) = garage.job.take().and_then(|job| job.work) {
+                work.cancel();
+            }
             garage.status = "Cancelled.".to_string();
         }
     } else {
@@ -680,7 +707,7 @@ fn condition(ui: &mut egui::Ui, car: &mut Car) {
 }
 
 /// Builds the draft: right away if the engine's maps are at hand (the car's own, the
-/// factory's or cached ones), else starts baking them.
+/// factory's or cached ones), else once they come from the server or are baked (`bake`).
 fn start(
     commands: &mut Commands,
     terrain: &Terrain,
@@ -720,7 +747,7 @@ fn start(
         car: car.index,
         build,
         parts,
-        work: Work::start(&hardware),
+        work: None,
         hardware,
         retune: garage.retune,
     });

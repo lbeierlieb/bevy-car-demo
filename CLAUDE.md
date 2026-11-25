@@ -777,7 +777,7 @@ As built:
   a car is lent) (`the_server_takes_a_car_changed_in_a_shop`, the hunt test).
 - Not done: the shops' changes as requests (the game builds first, the server's word is
   checked after; free, validated against the catalogue); the
-  garage on the web bakes factory engines itself instead of asking for their maps;
+  dyno's cam changes bake without asking the server (the parts shop asks first);
   the race editor uses the built-in
   catalogue (biggest car box); stable string ids for saved cars; a catalogue file.
 
