@@ -827,31 +827,51 @@ The game is about tuning every aspect of a car. Agreed so far (the user's answer
   long block plus bolt-ons. Body parts (bonnet, bumpers, wing…, more aero and drag; a
   bonnet cut-out for a supercharger) and most other parts are chassis-specific.
 - **Money** is part of the plan, every price 0 € for now (earning comes later).
-- **Persistence** in a database: MySQL for a single server (and playing alone),
-  PostgreSQL for several server instances sharing it (a player active on one at a time).
+- **Persistence** in a database: SQLite playing alone, MySQL for a single server,
+  PostgreSQL for several server instances sharing it (a player active on one at a time:
+  a lock row refreshed while playing, taken over once stale, ~30 s).
+- **Accounts**: username and password; a server option allows guests (kept for the
+  session only); playing alone uses a default user. A catalogue entry changed by the
+  server changes the items of it; entries are never meant to be removed (if one is, its
+  items go, smoothly).
+- **What's sold where**: car shops only stock parts, tuning shops standard tuning parts;
+  special parts only from multiplayer events (weekly races or so): that's what makes a
+  part rare and traded. A stock car is an assembly of part definitions, in trims (more
+  than the engine: bigger brakes…); no generated stock parts.
 - **Garage park**: one shared place on the map, everyone their own garage there; storage
   only (cars and parts), a limit high enough never to be hit by playing (it only keeps the
   database from growing without end). Switching cars only there.
-- **Trunks** are a grid of their own per car, parts placed like Tetris (no folding seats;
-  seats are parts that can be taken out, giving a bigger grid); what's carried adds its
-  mass to the car (its place in the trunk).
+- **Trunks** are a grid of their own per car (the floor, with a height per area), parts
+  placed like Tetris **by the game** (no placing by hand; no folding seats; passenger and
+  rear seats are parts that can be taken out, giving a bigger grid and saving weight,
+  insulation unchanged; the driver's seat can be replaced, e.g. a carbon bucket); what's
+  carried adds its mass to the car (its place in the trunk). Loading and unloading
+  everywhere (shops, garage, marketplace); shipping is the paid alternative (free for
+  now), also from the garage to a shop (e.g. an engine to wait at the engine shop).
+- **Slots**: body parts are all optional (missing ones add drag); every shop can take an
+  engine out and put one in, the long block's insides only the engine shop; a car always
+  has an engine (trailers maybe later).
 - **Shops** (unlimited stock, every chassis; no time, a cost for fitting and for parts
   not brought): the **car shop** sells stock parts and fits any non-long-block part you
   bring; the old part goes into your trunk (if it fits) or the shop discards it.
   **Tuning shops** the same, with aftermarket parts (exhausts, sport cats, body parts).
   A **tire shop** for wheels and tires (individual items, no spare wheel). The
   **alignment shop** and the **dyno** stay; the **paint shop** paints every body part
-  fitted. The **engine shop** works only on long blocks (in the car or brought in a
+  fitted; a new body part's colour is picked when buying it, and parts can differ in
+  colour. The **engine shop** works only on long blocks (in the car or brought in a
   trunk), sells nothing, keeps one engine for you (bring it in the van, come back with
   the car, they swap). Repairs are new parts, except the engine shop's rebore (needing
   oversize pistons). Shops deliver anything to the garage.
 - **Showrooms** may later sell only some chassis; **used car dealers** and a **used parts
   shop** (buys and sells; new-part shops only sell); buying a car, the old one goes to the
-  garage or is traded in, as the player picks. A **marketplace**: players put up offers,
-  others buy (rare parts are traded).
+  garage or is traded in, as the player picks; the used parts shop sells cheaper, worn
+  parts. A **marketplace**, a place on the map: players bring (or ship) what they offer
+  there, which locks it, others buy (rare parts are traded; whole cars too). Offered
+  engines and cars show what they're built of.
 - A car that can't drive gets a **special rescue**: to a shop or a gas station.
 - Crashes don't damage cars. Wear to come for brakes, clutch and gearbox (too much
-  torque, synchros), as for the engine and tires now.
+  torque, synchros), as for the engine and tires now: worse before failing (brakes fade,
+  the clutch slips, synchros grind, then refuse).
 - Lent cars in events: your own car, trunk and all, comes back as it was.
 
 ## Multiplayer (agreed with the user, 2026-11-19)
