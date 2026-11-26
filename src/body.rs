@@ -66,7 +66,8 @@ pub struct Body {
     pub deck: Vec<[f32; 2]>,
     /// The cabin's outline above the deck from the base of the windscreen to the base of
     /// the rear window, as (x, y, glazed) points: the side from a point to the next is
-    /// glass if it's glazed (1), else a painted panel (0). Two points are the base and the
+    /// glass if it's glazed (1), else a painted panel (0); 2 is a painted side with the
+    /// windscreen or rear window glazed (a thick C pillar beside a hatch's glass). Two points are the base and the
     /// top of an open car's windscreen; none, no windscreen at all.
     pub cabin: Vec<[f32; 3]>,
     /// Width at the nose and at the tail, relative to the full width.
@@ -535,12 +536,14 @@ impl Body {
                 (base.z, half)
             })
             .collect();
-        let glazed = |station: usize| cabin[station][2] > 0.5;
+        // The side glazed (1), and the windscreen or rear window (1 or 2).
+        let glazed = |station: usize| (0.5..1.5).contains(&cabin[station][2]);
+        let window = |station: usize| cabin[station][2] > 0.5;
         builder.loft(&sections, |station, segment| match segment {
             // The sides, then the top: the roof between the windscreen and the rear
             // window.
             1 if glazed(station) => GLASS,
-            2 if glazed(station) && (station == 0 || station + 1 == last) => GLASS,
+            2 if window(station) && (station == 0 || station + 1 == last) => GLASS,
             _ => paint,
         });
         // Pillars along the windscreen and the rear window, posts in between, and the

@@ -310,8 +310,8 @@ fn pick_car(
     commands.spawn((Transform::from_translation(new.body.position), new));
 }
 
-/// LINEUP="first,count": instead of the one car, `count` cars of the catalogue from the
-/// `first`, parked one behind the other (6 m apart) on the flattest, most open straight
+/// LINEUP="first,count": instead of the one car, `count` stock cars of the catalogue
+/// (each chassis with each factory engine) from the `first`, parked one behind the other (6 m apart) on the flattest, most open straight
 /// of paved road there is, so they can be looked at from the side.
 fn line_up(
     mut commands: Commands,
@@ -370,7 +370,13 @@ fn line_up(
         // The first car in front; cars face along -z of their heading.
         let p = start + along * (length - 6.0 - 6.0 * i as f32);
         let yaw = (-along.x).atan2(-along.y);
-        let setup = crate::car::CarSetup::factory(v[0] + i, 0);
+        // The catalogue's trims, each chassis with each of its factory engines.
+        let catalogue = crate::catalogue::builtin();
+        let stock: Vec<(usize, usize)> = (catalogue.chassis.iter().enumerate())
+            .flat_map(|(c, chassis)| (0..chassis.engines.len()).map(move |o| (c, o)))
+            .collect();
+        let (chassis, option) = stock[(v[0] + i) % stock.len()];
+        let setup = crate::car::CarSetup::factory(chassis, option);
         let car = crate::car::Car::spawn_at(i, setup, &terrain, p.x, p.y, yaw);
         commands.spawn((Transform::from_translation(car.body.position), car));
     }

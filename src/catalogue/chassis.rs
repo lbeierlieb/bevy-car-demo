@@ -216,13 +216,14 @@ pub fn chassis() -> Vec<Chassis> {
                 [3.95, 0.92],
                 [4.07, 0.8],
             ],
-            // A long glasshouse, the roof falling a little to a near-upright hatch.
+            // Long door glass and a small quarter window, the roof falling a little to a
+            // thick C pillar and a steep, short hatch.
             cabin: vec![
                 [1.1, 0.8, 1.0],
-                [1.95, 1.33, 1.0],
-                [3.35, 1.35, 1.0],
-                [3.7, 1.3, 1.0],
-                [3.98, 0.93, 1.0],
+                [1.85, 1.32, 1.0],
+                [3.0, 1.34, 1.0],
+                [3.5, 1.28, 2.0],
+                [3.95, 0.95, 0.0],
             ],
             nose: 0.8,
             tail: 0.92,
