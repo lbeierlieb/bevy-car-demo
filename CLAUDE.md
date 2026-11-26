@@ -873,6 +873,18 @@ The game is about tuning every aspect of a car. Agreed so far (the user's answer
   torque, synchros), as for the engine and tires now: worse before failing (brakes fade,
   the clutch slips, synchros grind, then refuse).
 - Lent cars in events: your own car, trunk and all, comes back as it was.
+- Taking an engine out is only a swap (the new one in the trunk or waiting at that shop).
+- Accounts are made by the server's admin for now; the username is the name in the game;
+  a forgotten password is reset by the admin.
+- Parts sold to the used parts shop disappear; what it sells the server makes up.
+  Assortments are per shop (the shops file). With several instances everything persisted
+  is shared, marketplace included: instances only spread the physics.
+- **The body is built of real pieces**: a missing bonnet shows the engine and intake
+  under it; upside down you see the silencer, cat or straight pipe.
+- Showrooms sell trims, used car dealers worn ones. Weekly races with rewards: later,
+  nothing planned yet.
+- **One car for now**: the hot hatch with 1.6 and 1.8 engine options, made to look like
+  an early-90s hatchback (the user: like an EG Civic; no real names or badges).
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 
