@@ -115,6 +115,8 @@ pub struct Shadow {
     /// through.
     car: Option<Car>,
     done: u32,
+    /// When the server step that drove it through `done` ended (the server's clock, s).
+    time: f64,
     /// A car of the spec without a state yet (waiting for a check).
     built: Option<Car>,
     /// The player's step driven at server step 0 (wrapping): step `tick + offset` is
@@ -339,6 +341,7 @@ impl Shadow {
         self.taken = self.rescue.has_car();
         self.yours = Some(Yours {
             step,
+            time: self.time,
             placed: self.placed,
             moved: self.moved,
             notice: self.taken.then(|| RESCUED.to_string()),
@@ -393,6 +396,12 @@ impl Shadow {
         given.flatten()
     }
 
+    /// The player's step the car was last driven through.
+    #[cfg(test)]
+    pub fn done(&self) -> u32 {
+        self.done
+    }
+
     /// Where the car is, as the server has it (none before it has a state).
     pub fn position(&self) -> Option<Vec3> {
         self.car.as_ref().map(|car| car.body.position)
@@ -415,9 +424,10 @@ impl Shadow {
         self.waiting.insert(step, state);
     }
 
-    /// Server step `tick`: drives the copy through the player's step for it (the rest
-    /// of the step, after the cars met, is `finish_step`).
-    pub fn step(&mut self, tick: u32, terrain: &Terrain) {
+    /// Server step `tick`, ending at `time` (the server's clock): drives the copy through
+    /// the player's step for it (the rest of the step, after the cars met, is
+    /// `finish_step`).
+    pub fn step(&mut self, tick: u32, time: f64, terrain: &Terrain) {
         let (Some(car), Some(offset)) = (&mut self.car, self.offset) else {
             return;
         };
@@ -452,6 +462,7 @@ impl Shadow {
         car.drive(&input, STEP);
         step_car(car, terrain, STEP);
         self.done = step;
+        self.time = time;
         self.started = Some(started);
     }
 
@@ -774,7 +785,7 @@ mod tests {
         shadow.take_inputs(1, &[DriverInput::default()], 0);
         // Step 2's input isn't there in time: guessed, without R.
         for tick in 1..=2 {
-            shadow.step(tick, &terrain);
+            shadow.step(tick, 0.0, &terrain);
             shadow.finish_step(&terrain);
         }
         assert!(!shadow.taken());
@@ -784,7 +795,7 @@ mod tests {
             ..default()
         };
         shadow.take_inputs(3, &[pressed, DriverInput::default()], 2);
-        shadow.step(3, &terrain);
+        shadow.step(3, 0.0, &terrain);
         shadow.finish_step(&terrain);
         assert!(shadow.taken(), "R was lost");
     }

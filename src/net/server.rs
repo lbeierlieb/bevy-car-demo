@@ -675,13 +675,17 @@ const PACE_EVERY: f64 = 0.25;
 /// itself (`traffic::step`) against where the players' cars are (`Visitor`).
 fn step_shadows(
     mut tick: ResMut<Tick>,
+    (time, fixed): (Res<Time<Real>>, Res<Time<Fixed>>),
     (terrain, rounds): (Res<Terrain>, Res<Rounds>),
     mut peers: Query<(&mut Peer, Option<&Realm>, Option<&mut Visitor>)>,
     traffic: Query<(&TrafficCar, Option<&Realm>)>,
 ) {
     tick.0 = tick.0.wrapping_add(1);
+    // When this step ends, on the clock the cars' states are stamped on (the traffic's
+    // step comes after the players' cars', within the same step).
+    let end = super::stamp(&time, &fixed);
     for (mut peer, ..) in &mut peers {
-        peer.shadow.step(tick.0, &terrain);
+        peer.shadow.step(tick.0, end, &terrain);
     }
     let solid = |peer: &Peer| peer.state.is_some() && !peer.ghost;
     let mut pairs = peers.iter_combinations_mut();

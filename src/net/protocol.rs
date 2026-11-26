@@ -39,7 +39,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 27;
+pub const PROTOCOL: u32 = 28;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -189,14 +189,16 @@ pub enum ToClient {
     },
 }
 
-/// A player's car's whole state as the server drives it: after their step `step`, with
-/// the latest of their placements the server had taken up then and how many times it had
+/// A player's car's whole state as the server drives it: after their step `step`, which
+/// ended at `time` on the server's clock (the clock every car's state is stamped on: the
+/// player's game shows the other cars as of each of its steps by it), with the latest of their placements the server had taken up then and how many times it had
 /// moved the car itself; and, while the server has the car (the rescue helicopter carrying
 /// it), what to tell the player about that: their game then doesn't drive it, it shows it
 /// as the server sends it to everyone (`Cars`), until it's given back as a move.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Yours {
     pub step: u32,
+    pub time: f64,
     pub placed: Option<u32>,
     pub moved: u32,
     pub notice: Option<String>,
@@ -465,6 +467,7 @@ impl Wire for ToClient {
             ToClient::Yours(yours) => {
                 17u8.put(out);
                 yours.step.put(out);
+                yours.time.put(out);
                 yours.placed.put(out);
                 yours.moved.put(out);
                 yours.notice.put(out);
@@ -524,6 +527,7 @@ impl Wire for ToClient {
             16 => ToClient::Pace { early: r.get()? },
             17 => ToClient::Yours(Yours {
                 step: r.get()?,
+                time: r.get()?,
                 placed: r.get()?,
                 moved: r.get()?,
                 notice: r.get()?,
