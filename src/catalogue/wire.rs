@@ -6,7 +6,7 @@ use super::{Catalogue, Clutch, Paint, Suspension, TireCompound};
 use crate::body::{Body, Detail, Tone};
 use crate::cargo::{Area, Hold};
 use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars};
-use crate::items::{Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim};
+use crate::items::{Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim};
 use crate::net::wire::{Reader, Wire};
 use crate::physics::drivetrain::Drive;
 use crate::physics::engine::families::{Family, Layout, Version};
@@ -571,7 +571,7 @@ impl Wire for Does {
 }
 
 fields!(Knob { low, high, default } text { name });
-fields!(SlotDef { kind, required } text { name });
+fields!(SlotDef { kind, required, needs } text { name });
 fields!(PartDef {
     kind,
     does,
@@ -580,10 +580,12 @@ fields!(PartDef {
     mass,
     price,
     painted,
+    absent,
     knobs,
     slots
 } text { id, name });
 fields!(Trim { car } text { id, name });
+fields!(Assembly { item } text { id, name });
 
 /// How deep a tree of items goes at most (a car, its engine, its long block, a part).
 const ITEM_DEPTH: usize = 6;
@@ -634,8 +636,8 @@ fn read_item(r: &mut Reader, depth: usize) -> Option<Item> {
 
 impl Item {
     /// Whether the tree refers only to what's in `catalogue`, with each part in a slot
-    /// of its kind, sizes, paints and knobs within what there is (the chassis it's in
-    /// deciding the anti-roll bars' sizes).
+    /// of its kind (and the part a slot needs there), sizes, paints and knobs within what
+    /// there is (the chassis it's in deciding the anti-roll bars' sizes).
     /// A loose part (not a car) goes by the chassis it's made for, if any.
     pub fn fine(&self, catalogue: &Catalogue) -> bool {
         let chassis = match catalogue.defs.get(self.def) {
@@ -666,6 +668,9 @@ impl Item {
                 Some(item) => {
                     (catalogue.defs.get(item.def)).is_some_and(|d| d.kind == slot.kind)
                         && item.fine_in(catalogue, chassis)
+                        && slot
+                            .needs
+                            .is_none_or(|n| self.slots.get(n).is_some_and(Option::is_some))
                 }
                 None => !slot.required,
             });
@@ -686,6 +691,7 @@ impl Wire for Catalogue {
         self.start.put(out);
         self.defs.put(out);
         self.trims.put(out);
+        self.assemblies.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         let mut catalogue = Catalogue::new(
@@ -701,6 +707,7 @@ impl Wire for Catalogue {
         );
         catalogue.defs = r.get()?;
         catalogue.trims = r.get()?;
+        catalogue.assemblies = r.get()?;
         catalogue.rehash();
         catalogue.holds_together().then_some(catalogue)
     }
@@ -750,6 +757,7 @@ impl Catalogue {
             does(def)
                 && kind(&def.kind)
                 && def.slots.iter().all(|slot| kind(&slot.kind))
+                && (def.slots.iter()).all(|slot| slot.needs.is_none_or(|n| n < def.slots.len()))
                 && def
                     .knobs
                     .iter()
@@ -758,6 +766,9 @@ impl Catalogue {
         // Every trim makes a car (`resolve` needs a shared catalogue).
         let shared = std::sync::Arc::new(self.clone());
         let trim = |trim: &Trim| trim.car.fine(self) && trim.car.resolve(&shared).is_ok();
+        let assembly = |assembly: &Assembly| {
+            assembly.item.fine(self) && assembly.item.def(self).kind != Kind::Chassis
+        };
         let gearbox = |gearbox: &Gearbox| !gearbox.gears.is_empty();
         self.start < self.chassis.len()
             && !self.clutches.is_empty()
@@ -769,6 +780,7 @@ impl Catalogue {
                 .all(|f| !f.versions.is_empty() && f.versions.iter().all(version))
             && self.defs.iter().all(def)
             && self.trims.iter().all(trim)
+            && self.assemblies.iter().all(assembly)
     }
 }
 

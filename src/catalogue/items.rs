@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::{Catalogue, Shared};
 use crate::chassis::CarBuild;
 use crate::items::{
-    Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, assemble, chassis_knobs,
+    Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, assemble, chassis_knobs,
     damper_knobs, engine_knobs, knob, tire_knobs,
 };
 use crate::physics::engine::ecu::EcuModel;
@@ -25,6 +25,7 @@ pub fn with_items(catalogue: Catalogue) -> Catalogue {
     catalogue.defs = defs(&catalogue);
     let shared: Shared = Arc::new(catalogue.clone());
     catalogue.trims = trims(&shared);
+    catalogue.assemblies = engines(&catalogue);
     catalogue.rehash();
     catalogue
 }
@@ -51,6 +52,7 @@ struct Def {
     size: [f32; 3],
     mass: f32,
     painted: bool,
+    absent: bool,
     knobs: Vec<Knob>,
     slots: Vec<SlotDef>,
 }
@@ -66,6 +68,7 @@ impl Def {
             size,
             mass,
             painted: false,
+            absent: false,
             knobs: Vec::new(),
             slots: Vec::new(),
         }
@@ -102,6 +105,7 @@ impl Def {
             mass: self.mass,
             price: 0,
             painted: self.painted,
+            absent: self.absent,
             knobs: self.knobs,
             slots: self.slots,
         }
@@ -113,6 +117,15 @@ fn slot(name: &str, kind: Kind, required: bool) -> SlotDef {
         name: name.into(),
         kind,
         required,
+        needs: None,
+    }
+}
+
+/// `slot` needing the slot at `place` filled.
+fn needing(slot: SlotDef, place: usize) -> SlotDef {
+    SlotDef {
+        needs: Some(place),
+        ..slot
     }
 }
 
@@ -121,22 +134,24 @@ fn slot(name: &str, kind: Kind, required: bool) -> SlotDef {
 /// engine.
 fn hatch_slots(catalogue: &Catalogue) -> Vec<SlotDef> {
     let body = |name: &str, panel| slot(name, Kind::Body(panel), false);
+    // A lip goes on the front bumper, mirrors on the doors, the spoiler on the hatch, the
+    // diffuser under the rear bumper (by their places here).
     let mut slots = vec![
         body("Front bumper", Panel::FrontBumper),
-        body("Front lip", Panel::FrontLip),
+        needing(body("Front lip", Panel::FrontLip), 0),
         body("Bonnet", Panel::Bonnet),
         body("Left fender", Panel::Fender),
         body("Right fender", Panel::Fender),
         body("Left door", Panel::Door),
         body("Right door", Panel::Door),
-        body("Left mirror", Panel::Mirror),
-        body("Right mirror", Panel::Mirror),
+        needing(body("Left mirror", Panel::Mirror), 5),
+        needing(body("Right mirror", Panel::Mirror), 6),
         body("Left side skirt", Panel::SideSkirt),
         body("Right side skirt", Panel::SideSkirt),
         body("Hatch", Panel::Hatch),
-        body("Rear spoiler", Panel::RearSpoiler),
+        needing(body("Rear spoiler", Panel::RearSpoiler), 11),
         body("Rear bumper", Panel::RearBumper),
-        body("Diffuser", Panel::Diffuser),
+        needing(body("Diffuser", Panel::Diffuser), 13),
         slot("Driver's seat", Kind::Seat(Seat::Front), true),
         slot("Passenger seat", Kind::Seat(Seat::Front), false),
         slot("Rear bench", Kind::Seat(Seat::RearBench), false),
@@ -474,14 +489,17 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
     for (s, kind) in catalogue.slots.iter().enumerate() {
         let (size, mass) = engine_part_size(&kind.name);
         for (p, part) in kind.parts.iter().enumerate() {
-            add(Def::new(
+            let mut def = Def::new(
                 &format!("{}.{}", slug(&kind.name), slug(&part.name)),
                 &format!("{} ({})", part.name, kind.name.to_lowercase()),
                 Kind::EnginePart(s),
                 Does::EnginePart { slot: s, part: p },
                 size,
                 mass,
-            ));
+            );
+            // "None": no turbo, no intercooler, no catalyst.
+            def.absent = part.name == "None";
+            add(def);
         }
     }
     defs
@@ -602,4 +620,28 @@ fn trims(catalogue: &Shared) -> Vec<Trim> {
         }
     }
     trims
+}
+
+/// The factory engines as the trims have them, each sold whole (`engine.<code>`).
+fn engines(catalogue: &Catalogue) -> Vec<Assembly> {
+    let mut engines: Vec<Assembly> = Vec::new();
+    for trim in &catalogue.trims {
+        let Some(engine) = trim.car.fitted(catalogue, Kind::Engine).next() else {
+            continue;
+        };
+        let block = engine.fitted(catalogue, Kind::LongBlock).next();
+        let Some(Does::Block { family, version }) = block.map(|b| &b.def(catalogue).does) else {
+            continue;
+        };
+        let version = &catalogue.families[*family].versions[*version];
+        let id = format!("engine.{}", version.code.to_lowercase());
+        if engines.iter().all(|assembly| assembly.id != id) {
+            engines.push(Assembly {
+                id,
+                name: format!("{} {} engine", version.code, version.name),
+                item: engine.clone(),
+            });
+        }
+    }
+    engines
 }

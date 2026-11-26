@@ -54,6 +54,8 @@ pub struct Catalogue {
     /// Every part there is (see `items`), and the stock cars built of them.
     pub defs: Vec<crate::items::PartDef>,
     pub trims: Vec<crate::items::Trim>,
+    /// Parts sold as one, put together as the factory does (the factory engines).
+    pub assemblies: Vec<crate::items::Assembly>,
     /// Tells catalogues apart: two with the same fingerprint are the same.
     fingerprint: u64,
 }
@@ -120,6 +122,7 @@ impl Catalogue {
             start,
             defs: Vec::new(),
             trims: Vec::new(),
+            assemblies: Vec::new(),
             fingerprint: 0,
         };
         catalogue.rehash();
@@ -134,7 +137,7 @@ impl Catalogue {
     /// FNV-1a over everything in it.
     fn hash(&self) -> u64 {
         let text = format!(
-            "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{}{:?}{:?}",
+            "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{}{:?}{:?}{:?}",
             self.chassis,
             self.gearboxes,
             self.clutches,
@@ -145,7 +148,8 @@ impl Catalogue {
             self.slots,
             self.start,
             self.defs,
-            self.trims
+            self.trims,
+            self.assemblies
         );
         text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash: u64, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)

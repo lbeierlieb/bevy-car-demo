@@ -148,6 +148,9 @@ pub struct SlotDef {
     pub kind: Kind,
     /// Must have a part (else the car can't be driven, or the part not built).
     pub required: bool,
+    /// Another slot of the same part that must have a part for this one to (a lip goes on
+    /// a bumper), by its place.
+    pub needs: Option<usize>,
 }
 
 /// A part there is.
@@ -167,6 +170,9 @@ pub struct PartDef {
     pub price: u32,
     /// Painted (in the catalogue's `paints`, each item its own).
     pub painted: bool,
+    /// Stands for nothing fitted, in a slot the engine needs filled (no turbo): taking a
+    /// part off puts it in, and it's never sold or carried.
+    pub absent: bool,
     pub knobs: Vec<Knob>,
     pub slots: Vec<SlotDef>,
 }
@@ -177,6 +183,15 @@ pub struct Trim {
     pub id: String,
     pub name: String,
     pub car: Item,
+}
+
+/// Parts sold as one, put together as the factory does (an engine with its long block
+/// and bolt-ons): a shop's ware like a single part.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Assembly {
+    pub id: String,
+    pub name: String,
+    pub item: Item,
 }
 
 /// An owned part, and what's fitted into its slots.

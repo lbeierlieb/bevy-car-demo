@@ -613,6 +613,39 @@ mod tests {
     }
 
     #[test]
+    fn what_the_shops_sell_is_in_the_catalogue() {
+        let catalogue = crate::catalogue::builtin();
+        let ids: Vec<&str> = (catalogue.defs.iter())
+            .filter(|def| !def.absent)
+            .map(|def| def.id.as_str())
+            .chain(catalogue.trims.iter().map(|trim| trim.id.as_str()))
+            .chain(catalogue.assemblies.iter().map(|a| a.id.as_str()))
+            .collect();
+        for shop in parse(LIST).unwrap() {
+            assert_eq!(
+                shop.sells.is_empty(),
+                !matches!(
+                    shop.kind,
+                    ShopKind::Showroom | ShopKind::Car | ShopKind::Tuning | ShopKind::Tire
+                ),
+                "{}",
+                shop.name
+            );
+            for pattern in &shop.sells {
+                let one = Shop {
+                    sells: vec![pattern.clone()],
+                    ..shop.clone()
+                };
+                assert!(
+                    ids.iter().any(|id| one.sells(id)),
+                    "{} sells {pattern}: nothing has that id",
+                    shop.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_shop_is_by_a_road() {
         let terrain = Terrain::baked();
         for shop in parse(LIST).unwrap() {
