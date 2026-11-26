@@ -278,14 +278,16 @@ fn shop(
     let marker = at.shop.and_then(|i| shops.list.get(i)).map(|p| p.marker);
     let mut enter = false;
     let ctx = contexts.ctx_mut()?;
-    shop_window(ctx, &shops, &mut at, ShopKind::Parts, |ui, _| {
-        enter = kit::button(ui, "Onto the lift").clicked();
-        kit::note(
-            ui,
-            "A workshop with a two-post lift: engines and their parts, gearboxes, \
-             suspension, rims and tires; repairs.",
-        );
-    });
+    for kind in [ShopKind::Car, ShopKind::Tuning, ShopKind::Tire] {
+        shop_window(ctx, &shops, &mut at, kind, |ui, _| {
+            enter = kit::button(ui, "Onto the lift").clicked();
+            kit::note(
+                ui,
+                "A workshop with a two-post lift: engines and their parts, gearboxes, \
+                 suspension, rims and tires; repairs.",
+            );
+        });
+    }
     let Some(marker) = marker.filter(|_| enter) else {
         return Ok(());
     };

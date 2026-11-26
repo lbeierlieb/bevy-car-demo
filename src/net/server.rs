@@ -547,7 +547,7 @@ fn receive(
                 }
                 ToServer::Rescue { to } => {
                     let to = server.shops.get(usize::from(to));
-                    let to = to.filter(|shop| matches!(shop.kind, ShopKind::Gas | ShopKind::Parts));
+                    let to = to.filter(|shop| matches!(shop.kind, ShopKind::Gas | ShopKind::Car));
                     if let Some(shop) = to {
                         let (at, yaw) = crate::shops::kerb(&terrain, shop.at);
                         peer.shadow.special_rescue(&terrain, at, yaw);

@@ -437,8 +437,8 @@ fn actions(
         driving.presses.press(Action::View);
         menu.close();
     }
-    // The special rescue: a car that can't drive on, to the nearest gas station or parts
-    // shop (whether it goes is the server's call too).
+    // The special rescue: a car that can't drive on, to the nearest gas station or car
+    // workshop (whether it goes is the server's call too).
     let Some(connection) = online.connection.as_deref_mut() else {
         return;
     };
@@ -448,7 +448,7 @@ fn actions(
     kit::section(ui, "Special rescue");
     let stranded = can_reset && car.stranded();
     let p = car.body.position.xz();
-    for kind in [ShopKind::Gas, ShopKind::Parts] {
+    for kind in [ShopKind::Gas, ShopKind::Car] {
         let list = driving
             .shops
             .as_ref()

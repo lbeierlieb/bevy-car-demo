@@ -1,7 +1,9 @@
-//! Shops on the map: places to drive to for what changes a car (a showroom, parts, the
-//! alignment (`alignment`), paint (`paint`), fuel (`gas`), a dyno (`dyno`)). The server says where they are (its own list, `--shops`,
-//! separate from the map, e.g. `assets/shops.cfg`; none without one) when a player joins;
-//! playing alone there are none.
+//! Shops on the map: places to drive to for what changes a car (a showroom, a car workshop,
+//! a tuning shop, a tire shop (all three fitting parts, see `fitting`), the alignment
+//! (`alignment`), paint (`paint`), fuel (`gas`), a dyno (`dyno`), the garage park). The
+//! server says where they are and what each sells (its own list, `--shops`, separate from
+//! the map, e.g. `assets/shops.cfg`; none without one) when a player joins; playing alone,
+//! the game's own server has the repo's list.
 //!
 //! Each has a glowing marker on the road in front of it, at the edge on its side, and its
 //! name floats above it when near.
@@ -39,10 +41,14 @@ const MAP_NAMES_BELOW: f32 = 1.6;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ShopKind {
-    /// Another car (the showroom window for now).
+    /// Stock cars (trims).
     Showroom,
-    /// Engine and car parts, repairs, tires.
-    Parts,
+    /// Fits any part (but a long block's insides), selling stock parts.
+    Car,
+    /// The same, selling tuning parts.
+    Tuning,
+    /// Rims and tires: the only place a tire goes onto a rim or off it.
+    Tire,
     /// Camber, toe, tire pressures and the brakes.
     Alignment,
     Paint,
@@ -55,9 +61,11 @@ pub enum ShopKind {
 }
 
 impl ShopKind {
-    pub const ALL: [ShopKind; 7] = [
+    pub const ALL: [ShopKind; 9] = [
         Self::Showroom,
-        Self::Parts,
+        Self::Car,
+        Self::Tuning,
+        Self::Tire,
         Self::Alignment,
         Self::Paint,
         Self::Gas,
@@ -69,7 +77,9 @@ impl ShopKind {
     pub fn word(self) -> &'static str {
         match self {
             Self::Showroom => "showroom",
-            Self::Parts => "parts",
+            Self::Car => "car",
+            Self::Tuning => "tuning",
+            Self::Tire => "tire",
             Self::Alignment => "alignment",
             Self::Paint => "paint",
             Self::Gas => "gas",
@@ -82,7 +92,9 @@ impl ShopKind {
     pub fn title(self) -> &'static str {
         match self {
             Self::Showroom => "Car dealer",
-            Self::Parts => "Parts shop",
+            Self::Car => "Car workshop",
+            Self::Tuning => "Tuning shop",
+            Self::Tire => "Tire shop",
             Self::Alignment => "Alignment shop",
             Self::Paint => "Paint shop",
             Self::Gas => "Gas station",
@@ -91,10 +103,18 @@ impl ShopKind {
         }
     }
 
+    /// Whether it fits parts to cars (with its own window of the car's slots, see
+    /// `fitting`).
+    pub fn fits_parts(self) -> bool {
+        matches!(self, Self::Car | Self::Tuning | Self::Tire)
+    }
+
     pub fn color(self) -> [u8; 3] {
         match self {
             Self::Showroom => [80, 230, 120],
-            Self::Parts => [200, 120, 255],
+            Self::Car => [200, 120, 255],
+            Self::Tuning => [255, 70, 70],
+            Self::Tire => [150, 150, 170],
             Self::Alignment => [90, 200, 255],
             Self::Paint => [255, 110, 190],
             Self::Gas => [255, 200, 40],
@@ -111,10 +131,27 @@ pub struct Shop {
     pub name: String,
     /// The building (map x and z); the marker goes on the road next to it.
     pub at: Vec2,
+    /// What it sells (its assortment): ids of the catalogue's part definitions and
+    /// assemblies (a showroom's: trims), each exact or, ending in `*`, every id starting
+    /// with what's before it.
+    pub sells: Vec<String>,
+}
+
+impl Shop {
+    /// Whether it sells what has the id `id`.
+    pub fn sells(&self, id: &str) -> bool {
+        self.sells
+            .iter()
+            .any(|pattern| match pattern.strip_suffix('*') {
+                Some(start) => id.starts_with(start),
+                None => id == pattern,
+            })
+    }
 }
 
 /// Reads a list of shops: one per line, its kind, x, z and name, with `#` comments and
-/// blank lines skipped.
+/// blank lines skipped. Lines starting with `sells` list what the shop above sells (ids,
+/// see `Shop::sells`).
 pub fn parse(text: &str) -> Result<Vec<Shop>, String> {
     let mut shops = Vec::new();
     for (n, line) in text.lines().enumerate() {
@@ -125,6 +162,13 @@ pub fn parse(text: &str) -> Result<Vec<Shop>, String> {
         let wrong = |what: &str| format!("line {}: {what}: {line}", n + 1);
         let mut words = line.split_whitespace();
         let word = words.next().unwrap_or("");
+        if word == "sells" {
+            let shop: &mut Shop = shops
+                .last_mut()
+                .ok_or_else(|| wrong("what a shop sells goes under its line"))?;
+            shop.sells.extend(words.map(str::to_string));
+            continue;
+        }
         let kind = (ShopKind::ALL.into_iter())
             .find(|kind| kind.word() == word)
             .ok_or_else(|| {
@@ -142,7 +186,12 @@ pub fn parse(text: &str) -> Result<Vec<Shop>, String> {
         if name.is_empty() {
             return Err(wrong("needs a name after x and z"));
         }
-        shops.push(Shop { kind, name, at });
+        shops.push(Shop {
+            kind,
+            name,
+            at,
+            sells: Vec::new(),
+        });
     }
     if shops.len() > usize::from(u16::MAX) {
         return Err("too many shops".into());
@@ -156,12 +205,14 @@ impl Wire for Shop {
         (kind.unwrap_or(0) as u8).put(out);
         self.name.put(out);
         self.at.put(out);
+        self.sells.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         Some(Self {
             kind: *ShopKind::ALL.get(usize::from(r.get::<u8>()?))?,
             name: r.get()?,
             at: r.get()?,
+            sells: r.get()?,
         })
     }
 }
@@ -540,8 +591,8 @@ mod tests {
     fn a_wrong_line_says_where() {
         assert_eq!(
             parse("gas 1 2 Pumps\n# a comment\n\nbakery 3 4 Bread").unwrap_err(),
-            "line 4: not a kind of shop (showroom, parts, alignment, paint, gas, dyno, \
-             garage): bakery 3 4 Bread"
+            "line 4: not a kind of shop (showroom, car, tuning, tire, alignment, paint, gas, \
+             dyno, garage): bakery 3 4 Bread"
         );
         assert!(parse("gas 1 Pumps").is_err());
         assert!(parse("gas 1 2").is_err());
@@ -552,8 +603,13 @@ mod tests {
                 kind: ShopKind::Dyno,
                 name: "Rollenprüfstand Süd".into(),
                 at: Vec2::new(-2601.5, -3784.0),
+                sells: Vec::new(),
             }]
         );
+        let shops = parse("tire 1 2 Rubber\n  sells rim.* tire.street\nsells tire.race").unwrap();
+        assert!(shops[0].sells("rim.steel") && shops[0].sells("tire.race"));
+        assert!(!shops[0].sells("tire.sport"));
+        assert!(parse("sells rim.*").is_err());
     }
 
     #[test]

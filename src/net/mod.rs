@@ -665,6 +665,7 @@ mod tests {
                 kind: crate::shops::ShopKind::Gas,
                 name: "Pump".to_string(),
                 at: Vec2::ZERO,
+                sells: Vec::new(),
             };
             let with = server.world_mut().remove_resource::<Server>().unwrap();
             server.insert_resource(with.with_shops(vec![shop]));
@@ -696,6 +697,7 @@ mod tests {
                 kind: crate::shops::ShopKind::Gas,
                 name: "Pump".to_string(),
                 at: Vec2::ZERO,
+                sells: Vec::new(),
             };
             let with = server.world_mut().remove_resource::<Server>().unwrap();
             server.insert_resource(with.with_shops(vec![shop]));
@@ -1109,11 +1111,13 @@ mod tests {
                 kind: ShopKind::Garage,
                 name: "Garages".into(),
                 at: Vec2::ZERO,
+                sells: Vec::new(),
             },
             Shop {
-                kind: ShopKind::Parts,
+                kind: ShopKind::Car,
                 name: "Parts".into(),
                 at: Vec2::new(0.0, 500.0),
+                sells: Vec::new(),
             },
         ];
         let with = server.world_mut().remove_resource::<Server>().unwrap();
