@@ -1,8 +1,9 @@
 //! The paint shops: the car in a spray booth of their own (white walls, a lit filter
 //! ceiling, floor grates along the car, the doors ahead, filters at the back), a shelf of
-//! tins and a test card on a stand in the picked colour. The window on the right picks a
-//! paint and sprays it: the booth fills with a mist of the new colour, which the downdraft
-//! clears from the car in it.
+//! tins and a test card on a stand in the picked colour. The window on the right picks what
+//! to paint (the whole car, or one of its body parts: each part has a colour of its own)
+//! and a paint, and sprays it: the booth fills with a mist of the new colour, which the
+//! downdraft clears from the car in it. The server is asked for it as works (`fitting`).
 //!
 //! The booth is under the shop (like the alignment bay); the driven car stays parked on the
 //! shop's marker meanwhile (a ghost, its input held like in the dyno's room), and the car in
@@ -23,7 +24,7 @@ use crate::car::{ActiveCar, Away, Car};
 use crate::catalogue::Current;
 use crate::looks::{Looks, Motion};
 use crate::menu::kit::{self, Panel, Place};
-use crate::shops::{self, AtShop, SceneBack, ShopKind, Shops, shop_window};
+use crate::shops::{AtShop, SceneBack, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
 
 /// How far under the ground at the shop the booth is (m).
@@ -81,8 +82,10 @@ struct Booth {
     swing: f32,
     zoom: f32,
     eye: Option<Vec3>,
-    /// The paint picked in the window (in the catalogue's `paints`).
+    /// The paint picked in the window (in the catalogue's `paints`), and what to paint
+    /// (a body part, by where it's fitted; none: the whole car).
     picked: usize,
+    part: Option<crate::fitting::Path>,
     /// In the colour picker: the paint picked before it opened (back to it on cancel).
     choosing: Option<usize>,
     /// The colour row, to give the focus back to when the picker closes.
@@ -90,10 +93,12 @@ struct Booth {
     spray: Option<Spray>,
 }
 
-/// A coat being sprayed: the paint, and how long it's been going (s).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A coat being sprayed: the paint, on what (a body part; none: the whole car), and how
+/// long it's been going (s).
+#[derive(Clone, Debug, PartialEq)]
 struct Spray {
     paint: usize,
+    part: Option<crate::fitting::Path>,
     time: f32,
 }
 
@@ -164,13 +169,39 @@ fn spray_coat(spray: &mut Option<Spray>, car: &mut Car, dt: f32) {
     let was = coat.time;
     coat.time += dt;
     if was < THICKEST && coat.time >= THICKEST {
-        let mut build = car.setup.build.clone();
-        build.paint = coat.paint;
-        shops::rebuild(car, build);
+        let part = coat.part.clone();
+        paint_part(car, part.as_deref(), coat.paint);
     }
     if coat.time >= SPRAY {
         *spray = None;
     }
+}
+
+/// `car` with the part fitted at `path` in `paint` (none: every painted part).
+fn paint_part(car: &mut Car, path: Option<&[u8]>, paint: usize) {
+    let mut setup = car.setup.clone();
+    let mut build = car.setup.build.clone();
+    match path {
+        None => {
+            crate::items::paint_all(&mut setup.car, paint);
+            build.paint = paint;
+        }
+        Some(path) => match crate::fitting::item_mut(&mut setup.car, path) {
+            Some(item) if item.paint.is_some() => item.paint = Some(paint),
+            _ => return,
+        },
+    }
+    let engine = &car.setup.engine;
+    let setup = setup.changed(build, engine.parts.clone(), engine.build.clone());
+    *car = car.rebuilt(setup);
+}
+
+/// The paint of what's at `path` on `car` (none: its shell's).
+fn paint_of(car: &Car, path: Option<&[u8]>) -> usize {
+    let tree = &car.setup.car;
+    (path.and_then(|path| crate::fitting::item_at(tree, path)))
+        .and_then(|item| item.paint)
+        .unwrap_or(car.setup.build.paint)
 }
 
 /// The paint shop's window (before the booth): the paint now, and into the booth.
@@ -788,7 +819,8 @@ fn dress(
 ) {
     if let Some(car) = cars.iter().find(|car| car.index == active.0) {
         for mut looks in &mut models {
-            if looks.build.paint != car.setup.build.paint {
+            // Each part's paint is in the tree.
+            if looks.car != car.setup.car {
                 *looks = Looks::of(&car.setup);
             }
         }
@@ -825,7 +857,7 @@ fn mist(
     let Some(paints) = paints else {
         return;
     };
-    let (thick, paint) = match booth.spray {
+    let (thick, paint) = match &booth.spray {
         Some(coat) => (thickness(coat.time), coat.paint),
         None => (0.0, booth.picked),
     };
@@ -920,7 +952,6 @@ fn window(
     let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return Ok(());
     };
-    let now = car.setup.build.paint;
     let catalogue = car.setup.build.catalogue.clone();
     let paints = &catalogue.paints;
     let shop = catalogue.shop_paints();
@@ -968,7 +999,36 @@ fn window(
                 }
                 return;
             }
-            let spraying = booth.spray;
+            let spraying = booth.spray.clone();
+            // What to paint: the whole car, or a body part fitted to it.
+            let tree = &car.setup.car;
+            let mut parts: Vec<Option<crate::fitting::Path>> = vec![None];
+            let slots = &tree.def(&catalogue).slots;
+            for (i, (slot, item)) in slots.iter().zip(&tree.slots).enumerate() {
+                let body = matches!(slot.kind, crate::items::Kind::Body(_));
+                if body && item.as_ref().is_some_and(|item| item.paint.is_some()) {
+                    parts.push(Some(vec![i as u8]));
+                }
+            }
+            if !parts.contains(&booth.part) {
+                booth.part = None;
+            }
+            let names: Vec<String> = (parts.iter())
+                .map(|part| match part {
+                    None => "The whole car".to_string(),
+                    Some(path) => slots[usize::from(path[0])].name.clone(),
+                })
+                .collect();
+            let mut which = parts.iter().position(|p| *p == booth.part).unwrap_or(0);
+            ui.add_enabled_ui(spraying.is_none(), |ui| {
+                kit::choice(ui, "What", &mut which, &names);
+            });
+            booth.part = parts[which].clone();
+            let now = paint_of(car, booth.part.as_deref());
+            // The whole car is "in" a paint only if every painted part is.
+            let all_in = |paint: usize| {
+                (car.setup.car.all().into_iter()).all(|item| item.paint.is_none_or(|p| p == paint))
+            };
             let colour = ui
                 .add_enabled_ui(spraying.is_none(), |ui| {
                     kit::submenu_with(ui, "Colour", &paints[booth.picked].name)
@@ -992,13 +1052,15 @@ fn window(
                 None => {
                     let picked = booth.picked;
                     let spray = ui
-                        .add_enabled_ui(picked != now, |ui| {
-                            kit::button(ui, &format!("Spray it {}", paints[picked].name))
-                        })
+                        .add_enabled_ui(
+                            picked != now || booth.part.is_none() && !all_in(picked),
+                            |ui| kit::button(ui, &format!("Spray it {}", paints[picked].name)),
+                        )
                         .inner;
                     if spray.clicked() {
                         booth.spray = Some(Spray {
                             paint: picked,
+                            part: booth.part.clone(),
                             time: 0.0,
                         });
                     }
@@ -1032,17 +1094,29 @@ mod tests {
         let terrain = Terrain::flat();
         let mut car = Car::spawn_at(0, CarSetup::default(), &terrain, 0.0, 0.0, 0.0);
         let paint = (car.setup.build.paint + 1) % car.setup.build.catalogue.shop_paints().len();
-        let mut spray = Some(Spray { paint, time: 0.0 });
+        let mut spray = Some(Spray {
+            paint,
+            part: None,
+            time: 0.0,
+        });
         let dt = 0.1;
         let mut steps = 0;
-        while spray.is_some() {
-            let before = spray.unwrap().time;
+        while let Some(coat) = &spray {
+            let before = coat.time;
             spray_coat(&mut spray, &mut car, dt);
             let painted = car.setup.build.paint == paint;
             assert_eq!(painted, before + dt >= THICKEST, "at {before} s");
             steps += 1;
         }
         assert!((steps as f32 * dt - SPRAY).abs() < 2.0 * dt);
+        assert_eq!(car.setup.build.paint, paint);
+        // A part on its own.
+        let bonnet = (car.setup.car.def(&car.setup.build.catalogue).slots.iter())
+            .position(|slot| slot.name == "Bonnet")
+            .unwrap() as u8;
+        let other = car.setup.build.catalogue.shop_paints()[0];
+        paint_part(&mut car, Some(&[bonnet]), other);
+        assert_eq!(paint_of(&car, Some(&[bonnet])), other);
         assert_eq!(car.setup.build.paint, paint);
         // The mist is thickest then, and gone at either end.
         assert!(thickness(0.0) < 1e-6 && thickness(SPRAY) < 1e-6);

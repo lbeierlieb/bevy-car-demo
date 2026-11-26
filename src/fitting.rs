@@ -103,7 +103,7 @@ fn slot_mut<'a>(car: &'a mut Item, path: &[u8]) -> Option<&'a mut Option<Item>> 
     holder.slots.get_mut(usize::from(last))
 }
 
-fn item_mut<'a>(car: &'a mut Item, path: &[u8]) -> Option<&'a mut Item> {
+pub fn item_mut<'a>(car: &'a mut Item, path: &[u8]) -> Option<&'a mut Item> {
     let mut item = car;
     for &place in path {
         item = item.slots.get_mut(usize::from(place))?.as_mut()?;
