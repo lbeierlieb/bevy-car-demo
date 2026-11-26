@@ -879,6 +879,43 @@ fitted parts). `Looks::car` is the tree (protocol 32); `visuals` caches bodies b
 `FITPAINT=0` dress the lined-up or `OFFLINE` car (`TRIM=1`: OFFLINE's is the 1.8);
 never name a shot variable `STRIP` (the dev shell exports `STRIP`, the strip tool).
 
+Milestone 4, accounts and saving (2026-11-26): `db.rs` (native only; sqlx `Any` over
+SQLite (bundled), MySQL/MariaDB, PostgreSQL by the URL's scheme, a plain path is an SQLite
+file made if missing; migrations per dialect in `MIGRATIONS`, `schema_version`; `?`
+placeholders numbered for PostgreSQL by `Store::sql`): tables `accounts` (name, `folded`
+lowercase unique, argon2 PHC hash; empty hash = no password, the default user's),
+`active` (the instance lock: account, instance, refreshed ms; taken if ours, missing,
+older than `STALE` 30 s, or by force alone; refreshed every `REFRESH` 10 s; deleted on
+leaving), `cars` (owner, text; one per account for now). `Database` runs a `Store` on a
+thread of its own with a current-thread tokio runtime, jobs in order (logins' answers
+picked up by `answers`, `flush` waits). `net/accounts.rs`: `Accounts` (the server's,
+`Server::with_accounts`; a stub type on wasm), `Admitted`. The server: `Hello` has a
+`password` (protocol 33; read as empty when missing, so an old game is told the version),
+a player with accounts waits (`Peer::logging_in`) until the database answers, then
+`admit` (the old join code): the saved car (`saved::read`; unreadable: the start car,
+logged) with its `Condition` given to the shadow's car when it first has a state (a move,
+`Yours::moved`, so the game takes it up), else the start car. An account plays once per
+server, a name once (case-insensitive). Saved (`saved::write` of `Shadow::kept`: the own
+car while one is lent) every `SAVE_EVERY` 60 s (`keep`), when the player leaves (then
+released), and by `Server::save_everyone` when the game's own server stops (`LocalLink`'s
+drop waits up to 4 s). `saved.rs`: `part` lines (tab-separated depth, slot name, def id,
+paint name, variant (rims/tires by label), `knob=value`s), a definition gone drops its
+item, then `fuel`, `tread`, `engine`, `cylinder` lines, then `tune` and the whole ECU
+(`Ecu::to_text_whole`), read into `Ecu::blank`, checked by a wire round trip. The server
+binary: `--database URL`, `--database-file F`, `--guests on|off` (off; needs a database),
+`server --database URL user add|password|remove NAME | list` (password from the terminal
+via rpassword, else a stdin line). Playing alone: `Accounts::alone`, SQLite at
+`storage::data_dir()/alone.db` (`~/.local/share/car-sim`), the default user `default`, by
+the name the game gives; tests use `sqlite::memory:`. The start menu has
+`kit::password_field` (never saved). NixOS module: `database` (default
+`sqlite:///var/lib/car-sim/car-sim.db`, `StateDirectory`), `databaseFile` (credential),
+`guests` (false), and `car-sim-user` (runuser as car-sim, or root with a URL file).
+Tests: `db::tests` (all dialects through `on_another_database`, ignored:
+`CAR_SIM_TEST_DB=postgres://…|mysql://…`; tried against PostgreSQL 18 and MariaDB 11.4
+started by hand from nixpkgs in the scratchpad), `saved::tests`,
+`a_players_car_is_kept_between_sessions`. Shots get a fresh `XDG_DATA_HOME` each
+(`DATA=dir` keeps one, e.g. to see a car come back); `JOIN` with `PASSWORD`.
+
 The game is about tuning every aspect of a car. Agreed so far (the user's answers):
 - **Parts are items** you own (a definition from the server's catalogue + condition),
   fitted to cars or carried. A car is a chassis with parts in slots; the engine is a
@@ -889,7 +926,7 @@ The game is about tuning every aspect of a car. Agreed so far (the user's answer
   PostgreSQL for several server instances sharing it (a player active on one at a time:
   a lock row refreshed while playing, taken over once stale, ~30 s).
 - **Accounts**: username and password; a server option allows guests (kept for the
-  session only); playing alone uses a default user. A catalogue entry changed by the
+  session only); playing alone uses a default user. (Built: milestone 4, above.) A catalogue entry changed by the
   server changes the items of it; entries are never meant to be removed (if one is, its
   items go, smoothly).
 - **What's sold where**: car shops only stock parts, tuning shops standard tuning parts;
@@ -954,7 +991,7 @@ The game is about tuning every aspect of a car. Agreed so far (the user's answer
 
 A multiplayer sandbox first; the career comes back later, built on it. Native and web
 native offers **"Play alone"** and **"Join server"** (a start menu, chosen at runtime);
-the web only asks for the name and joins the server the page came from (no playing
+the web only asks for the name (and password: an account's, none for a guest) and joins the server the page came from (no playing
 alone, no address field; agreed with the user, 2026-11-21). **Alone is joining a server
 of the game's own** (agreed with the user, 2026-11-24, so there's one way to play and
 alone has shops and events): `net::local::start` runs `net::server_app` (the
@@ -1051,7 +1088,10 @@ No hosting from the game: a dedicated server (`src/bin/server.rs`, native, headl
   here: a few frames per second; `shot.sh` hides info lines anyway).
 - Checking a deployed server from outside: `CAR_SIM_SERVER=host cargo test --profile
   release-dev join_a_real_server -- --ignored --nocapture` (says hello with this build's
-  protocol and map, prints the answer). "No answer" with the page loading over HTTPS
+  protocol and map, as a guest, and prints the answer: a server without guests refuses
+  it, which shows it's up). Closing a QUIC link waits up to 2 s for the send stream to be
+  acknowledged (`FINISH_TIMEOUT`): closed at once, a refusal never arrived (found
+  2026-11-26; the version and reload refusals had the same problem). "No answer" with the page loading over HTTPS
   means UDP is dropped before the server (seen 2026-11-19 on the user's IONOS VPS; QUIC
   out of the sandbox works, e.g. `curl --http3-only https://cloudflare.com`).
 - **Updates** (discussed with the user): the server checks only `PROTOCOL` and the map

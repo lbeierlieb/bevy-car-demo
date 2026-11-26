@@ -1,7 +1,7 @@
 # Owning cars and parts: the plan
 
 Agreed with the user in rounds of questions on 2026-11-26 (the decisions are also short
-in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–3 are built. The milestones are
+in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–4 are built. The milestones are
 in the order they're meant to be built; each ends with clippy and tests passing and the
 game playable.
 
@@ -171,7 +171,14 @@ stand still draws its own engine.
 - `Looks` carries the fitted visible parts and colours (protocol bump); traffic,
   showroom, shops' scenes draw from it.
 
-### 4. Accounts and saving
+### 4. Accounts and saving (done 2026-11-26)
+
+Built as below (see `CLAUDE.md`, "Owning cars and parts"). A server without
+`--database` keeps nothing and lets everyone in by name, as before. Guests aren't in the
+database at all (nothing of theirs is kept, so nothing needs erasing). The saved car is
+text by string ids (`saved.rs`), not the wire format, so it survives catalogue changes.
+Not done: limiting login attempts, a last save when a dedicated server is stopped
+(SIGTERM; it saves every minute), logging in from a browser tried for real.
 
 - A database layer (`sqlx`: SQLite, MySQL, PostgreSQL; migrations per dialect), server
   only (the web client needs none).
