@@ -7,10 +7,12 @@ use super::accounts::{Belongings, GARAGE, held_at};
 use super::protocol::ToClient;
 use super::server::Peer;
 use super::shadow::BakedMaps;
+use crate::car::CarSetup;
 use crate::cargo;
 use crate::catalogue::{Catalogue, Shared};
 use crate::fitting::{Bench, Fresh, Work};
 use crate::items::Item;
+use crate::items::{Does, trim_of};
 use crate::owned::{GARAGE_CARS, GARAGE_PARTS, Owned, Parked, SHOP_HOLD, Source, Stash, name};
 use crate::saved::{self, Condition};
 use crate::shops::{Shop, ShopKind};
@@ -306,13 +308,56 @@ fn renew(condition: &mut Condition, fresh: &Fresh) {
     }
 }
 
+/// A player at a car dealer buys its trim `trim` (in the catalogue's `trims`): the car they
+/// drove goes into their garage with what's in its trunk, or is traded in (gone, trunk and
+/// all). The trim's name, or why not.
+pub fn buy(
+    peer: &mut Peer,
+    trim: u16,
+    trade_in: bool,
+    shops: &[Shop],
+    catalogue: &Shared,
+    baked: &mut BakedMaps,
+) -> Result<String, String> {
+    let shop = (peer.at_shop())
+        .and_then(|i| shops.get(i))
+        .filter(|shop| shop.kind == ShopKind::Showroom);
+    let made = catalogue
+        .trims
+        .get(usize::from(trim))
+        .ok_or("No such car")?;
+    match shop {
+        Some(shop) if !shop.sells(&made.id) => {
+            return Err(format!("{} doesn't sell the {}", shop.name, made.name));
+        }
+        None if !super::shadow::trusts_placements() => {
+            return Err("Cars are bought at car dealers".into());
+        }
+        _ => {}
+    }
+    let Does::Chassis(chassis) = made.car.def(catalogue).does else {
+        return Err("No such car".into());
+    };
+    let option = (0..catalogue.chassis[chassis].engines.len())
+        .find(|&option| trim_of(catalogue, chassis, option).is_some_and(|t| t.id == made.id))
+        .ok_or("No such car")?;
+    let spec = CarSpec::of(&CarSetup::factory_in(catalogue, chassis, option));
+    bought(peer, spec, baked, trade_in)?;
+    Ok(made.name.clone())
+}
+
 /// A player bought a car (`spec`): the one they drove goes into their garage, with what's
-/// in its trunk (refused if the garage is full).
-pub fn bought(peer: &mut Peer, spec: CarSpec, baked: &mut BakedMaps) -> Result<(), String> {
+/// in its trunk (refused if the garage is full), unless it's traded in.
+fn bought(
+    peer: &mut Peer,
+    spec: CarSpec,
+    baked: &mut BakedMaps,
+    trade_in: bool,
+) -> Result<(), String> {
     if peer.shadow.lent() {
         return Err("Not while you drive a lent car".into());
     }
-    if let Some((old, car)) = peer.shadow.kept() {
+    if let Some((old, car)) = peer.shadow.kept().filter(|_| !trade_in) {
         if peer.owned.cars.len() >= GARAGE_CARS {
             return Err(format!("Your garage holds {GARAGE_CARS} cars at most"));
         }

@@ -41,7 +41,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 37;
+pub const PROTOCOL: u32 = 38;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -95,11 +95,11 @@ pub enum ToServer {
         id: u32,
         works: Vec<Work>,
     },
-    /// A car from the showroom: the catalogue's `chassis` with its factory engine
-    /// `engine`, as it leaves the factory.
+    /// A car from the car dealer we're at: the catalogue's trim `trim`; the car we drove
+    /// goes into the garage, or is traded in (gone, with what's in its trunk).
     Buy {
-        chassis: usize,
-        engine: usize,
+        trim: u16,
+        trade_in: bool,
     },
     /// The maps of the engine whose hardware has `fingerprint` (`maps::fingerprint`), if
     /// the server has them (a factory engine's).
@@ -380,10 +380,10 @@ impl Wire for ToServer {
                 step.put(out);
                 state.put(out);
             }
-            ToServer::Buy { chassis, engine } => {
+            ToServer::Buy { trim, trade_in } => {
                 9u8.put(out);
-                chassis.put(out);
-                engine.put(out);
+                trim.put(out);
+                trade_in.put(out);
             }
             ToServer::Maps { fingerprint } => {
                 10u8.put(out);
@@ -433,8 +433,8 @@ impl Wire for ToServer {
                 state: r.get()?,
             },
             9 => ToServer::Buy {
-                chassis: r.get()?,
-                engine: r.get()?,
+                trim: r.get()?,
+                trade_in: r.get()?,
             },
             10 => ToServer::Maps {
                 fingerprint: r.get()?,

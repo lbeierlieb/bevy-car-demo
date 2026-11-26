@@ -78,10 +78,10 @@ const MOST_WAITING: usize = 4;
 /// much farther for each m/s it moves per second the placement is old.
 const REACH: f32 = 2.0;
 
-/// Whether placements are taken up however far they move the car: only for screenshots
-/// of the game's own server (`CAR_SIM_TRUST_PLACEMENTS=1`, which `tools/dev/shot.sh` sets
-/// for `PLACE`).
-fn trusts_placements() -> bool {
+/// Whether placements are taken up however far they move the car, and cars bought away
+/// from a car dealer: only for screenshots of the game's own server
+/// (`CAR_SIM_TRUST_PLACEMENTS=1`, which `tools/dev/shot.sh` sets for `PLACE` and `CAR`).
+pub fn trusts_placements() -> bool {
     static TRUSTS: std::sync::LazyLock<bool> =
         std::sync::LazyLock::new(|| std::env::var("CAR_SIM_TRUST_PLACEMENTS").is_ok());
     *TRUSTS

@@ -199,12 +199,7 @@ mod tests {
     /// The same, over `link`.
     fn player_over(link: impl link::Link + 'static, name: &str, at: Vec2, terrain: Terrain) -> App {
         let car = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, at.x, at.y, 0.0);
-        let mut connection = Connection::new(link, name, &terrain);
-        // That car, from the showroom (the server gives everyone its first car).
-        connection.say(&protocol::ToServer::Buy {
-            chassis: 0,
-            engine: 0,
-        });
+        let connection = Connection::new(link, name, &terrain);
         let mut app = app_on(terrain);
         app.add_systems(Update, crate::looks::show_cars)
             .add_plugins(ClientPlugin)
@@ -1151,7 +1146,7 @@ mod tests {
             },
         ];
         let with = server.world_mut().remove_resource::<Server>().unwrap();
-        server.insert_resource(with.with_shops(shops));
+        server.insert_resource(with.with_shops(shops.clone()));
         let mut anna = account_driver(&listener, "Anna", "secret");
         assert!(matches!(
             log_in(&mut server, &mut anna),
@@ -1206,15 +1201,25 @@ mod tests {
         );
         run(&mut [&mut server, &mut anna], 10);
         assert!(connection(&anna).refused.is_some());
-        // A new car: the sport clutch one goes into the garage.
-        anna.world_mut()
-            .resource_mut::<Connection>()
-            .say(&protocol::ToServer::Buy {
-                chassis: 0,
-                engine: 1,
-            });
+        // A new car (where the garage was, a car dealer for a moment): the sport clutch
+        // one goes into the garage.
+        let set_shops = |server: &mut App, shops: Vec<Shop>| {
+            let with = server.world_mut().remove_resource::<Server>().unwrap();
+            server.insert_resource(with.with_shops(shops));
+        };
+        let mut dealer = shops.clone();
+        dealer[0].kind = ShopKind::Showroom;
+        dealer[0].sells = vec!["vireo.*".into()];
+        set_shops(&mut server, dealer);
+        let buy = |anna: &mut App, trade_in| {
+            anna.world_mut()
+                .resource_mut::<Connection>()
+                .say(&protocol::ToServer::Buy { trim: 1, trade_in });
+        };
+        buy(&mut anna, false);
         run(&mut [&mut server, &mut anna], 60);
         assert_eq!(connection(&anna).owned.cars.len(), 1);
+        set_shops(&mut server, shops.clone());
         // Driven nearly dry.
         let tank = car(&mut anna).setup.tank.litres;
         car(&mut anna).refuel(5.0 / tank);

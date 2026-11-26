@@ -304,9 +304,14 @@ fn pick_car(
     }
     let v: Vec<usize> = spec.split(',').map(|s| s.parse().unwrap()).collect();
     if let Some(mut connection) = connection {
+        // The trim of that chassis and factory engine.
+        let catalogue = car.setup.build.catalogue.clone();
+        let trim = crate::items::trim_of(&catalogue, v[0], *v.get(1).unwrap_or(&0))
+            .and_then(|trim| catalogue.trims.iter().position(|t| t.id == trim.id))
+            .expect("a trim");
         connection.say(&crate::net::protocol::ToServer::Buy {
-            chassis: v[0],
-            engine: *v.get(1).unwrap_or(&0),
+            trim: trim as u16,
+            trade_in: false,
         });
         return;
     }

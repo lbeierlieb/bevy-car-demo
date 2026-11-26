@@ -154,8 +154,9 @@ fn brochure(ui: &mut egui::Ui, catalogue: &Shared, shown: &Showroom) {
     let body = &chassis.body;
     kit::section(ui, &chassis.class);
     kit::note(ui, &chassis.about);
-    let build = CarBuild::factory_in(catalogue, shown.chassis);
-    let parts = build.factory_engine(shown.engine);
+    // The trim: its wheels, brakes and differential as well as its engine.
+    let setup = CarSetup::factory_in(catalogue, shown.chassis, shown.engine);
+    let (build, parts) = (&setup.build, &setup.engine.parts);
     kit::note(ui, &parts.family().about);
     let gearbox = build.gearbox();
     let mass = chassis.mass
@@ -177,7 +178,7 @@ fn brochure(ui: &mut egui::Ui, catalogue: &Shared, shown: &Showroom) {
         ),
     );
     kit::info(ui, "Wheelbase", &format!("{:.2} m", chassis.wheelbase));
-    let [front, rear] = chassis.wheels.map(|wheel| catalogue.wheel_label(&wheel));
+    let [front, rear] = build.wheels.map(|wheel| catalogue.wheel_label(&wheel));
     if front == rear {
         kit::info(ui, "Tires", &front);
     } else {
@@ -186,6 +187,6 @@ fn brochure(ui: &mut egui::Ui, catalogue: &Shared, shown: &Showroom) {
     kit::info(ui, "Paint", &catalogue.paints[chassis.paint].name);
     kit::note(
         ui,
-        "A parts shop fits any engine there's room for; any paint shop changes the paint.",
+        "Car workshops swap engines and fit parts; any paint shop changes the paint.",
     );
 }

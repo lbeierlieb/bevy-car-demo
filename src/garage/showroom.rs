@@ -3,8 +3,9 @@
 //! paint, each in a place of its own; the one picked in the window turns slowly on a
 //! turntable at the front under spotlights (its place on the floor stays empty), and "Start
 //! it" idles its engine and blips it now and then. The driven car waits outside the glass.
-//! The window on the right is the brochure (`brochure`); "Drive it" builds the car picked
-//! and goes straight out to it.
+//! The window on the right picks a trim (those the dealer doesn't sell are only to look at)
+//! and has the brochure (`brochure`); "Buy it and drive it" asks the server for it (the car
+//! driven goes into the garage, or is traded in, trunk and all) and goes straight out to it.
 //!
 //! The driven car stays parked on the shop's marker meanwhile (a ghost, its input held like
 //! in the dyno's room); the one outside is drawn from its looks, the engine off.
@@ -112,6 +113,8 @@ struct Hall {
     /// A car asked the server for (chassis, engine option): out of the showroom once ours is
     /// built as it.
     buying: Option<(usize, usize)>,
+    /// Trade the car driven in (else it goes into the garage).
+    trade_in: bool,
 }
 
 fn in_hall(hall: Res<Hall>) -> bool {
@@ -951,6 +954,7 @@ fn window(
     mut commands: Commands,
     mut contexts: EguiContexts,
     connection: Option<ResMut<Connection>>,
+    (shops, at): (Res<Shops>, Res<AtShop>),
     (mut hall, mut garage): (ResMut<Hall>, ResMut<Garage>),
     things: Query<Entity, With<InHall>>,
     active: Res<ActiveCar>,
@@ -965,6 +969,23 @@ fn window(
     let mut shown = garage.showroom;
     let mut drive = false;
     let mut out = back.take();
+    // What this dealer sells: the trims of each chassis (by its factory engine option).
+    let shop = at
+        .shop
+        .and_then(|i| shops.list.get(i))
+        .map(|placed| &placed.shop);
+    let sold = |chassis: usize, option: usize| {
+        crate::items::trim_of(&catalogue, chassis, option)
+            .filter(|trim| shop.is_some_and(|shop| shop.sells(&trim.id)))
+    };
+    let trunk = car.setup.cargo.len();
+    // A refusal ends the wait.
+    if hall.buying.is_some()
+        && let Some((why, _)) = connection.as_ref().and_then(|c| c.refused.clone())
+    {
+        hall.buying = None;
+        garage.status = why;
+    }
     let ctx = contexts.ctx_mut()?;
     Panel::new("showroom", "Showroom")
         .place(Place::Right)
@@ -976,17 +997,35 @@ fn window(
             if kit::choice(ui, "Car", &mut chassis, &names).changed() {
                 shown = Showroom { chassis, engine: 0 };
             }
-            let engines: Vec<String> = (catalogue.chassis[shown.chassis].engines.iter())
-                .filter_map(|code| {
-                    crate::physics::engine::parts::Parts::factory_in(&catalogue, code)
-                })
-                .map(|parts| parts.hardware().name.to_string())
+            let options = catalogue.chassis[shown.chassis].engines.len();
+            let names: Vec<String> = (0..options)
+                .map(
+                    |option| match crate::items::trim_of(&catalogue, shown.chassis, option) {
+                        Some(trim) => trim.name.clone(),
+                        None => "?".into(),
+                    },
+                )
                 .collect();
-            kit::choice(ui, "Engine", &mut shown.engine, &engines);
+            kit::choice(ui, "Trim", &mut shown.engine, &names);
+            let for_sale = sold(shown.chassis, shown.engine).is_some();
             drive = ui
-                .add_enabled_ui(hall.buying.is_none(), |ui| kit::button(ui, "Drive it"))
+                .add_enabled_ui(hall.buying.is_none() && for_sale, |ui| {
+                    kit::button(ui, "Buy it and drive it")
+                })
                 .inner
                 .clicked();
+            if !for_sale {
+                kit::note(ui, "Not for sale here: only to look at.");
+            }
+            kit::toggle(ui, "Trade in the car I drive", &mut hall.trade_in);
+            if hall.trade_in && trunk > 0 {
+                kit::warning(
+                    ui,
+                    &format!("What's in its trunk ({trunk} parts) goes with it."),
+                );
+            } else if !hall.trade_in {
+                kit::note(ui, "The car you drive goes into your garage.");
+            }
             if hall.buying.is_some() {
                 kit::note(ui, "Getting it ready…");
             } else if !garage.status.is_empty() {
@@ -1006,12 +1045,18 @@ fn window(
                 out = true;
             }
         });
-    if drive && let Some(mut connection) = connection {
+    if drive
+        && let Some(mut connection) = connection
+        && let Some(trim) = sold(shown.chassis, shown.engine)
+        && let Some(place) = catalogue.trims.iter().position(|t| t.id == trim.id)
+    {
         // The server builds it, and tells us (`YourCar`).
+        connection.refused = None;
         connection.say(&ToServer::Buy {
-            chassis: shown.chassis,
-            engine: shown.engine,
+            trim: place as u16,
+            trade_in: hall.trade_in,
         });
+        garage.status.clear();
         hall.buying = Some((shown.chassis, shown.engine));
     }
     garage.showroom = shown;

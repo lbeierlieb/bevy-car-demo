@@ -535,17 +535,20 @@ fn receive(
                         text: text.map(super::wire::Blob),
                     });
                 }
-                ToServer::Buy { chassis, engine } => {
-                    let made = catalogue.chassis.get(chassis);
-                    if let Some(made) = made.filter(|made| engine < made.engines.len()) {
-                        let car = CarSetup::factory_in(&catalogue, chassis, engine);
-                        let spec = CarSpec::of(&car);
-                        let why = super::stash::bought(&mut peer, spec, &mut baked).err();
-                        if why.is_none() {
-                            info!("Player {} took a {} from the showroom", peer.id, made.name);
-                        }
-                        super::stash::tell(&mut peer, &server.shops, why);
+                ToServer::Buy { trim, trade_in } => {
+                    let shops = &server.shops;
+                    let bought = super::stash::buy(
+                        &mut peer,
+                        trim,
+                        trade_in,
+                        shops,
+                        &catalogue.0,
+                        &mut baked,
+                    );
+                    if let Ok(name) = &bought {
+                        info!("Player {} bought a {name}", peer.id);
                     }
+                    super::stash::tell(&mut peer, shops, bought.err());
                 }
                 ToServer::Stash(stash) => {
                     super::stash::act(&mut peer, stash, &server.shops, &catalogue, &mut baked);
