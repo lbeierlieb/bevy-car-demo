@@ -176,14 +176,37 @@ fn take_your_car(
     }
     let hardware = spec.parts.hardware();
     let print = crate::physics::engine::maps::fingerprint(&hardware);
+    // A bake for another engine is of no use any more.
+    if connection.baking.as_ref().is_some_and(|(p, _)| *p != print)
+        && let Some((_, work)) = connection.baking.take()
+    {
+        work.cancel();
+    }
     let maps = match crate::workshop::at_hand(&hardware) {
         Some(maps) => maps,
         None if connection.lacks_maps(print) => {
-            // Not the server's to give: baked here (a car built in a shop here before
-            // would have them kept already).
-            let maps = EngineMaps::bake(&hardware);
-            crate::workshop::keep(&hardware, &maps);
-            maps
+            // Not the server's to give: baked here, a few seconds, the car waiting till
+            // then (a car built here before would have them kept already).
+            let (_, work) = connection
+                .baking
+                .get_or_insert_with(|| (print, crate::workshop::Work::start(&hardware)));
+            match work.poll() {
+                Some(Some(maps)) => {
+                    connection.baking = None;
+                    crate::workshop::keep(&hardware, &maps);
+                    maps
+                }
+                Some(None) => {
+                    // Failed: tried again.
+                    connection.baking = None;
+                    connection.your_car = Some(spec);
+                    return;
+                }
+                None => {
+                    connection.your_car = Some(spec);
+                    return;
+                }
+            }
         }
         None => {
             // From the server; till then the car waits.
@@ -288,6 +311,9 @@ pub struct Connection {
     next_request: u32,
     /// Our car as the server last said (built once our requests are all answered).
     server_spec: Option<CarSpec>,
+    /// The maps of our car's engine baking here (with its fingerprint), when the server
+    /// hasn't got them.
+    baking: Option<(u64, crate::workshop::Work)>,
     /// What cars and parts there are, as the server told us (none before it has).
     pub catalogue: Option<Shared>,
     /// The car the server said ours is now, until it's built (`take_your_car`).
@@ -344,6 +370,11 @@ impl Connection {
         self.say(&ToServer::Work { id, works });
     }
 
+    /// How far the maps of our car's new engine have baked, while they are.
+    pub fn baking(&self) -> Option<f32> {
+        self.baking.as_ref().map(|(_, work)| work.progress())
+    }
+
     /// Whether requests of ours are still unanswered.
     pub fn waiting(&self) -> bool {
         !self.unanswered.is_empty()
@@ -395,6 +426,7 @@ impl Connection {
             unanswered: VecDeque::new(),
             next_request: 0,
             server_spec: None,
+            baking: None,
             catalogue: None,
             your_car: None,
             owned: OwnedView::default(),

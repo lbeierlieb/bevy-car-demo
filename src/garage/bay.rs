@@ -1,8 +1,9 @@
-//! The parts shops' workshop: the car up on a two-post lift (its wheels hanging), in a bay
-//! deep under the shop, with the engine picked in the window on a stand in front of it (its
-//! family's size and layout, a turbo if it has one), the tires picked standing in a rack at
-//! the back, a workbench with tools on the wall, a tool chest, shelves of parts and an oil
-//! drain under the car. The window on the right is the parts shop's (`parts_shop`).
+//! The workshop of car workshops, tuning shops and tire shops: the car up on a two-post
+//! lift (its wheels hanging), in a bay deep under the shop, an engine like the car's on a
+//! stand in front of it (its family's size and layout, a turbo if it has one), tires like
+//! the car's standing in a rack at the back, a workbench with tools on the wall, a tool
+//! chest, shelves of parts and an oil drain under the car. The window on the right is the
+//! fitting window (`fit`).
 //!
 //! The driven car stays parked on the shop's marker meanwhile (a ghost, its input held like
 //! in the dyno's room); the car on the lift is drawn from its looks, the engine off, and
@@ -14,18 +15,23 @@ use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
-use super::{Garage, parts_shop, start, take_draft};
+use super::Garage;
+use super::fit::{self, Fitter};
 use crate::audio::{EngineAudio, EngineRun};
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car};
+use crate::catalogue::Current;
 use crate::looks::{Looks, Motion};
 use crate::menu::kit::{self, Panel, Place};
+use crate::net::Connection;
 use crate::physics::engine::families::Layout;
 use crate::physics::engine::parts::Parts;
 use crate::shops::{AtShop, SceneBack, ShopKind, Shops, shop_window};
 use crate::terrain::Terrain;
 use crate::wheels::Wheel;
 
+/// How long the server's word on why something wasn't done stays up (s).
+const REFUSAL: f64 = 8.0;
 /// How far under the ground at the shop the workshop is (m).
 const DEPTH: f32 = 260.0;
 /// The workshop's half width (across the car), half length and height (m).
@@ -90,6 +96,8 @@ struct Bay {
     lift_for: Option<usize>,
     engine_for: Option<Parts>,
     tires_for: Option<[Wheel; 2]>,
+    /// The fitting window's screens.
+    fitter: Fitter,
 }
 
 fn in_bay(bay: Res<Bay>) -> bool {
@@ -264,7 +272,7 @@ fn shop(
     terrain: Res<Terrain>,
     active: Res<ActiveCar>,
     cars: Query<&Car>,
-    (mut bay, mut garage): (ResMut<Bay>, ResMut<Garage>),
+    mut bay: ResMut<Bay>,
     (mut away, mut audio): (ResMut<Away>, ResMut<EngineAudio>),
     mut cameras: Query<&mut Projection, With<ChaseCamera>>,
     (mut meshes, mut materials): (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
@@ -283,8 +291,20 @@ fn shop(
             enter = kit::button(ui, "Onto the lift").clicked();
             kit::note(
                 ui,
-                "A workshop with a two-post lift: engines and their parts, gearboxes, \
-                 suspension, rims and tires; repairs.",
+                match kind {
+                    ShopKind::Tire => {
+                        "Rims and tires: new wheels, new tires, and wheels \
+                         made and taken apart."
+                    }
+                    ShopKind::Tuning => {
+                        "Tuning parts fitted: engine bolt-ons, exhausts, \
+                         suspension, clutches, body parts; and any part you bring."
+                    }
+                    _ => {
+                        "Stock parts fitted, engines swapped, and any part you bring \
+                         (but a long block's insides)."
+                    }
+                },
             );
         });
     }
@@ -298,7 +318,6 @@ fn shop(
         zoom: 1.0,
         ..default()
     };
-    take_draft(&mut garage, car);
     for mut projection in &mut cameras {
         if let Projection::Perspective(perspective) = &mut *projection {
             (perspective.fov, perspective.near) = (0.9, 0.05);
@@ -1043,14 +1062,18 @@ fn refit(
     mut commands: Commands,
     mut bay: ResMut<Bay>,
     kit: Option<Res<Kit>>,
-    garage: Res<Garage>,
+    active: Res<ActiveCar>,
+    cars: Query<&Car>,
     models: Query<&Looks, With<CarModel>>,
     remade: Query<(Entity, &Remade)>,
 ) {
     let (Some(kit), Ok(looks)) = (kit, models.single()) else {
         return;
     };
-    let (build, parts) = &garage.draft;
+    let Some(car) = cars.iter().find(|car| car.index == active.0) else {
+        return;
+    };
+    let (build, parts) = (&car.setup.build, &car.setup.engine.parts);
     let wheels = build.wheels;
     let chassis = looks.build.chassis;
     let mut redo = Vec::new();
@@ -1116,44 +1139,58 @@ fn look(
     }
 }
 
-/// The parts shop's window, on the right: what's fitted and what to build; and back to the
-/// car.
+/// The fitting window, on the right; and back to the car.
 #[allow(clippy::too_many_arguments)]
 fn window(
     mut commands: Commands,
     mut contexts: EguiContexts,
-    terrain: Res<Terrain>,
-    (mut bay, mut garage): (ResMut<Bay>, ResMut<Garage>),
+    mut bay: ResMut<Bay>,
+    (shops, at): (Res<Shops>, Res<AtShop>),
+    (connection, catalogue): (Option<ResMut<Connection>>, Option<Res<Current>>),
     things: Query<Entity, With<InBay>>,
     active: Res<ActiveCar>,
-    mut cars: Query<(Entity, &mut Car)>,
+    cars: Query<&Car>,
+    time: Res<Time<Real>>,
     (mut away, mut audio): (ResMut<Away>, ResMut<EngineAudio>),
     (mut cameras, mut back): (Query<(&ChaseCamera, &mut Projection)>, ResMut<SceneBack>),
 ) -> Result {
-    let Some((entity, mut car)) = super::active(&mut cars, active.0) else {
+    let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return Ok(());
     };
-    let mut out = back.take();
-    let mut build_now = false;
+    let Some(shop) = at.shop.and_then(|i| Some((i, &shops.list.get(i)?.shop))) else {
+        return Ok(());
+    };
+    let (Some(mut connection), Some(catalogue)) = (connection, catalogue) else {
+        return Ok(());
+    };
+    let (here, shop) = shop;
+    let mut out = back.take() && !bay.fitter.back();
+    let refused = (connection.refused.as_ref())
+        .filter(|(_, at)| time.elapsed_secs_f64() - at < REFUSAL)
+        .map(|(why, _)| why.clone());
+    let held = connection.owned.held_at(here).to_vec();
     let ctx = contexts.ctx_mut()?;
-    Panel::new("parts shop", "Parts shop")
+    Panel::new("fitting", shop.kind.title())
         .place(Place::Right)
         .width(470.0)
-        .back(Some("Back to the car"))
+        .back(Some("Back"))
         .show(ctx, |ui| {
             if kit::button(ui, "Back to the car").clicked() {
                 out = true;
             }
-            build_now = parts_shop(ui, &mut garage, &mut car);
-            kit::note(
-                ui,
-                "The engine picked stands in front of the car, the tires in the rack. Drag \
-                 to look round, the mouse wheel to go nearer.",
-            );
+            if let Some(why) = &refused {
+                kit::warning(ui, why);
+            }
+            let bench = fit::Bench {
+                catalogue: &catalogue.0,
+                shop,
+                car,
+                held: &held,
+                connection: &mut connection,
+            };
+            fit::window(ui, &mut bay.fitter, bench);
+            kit::note(ui, "Drag to look round, the mouse wheel to go nearer.");
         });
-    if build_now {
-        start(&mut commands, &terrain, &mut garage, entity, &mut car);
-    }
     if out {
         leave(
             &mut commands,

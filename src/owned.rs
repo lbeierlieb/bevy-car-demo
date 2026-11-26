@@ -241,6 +241,17 @@ pub fn name(catalogue: &Catalogue, item: &Item) -> String {
             .map_or(def.name.clone(), |size| {
                 format!("{} {}", def.name, size.label())
             }),
+        crate::items::Does::Engine => item
+            .all()
+            .into_iter()
+            .find_map(|part| match part.def(catalogue).does {
+                crate::items::Does::Block { family, version } => {
+                    let version = &catalogue.families[family].versions[version];
+                    Some(format!("{} {} engine", version.code, version.name))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| format!("{} (no long block)", def.name)),
         crate::items::Does::Wheel => {
             let inner: Vec<String> = item
                 .slots
