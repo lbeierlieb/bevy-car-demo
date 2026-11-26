@@ -145,26 +145,48 @@ pub fn families() -> Vec<Family> {
         width: 0.58,
         height: 0.63,
         mass: 100.0,
-        versions: vec![version(
-            "B16",
-            "1.6 four",
-            || {
-                block(Block {
-                    cylinders: 4,
-                    bore: 78.0,
-                    stroke: 83.6,
-                    compression: 10.5,
-                    duration: 240.0,
-                    separation: 110.0,
-                    redline: 6800.0,
-                    runner: 350.0,
-                    header: 700.0,
-                    inertia: 0.13,
-                    flow: 1.0,
-                })
-            },
-            none,
-        )],
+        versions: vec![
+            version(
+                "B16",
+                "1.6 four",
+                || {
+                    block(Block {
+                        cylinders: 4,
+                        bore: 78.0,
+                        stroke: 83.6,
+                        compression: 10.5,
+                        duration: 240.0,
+                        separation: 110.0,
+                        redline: 6800.0,
+                        runner: 350.0,
+                        header: 700.0,
+                        inertia: 0.13,
+                        flow: 1.0,
+                    })
+                },
+                none,
+            ),
+            version(
+                "B18",
+                "1.8 four",
+                || {
+                    block(Block {
+                        cylinders: 4,
+                        bore: 81.0,
+                        stroke: 87.2,
+                        compression: 10.0,
+                        duration: 244.0,
+                        separation: 110.0,
+                        redline: 6700.0,
+                        runner: 360.0,
+                        header: 700.0,
+                        inertia: 0.14,
+                        flow: 1.0,
+                    })
+                },
+                none,
+            ),
+        ],
     }]
 }
 

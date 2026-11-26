@@ -10,6 +10,8 @@ use crate::items::{
     damper_knobs, engine_knobs, knob, tire_knobs,
 };
 use crate::physics::engine::ecu::EcuModel;
+use crate::physics::tire::STREET;
+use crate::wheels::Wheel;
 
 /// Where the catalogue's engine slots are: in the long block, on the engine, or in the
 /// car (by their places in `slots`).
@@ -245,16 +247,24 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             );
             add(def.fits(name).painted());
         }
-        for (axle, end) in ["front", "rear"].into_iter().enumerate() {
-            add(Def::new(
-                &format!("{id}.brake.{end}"),
-                &format!("Stock {end} brake"),
+        let brakes = [
+            ("front-solid", "Solid front disc brake", 8.0),
+            ("front-vented", "Vented front disc brake", 10.0),
+            ("rear-drum", "Rear drum brake", 7.0),
+            ("rear-disc", "Rear disc brake", 6.0),
+        ];
+        for (brake, title, mass) in brakes {
+            let def = Def::new(
+                &format!("{id}.brake.{brake}"),
+                title,
                 Kind::Brake,
                 Does::Brake,
                 [0.35, 0.35, 0.2],
-                if axle == 0 { 9.0 } else { 7.0 },
-            )
-            .fits(name));
+                mass,
+            );
+            add(def.fits(name));
+        }
+        for (axle, end) in ["front", "rear"].into_iter().enumerate() {
             add(Def::new(
                 &format!("{id}.anti-roll-bar.{end}"),
                 &format!("{} anti-roll bar", if axle == 0 { "Front" } else { "Rear" }),
@@ -323,6 +333,14 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
         Does::Rim,
         [0.5, 0.5, 0.22],
         8.0,
+    ));
+    add(Def::new(
+        "rim.steel",
+        "Steel rim",
+        Kind::Rim,
+        Does::Rim,
+        [0.5, 0.5, 0.22],
+        10.0,
     ));
     for (c, compound) in catalogue.compounds.iter().enumerate() {
         add(Def::new(
@@ -448,7 +466,48 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
     defs
 }
 
-/// The stock cars: each chassis with each of its factory engines.
+/// What sets a stock car apart: its factory engine, wheels (the same all round), rims,
+/// brakes (front and rear, by the part ids after the chassis' "<id>.brake."),
+/// differential and whether it has a rear spoiler.
+struct TrimSpec {
+    engine: String,
+    name: String,
+    wheel: Wheel,
+    rim: &'static str,
+    brakes: [&'static str; 2],
+    limited_slip: bool,
+    spoiler: bool,
+}
+
+/// The trims of `chassis` (none: one per factory engine, as the chassis leaves the
+/// factory).
+fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
+    match chassis {
+        "Vireo" => vec![
+            TrimSpec {
+                engine: "B16".into(),
+                name: "1.6".into(),
+                wheel: super::chassis::wheel(14, 55, 185, 60, STREET),
+                rim: "rim.steel",
+                brakes: ["front-solid", "rear-drum"],
+                limited_slip: false,
+                spoiler: false,
+            },
+            TrimSpec {
+                engine: "B18".into(),
+                name: "1.8".into(),
+                wheel: super::chassis::wheel(15, 60, 195, 55, STREET),
+                rim: "rim.alloy",
+                brakes: ["front-vented", "rear-disc"],
+                limited_slip: true,
+                spoiler: true,
+            },
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// The stock cars of every chassis (see `trim_specs`).
 fn trims(catalogue: &Shared) -> Vec<Trim> {
     let def = |id: &str| {
         (catalogue.defs.iter())
@@ -458,47 +517,65 @@ fn trims(catalogue: &Shared) -> Vec<Trim> {
     let mut trims = Vec::new();
     for (c, chassis) in catalogue.chassis.iter().enumerate() {
         let id = chassis.name.to_lowercase();
-        let build = CarBuild::factory_in(catalogue, c);
-        let mut car = Item::new(catalogue, def(&id), chassis.paint);
-        let made = |part: &str| Item::new(catalogue, def(part), chassis.paint);
-        let slots = catalogue.defs[car.def].slots.clone();
-        let (mut fenders, mut doors, mut mirrors) = (0, 0, 0);
-        for (slot, item) in slots.iter().zip(&mut car.slots) {
-            let part = match slot.kind {
-                Kind::Body(Panel::FrontBumper) => format!("{id}.front-bumper"),
-                Kind::Body(Panel::Bonnet) => format!("{id}.bonnet"),
-                Kind::Body(Panel::Fender) => {
-                    fenders += 1;
-                    format!("{id}.fender")
-                }
-                Kind::Body(Panel::Door) => {
-                    doors += 1;
-                    format!("{id}.door")
-                }
-                Kind::Body(Panel::Mirror) => {
-                    mirrors += 1;
-                    format!("{id}.mirror")
-                }
-                Kind::Body(Panel::Hatch) => format!("{id}.hatch"),
-                Kind::Body(Panel::RearSpoiler) => format!("{id}.rear-spoiler"),
-                Kind::Body(Panel::RearBumper) => format!("{id}.rear-bumper"),
-                Kind::Seat(Seat::Front) => "seat.stock".into(),
-                Kind::Seat(Seat::RearBench) => "rear-bench.stock".into(),
-                Kind::Brake => {
-                    let front = slot.name.contains("front");
-                    format!("{id}.brake.{}", if front { "front" } else { "rear" })
-                }
-                _ => continue,
-            };
-            *item = Some(made(&part));
+        let mut specs = trim_specs(&chassis.name);
+        if specs.is_empty() {
+            let factory = CarBuild::factory_in(catalogue, c);
+            specs = (chassis.engines.iter())
+                .map(|code| TrimSpec {
+                    engine: code.clone(),
+                    name: code.clone(),
+                    wheel: factory.wheels[0],
+                    rim: "rim.alloy",
+                    brakes: ["front-vented", "rear-disc"],
+                    limited_slip: chassis.limited_slip,
+                    spoiler: false,
+                })
+                .collect();
         }
-        debug_assert!(fenders == 2 && doors == 2 && mirrors == 2);
-        for (option, code) in chassis.engines.iter().enumerate() {
+        for spec in specs {
+            let mut car = Item::new(catalogue, def(&id), chassis.paint);
+            let made = |part: &str| Item::new(catalogue, def(part), chassis.paint);
+            let slots = catalogue.defs[car.def].slots.clone();
+            for (slot, item) in slots.iter().zip(&mut car.slots) {
+                let part = match slot.kind {
+                    Kind::Body(Panel::FrontBumper) => format!("{id}.front-bumper"),
+                    Kind::Body(Panel::Bonnet) => format!("{id}.bonnet"),
+                    Kind::Body(Panel::Fender) => format!("{id}.fender"),
+                    Kind::Body(Panel::Door) => format!("{id}.door"),
+                    Kind::Body(Panel::Mirror) => format!("{id}.mirror"),
+                    Kind::Body(Panel::Hatch) => format!("{id}.hatch"),
+                    Kind::Body(Panel::RearSpoiler) if spec.spoiler => {
+                        format!("{id}.rear-spoiler")
+                    }
+                    Kind::Body(Panel::RearBumper) => format!("{id}.rear-bumper"),
+                    Kind::Seat(Seat::Front) => "seat.stock".into(),
+                    Kind::Seat(Seat::RearBench) => "rear-bench.stock".into(),
+                    Kind::Brake => {
+                        let front = slot.name.contains("front");
+                        format!("{id}.brake.{}", spec.brakes[usize::from(!front)])
+                    }
+                    Kind::Wheel => {
+                        // The rim of the trim's kind; `assemble` sizes it.
+                        let mut wheel = made("wheel");
+                        wheel.slots[0] = Some(made(spec.rim));
+                        *item = Some(wheel);
+                        continue;
+                    }
+                    _ => continue,
+                };
+                *item = Some(made(&part));
+            }
+            let mut build = CarBuild::factory_in(catalogue, c);
+            build.wheels = [spec.wheel; 2];
+            build.limited_slip = spec.limited_slip;
+            let option = (chassis.engines.iter())
+                .position(|code| *code == spec.engine)
+                .expect("a factory engine");
             let parts = build.factory_engine(option);
             let car = assemble(catalogue, Some(&car), &build, &parts).expect("a stock car");
             trims.push(Trim {
-                id: format!("{id}.{}", code.to_lowercase()),
-                name: format!("{} {code}", chassis.name),
+                id: format!("{id}.{}", slug(&spec.name)),
+                name: format!("{} {}", chassis.name, spec.name),
                 car,
             });
         }

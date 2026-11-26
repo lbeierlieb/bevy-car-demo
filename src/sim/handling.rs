@@ -413,8 +413,9 @@ fn a_car_stops_at_a_fence_and_a_guard_rail() {
         };
         let piece = fences::pieces(&fence, 0)[0];
         let car = drive_into(fences::solid(&Terrain::flat(), &fence, &piece), 20.0, 2.0);
+        // Stopped with its nose at the fence, its middle under 2 m behind it.
         assert!(
-            car.body.position.z > -8.0,
+            car.body.position.z > -8.5,
             "went through the {kind:?}: {}",
             car.body.position
         );

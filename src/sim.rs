@@ -502,8 +502,8 @@ mod tests {
         let mut parts = build
             .install(crate::physics::engine::parts::Parts::turbo())
             .unwrap();
-        parts.chosen[crate::catalogue::TURBO] = 3;
-        parts.boost = 1.5;
+        parts.chosen[crate::catalogue::TURBO] = 2;
+        parts.boost = 1.2;
         let engine = crate::physics::engine::EngineBuild::new(parts.hardware(), parts.ecu);
         CarSetup::new(build, parts, engine)
     }

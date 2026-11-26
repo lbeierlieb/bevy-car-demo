@@ -355,6 +355,24 @@ impl Item {
     }
 }
 
+/// The stock car of `catalogue`'s `chassis` with its factory engine `option`, if
+/// there's one.
+pub fn trim_of(catalogue: &Catalogue, chassis: usize, option: usize) -> Option<&Trim> {
+    let code = catalogue.chassis.get(chassis)?.engines.get(option)?;
+    catalogue.trims.iter().find(|trim| {
+        let car = &trim.car;
+        let block = (car.fitted(catalogue, Kind::Engine).next())
+            .and_then(|engine| engine.fitted(catalogue, Kind::LongBlock).next());
+        car.def(catalogue).does == Does::Chassis(chassis)
+            && block.is_some_and(|block| match block.def(catalogue).does {
+                Does::Block { family, version } => {
+                    catalogue.families[family].versions[version].code == *code
+                }
+                _ => false,
+            })
+    })
+}
+
 /// The definition doing `does` (of `kind`, made for `chassis` if it's made for one).
 pub fn find(catalogue: &Catalogue, kind: Kind, does: &Does, chassis: &str) -> Option<usize> {
     let fits = |def: &PartDef| def.fits.is_empty() || def.fits.iter().any(|c| c == chassis);
@@ -387,8 +405,8 @@ pub fn assemble(
     };
     let paint = build.paint;
     let repaint = car.paint != Some(paint);
-    // A part in each slot of `kind` (the `n`th made by `make(n)`), keeping what's in it
-    // if it's of the same definition.
+    // A part in each slot of `kind` (the `n`th's definition made by `make(n)`), keeping
+    // what's in it if that does the same (steel rims stay steel rims).
     fn swap(
         catalogue: &Catalogue,
         holder: &mut Item,
@@ -406,7 +424,11 @@ pub fn assemble(
                 .clone()
                 .unwrap_or_else(|| Item::new(catalogue, 0, paint));
             let def = make(n, &mut fresh)?;
-            if item.as_ref().is_none_or(|old| old.def != def) {
+            let does = &catalogue.defs[def].does;
+            if item
+                .as_ref()
+                .is_none_or(|old| catalogue.defs[old.def].does != *does)
+            {
                 let mut new = Item::new(catalogue, def, paint);
                 new.variant = fresh.variant;
                 if new.knobs.len() == fresh.knobs.len() {
@@ -608,6 +630,37 @@ mod tests {
         let (build, parts) = trim.car.resolve(&catalogue).expect("a car");
         assert_eq!(build, CarBuild::factory(0));
         assert_eq!(parts, build.factory_engine(0));
+    }
+
+    #[test]
+    fn the_trims_differ_in_more_than_the_engine() {
+        let catalogue = builtin();
+        let ids: Vec<&str> = catalogue.trims.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["vireo.1-6", "vireo.1-8"]);
+        let rims = |car: &Item| -> Vec<String> {
+            (car.fitted(&catalogue, Kind::Wheel))
+                .flat_map(|wheel| wheel.fitted(&catalogue, Kind::Rim))
+                .map(|rim| rim.def(&catalogue).id.clone())
+                .collect()
+        };
+        let spoiler = |car: &Item| {
+            (car.fitted(&catalogue, Kind::Body(Panel::RearSpoiler)))
+                .next()
+                .is_some()
+        };
+        let [base, sport] = [0, 1].map(|option| crate::car::CarSetup::factory(0, option));
+        assert_eq!(rims(&base.car), ["rim.steel"; 4]);
+        assert_eq!(rims(&sport.car), ["rim.alloy"; 4]);
+        assert!(!spoiler(&base.car) && spoiler(&sport.car));
+        assert!(!base.build.limited_slip && sport.build.limited_slip);
+        assert_eq!(sport.build.wheels[0].rim.diameter, 15);
+        assert_eq!(sport.engine.parts.hardware().name, "B18 1.8 four");
+        // A shop's change keeps the steel rims steel.
+        let mut build = base.build.clone();
+        build.clutch = 1;
+        let parts = base.engine.parts.clone();
+        let changed = base.changed(build, parts, base.engine.build.clone());
+        assert_eq!(rims(&changed.car), ["rim.steel"; 4]);
     }
 
     #[test]

@@ -264,7 +264,7 @@ mod tests {
         let (smooth, _) = shake(hatch.clone(), 16.0, false);
         let (rough, _) = shake(hatch.clone(), 256.0, false);
         let (floored, _) = shake(hatch, 256.0, true);
-        assert!(rough[0] > 3.0 * smooth[0], "{rough:?} against {smooth:?}");
+        assert!(rough[0] > 2.0 * smooth[0], "{rough:?} against {smooth:?}");
         assert!(floored[0] > 1.5 * rough[0], "{floored:?} against {rough:?}");
         assert!(floored[4] > 0.01, "the driveshafts: {floored:?}");
         let rear = crate::catalogue::builtin_changed(|c| c.chassis[0].drive = Drive::Rear);

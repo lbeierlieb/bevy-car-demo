@@ -115,7 +115,7 @@ pub fn gearboxes() -> Vec<Gearbox> {
     ]
 }
 
-const fn wheel(diameter: u8, rim_width: u8, width: u16, aspect: u8, compound: usize) -> Wheel {
+pub const fn wheel(diameter: u8, rim_width: u8, width: u16, aspect: u8, compound: usize) -> Wheel {
     Wheel {
         rim: Rim {
             diameter,
@@ -140,47 +140,49 @@ pub const DEFAULT_CHASSIS: usize = 0;
 pub fn chassis() -> Vec<Chassis> {
     vec![Chassis {
         name: "Vireo".into(),
-        class: "Hot hatch".into(),
-        about: "A practical hatchback that the factory couldn't leave alone: front-wheel \
-                drive with a limited-slip differential and a choice of eager fours"
+        class: "Hatchback".into(),
+        about: "A light three-door hatch from the early nineties: low nose, long glass, a \
+                chopped tail, front-wheel drive and eager fours; the 1.8 comes with \
+                alloys, bigger brakes and a limited-slip differential"
             .into(),
-        mass: 890.0,
-        mass_at: 1.32,
-        cg_height: 0.51,
-        wheelbase: 2.6,
-        track: [1.53, 1.51],
+        mass: 820.0,
+        mass_at: 1.28,
+        cg_height: 0.5,
+        wheelbase: 2.57,
+        track: [1.475, 1.465],
+        // The 1.6's wheels; the 1.8 has its own (see `items`).
         wheels: [
-            wheel(17, 70, 205, 45, STREET),
-            wheel(17, 70, 205, 45, STREET),
+            wheel(14, 55, 185, 60, STREET),
+            wheel(14, 55, 185, 60, STREET),
         ],
         room: [
             WheelRoom {
-                diameter: 0.67,
-                width: 235,
-                min_rim: 15,
+                diameter: 0.62,
+                width: 215,
+                min_rim: 13,
             },
             WheelRoom {
-                diameter: 0.67,
-                width: 235,
-                min_rim: 15,
+                diameter: 0.62,
+                width: 215,
+                min_rim: 13,
             },
         ],
-        hub: [18.0, 15.0],
-        ride: [1.6, 1.85],
-        damping: 0.34,
+        hub: [16.0, 13.0],
+        ride: [1.5, 1.7],
+        damping: 0.32,
         bars: [
-            bars(&[20, 22, 24, 26], 1, 270.0),
-            bars(&[18, 20, 22, 24, 26], 2, 340.0),
+            bars(&[18, 20, 22, 24, 26], 1, 270.0),
+            bars(&[14, 16, 18, 20, 22], 1, 340.0),
         ],
-        camber: [-1.5, -1.5],
-        pressure: [2.4, 2.1],
-        max_steer: 0.52,
+        camber: [-1.0, -1.0],
+        pressure: [2.45, 2.1],
+        max_steer: 0.55,
         brakes: 0.8,
-        drag_area: 0.68,
-        downforce_area: [0.0, 0.03],
+        drag_area: 0.62,
+        downforce_area: [0.0, 0.0],
         tank: Tank {
-            litres: 50.0,
-            at: 2.2,
+            litres: 45.0,
+            at: 2.15,
             height: 0.3,
         },
         bay: EngineBay {
@@ -188,49 +190,55 @@ pub fn chassis() -> Vec<Chassis> {
             orientation: Orientation::Transverse,
             length: 0.74,
             width: 1.0,
-            height: 0.7,
+            height: 0.66,
             engine_at: -0.12,
             gearbox_at: -0.12,
             header_room: 1.15,
         },
         drive: Drive::Front,
-        limited_slip: true,
-        gearbox: 1,
-        final_drive: 4.4,
-        engines: codes(&["B16"]),
+        limited_slip: false,
+        gearbox: 0,
+        final_drive: 4.25,
+        engines: codes(&["B16", "B18"]),
         paint: 11,
         body: Body {
-            length: 4.15,
-            width: 1.78,
+            length: 4.07,
+            width: 1.69,
             front_overhang: 0.85,
-            floor: 0.15,
+            floor: 0.14,
+            // A low, pointed nose, the bonnet rising to a raked windscreen, a belt line
+            // rising a little to the tail.
             deck: vec![
-                [0.0, 0.5],
-                [0.06, 0.64],
-                [0.8, 0.78],
-                [1.15, 0.88],
-                [4.07, 0.92],
-                [4.15, 0.82],
+                [0.0, 0.42],
+                [0.05, 0.56],
+                [0.7, 0.68],
+                [1.12, 0.8],
+                [3.95, 0.92],
+                [4.07, 0.8],
             ],
+            // A long glasshouse, the roof falling a little to a near-upright hatch.
             cabin: vec![
-                [1.1, 0.86, 1.0],
-                [1.8, 1.38, 1.0],
-                [2.3, 1.44, 1.0],
-                [3.6, 1.4, 1.0],
-                [4.08, 0.93, 1.0],
+                [1.1, 0.8, 1.0],
+                [1.95, 1.33, 1.0],
+                [3.35, 1.35, 1.0],
+                [3.7, 1.3, 1.0],
+                [3.98, 0.93, 1.0],
             ],
-            nose: 0.82,
-            tail: 0.9,
-            tumblehome: 0.82,
+            nose: 0.8,
+            tail: 0.92,
+            tumblehome: 0.8,
             open_wheels: false,
             openings: vec![],
             details: vec![
-                // A roof spoiler over the hatch.
-                detail([3.72, 1.42, 0.0], [0.3, 0.03, 1.1], Tone::Dark),
+                // The glass panel low in the hatch, under the number plate's lip.
+                detail([4.06, 0.72, 0.0], [0.03, 0.14, 1.1], Tone::Glass),
+                // Dark rubbing strips along the doors.
+                detail([2.0, 0.5, 0.84], [1.6, 0.06, 0.03], Tone::Dark),
+                detail([2.0, 0.5, -0.84], [1.6, 0.06, 0.03], Tone::Dark),
             ],
         },
-        eye: [2.15, 1.17, 0.36],
-        insulation: 0.45,
+        eye: [2.0, 1.1, 0.36],
+        insulation: 0.4,
         traffic: 3.0,
     }]
 }
@@ -344,6 +352,6 @@ mod tests {
         );
         // The hatch's own gearbox takes its engine; the other needs a plate.
         assert!(!catalogue.needs_adapter(hatch.gearbox, family("B16")));
-        assert!(catalogue.needs_adapter(0, family("B16")));
+        assert!(catalogue.needs_adapter(1 - hatch.gearbox, family("B16")));
     }
 }

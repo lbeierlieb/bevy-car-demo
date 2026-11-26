@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use crate::catalogue::Shared;
 use crate::chassis::{CarBuild, Chassis};
 use crate::input::WheelInput;
+use crate::items::Item;
 use crate::net::wire::{Reader, Wire, decode, encode};
 use crate::physics::collision::Obb;
 use crate::physics::drivetrain::{Differential, Drive, Drivetrain, EngineSetup, REVERSE_SPEED};
@@ -29,7 +30,7 @@ pub struct CarSetup {
     pub build: CarBuild,
     /// The parts it's built of, as items (`build` and `engine.parts` are what they
     /// resolve to, see `items`).
-    pub car: crate::items::Item,
+    pub car: Item,
     /// Sprung mass without fuel (kg), and its principal moments of inertia (kg·m²).
     pub sprung_mass: f32,
     pub inertia: Vec3,
@@ -244,10 +245,28 @@ impl CarSetup {
     /// `catalogue`'s `chassis` as it leaves the factory, with the factory's engine
     /// `option` for it.
     pub fn factory_in(catalogue: &Shared, chassis: usize, option: usize) -> Self {
+        let (build, parts, car) = Self::stock(catalogue, chassis, option);
+        let engine = EngineBuild::new(parts.hardware(), parts.ecu);
+        let mut setup = Self::new(build, parts, engine);
+        setup.car = car;
+        setup
+    }
+
+    /// What the stock car of `chassis` with its factory engine `option` is built of: its
+    /// trim's, if it has one, else the chassis' and the engine's own.
+    fn stock(catalogue: &Shared, chassis: usize, option: usize) -> (CarBuild, Parts, Item) {
+        let trim = crate::items::trim_of(catalogue, chassis, option);
+        if let Some((build, parts, car)) = trim.and_then(|trim| {
+            let (build, parts) = trim.car.resolve(catalogue).ok()?;
+            Some((build, parts, trim.car.clone()))
+        }) {
+            return (build, parts, car);
+        }
         let build = CarBuild::factory_in(catalogue, chassis);
         let parts = build.factory_engine(option);
-        let engine = EngineBuild::new(parts.hardware(), parts.ecu);
-        Self::new(build, parts, engine)
+        let car = crate::items::assemble(catalogue, None, &build, &parts)
+            .expect("every part of a car is in its catalogue");
+        (build, parts, car)
     }
 
     /// `catalogue`'s `chassis` as it leaves the factory with its engine `option`, only to
@@ -255,8 +274,7 @@ impl CarSetup {
     /// it must never be driven.
     pub fn to_look_at(catalogue: &Shared, chassis: usize, option: usize) -> Self {
         use crate::physics::engine::{ecu::Ecu, maps::EngineMaps};
-        let build = CarBuild::factory_in(catalogue, chassis);
-        let parts = build.factory_engine(option);
+        let (build, parts, car) = Self::stock(catalogue, chassis, option);
         let hardware = parts.hardware();
         let engine = EngineBuild {
             ecu: Ecu::blank(&hardware, parts.ecu),
@@ -264,7 +282,9 @@ impl CarSetup {
             maps: EngineMaps::blank(),
             octane: crate::physics::fuel::PUMP_OCTANE,
         };
-        Self::new(build, parts, engine)
+        let mut setup = Self::new(build, parts, engine);
+        setup.car = car;
+        setup
     }
 
     pub fn axle(&self, front: bool) -> &AxleSetup {
