@@ -57,8 +57,10 @@ that does: reverse asked for while rolling
 (`car::ReverseRefused`, a message from `drive`), on the rev limiter in first gear (only
 there, at the user's wish, 2026-11-22), and
 gas without moving for 3 s (R). (The parking brake hint went when gas started releasing it, 2026-11-24.) Added alone: in neutral, stalled, wrecked engine, empty
-tank (stating the problem only, since 2026-11-22). R (a press in the step's input, for the server) puts the car on the nearest road, as it is, (`Terrain::drive_spot`: the
-right-hand lane on roads with traffic lanes), carried there by the rescue helicopter (see
+tank (stating the problem only, since 2026-11-22). R (a press in the step's input, for the server) puts the car on the nearest road, as it is, (`Terrain::drive_spot_along`: the
+right-hand lane on roads with traffic lanes; 8–25 m along the road from the nearest point,
+either way at random (`rescue::ALONG_ROAD`, hashed from the step and the car's place), the other way
+if the road ends first, so a car stuck on a road isn't put back into the trap; 2026-11-26), carried there by the rescue helicopter (see
 "Helicopters"). The map teleport was removed at the user's
 wish (2026-11-21). Keys (the keyboard profile's): M map, B (held) looks back; Esc the central menu (the 0
 mute key went into it, 2026-11-23).
@@ -579,7 +581,7 @@ anywhere; `Chase`, the hunt's flight) and `rescue.rs`.
   ahead of the car (where the chase camera looks), holds over its roof on a 12 m cable
   (longer to stay 4 m over trees and houses within 8 m: their `Upright::top`), lets the
   cable down, lifts the car (upright), carries it at ~10 m/s average over a lift clearing
-  land, trees and houses along the way, sets it down at the drive spot, unhooks
+  land, trees and houses along the way, sets it down at the drive spot (a random way along the road, see "Beginner help"), unhooks
   (`Car::place`) and flies off 8 s. ~10 s near a road
   (`the_helicopter_takes_the_car_to_the_road`). Neutral and the parking brake on from the
   call, also once set down. Lets go if the car is moved by something else (> 2 m) or the
@@ -599,7 +601,8 @@ anywhere; `Chase`, the hunt's flight) and `rescue.rs`.
   driven, simulated, predicted, checked or force-fed, hidden, its engine hushed, its body
   and `Transform` following the remote car of our number (`client::spectate`), which is
   drawn and heard (helicopter from `CarState::heli`) like any other; the HUD shows the
-  notice (`hud::server_notice`, first line large). **Scripted cars** (protocol 29,
+  notice (`hud::server_notice`, first line large; only the border's colour pulses, not its
+  width, which resized the frame and wrapped the last letter, and its lines never wrap). **Scripted cars** (protocol 29,
   asked for by the user, 2026-11-26): while the server has a car (`Shadow::taken`) its
   states carry `CarState::scripted` ("nothing a game does changes where it goes"), and
   every game shows it `SCRIPTED_DELAY` (0.1 s) before what's heard, on a cubic between

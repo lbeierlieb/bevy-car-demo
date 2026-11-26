@@ -452,7 +452,7 @@ impl Shadow {
         if input.away {
             self.rescue.let_go();
         } else if input.reset && !self.rescue.busy() {
-            self.rescue.press(self.rule, car, terrain);
+            self.rescue.press(self.rule, car, terrain, step as u64);
         }
         // While the server has the car, the player's input does nothing.
         let input = DriverInput {

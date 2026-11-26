@@ -65,6 +65,24 @@ const TURN: f32 = 1.2;
 /// starting, a lent car) is let go of (m).
 const LET_GO: f32 = 2.0;
 
+/// How far along the road from its nearest point a rescued car is set down (m, either
+/// way, at random).
+const ALONG_ROAD: (f32, f32) = (8.0, 25.0);
+
+/// The (signed) way along the road a car at `p` is set down, by `seed`: random-looking,
+/// but the same for the same step and place.
+fn set_down_shift(seed: u64, p: Vec2) -> f32 {
+    let mut x = seed ^ ((p.x.to_bits() as u64) << 32 | p.y.to_bits() as u64);
+    // splitmix64
+    x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    let share = (x >> 40) as f32 / (1u64 << 24) as f32;
+    let sign = if x & 1 == 0 { 1.0 } else { -1.0 };
+    sign * (ALONG_ROAD.0 + share * (ALONG_ROAD.1 - ALONG_ROAD.0))
+}
+
 /// A car's rescue under way, if any.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Rescue {
@@ -73,11 +91,19 @@ pub struct Rescue {
 
 impl Rescue {
     /// R pressed: calls the helicopter as `rule` says, to the nearest road or a spot.
-    /// Nothing if one is already under way.
-    pub fn press(&mut self, rule: ResetRule, car: &Car, terrain: &Terrain) {
+    /// Nothing if one is already under way. To the road it's a random way along it from
+    /// the nearest point (`ALONG_ROAD`, either way; by `seed` and where the car is), so a car
+    /// stuck on the road isn't put back into the same trap.
+    pub fn press(&mut self, rule: ResetRule, car: &Car, terrain: &Terrain, seed: u64) {
         match rule {
             ResetRule::Road => {
-                let (p, yaw) = car.road_spot(terrain);
+                let p = car.body.position.xz();
+                let yaw = heading(car.body.rotation);
+                let facing = Vec2::new(-yaw.sin(), -yaw.cos());
+                let shift = set_down_shift(seed, p);
+                let (p, yaw) = terrain
+                    .drive_spot_along(p, facing, shift)
+                    .unwrap_or((p, yaw));
                 self.call(car, terrain, p, yaw);
             }
             ResetRule::Spot(p, yaw) => self.call(car, terrain, p, yaw),
@@ -470,6 +496,30 @@ mod tests {
             .fold(0.0f32, f32::max);
         assert!(hottest < 30.0, "tires at {hottest} °C");
         (t, car, to, facing)
+    }
+
+    #[test]
+    fn a_rescued_car_is_set_down_a_way_along_the_road() {
+        let terrain = Terrain::baked();
+        let (spawn, yaw) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
+        let car = Car::spawn_at(0, CarSetup::default(), &terrain, spawn.x, spawn.y, yaw);
+        let nearest = car.road_spot(&terrain).0;
+        let mut spots = Vec::new();
+        for seed in 0..6 {
+            let mut rescue = Rescue::default();
+            rescue.press(ResetRule::Road, &car, &terrain, seed);
+            let to = rescue.flight.as_ref().unwrap().end.xz();
+            let apart = to.distance(nearest);
+            assert!(
+                (0.5 * ALONG_ROAD.0..ALONG_ROAD.1 + 0.5).contains(&apart),
+                "set down {apart} m from the nearest spot"
+            );
+            spots.push(to);
+        }
+        assert!(
+            spots.iter().any(|s| s.distance(spots[0]) > 1.0),
+            "always the same spot"
+        );
     }
 
     #[test]

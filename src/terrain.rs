@@ -1122,7 +1122,26 @@ impl Terrain {
     /// yaw facing along the road in the direction closest to `heading`): in the right-hand
     /// lane where the traffic has a lane each way, else in the middle.
     pub fn drive_spot(&self, p: Vec2, heading: Vec2) -> Option<(Vec2, f32)> {
+        self.drive_spot_along(p, heading, 0.0)
+    }
+
+    /// Like `drive_spot`, but `shift` metres along that road from the point nearest to `p`
+    /// (towards its last point if positive, its first if negative; the other way if it
+    /// ends before, else to its end), so a car stuck on a road isn't put back where it was.
+    pub fn drive_spot_along(&self, p: Vec2, heading: Vec2, shift: f32) -> Option<(Vec2, f32)> {
         let (road, i, point) = self.closest_on_road(p, |r| r.kind != RoadKind::Water)?;
+        let (i, point) = match walk_along(&road.points, i, point, shift) {
+            // The road ends before: the other way instead.
+            Err(_) => walk_along(&road.points, i, point, -shift).unwrap_or_else(|end| end),
+            Ok(moved) => moved,
+        };
+        if !self.inside(point.x, point.y) {
+            return if shift == 0.0 {
+                None
+            } else {
+                self.drive_spot_along(p, heading, 0.0)
+            };
+        }
         let along = (road.points[i + 1] - road.points[i]).normalize_or(Vec2::NEG_Y);
         let facing = if along.dot(heading) >= 0.0 {
             along
@@ -1965,6 +1984,39 @@ pub fn hash(n: u32) -> f32 {
     (h & 0x00ff_ffff) as f32 / 16_777_216.0
 }
 
+/// From `point` on the segment starting at `points[i]`, `shift` metres along the line
+/// (towards its last point if positive): the segment and point there, or `Err` with its
+/// end if it ends before.
+fn walk_along(
+    points: &[Vec2],
+    mut i: usize,
+    mut point: Vec2,
+    shift: f32,
+) -> Result<(usize, Vec2), (usize, Vec2)> {
+    let mut left = shift.abs();
+    while left > 0.0 {
+        let to = if shift > 0.0 {
+            points[i + 1]
+        } else {
+            points[i]
+        };
+        let gap = point.distance(to);
+        if gap >= left {
+            return Ok((i, point.move_towards(to, left)));
+        }
+        left -= gap;
+        point = to;
+        if shift > 0.0 && i + 2 < points.len() {
+            i += 1;
+        } else if shift < 0.0 && i > 0 {
+            i -= 1;
+        } else {
+            return Err((i, point));
+        }
+    }
+    Ok((i, point))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2039,6 +2091,24 @@ mod tests {
                     "facing {facing}, heading {heading}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn drive_spots_move_along_the_road() {
+        let terrain = Terrain::baked();
+        let p = Vec2::new(1500.0, -2000.0);
+        let (spot, _) = terrain.drive_spot(p, Vec2::X).unwrap();
+        for shift in [-25.0, -8.0, 8.0, 25.0] {
+            let (moved, _) = terrain.drive_spot_along(p, Vec2::X, shift).unwrap();
+            let apart = moved.distance(spot);
+            assert!(
+                apart > 0.5 * shift.abs() && apart < shift.abs() + 0.5,
+                "{shift} m along the road is {apart} m away"
+            );
+            // Still on that road: the nearest spot from there is itself.
+            let (again, _) = terrain.drive_spot(moved, Vec2::X).unwrap();
+            assert!(again.distance(moved) < 0.1, "{moved} isn't in the lane");
         }
     }
 
