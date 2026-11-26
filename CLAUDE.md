@@ -1084,6 +1084,11 @@ and plays force feedback, both through hid-fanatecff on Linux.
   up to the lower gear's speed on a downshift (`BLIP_RPM`). Paddles shift
   with the automatic clutch even when a pedal is bound.
 - Each H gate is a button held while the lever is in it; neutral is "no gate held".
+- Put in neutral by the game (`Drivetrain::neutral`: a reset, the rescue, a round's start
+  or end, a car built anew), the gate the lever is still in counts as neutral until the
+  lever moves (`Drivetrain::parked`, `lever`; asked for by the user, 2026-11-26: it went
+  straight back into gear and stalled or ground). A car put down afresh doesn't know the
+  lever, so the first gate it sees waits too. Protocol 30 (snapshot fields).
 - No hill hold (removed at the user's wish): the handbrake is a parking brake worked
   by Space or a handbrake button (`Car::parking_brake`, on when a car spawns or resets,
   a red (P) under the gear); a handbrake lever (an axis) works directly on top of it.

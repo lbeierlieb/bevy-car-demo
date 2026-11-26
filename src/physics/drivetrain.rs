@@ -294,6 +294,12 @@ pub struct Drivetrain {
     /// Cranking in the last step, and the revolutions turned since the starter engaged.
     cranking: bool,
     turned: f32,
+    /// The H-shifter's gate seen in the last step (`None` before any).
+    lever: Option<i8>,
+    /// Put in neutral by the game (`neutral`): the gate the lever is still in counts as
+    /// neutral until the lever moves, so a reset or a round's end doesn't put the car
+    /// straight back in the gear the lever was left in.
+    parked: bool,
 }
 
 /// What the drivetrain does to the driven wheels this step (shared by both).
@@ -324,6 +330,8 @@ impl Drivetrain {
             switched_off: false,
             cranking: false,
             turned: 0.0,
+            lever: None,
+            parked: false,
         }
     }
 
@@ -387,6 +395,14 @@ impl Drivetrain {
     pub fn select_gate(&mut self, engine: &EngineSetup, gate: i8, speed: f32, wheel_omega: f32) {
         // A shifter's gates past the gearbox's top gear give the top gear.
         let gate = gate.min(engine.top_gear());
+        // After `neutral`, the lever has to move into a gate before it counts.
+        if self.parked && self.lever.is_none_or(|before| before == gate) {
+            self.lever = Some(gate);
+            self.grinding = None;
+            return;
+        }
+        self.parked = false;
+        self.lever = Some(gate);
         let lever = gate;
         // Reverse is refused while rolling forward (backing up quickly must keep it).
         let gate = if gate < 0 && speed > REVERSE_SPEED {
@@ -413,8 +429,10 @@ impl Drivetrain {
         self.grinding = (lever != 0 && self.selected_gear() != lever).then_some(lever);
     }
 
-    /// Out of gear at once, whatever the lever or a shift under way says.
+    /// Out of gear at once, whatever the lever or a shift under way says. An H-shifter's
+    /// lever counts again once it moves.
     pub fn neutral(&mut self) {
+        self.parked = true;
         self.gear = 0;
         self.shift = None;
         self.in_gear = 0.0;
@@ -667,6 +685,8 @@ crate::snapshot::snapshot!(Drivetrain {
     switched_off,
     cranking,
     turned,
+    lever,
+    parked,
 });
 
 #[cfg(test)]
@@ -952,6 +972,7 @@ mod tests {
         drivetrain.running = false;
         drivetrain.rpm = 0.0;
         drivetrain.step(&engine, 0.0, Some(0.0), 0.0, true, dt);
+        drivetrain.select_gate(&engine, 0, 0.0, 0.0);
         drivetrain.select_gate(&engine, 1, 0.0, 0.0);
         assert_eq!(drivetrain.gear, 1);
         assert_eq!(drivetrain.grinding, None);
@@ -959,6 +980,7 @@ mod tests {
         let mut drivetrain = Drivetrain::new(&engine);
         drivetrain.neutral();
         drivetrain.step(&engine, 0.0, Some(0.0), 0.0, true, dt);
+        drivetrain.select_gate(&engine, 0, 0.0, 0.0);
         drivetrain.select_gate(&engine, 1, 0.0, 0.0);
         assert_eq!(drivetrain.gear, 0);
         assert_eq!(drivetrain.grinding, Some(1));
@@ -1007,6 +1029,31 @@ mod tests {
             drivetrain.step(&engine, 0.0, Some(0.0), omega, true, dt);
         }
         assert!(drivetrain.locked);
+    }
+
+    #[test]
+    fn put_in_neutral_the_lever_has_to_move_first() {
+        let engine = EngineSetup::default();
+        let mut drivetrain = Drivetrain::new(&engine);
+        drivetrain.step(&engine, 0.0, Some(1.0), 0.0, true, 1.0 / 120.0);
+        drivetrain.select_gate(&engine, 2, 0.0, 0.0);
+        assert_eq!(drivetrain.gear, 2);
+        // A reset: the lever left in second doesn't count, nor grind with the clutch up.
+        drivetrain.neutral();
+        drivetrain.step(&engine, 0.0, Some(0.0), 0.0, true, 1.0 / 120.0);
+        drivetrain.select_gate(&engine, 2, 0.0, 0.0);
+        assert_eq!((drivetrain.gear, drivetrain.grinding), (0, None));
+        // Moved into another gate (or out and back in), it counts again.
+        drivetrain.select_gate(&engine, 1, 0.0, 0.0);
+        assert_eq!(drivetrain.grinding, Some(1));
+        // A car put down afresh doesn't know where the lever was: the first gate seen waits.
+        let mut fresh = Drivetrain::new(&engine);
+        fresh.neutral();
+        fresh.select_gate(&engine, 3, 0.0, 0.0);
+        assert_eq!(fresh.gear, 0);
+        fresh.select_gate(&engine, 0, 0.0, 0.0);
+        fresh.select_gate(&engine, 3, 0.0, 0.0);
+        assert_eq!(fresh.selected_gear(), 3);
     }
 
     #[test]
