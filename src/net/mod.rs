@@ -197,8 +197,19 @@ mod tests {
         at: Vec2,
         terrain: Terrain,
     ) -> App {
+        player_over(listener.connect(), name, chassis, at, terrain)
+    }
+
+    /// The same, over `link`.
+    fn player_over(
+        link: impl link::Link + 'static,
+        name: &str,
+        chassis: usize,
+        at: Vec2,
+        terrain: Terrain,
+    ) -> App {
         let car = Car::spawn_at(0, CarSetup::factory(chassis, 0), &terrain, at.x, at.y, 0.0);
-        let mut connection = Connection::new(listener.connect(), name, &terrain);
+        let mut connection = Connection::new(link, name, &terrain);
         // That car, from the showroom (the server gives everyone its first car).
         connection.say(&protocol::ToServer::Buy { chassis, engine: 0 });
         let mut app = app_on(terrain);
@@ -329,12 +340,192 @@ mod tests {
 
     /// The same, starting at `at` (map x, z), facing -z.
     fn driver_at(listener: &LoopbackListener, name: &str, at: Vec2) -> App {
-        let mut app = player_on(listener, name, 3, at, Terrain::flat());
+        driver_over(listener.connect(), name, at)
+    }
+
+    /// The same, over `link`.
+    fn driver_over(link: impl link::Link + 'static, name: &str, at: Vec2) -> App {
+        let mut app = player_over(link, name, 3, at, Terrain::flat());
         app.add_plugins((crate::sim::SimPlugin, crate::car::CarPlugin))
             .init_resource::<crate::input::WheelInput>();
         let engine = car(&mut app).setup.engine.clone();
         car(&mut app).drivetrain.shift_to(&engine, 1);
         app
+    }
+
+    /// A way to the server that takes `delay` frames each way (a frame of the player's
+    /// game ends when it finds nothing more to receive).
+    struct Slow {
+        link: link::Loopback,
+        delay: usize,
+        frame: usize,
+        incoming: std::collections::VecDeque<(usize, Vec<u8>)>,
+        outgoing: std::collections::VecDeque<(usize, bool, Vec<u8>)>,
+    }
+
+    impl Slow {
+        fn new(link: link::Loopback, delay: usize) -> Self {
+            Self {
+                link,
+                delay,
+                frame: 0,
+                incoming: default(),
+                outgoing: default(),
+            }
+        }
+    }
+
+    impl link::Link for Slow {
+        fn send(&mut self, reliable: bool, message: Vec<u8>) {
+            self.outgoing.push_back((self.frame, reliable, message));
+        }
+
+        fn receive(&mut self) -> Option<Vec<u8>> {
+            let due = |sent: usize| sent + self.delay <= self.frame;
+            while self.outgoing.front().is_some_and(|(sent, ..)| due(*sent)) {
+                let (_, reliable, message) = self.outgoing.pop_front().unwrap();
+                self.link.send(reliable, message);
+            }
+            while let Some(message) = self.link.receive() {
+                self.incoming.push_back((self.frame, message));
+            }
+            if self.incoming.front().is_some_and(|(came, _)| due(*came)) {
+                return self.incoming.pop_front().map(|(_, message)| message);
+            }
+            self.frame += 1;
+            None
+        }
+
+        fn is_open(&self) -> bool {
+            self.link.is_open()
+        }
+
+        fn close(&mut self) {
+            self.link.close();
+        }
+    }
+
+    /// Our car runs ahead of the server (by the way there and back, and a margin): the
+    /// other cars are carried on to where the server has them when it drives our car's
+    /// step, so that ours meets them here where it does there.
+    #[test]
+    fn other_cars_are_met_where_the_server_has_them_as_it_drives_our_step() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        // Anna's game is 100 ms from the server each way.
+        let slow = Slow::new(listener.connect(), 6);
+        let mut anna = driver_over(slow, "Anna", Vec2::new(-8.0, 0.0));
+        let mut ben = driver(&listener, "Ben");
+        run(&mut [&mut server, &mut anna, &mut ben], 240);
+        ben.world_mut()
+            .resource_mut::<crate::input::WheelInput>()
+            .throttle = Some(0.3);
+        run(&mut [&mut server, &mut anna, &mut ben], 60);
+        // Where Anna's game has Ben's car as of each of her steps, and where the server has
+        // it as of each of hers it drives.
+        let mut ours = Vec::new();
+        let mut theirs = Vec::new();
+        for _ in 0..90 {
+            server.update();
+            let mut peers = server.world_mut().query::<&super::server::Peer>();
+            let peers: Vec<_> = peers.iter(server.world()).collect();
+            let peer = |name: &str| {
+                *peers
+                    .iter()
+                    .find(|peer| peer.name.as_deref() == Some(name))
+                    .unwrap()
+            };
+            let ben_there = peer("Ben").shadow.car().unwrap().body.clone();
+            theirs.push((
+                peer("Anna").shadow.done(),
+                ben_there.position,
+                ben_there.velocity,
+            ));
+            anna.update();
+            ben.update();
+            let step = connection(&anna).last_step().unwrap();
+            let mut remote = anna.world_mut().query::<(&RemoteCar, &Tag)>();
+            let body = (remote.iter(anna.world()))
+                .find(|(_, tag)| tag.0 == "Ben")
+                .and_then(|(car, _)| car.body.clone())
+                .expect("Ben's car in Anna's game");
+            ours.push((step, body.position));
+        }
+        let speed = theirs.last().unwrap().2.length();
+        assert!(speed > 5.0, "Ben drives at {speed} m/s");
+        let mut farthest: f32 = 0.0;
+        let mut compared = 0;
+        for (step, at) in ours {
+            // Ben's car on the server between the server's frames around Anna's step.
+            let Some(w) = theirs.windows(2).find(|w| {
+                let (a, b) = (w[0].0 as i64, w[1].0 as i64);
+                a <= step as i64 && (step as i64) <= b && a < b
+            }) else {
+                continue;
+            };
+            let (a, b) = (&w[0], &w[1]);
+            let t = (step - a.0) as f32 / (b.0 - a.0) as f32;
+            farthest = farthest.max(a.1.lerp(b.1, t).distance(at));
+            compared += 1;
+        }
+        println!("Ben at {speed:.1} m/s: Anna's game had his car up to {farthest:.3} m off");
+        assert!(compared > 30, "{compared} steps compared");
+        assert!(farthest < 0.15, "up to {farthest} m off");
+    }
+
+    /// Anna, 100 ms from the server, drives into the back of Ben's car, driving on ahead
+    /// more slowly: her game feels the knock in the step it comes on the server, within a
+    /// few steps.
+    #[test]
+    fn a_car_rear_ended_is_met_in_the_same_step_here_and_on_the_server() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let slow = Slow::new(listener.connect(), 6);
+        let mut anna = driver_over(slow, "Anna", Vec2::new(0.0, 16.0));
+        let mut ben = driver(&listener, "Ben");
+        run(&mut [&mut server, &mut anna, &mut ben], 240);
+        let throttle = |app: &mut App, throttle: f32| {
+            app.world_mut()
+                .resource_mut::<crate::input::WheelInput>()
+                .throttle = Some(throttle);
+        };
+        throttle(&mut ben, 0.15);
+        throttle(&mut anna, 1.0);
+        anna.world_mut().resource_mut::<Touching>().0.clear();
+        let (mut here, mut there) = (None, None);
+        for _ in 0..600 {
+            server.update();
+            if there.is_none() {
+                let mut peers = server.world_mut().query::<&super::server::Peer>();
+                let peers: Vec<_> = peers.iter(server.world()).collect();
+                let car = |name: &str| {
+                    (peers.iter())
+                        .find(|peer| peer.name.as_deref() == Some(name))
+                        .and_then(|peer| peer.shadow.car())
+                        .unwrap()
+                };
+                let hull = |car: &Car| car.setup.hull.placed(car.body.position, car.body.rotation);
+                if hull(car("Anna")).contact(&hull(car("Ben"))).is_some() {
+                    let anna = peers.iter().find(|p| p.name.as_deref() == Some("Anna"));
+                    there = Some(anna.unwrap().shadow.done());
+                }
+            }
+            anna.update();
+            ben.update();
+            if here.is_none() && !anna.world().resource::<Touching>().0.is_empty() {
+                here = connection(&anna).last_step();
+            }
+            if here.is_some() && there.is_some() {
+                break;
+            }
+        }
+        let (here, there) = (
+            here.expect("no knock here"),
+            there.expect("none on the server"),
+        );
+        let apart = here as i64 - there as i64;
+        println!("Anna's car met Ben's in step {here} in her game, {there} on the server");
+        assert!(apart.abs() <= 4, "{apart} steps apart");
     }
 
     #[test]

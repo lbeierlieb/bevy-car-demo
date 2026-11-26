@@ -685,6 +685,25 @@ Built (phases 0, 1, 2 and the start of 3):
 - `car::Correction`: after a correction the active car is drawn where it was and glides
   to where it is (0.1 s; past 4 m at once); the camera follows the drawn car (its
   `Transform`), not `car.body`.
+- **Remote cars on our car's timeline** (2026-11-26, protocol 28; the user found
+  rear-ending traffic weird: a knock here, traffic driving on): our car runs a round trip
+  plus the margin ahead of what the server's states show, so dead reckoning to
+  `their(now)` met cars ~v × (RTT + 30 ms) too near (1.95 m at 7.7 m/s, 100 ms each
+  way). `Yours::time` is when the server's step that drove `Yours::step` ended (its
+  clock); `Connection::step_time` maps any step of ours to the server's clock, and
+  `meet_time` carries every remote car to the time of our step (not cars a helicopter
+  carries, nor our own spectated car; not while our steps don't run, or more than
+  `AHEAD` off what's heard). Bodies are placed per step (`place_bodies`, `FixedUpdate`
+  before `push_off_remote_cars`) and drawn as of the last step (`move_cars`). A push our
+  car gives a remote car is a `Kick` (velocity change from `collision::resolve` on the
+  clone, at the step's server time) carried on until a state from then on comes. Replays
+  in `reconcile` meet the remote cars as of each step (`others_at`, `meet_again`; knocks
+  restored, the crashes were heard). Tests over a link 6 frames each way (`Slow`):
+  `other_cars_are_met_where_the_server_has_them_as_it_drives_our_step` (2.7 cm),
+  `a_car_rear_ended_is_met_in_the_same_step_here_and_on_the_server` (1 step apart; 25
+  before). Sustained pushing between players still corrects every ~0.1 s by up to ~0.2
+  m (the other car's reaction can't be known; 1.4 m before kicks); replay contacts made
+  no measurable difference there. Not tried with real traffic in the game yet.
 - Collisions on the server (`server::step_shadows`, after the cars' steps): players'
   cars push each other (same realm, neither a ghost by the client's word,
   `Rounds::players_collide`), push themselves off traffic, and traffic reacts to the

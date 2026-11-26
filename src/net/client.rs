@@ -8,6 +8,12 @@
 //! that disagrees doesn't make a car jump. A car only pushes itself off a remote car; the
 //! other player's game (or the server, for traffic) does the same on their side. On a
 //! server there's no traffic of our own: the server's comes as remote cars.
+//!
+//! Our own car runs ahead of the server (our inputs reach it just in time for each step,
+//! see `predict`), so the remote cars are carried on to when the server drives the step
+//! our car is at, not just to the latest the server's word could have come by (a round
+//! trip earlier): that's where our car meets them on the server (`Connection::step_time`).
+//! A car rear-ending a steadily driving one so meets it here where it does there.
 //! The other players the server puts on our map are kept apart from all that
 //! (`Connection::on_map`), and so is the chat (`Connection::chat`).
 
@@ -33,12 +39,20 @@ use crate::physics::collision::{self, OBSTACLE};
 use crate::physics::engine::maps::EngineMaps;
 use crate::physics::rigid_body::RigidBody;
 use crate::shops::Shop;
+use crate::sim;
 use crate::spec::CarSpec;
 use crate::terrain::{Spawn, Terrain};
 
 /// How long a car is carried on past its latest state; then it's held there (s). More
-/// than the time between states far away (3 a second), and a lost one.
+/// than the time between states far away (3 a second), and a lost one, plus a round trip
+/// (cars are carried on to when the server drives our latest step).
 const PREDICT: f64 = 0.8;
+/// How many steps from the latest the server told us of when it drove it we work out
+/// when it drives others (two seconds; it tells ten times a second).
+const TIMELINE_REACH: i32 = 240;
+/// How far ahead of the latest the server's word could have come by our steps run, by the
+/// server's clock (s): a round trip and a margin, give or take the clocks' jitter.
+const AHEAD: std::ops::RangeInclusive<f64> = -0.1..=1.0;
 /// How quickly what's drawn of a car closes on where it's predicted to be (s, the time
 /// constant).
 const SMOOTHING: f32 = 0.1;
@@ -121,7 +135,9 @@ impl Plugin for ClientPlugin {
                 (record_input, super::predict::notice_placing)
                     .after(crate::car::take_input)
                     .before(crate::car::drive),
-                push_off_remote_cars.after(crate::sim::simulate),
+                (place_bodies, push_off_remote_cars)
+                    .chain()
+                    .after(crate::sim::simulate),
             )
                 .run_if(resource_exists::<Connection>),
         )
@@ -248,6 +264,9 @@ pub struct Connection {
     pub hunt_heli: Option<(HeliPose, f64)>,
     /// The server's clock against ours (every state comes on it).
     clock: ClockOffset,
+    /// Our latest step the server's word came for, and when the server drove it (its
+    /// clock, s).
+    timeline: Option<(u32, f64)>,
     /// What we've been told of each car (a state may overtake it, or come later).
     known: HashMap<CarId, Known>,
     /// The other players the server shows on our map, and when each was heard of (s).
@@ -324,6 +343,7 @@ impl Connection {
             hunt_heli: None,
             chat: VecDeque::new(),
             clock: ClockOffset::default(),
+            timeline: None,
             known: HashMap::new(),
             map: HashMap::new(),
             sent: f64::NEG_INFINITY,
@@ -381,6 +401,44 @@ impl Connection {
         self.say(&ToServer::Event(action));
     }
 
+    /// When the server drives (drove) our step `step`, by its clock (s): from the latest
+    /// step it told us of (none without word lately).
+    pub fn step_time(&self, step: u32) -> Option<f64> {
+        let (told, time) = self.timeline?;
+        let since = step.wrapping_sub(told) as i32;
+        (since.abs() <= TIMELINE_REACH).then(|| time + f64::from(since) * f64::from(sim::STEP))
+    }
+
+    /// Our latest step (the one being simulated, in a step), once they run (a game that
+    /// doesn't simulate its car, a test's, keeps the one input it began with).
+    pub(super) fn last_step(&self) -> Option<u32> {
+        let ran = self.inputs.len() > 1;
+        self.inputs.back().filter(|_| ran).map(|&(step, _)| step)
+    }
+
+    /// When (the server's clock) a remote car is met and shown as of in our step `step`,
+    /// `heard` being the latest the server's word could have come by now: when the server
+    /// drives that step of ours. Not so a car the server's rescue helicopter is carrying
+    /// (the helicopter is shown as heard), nor our own car shown as the server drives it:
+    /// those as heard (as long before as the step is). Nor any while our steps don't run
+    /// ahead of what's heard as they should (a game not simulating its car).
+    fn meet_time(&self, step: u32, heard: f64, car: CarId, latest: &CarState) -> f64 {
+        let back = self.last_step().map_or(0.0, |last| {
+            f64::from(last.wrapping_sub(step) as i32) * f64::from(sim::STEP)
+        });
+        let heard = heard - back;
+        match self.step_time(step) {
+            Some(time)
+                if AHEAD.contains(&(time - heard))
+                    && latest.heli.is_none()
+                    && Some(car) != self.car =>
+            {
+                time
+            }
+            _ => heard,
+        }
+    }
+
     /// The time on the server's clock that it is `now` (on `Time<Real>`), as near as the
     /// states that came tell (none before the first).
     pub fn server_time(&self, now: f64) -> Option<f64> {
@@ -409,9 +467,23 @@ pub struct RemoteCar {
     states: VecDeque<CarState>,
     /// When it was last heard of (our clock, s).
     heard: f64,
-    /// Where it is by now, as a body to run into (moving, but never pushed).
+    /// Where it is by now, as a body to run into (moving, but never pushed), and as of
+    /// when (the server's clock).
     pub body: Option<RigidBody>,
+    met: f64,
+    /// How our car pushed it, which the server's word doesn't show yet.
+    kicks: Vec<Kick>,
     drawn: Drawn,
+}
+
+/// A push our car gave a remote car (as our game worked it out) at `time` on the server's
+/// clock: it's taken to move so until a state from then on comes, which shows how it
+/// really did (the server's traffic, or the other player's car on the server).
+#[derive(Clone, Copy, Debug)]
+struct Kick {
+    time: f64,
+    velocity: Vec3,
+    angular_velocity: Vec3,
 }
 
 impl RemoteCar {
@@ -419,6 +491,42 @@ impl RemoteCar {
     pub fn latest(&self) -> Option<&CarState> {
         self.states.back()
     }
+
+    /// Where it is (to run into) as of our step `step`, by `connection`'s word, `heard`
+    /// being the latest the server's word could have come by now (its clock).
+    fn body_at(
+        &self,
+        connection: &Connection,
+        looks: &Looks,
+        step: u32,
+        heard: f64,
+    ) -> Option<RigidBody> {
+        let time = connection.meet_time(step, heard, self.id, self.states.back()?);
+        Some(body_of(&self.at(time).0, looks))
+    }
+
+    /// Where it is at `time` (the server's clock), and how long after its latest state:
+    /// carried on from that, and pushed as our car pushed it since (`Kick`).
+    fn at(&self, time: f64) -> (Kinematics, f32) {
+        let (mut at, ahead) = predict(&self.states, time);
+        let latest = self.states.back().map_or(f64::MIN, |state| state.time);
+        for kick in &self.kicks {
+            if kick.time > latest && kick.time <= time {
+                at.velocity += kick.velocity;
+                at.angular_velocity += kick.angular_velocity;
+                at.position += kick.velocity * (time - kick.time) as f32;
+            }
+        }
+        (at, ahead)
+    }
+}
+
+/// A body moving as `at`.
+fn body_of(at: &Kinematics, looks: &Looks) -> RigidBody {
+    let mut body = RigidBody::new(at.position, at.rotation, looks.mass, looks.inertia);
+    body.velocity = at.velocity;
+    body.angular_velocity = at.angular_velocity;
+    body
 }
 
 /// The name a remote car shows over it.
@@ -585,7 +693,14 @@ fn receive(
             ToClient::Busy(busy) => connection.busy = busy.into_iter().collect(),
             ToClient::Heli(pose) => connection.hunt_heli = Some((pose, now)),
             ToClient::Pace { early } => connection.early = Some((early, now)),
-            ToClient::Yours(yours) => prediction.yours = Some(yours),
+            ToClient::Yours(yours) => {
+                let newer = (connection.timeline)
+                    .is_none_or(|(step, _)| (yours.step.wrapping_sub(step) as i32) >= 0);
+                if newer {
+                    connection.timeline = Some((yours.step, yours.time));
+                }
+                prediction.yours = Some(yours);
+            }
             ToClient::Pings(pings) => {
                 connection.pings = pings.into_iter().collect();
             }
@@ -646,6 +761,8 @@ fn receive(
                 states,
                 heard: now,
                 body: None,
+                met: 0.0,
+                kicks: Vec::new(),
                 drawn: Drawn::default(),
             },
             Transform::from_translation(state.position).with_rotation(state.rotation),
@@ -864,9 +981,10 @@ type RemoteParts = (
 );
 
 /// Shows each remote car where it's predicted to be by the end of the last simulation
-/// step, and keeps its body there. That's when our own car is drawn (and the camera
-/// placed): drawn at now instead, a car keeping pace with ours would shake by its speed
-/// times the step's overstep, which changes from frame to frame.
+/// step (as the server has it when it drives that step of ours: `Connection::meet_time`),
+/// and keeps its body there. That's when our own car is drawn (and the camera placed):
+/// drawn at now instead, a car keeping pace with ours would shake by its speed times the
+/// step's overstep, which changes from frame to frame.
 fn move_cars(
     time: Res<Time<Real>>,
     fixed: Res<Time<Fixed>>,
@@ -882,9 +1000,17 @@ fn move_cars(
     };
     let dt = drawn_at.map_or(0.0, |before| (at - before).max(0.0) as f32);
     *drawn_at = Some(at);
+    let step = connection.last_step();
     for (entity, mut car, mut transform, mut motion, looks, ghost, tagged) in &mut cars {
         let car = &mut *car;
-        let (by_now, ahead) = predict(&car.states, their);
+        let latest = car.states.back().unwrap();
+        let time = step.map_or(their, |step| {
+            connection.meet_time(step, their, car.id, latest)
+        });
+        // (A state from a push on shows how it went.)
+        let latest = latest.time;
+        car.kicks.retain(|kick| kick.time > latest);
+        let (by_now, ahead) = car.at(time);
         (transform.translation, transform.rotation) = car.drawn.follow(&by_now, dt);
         // The wheels roll on as fast as they did between the last two states.
         let (before, latest) = (car.states.front().unwrap(), car.states.back().unwrap());
@@ -902,13 +1028,30 @@ fn move_cars(
                 wheel.spin += (wheel.spin - was.spin) / between * ahead;
             }
         }
-        car.body = looks.map(|looks| {
-            let mut body =
-                RigidBody::new(by_now.position, by_now.rotation, looks.mass, looks.inertia);
-            body.velocity = by_now.velocity;
-            body.angular_velocity = by_now.angular_velocity;
-            body
-        });
+        car.body = looks.map(|looks| body_of(&by_now, looks));
+        car.met = time;
+    }
+}
+
+/// In each simulation step, before our car meets them: the remote cars' bodies where they
+/// are as of the step (`move_cars` only places them once a frame, after the steps).
+fn place_bodies(
+    time: Res<Time<Real>>,
+    fixed: Res<Time<Fixed>>,
+    connection: Res<Connection>,
+    mut cars: Query<(&mut RemoteCar, &Looks)>,
+) {
+    let (Some(step), Some(heard)) = (
+        connection.last_step(),
+        connection.clock.their(super::stamp(&time, &fixed)),
+    ) else {
+        return;
+    };
+    for (mut car, looks) in &mut cars {
+        car.body = car.body_at(&connection, looks, step, heard);
+        if let Some(latest) = car.states.back() {
+            car.met = connection.meet_time(step, heard, car.id, latest);
+        }
     }
 }
 
@@ -1084,13 +1227,18 @@ fn haunt(
     }
 }
 
-/// Our cars push themselves off the remote cars they run into (those aren't moved: the
-/// other player's game pushes theirs off ours, the server its traffic). Ghosts, ours or
-/// theirs, run into nothing.
+/// The remote cars that can be run into (not ghosts).
+pub(super) type SolidCars<'w, 's> =
+    Query<'w, 's, (&'static RemoteCar, &'static Looks), Without<Ghost>>;
+
+/// Our cars push themselves off the remote cars they run into. Those aren't moved for
+/// good (the other player's game pushes theirs off ours, the server its traffic), but are
+/// taken to move as pushed until the server's word shows how they did (`Kick`). Ghosts,
+/// ours or theirs, run into nothing.
 fn push_off_remote_cars(
     time: Res<Time>,
     mut cars: Query<&mut Car, (Without<Ghost>, Without<ServerDriven>)>,
-    remote: Query<(&RemoteCar, &Looks), Without<Ghost>>,
+    mut remote: Query<(&mut RemoteCar, &Looks), Without<Ghost>>,
     mut touching: ResMut<Touching>,
 ) {
     let dt = time.delta_secs();
@@ -1098,24 +1246,86 @@ fn push_off_remote_cars(
         .filter_map(|(car, looks)| Some((car.id, car.body.clone()?, looks.hull)))
         .collect();
     for mut car in &mut cars {
-        let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
-        for (id, body, other) in &others {
-            let mut body = body.clone();
-            let other = other.placed(body.position, body.rotation);
-            let reach = hull.radius() + other.radius();
-            if hull.center.distance_squared(other.center) > reach * reach {
-                continue;
+        for touch in push_off(&mut car, &others, dt) {
+            car.knocks += touch.impulse / car.body.mass;
+            if !touching.0.contains(&touch.id) {
+                touching.0.push(touch.id);
             }
-            if let Some(contact) = hull.contact(&other) {
-                let impulse =
-                    collision::resolve(&mut car.body, Some(&mut body), &[contact], OBSTACLE, dt);
-                car.knocks += impulse / car.body.mass;
-                if !touching.0.contains(id) {
-                    touching.0.push(*id);
-                }
+            let Some((mut other, _)) = remote.iter_mut().find(|(other, _)| other.id == touch.id)
+            else {
+                continue;
+            };
+            let kick = Kick {
+                time: other.met,
+                velocity: touch.velocity,
+                angular_velocity: touch.angular_velocity,
+            };
+            other.kicks.push(kick);
+            if let Some(body) = &mut other.body {
+                body.velocity += kick.velocity;
+                body.angular_velocity += kick.angular_velocity;
             }
         }
     }
+}
+
+/// Our car touching a remote car: how hard (the impulse, N·s) and how that changed the
+/// remote car's velocities.
+struct Touch {
+    id: CarId,
+    impulse: f32,
+    velocity: Vec3,
+    angular_velocity: Vec3,
+}
+
+/// Pushes `car` off the `others` (bodies with their boxes) it runs into, which aren't
+/// moved: which it touched, and how.
+fn push_off(car: &mut Car, others: &[(CarId, RigidBody, Obb)], dt: f32) -> Vec<Touch> {
+    let mut touched = Vec::new();
+    let hull = car.setup.hull.placed(car.body.position, car.body.rotation);
+    for (id, body, other) in others {
+        let mut body = body.clone();
+        let other = other.placed(body.position, body.rotation);
+        let reach = hull.radius() + other.radius();
+        if hull.center.distance_squared(other.center) > reach * reach {
+            continue;
+        }
+        if let Some(contact) = hull.contact(&other) {
+            let (velocity, angular_velocity) = (body.velocity, body.angular_velocity);
+            let impulse =
+                collision::resolve(&mut car.body, Some(&mut body), &[contact], OBSTACLE, dt);
+            touched.push(Touch {
+                id: *id,
+                impulse,
+                velocity: body.velocity - velocity,
+                angular_velocity: body.angular_velocity - angular_velocity,
+            });
+        }
+    }
+    touched
+}
+
+/// The remote cars our car runs into in our step `step` (not ghosts), where they are as
+/// of it: for driving steps again (`predict::reconcile`), as they were driven the first
+/// time.
+pub(super) fn others_at(
+    connection: &Connection,
+    step: u32,
+    heard: f64,
+    remote: &SolidCars,
+) -> Vec<(CarId, RigidBody, Obb)> {
+    (remote.iter())
+        .filter_map(|(car, looks)| {
+            let body = car.body_at(connection, looks, step, heard)?;
+            Some((car.id, body, looks.hull))
+        })
+        .collect()
+}
+
+/// The end of a step driven again: `car` meets the remote cars (`others_at` the step).
+/// Nothing's heard of it: the crashes were heard as it was first driven.
+pub(super) fn meet_again(car: &mut Car, others: &[(CarId, RigidBody, Obb)]) {
+    push_off(car, others, sim::STEP);
 }
 
 #[cfg(test)]

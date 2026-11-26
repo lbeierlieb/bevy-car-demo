@@ -2,8 +2,10 @@
 //! `shadow`) and is in charge of it; our game drives it too, at once, so the driving never
 //! waits for the server. Every step's input and our car's state after it are kept; when
 //! the server's state of our car for a step comes and differs from ours, ours takes it up
-//! and the steps since are driven again from the inputs kept. Driven alike, the two agree
-//! to the bit, so that only happens where the server knew more (other cars it met).
+//! and the steps since are driven again from the inputs kept, meeting the other cars as
+//! they are as of each step (as the first time: see `client::meet_time`). Driven alike,
+//! the two agree to the bit, so that only happens where the server knew more (other cars
+//! it met, where they really were).
 //!
 //! While the server has our car (the rescue helicopter carrying it: `Yours::notice`), we
 //! neither drive nor predict it: it's shown as the server sends it (`client::spectate`),
@@ -21,9 +23,10 @@ use std::collections::VecDeque;
 use bevy::prelude::*;
 
 use super::Connection;
-use super::client::Status;
+use super::client::{SolidCars, Status, meet_again, others_at};
 use super::protocol::Yours;
 use crate::car::{ActiveCar, Car, Correction, DriverInput, Spectating, StepInput};
+use crate::looks::Ghost;
 use crate::sim::{STEP, step_car};
 use crate::snapshot;
 use crate::terrain::Terrain;
@@ -138,10 +141,9 @@ pub fn reconcile(
     mut prediction: ResMut<Prediction>,
     connection: Res<Connection>,
     (step, chosen, mut spectating): (Res<StepInput>, Res<ActiveCar>, Option<ResMut<Spectating>>),
-    terrain: Res<Terrain>,
-    time: Res<Time<Real>>,
+    (terrain, time, fixed): (Res<Terrain>, Res<Time<Real>>, Res<Time<Fixed>>),
     mut correction: Option<ResMut<Correction>>,
-    mut cars: Query<&mut Car>,
+    (mut cars, remote): (Query<(&mut Car, Has<Ghost>)>, SolidCars),
 ) {
     let prediction = &mut *prediction;
     log(&mut prediction.report, time.elapsed_secs_f64());
@@ -173,7 +175,7 @@ pub fn reconcile(
     if !moved && i.is_none() {
         return;
     }
-    let Some(mut car) = active(cars.iter_mut(), &chosen) else {
+    let Some((mut car, ghost)) = (cars.iter_mut()).find(|(car, _)| car.index == chosen.0) else {
         return;
     };
     let (was, turned) = (car.body.position, car.body.rotation);
@@ -197,11 +199,18 @@ pub fn reconcile(
         }
     };
     prediction.history[i].2 = yours.state;
-    for (_, input, kept) in prediction.history.iter_mut().skip(i + 1) {
+    // (The crashes were heard as the steps were first driven.)
+    let knocks = car.knocks;
+    let heard = connection.server_time(super::stamp(&time, &fixed));
+    for (step, input, kept) in prediction.history.iter_mut().skip(i + 1) {
         car.drive(input, STEP);
         step_car(&mut car, &terrain, STEP);
+        if let Some(heard) = heard.filter(|_| !ghost) {
+            meet_again(&mut car, &others_at(&connection, *step, heard, &remote));
+        }
         *kept = snapshot::save(&*car);
     }
+    car.knocks = knocks;
     prediction.end = prediction.history.back().map(|(.., state)| state.clone());
     if let Some(correction) = correction.as_deref_mut() {
         correction.moved(&car, was, turned);
