@@ -819,7 +819,9 @@ As built:
   the race editor uses the built-in
   catalogue (biggest car box); stable string ids for saved cars; a catalogue file.
 
-## Owning cars and parts (being planned with the user, 2026-11-26; nothing built)
+## Owning cars and parts (planned with the user, 2026-11-26; nothing built)
+
+The whole plan, with milestones: `docs/cars-and-parts.md` (keep it up to date).
 
 The game is about tuning every aspect of a car. Agreed so far (the user's answers):
 - **Parts are items** you own (a definition from the server's catalogue + condition),
@@ -884,7 +886,13 @@ The game is about tuning every aspect of a car. Agreed so far (the user's answer
 - Showrooms sell trims, used car dealers worn ones. Weekly races with rewards: later,
   nothing planned yet.
 - **One car for now**: the hot hatch with 1.6 and 1.8 engine options, made to look like
-  an early-90s hatchback (the user: like an EG Civic; no real names or badges).
+  an early-90s hatchback (the user: like an EG Civic; no real names or badges); the other
+  twelve chassis go (others come later).
+- Engines come out whole (bolt-ons on); the ECU, exhaust after the manifold and cooling
+  stay with the car. Rims and tires are items of their own too (loose in trunks and
+  garages), put together only at the tire shop. Springs, dampers, brakes, wheels per
+  corner. Doors are parts. Gearboxes (gear set, final drive, differential) are worked on
+  by car and tuning shops, not the engine shop.
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 
