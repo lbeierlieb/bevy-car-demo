@@ -32,10 +32,11 @@ A small Bevy demo of car simulation techniques:
 - **Thirteen cars, twelve engine families**: from a city car to a supercar, a
   pickup and a van, each a chassis with a procedurally built low-poly body. Engines
   (a 1.0 three to a 6.5 V12, 22 factory versions) are independent of the cars: the
-  car dealers (on a server) have every car with the engines its factory offers, and
-  parts shops fit any engine the engine bay has room for, along with gearboxes, clutches,
-  final drives, differentials, suspension, tires and the engine's own parts. Weight
-  and balance follow from what's fitted where.
+  car dealers (on a server) sell trims, and car workshops, tuning shops and tire shops
+  fit parts (each shop what the server's list says it sells, or what you bring in the
+  trunk): engines, gearboxes, clutches, differentials, suspension, brakes, body parts,
+  the engine's bolt-ons, rims and tires. Weight and balance follow from what's fitted
+  where.
 - **Synthesised engine sound** that follows the cylinder layout: each firing sends a
   pulse through its bank's exhaust resonances. A cross-plane V8's banks fire at
   uneven intervals, which gives the burble; a flat four's unequal headers give its
@@ -114,8 +115,10 @@ stations take the car up to a pump under their canopy, with 95, 98 and 102 octan
 (pumped at 1 L/s; grades mix by volume in the tank, and the engine's knock limit follows); alignment shops put the car on an alignment lift with laser
 heads on its wheels, to set camber, toe, tire pressures and the brakes against the
 aligner's screen;
-paint shops put the car in a spray booth and spray it in a new paint; car dealers sell every car; parts shops put the car up on a lift in their workshop, with the engine picked on a stand in front of it, and fit engines and
-parts, repair the engine and fit new tires; and dyno shops put the car on a chassis dyno
+paint shops put the car in a spray booth and spray it, or any one body part, in a new paint;
+car dealers sell trims (the old car goes into your garage or is traded in); car workshops,
+tuning shops and tire shops put the car up on a lift in their workshop and fit what they
+sell or what you bring (the old part goes into the trunk); and dyno shops put the car on a chassis dyno
 in a room under the shop, for power runs, holding it at an rpm and throttle, ECU tuning,
 cam timing and the wastegate. A car at a shop is a ghost: other cars drive through it.
 
@@ -397,7 +400,8 @@ tire grip force, cyan for roll centres.
 | `src/gas.rs` | The gas stations' forecourt: the car at a pump, its display, pumping |
 | `src/alignment.rs` | The alignment shops' bay: the lift, laser heads, the aligner's screen |
 | `src/events/` | Events on the map (from the server): lobbies, rounds and rules of the car hunt, races and time trials; routes, their grids and gates along the roads |
-| `src/garage/` | The car dealers' showroom and the parts shops (`bay.rs`: the workshop, the car on a two-post lift) |
+| `src/garage/` | The car dealers' showroom, the workshops' fitting window (`fit.rs`; `bay.rs`: the workshop, the car on a two-post lift), the garage park |
+| `src/fitting.rs` | What shops may do to a car, as the server checks it: fitting, taking off, knobs, paint, tunes, wheels |
 | `src/dyno/`, `src/ecu_ui.rs` | The dyno shops' room: rollers, runs, holds, ECU tuning, cam timing |
 | `src/workshop.rs` | Baking engine maps in the background, and their cache |
 | `src/sim.rs` | Multi-rate loop, controls to wheel torques, driving tests |

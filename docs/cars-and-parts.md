@@ -1,7 +1,7 @@
 # Owning cars and parts: the plan
 
 Agreed with the user in rounds of questions on 2026-11-26 (the decisions are also short
-in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–5 are built. The milestones are
+in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–6 are built. The milestones are
 in the order they're meant to be built; each ends with clippy and tests passing and the
 game playable.
 
@@ -199,7 +199,7 @@ showroom puts the old one in the garage (no trade-in yet). Unloading and loading
 every shop and the garage park; shipping to the garage only from a shop. Nothing yet takes
 seats out, so the seats' areas of the hold stay closed in play. The special rescue only
 works for a car that can't drive (engine wrecked, tank under 0.5 L), to the nearest gas
-station or parts shop.
+station or parts shop (a car workshop since 6).
 
 - The garage park on the map (a kind in the shops file), the garage's scene: cars and
   parts listed, switch car, load and unload.
@@ -209,7 +209,16 @@ station or parts shop.
 - Shipping (free, instant for now): to the garage, from the garage to a shop.
 - The special rescue (to a shop or a gas station) in the central menu.
 
-### 6. Fitting at shops
+### 6. Fitting at shops (done 2026-11-26)
+
+Built as below (see `CLAUDE.md`, "Owning cars and parts"). The parts shops became car
+workshops and tuning shops, tire shops are new; each shop's assortment is listed in the
+shops file (`sells` lines, nothing by default). Long blocks' insides wait for the engine
+shop (7): until then only whole engines (the factory ones, sold as assemblies) are swapped.
+What comes off goes into the trunk, else the shop holds it (up to `SHOP_HOLD`), else it's
+thrown away. Settings set in the game's scenes (alignment, paint, the dyno) go to the
+server as works too. Not done: money (everything free), items' own condition (wear of a
+part taken off isn't kept), the intercooler's bumper opening.
 
 - One fitting mechanic for car, tuning and tire shops: the car's slots (and the trunk's
   items) listed, buy new or fit from the trunk, the old part to the trunk or discarded,

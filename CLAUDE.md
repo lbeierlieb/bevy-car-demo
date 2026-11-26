@@ -238,7 +238,8 @@ would move the car). `PLACE` works because `shot.sh` sets `CAR_SIM_TRUST_PLACEME
 (the game's own server then takes up placements however far they move the car).
 Shops need `PLACE` at the building's point
 (the car lands on the marker and goes in): gas `-2603,-1736`, car dealer
-`-1476,-1213`, alignment `-1480,-1305`, paint `3500,-63`, parts `-1950,-3160`, dyno
+`-1476,-1213`, alignment `-1480,-1305`, paint `3500,-63`, car workshop `-1566,-1329`,
+tuning shop `-1950,-3160`, tire shop `-2502,-1763`, dyno
 `-2601,-3784`, garage park `-2680,-1793` (the shop's window takes the focus on its first row, so
 `TAPS="Enter@200"` goes into the scene: onto the rollers, up to the pump…; older click
 coordinates in these notes are from before the menus, 2026-11-23, and are wrong now;
@@ -404,16 +405,18 @@ as built, in order:
    turntable, clear of the floor cars. Shots: `TAPS="Enter@200"` in, then the first row is the car
    (`ArrowRight` the next), then the engine, "Drive it", "Start it".
    (`shops::shop_window` draws a shop's window for other modules, saying when the car came in).
-9. ✓ **Parts shop**: the garage window without alignment, cam timing and wastegate;
-   repairs; new tires. Since 2026-11-22 (asked for by the user, "car on a lift") a scene
+9. ✓ **Parts shop**, since 2026-11-26 **car workshops, tuning shops and tire shops**
+   (see "Owning cars and parts", milestone 6: the fitting window). Since 2026-11-22
+   (asked for by the user, "car on a lift") a scene
    like the alignment bay's (`garage/bay.rs`): "Onto the lift" puts the car (drawn from
    `Looks`, engine off, wheels hanging at `DROOP`) up on a blue two-post lift (`RAISE`
    1.3 m) in a workshop 260 m under the marker; the arms' pads go under the sills behind
-   the front wheels and ahead of the rear ones, made afresh for another chassis. The draft's
-   engine stands on an engine stand in front of the car (family size and layout: inline,
-   V or flat; a turbo if it has one), the draft's tires in a rack at the back; workbench
-   with pegboard, tool chest, shelves of boxes, roller door, oil drain. The parts window
-   (`garage::parts_shop`) is on the right; the draft is taken from the car on entering.
+   the front wheels and ahead of the rear ones, made afresh for another chassis. An engine
+   like the car's stands on an engine stand in front of the car (family size and layout:
+   inline, V or flat; a turbo if it has one), tires like its in a rack at the back;
+   workbench with pegboard, tool chest, shelves of boxes, roller door, oil drain. The
+   fitting window (`garage::fit`) is on the right. Shots: `TAPS="Enter@200"` onto the lift;
+   the first row is back to the car, then the car's slots by group (Engine first).
    Shots: `TAPS="Enter@200"` onto the lift; the rows start with back to the car and building. 10. ✓ **Dyno** (`dyno/`): the career's chassis dyno room back
    (`mod.rs`, `rollers.rs`, `chart.rs`). A copy of the car runs in the room 200 m under
    the marker; the driven car stays parked there, a ghost (`car::Away` holds its input and
@@ -758,10 +761,11 @@ Built (phases 0, 1, 2 and the start of 3):
   itself (`Shadow::lend`, `Round::lent_chassis`, a factory build with stock maps), keeps
   the player's own car (`Shadow::own`) and gives it back as it was (`give_back`) when the
   round's over for them, telling the player each (`ToClient::YourCar`, which the game
-  builds); meanwhile `set_spec` is ignored. Still the client's word (trusted, phase 4/5):
-  a car built anew in a shop (`ToServer::Car` + its first placement: build, fuel, wear),
-  repairs and tires, the parking brake pulled at markers (harmless: it only stops our
-  own car).
+  builds); meanwhile `set_spec` is ignored. **Car changes** are requests since
+  milestone 6 (see "Owning cars and parts"): the server checks them and sets new tires',
+  engines' and turbos' condition itself. Still the client's word (trusted): the condition
+  otherwise (wear, fuel, by placements), the parking brake pulled at markers (harmless:
+  it only stops our own car).
 - Not done: hunt tags from the server's contacts (clients still send `Touched`), the rest
   of phase 3 (placements are trusted: a modified client can teleport), checking a
   client's inputs (rates, ranges are clamped by the encoding).
@@ -809,18 +813,12 @@ As built:
   in the maps cache (`workshop::keep_text`), and bakes only if the server has none.
   `CarSetup::to_look_at` (blank maps and ECU, `EngineMaps::blank`, `Ecu::blank`) is for
   cars only looked at: the showroom's and traffic's looks.
-- Shops (garage, paint, alignment, the dyno's tune and cams) still change the car in the
-  game, which sends `ToServer::Car`; the server answers each with the car it has
-  (`YourCar`): the game keeps the specs it sent until answered (`unanswered`), ignores
-  an answer that is one of them and builds anything else (a change refused, e.g. while
-  a car is lent) (`the_server_takes_a_car_changed_in_a_shop`, the hunt test).
-- Not done: the shops' changes as requests (the game builds first, the server's word is
-  checked after; free, validated against the catalogue); the
-  dyno's cam changes bake without asking the server (the parts shop asks first);
-  the race editor uses the built-in
-  catalogue (biggest car box); stable string ids for saved cars; a catalogue file.
+- Shops' changes are requests (`fitting::Work`, see "Owning cars and parts", milestone 6).
+- Not done: the dyno's cam changes bake without asking the server for maps; the server
+  only gives the stock engines' maps (not ones it baked); the race editor uses the
+  built-in catalogue (biggest car box); a catalogue file.
 
-## Owning cars and parts (planned with the user, 2026-11-26; nothing built)
+## Owning cars and parts (planned with the user, 2026-11-26; milestones 1–6 built)
 
 The whole plan, with milestones: `docs/cars-and-parts.md` (keep it up to date).
 
@@ -929,9 +927,8 @@ lies, loaded on the body in `Car::load_fuel`); saved cars have a `cargo` section
 50, `GARAGE_PARTS` 2000, `SHOP_HOLD` 20), told as `ToClient::Owned { owned: OwnedView,
 why }` (`Connection::owned`, `refused`); `ToServer::Stash` (`Unload`, `Load`,
 `ShipHome`, `Ship`, `Drive`) by where the car stopped (`Peer::at_shop`, the marker's
-shop); `Buy` parks the old car in the garage; `ToServer::Car` keeps the server's cargo
-and adds what the shop took off (`owned::replaced`: parts swapped for another definition
-or size, with what's fitted to them) while it fits. The database: migration 2 (`cars.place`
+shop); `Buy` parks the old car in the garage; what a shop takes off goes into the trunk
+(since milestone 6 by the fitting rules). The database: migration 2 (`cars.place`
 `driven`/`garage`, an `items` table, place `garage` or `shop NAME`); `Belongings`; the car
 driven saved alone unless `Owned::revision` moved (then `save_belongings`, all in one
 transaction). Every `YourCar` the game builds is placed (`Prediction::forget_end`): the
@@ -942,11 +939,59 @@ the first; parts on shelves at the back, `MOST_SHOWN` 120; rebuilt when what's i
 changes; the camera looks at the car whose row has the focus); `trunk.rs`: "Trunk and
 parts" in every shop window (`AtShop::stash`, a stack of `trunk::Screen`s drawn in the
 shop window's place; back pops it). **Special rescue**: `ToServer::Rescue { to }` (a gas
-station or parts shop), `Shadow::special_rescue` only for `Car::stranded`; the central
+station or car workshop), `Shadow::special_rescue` only for `Car::stranded`; the central
 menu's in-game actions list the nearest of each; a carry takes at most `LONGEST_CARRY`
 (30 s). Shots: `CARAT=frame` buys the `CAR` then (so the first car goes into the garage);
 the garage park `PLACE="-2680,-1793,150"`, `TAPS="Enter@200"` into the hall. Protocol 35.
 Test: `a_player_keeps_cars_and_parts_in_their_garage`.
+
+Milestone 6, fitting at shops (2026-11-26; the user's answers: the parts shops split into
+car workshops and tuning shops, tire shops new; every shop's assortment listed in the
+shops file, nothing by default; no long-block work until the engine shop, milestone 7).
+**Shops file**: kinds `car`, `tuning`, `tire` (`parts` gone; `ShopKind::fits_parts`),
+`sells` lines under a shop (ids, `*` at the end a prefix; `Shop::sells`, sent with the
+shops, protocol 36; `what_the_shops_sell_is_in_the_catalogue`); tire shops in Gerach
+(−2502, −1763), Baunach (174, 2587), Rattelsdorf (2903, −844). **Catalogue**:
+`assemblies` (`items::Assembly`: the factory engines as the trims have them, `engine.b16`,
+`engine.b18`), `PartDef::absent` (the "None" turbo, intercooler, catalyst: stands for
+nothing, put in when taken off, never kept), `SlotDef::needs` (lip → front bumper, mirrors
+→ doors, spoiler → hatch, diffuser → rear bumper; `Item::fine` checks it); loose parts may
+lack what their slots require (a gearbox without its final drive). **`fitting.rs`**
+(shared, the server's rules, the game's previews): `Work` (`Fit { slots, supply }` with
+`Supply` new `Part { def, variant, paint }` / `Assembly` / `Trunk` / `Held` / `Wheel(rim,
+tire)`; `Remove`; `Knob`; `Paint`; `Tune`; `MakeWheel`; `Split`), `Path` = slot places
+from the car. `Bench` does works in order on a copy, all or none; `finish` checks the car
+(needs, `fine`, `resolve`, every wheel against the room, a wire round trip of the spec),
+sets the tune's ECU model to the fitted ECU's, puts what came off into the trunk, else
+held at the shop, else thrown away (said), and reports `Fresh` (new tires per corner,
+engine, turbo), for which the server sets the condition (`stash::renew`). Who does what:
+`fits_into` (car/tuning: all but rims, tires, long blocks and their insides; tire: wheels,
+rims, tires), `knobs_at` (alignment: chassis, dampers, tires; dyno: the engine; car/tuning:
+the final drive), paint at paint shops (shop paints only), tunes at dynos; a new part is
+one the shop sells, made for the chassis, a size it comes in, painted in a shop paint or
+the car's own; what's fitted to the old part moves into the new one's empty slots.
+**Protocol**: `ToServer::Work { id, works }` → `YourCar`, `Owned { why }`, `Done { id }`
+(protocol 37); the game builds the server's car once all its requests are answered
+(`Connection::work`, `waiting`, `server_spec`); settings changed in the game (alignment,
+paint, the dyno's cams and tune) go as works (`fitting::changes`, `only_settings`); any
+other local difference falls back to the server's car. `ToServer::Car` is gone (protocol
+39); `Buy { trim, trade_in }` (protocol 38) only at a car dealer selling the trim (the
+shots' `CAR_SIM_TRUST_PLACEMENTS` server anywhere), trading in drops the old car, trunk and
+all. A car whose engine's maps the server hasn't got bakes them here without blocking
+(`Connection::baking`). **Game**: `garage/fit.rs` (in the workshop scene): the car's
+slots the shop works on by group, a slot's screen (fitted, what's on it the shop works on,
+take it off, new from the shop, brought), a ware's screen (size: rims and tires that go
+with what's on the wheel and in the well; paint), fit here / both on the axle / all four;
+the final drive's ratio at car and tuning shops; tire shops: a new wheel (rim kind,
+diameter, width, tire kind and size), loose wheels taken apart or made of a rim brought.
+The parts shop's window (engine builder, repairs, new tires) is gone: repairs are new
+parts. Paint shop: "What" picks the whole car or one fitted body part. Showroom: trims
+(those not sold there only to look at), "Trade in the car I drive". Tests:
+`fitting::tests`, `the_server_takes_a_car_changed_in_a_shop` (refused away from a paint
+shop), the garage test (a clutch at a tuning shop, a trade-in). Not done: prices and money
+(all free), items' own condition (a part taken off loses its wear; one brought counts as
+new), the rack and engine stand showing what's picked, removing "None" parts from the
+catalogue for empty slots, intercooler needing a bumper opening.
 
 The game is about tuning every aspect of a car. Agreed so far (the user's answers):
 - **Parts are items** you own (a definition from the server's catalogue + condition),
@@ -1420,9 +1465,10 @@ catalogue entries, and things like swap subframes are named so they can be price
   an open car's windscreen is a one-sided pane in a frame (two cabin points). One mesh
   with vertex colours, in pieces (see "Owning cars and parts"). The cockpit is placed by
   the chassis' eye point.
-- **Showroom (car dealers) and garage (parts shops)** are both in `garage/mod.rs`; both go through `start`
-  and `fit`. A changed `CarBuild` respawns the car's entity (its meshes are children);
-  an engine-only change swaps it in while driving.
+- **Showroom (car dealers) and workshops** are in `garage/` (`showroom.rs`, `fit.rs`); the
+  server builds what's bought or fitted, and the game builds what it's told
+  (`client::take_your_car`): a changed `CarBuild` respawns the car's entity (its meshes
+  are children); an engine-only change swaps it in while driving.
 - **Traction control** (my addition, on by default, in the central menu's driving aids): without
   it full throttle on the keyboard just spins the wheels of anything strong. It eases
   the throttle to hold the driven wheels at a slip ratio of 0.12, at a rate that follows
@@ -1643,16 +1689,17 @@ phasing, VTEC-style cam switching).
   local storage on the web) with the build they were made for; loading reads over the
   engine's factory tune and warns if the build differs. Swapping the engine build in
   the setup panel replaces the tune with the new build's factory tune.
-- Garage (parts shops, `src/garage/`): parts from the catalogue (`engine/parts.rs`: a
+- Engine parts (fitted at car workshops and tuning shops, see "Owning cars and parts"):
+  parts from the catalogue (`engine/parts.rs`: a
   slot per kind of part, each part a list of `Effect`s on the engine's hardware, relative
   to it; the built-in ones in `catalogue/parts.rs`; a factory version is a block and a
   `Preset`); cam-gear timing and wastegate spring are
   set in the dyno's room (`dyno::cams`). The car's `EngineSetup.parts` says
-  what it's built from. Building bakes the maps if the fingerprint changed (native: a
-  thread; wasm: 12 ms slices per frame), with the old engine running meanwhile, and caches
+  what it's built from. A car built anew bakes the maps if the fingerprint changed and the
+  server hasn't got them (native: a thread; wasm: 12 ms slices per frame), and caches
   them (`storage.rs` folders: `~/.cache/car-sim/engines/<fingerprint>.maps`, local storage
-  on the web); bolt-on parts fit at once. The new engine is new (no damage) and gets a
-  factory tune unless unticked. The redline follows from the hardware (`safe_rpm`: 95 %
+  on the web). A new engine is new (no damage); the tune stays (the ECU is the car's:
+  retune at a dyno). The redline follows from the hardware (`safe_rpm`: 95 %
   of the valve float speed, rods' pull under 70 % of their strength); the factory tune's
   rev limit (first cam profile's with the stock ECU) and the rev counter follow it.
 - Chassis dyno (dyno shops, `src/dyno/`; it replaced the engine dyno window (5),
@@ -1672,8 +1719,8 @@ phasing, VTEC-style cam switching).
   over 0.1 s so a step's transient doesn't count. Valve float speed from spring force at
   full lift, moving mass, lift and duration (`ValveTrain::float_rpm`); floating loses VE.
   The factory tune is knock-limited at boost and stays safe; greedy spark on race fuel
-  with big boost breaks stock rods. The parts shops show the condition and repair
-  it. Factory tunes richen where the turbine inlet would come within `TURBINE_MARGIN` (40 K)
+  with big boost breaks stock rods. Repairs are new parts (a whole engine, a turbo; a
+  long block's insides at the engine shop, to come). Factory tunes richen where the turbine inlet would come within `TURBINE_MARGIN` (40 K)
   of its limit (the X25T sat right on it and lost its turbo in ~10 min of hard driving;
   2026-11-22). Exhaust temperatures run hot (no losses before the turbine),
   hence the high turbine limit.
