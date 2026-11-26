@@ -355,6 +355,43 @@ impl Item {
     }
 }
 
+/// What's seen of a car's body: the colours of the body parts fitted to `car` (a car's
+/// tree), each by its slot (the first of a pair of slots is the left one), and the
+/// shell's.
+pub fn dress(catalogue: &Catalogue, car: &Item) -> crate::body::Dress {
+    use crate::body::Side;
+    let color = |paint: Option<usize>| {
+        let paint = paint.or(car.paint).unwrap_or(0);
+        catalogue
+            .paints
+            .get(paint)
+            .map_or([0.5; 3], |paint| paint.color)
+    };
+    let mut seen = Vec::new();
+    let mut pieces = Vec::new();
+    for (slot, item) in car.def(catalogue).slots.iter().zip(&car.slots) {
+        let Kind::Body(panel) = slot.kind else {
+            continue;
+        };
+        let side = match seen.iter().filter(|&&p| p == panel).count() {
+            0 => Side::Left,
+            _ => Side::Right,
+        };
+        seen.push(panel);
+        let side = match panel {
+            Panel::Fender | Panel::Door | Panel::Mirror | Panel::SideSkirt => side,
+            _ => Side::Middle,
+        };
+        if let Some(item) = item {
+            pieces.push((panel, side, color(item.paint)));
+        }
+    }
+    crate::body::Dress {
+        shell: color(car.paint),
+        pieces,
+    }
+}
+
 /// The stock car of `catalogue`'s `chassis` with its factory engine `option`, if
 /// there's one.
 pub fn trim_of(catalogue: &Catalogue, chassis: usize, option: usize) -> Option<&Trim> {

@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use crate::audio::{EngineCharacter, EngineRun};
 use crate::car::{Car, CarSetup, sync_transforms};
 use crate::chassis::CarBuild;
+use crate::items::Item;
 use crate::physics::collision::Obb;
 use crate::physics::suspension::{ArmGeometry, CornerPose};
 
@@ -29,8 +30,11 @@ pub struct Ghost;
 /// What a car is built like, as far as it's seen and heard.
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct Looks {
-    /// The chassis, paint and wheels (the body is made from these).
+    /// The chassis, paint and wheels.
     pub build: CarBuild,
+    /// What it's built of (the body's pieces and what's seen under them are made from
+    /// it).
+    pub car: Item,
     /// Where the body's design frame (on the ground midway between the axles) is in the
     /// chassis frame.
     pub body_offset: Vec3,
@@ -63,6 +67,7 @@ impl Looks {
         };
         Self {
             build: setup.build.clone(),
+            car: setup.car.clone(),
             body_offset: setup.body_offset,
             axles: [axle(true), axle(false)],
             engine: EngineCharacter::of(&setup.engine),

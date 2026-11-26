@@ -66,14 +66,14 @@ type NewCar = (
 );
 
 /// What every car's meshes share: the materials (solid and a ghost's), the wheel and bar
-/// meshes, and each body (made once per chassis and paint), so that many cars (traffic)
+/// meshes, and each body (made once per chassis and dress), so that many cars (traffic)
 /// cost little and batch.
 #[derive(Resource, Default)]
 struct Shared {
     materials: Option<[Materials; 2]>,
     wheel: Handle<Mesh>,
     bar: Handle<Mesh>,
-    bodies: HashMap<(u64, usize, usize), Handle<Mesh>>,
+    bodies: HashMap<(u64, usize, u64), Handle<Mesh>>,
     /// Each chassis' lamp lenses, head and tail (lit at night, `night::Glow`).
     lamps: HashMap<(u64, usize), [Handle<Mesh>; 2]>,
 }
@@ -160,11 +160,12 @@ fn add_car_meshes(
             }
         }
         let build = &looks.build;
+        let dress = crate::items::dress(&build.catalogue, &looks.car);
         let body = (shared.bodies)
-            .entry((build.catalogue.fingerprint(), build.chassis, build.paint))
+            .entry((build.catalogue.fingerprint(), build.chassis, dress.key()))
             .or_insert_with(|| {
                 let chassis = build.chassis();
-                meshes.add(chassis.body.mesh(&chassis.wheels(), build.color()))
+                meshes.add(chassis.body.mesh(&chassis.wheels(), &dress))
             })
             .clone();
         // A ghost's lamps aren't lit (they'd be solid on a see-through car).

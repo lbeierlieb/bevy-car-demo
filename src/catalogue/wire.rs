@@ -143,7 +143,10 @@ fields!(Body {
     tumblehome,
     open_wheels,
     openings,
-    details
+    details,
+    door,
+    bumpers,
+    bumper_top
 });
 fields!(Gearbox {
     kind,

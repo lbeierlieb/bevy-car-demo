@@ -216,10 +216,24 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
                 [1.7, 0.4, 0.4],
                 6.0,
             ),
+            (
+                "front-lip",
+                "Front lip",
+                Panel::FrontLip,
+                [1.5, 0.3, 0.08],
+                2.0,
+            ),
             ("bonnet", "Bonnet", Panel::Bonnet, [1.2, 1.4, 0.1], 12.0),
             ("fender", "Fender", Panel::Fender, [1.0, 0.3, 0.7], 4.0),
             ("door", "Door", Panel::Door, [1.3, 0.2, 1.1], 20.0),
             ("mirror", "Mirror", Panel::Mirror, [0.25, 0.15, 0.15], 1.0),
+            (
+                "side-skirt",
+                "Side skirt",
+                Panel::SideSkirt,
+                [1.8, 0.15, 0.1],
+                3.0,
+            ),
             ("hatch", "Hatch", Panel::Hatch, [1.3, 1.0, 0.25], 15.0),
             (
                 "rear-spoiler",
@@ -234,6 +248,13 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
                 Panel::RearBumper,
                 [1.7, 0.4, 0.4],
                 6.0,
+            ),
+            (
+                "diffuser",
+                "Diffuser",
+                Panel::Diffuser,
+                [1.2, 0.4, 0.12],
+                3.0,
             ),
         ];
         for (part, title, panel, size, mass) in panels {

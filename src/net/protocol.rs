@@ -39,7 +39,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 31;
+pub const PROTOCOL: u32 = 32;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -657,6 +657,7 @@ impl Wire for EngineRun {
 impl Wire for Looks {
     fn put(&self, out: &mut Vec<u8>) {
         self.build.put(out);
+        self.car.put(out);
         self.body_offset.put(out);
         self.axles.put(out);
         self.engine.put(out);
@@ -667,6 +668,7 @@ impl Wire for Looks {
     fn get(r: &mut Reader) -> Option<Self> {
         let looks = Self {
             build: r.get()?,
+            car: r.get()?,
             body_offset: r.get()?,
             axles: r.get()?,
             engine: r.get()?,

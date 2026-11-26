@@ -237,6 +237,10 @@ pub fn chassis() -> Vec<Chassis> {
                 detail([2.0, 0.5, 0.84], [1.6, 0.06, 0.03], Tone::Dark),
                 detail([2.0, 0.5, -0.84], [1.6, 0.06, 0.03], Tone::Dark),
             ],
+            // Long doors from the front wheel arch; bumpers wrapping round the ends.
+            door: [1.22, 2.45],
+            bumpers: [0.3, 0.3],
+            bumper_top: 0.44,
         },
         eye: [2.0, 1.1, 0.36],
         insulation: 0.4,

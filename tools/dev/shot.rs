@@ -157,7 +157,11 @@ fn start_online(
         menu.open = false;
     } else if std::env::var("OFFLINE").is_ok() {
         let (p, yaw) = terrain.road_spawns(&crate::terrain::Spawn::DEFAULT, 1, 0.0)[0];
-        let setup = crate::car::CarSetup::default();
+        let mut setup = match std::env::var("TRIM") {
+            Ok(_) => crate::car::CarSetup::factory(0, 1),
+            Err(_) => crate::car::CarSetup::default(),
+        };
+        dress_up(&mut setup);
         let car = crate::car::Car::spawn_at(0, setup, &terrain, p.x, p.y, yaw);
         commands.spawn((Transform::from_translation(car.body.position), car));
     } else if std::env::var("MENU").is_err() && std::env::var("LINEUP").is_err() {
@@ -376,9 +380,36 @@ fn line_up(
             .flat_map(|(c, chassis)| (0..chassis.engines.len()).map(move |o| (c, o)))
             .collect();
         let (chassis, option) = stock[(v[0] + i) % stock.len()];
-        let setup = crate::car::CarSetup::factory(chassis, option);
+        let mut setup = crate::car::CarSetup::factory(chassis, option);
+        dress_up(&mut setup);
         let car = crate::car::Car::spawn_at(i, setup, &terrain, p.x, p.y, yaw);
         commands.spawn((Transform::from_translation(car.body.position), car));
+    }
+}
+
+/// UNFIT="Bonnet,Door": the lined-up cars (or OFFLINE's, the 1.8 with TRIM set) without those body parts; FIT="FrontLip,SideSkirt"
+/// with those (in paint FITPAINT, a place in the catalogue's paints, else the car's).
+fn dress_up(setup: &mut crate::car::CarSetup) {
+    use crate::items::{Item, Kind};
+    let list = |name: &str| std::env::var(name).unwrap_or_default();
+    let (strip, fit) = (list("UNFIT"), list("FIT"));
+    let catalogue = setup.build.catalogue.clone();
+    let paint = std::env::var("FITPAINT").map_or(setup.build.paint, |p| p.parse().unwrap());
+    let slots = setup.car.def(&catalogue).slots.clone();
+    for (slot, item) in slots.iter().zip(&mut setup.car.slots) {
+        let Kind::Body(panel) = slot.kind else {
+            continue;
+        };
+        let name = format!("{panel:?}");
+        if strip.split(',').any(|s| s == name) {
+            *item = None;
+        }
+        if fit.split(',').any(|s| s == name) {
+            let def = (catalogue.defs.iter())
+                .position(|d| d.kind == slot.kind)
+                .unwrap();
+            *item = Some(Item::new(&catalogue, def, paint));
+        }
     }
 }
 

@@ -210,6 +210,7 @@ impl FactoryLooks {
             .get_or_insert_with(|| Looks::of(&CarSetup::to_look_at(catalogue, chassis, 0)))
             .clone();
         looks.build.paint = paint;
+        crate::items::paint_all(&mut looks.car, paint);
         looks
     }
 }
