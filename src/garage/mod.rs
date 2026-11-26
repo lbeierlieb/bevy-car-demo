@@ -203,7 +203,7 @@ fn fit(
         octane: old.octane,
     };
     let same_look = build == car.setup.build;
-    let setup = CarSetup::new(build, parts, engine);
+    let setup = car.setup.changed(build, parts, engine);
     if same_look {
         *car = car.rebuilt(setup);
         return;

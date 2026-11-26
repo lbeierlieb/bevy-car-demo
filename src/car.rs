@@ -27,6 +27,9 @@ pub struct CarSetup {
     pub color: Color,
     /// What the car is built of, apart from the engine (see `engine.parts`).
     pub build: CarBuild,
+    /// The parts it's built of, as items (`build` and `engine.parts` are what they
+    /// resolve to, see `items`).
+    pub car: crate::items::Item,
     /// Sprung mass without fuel (kg), and its principal moments of inertia (kg·m²).
     pub sprung_mass: f32,
     pub inertia: Vec3,
@@ -65,6 +68,8 @@ impl CarSetup {
     /// balance; springs and dampers are matched to the weight on each axle, and the
     /// brakes' balance to how it shifts forward when braking.
     pub fn new(build: CarBuild, parts: Parts, engine: EngineBuild) -> Self {
+        let car = crate::items::assemble(&build.catalogue, None, &build, &parts)
+            .expect("every part of a car is in its catalogue");
         let chassis = build.chassis();
         let gearbox = build.gearbox();
         let body = &chassis.body;
@@ -215,8 +220,18 @@ impl CarSetup {
             body_offset,
             eye: body_offset + Vec3::new(-eye_left, eye_y, body.z(eye_x, &wheels)),
             hull,
+            car,
             build,
         }
+    }
+
+    /// The car that `build` and `parts` (built as `engine`) make out of this one: the parts
+    /// they say nothing about (body panels, seats…) stay as they are.
+    pub fn changed(&self, build: CarBuild, parts: Parts, engine: EngineBuild) -> Self {
+        let car = crate::items::assemble(&build.catalogue, Some(&self.car), &build, &parts);
+        let mut setup = Self::new(build, parts, engine);
+        setup.car = car.expect("every part of a car is in its catalogue");
+        setup
     }
 
     /// A chassis of the built-in catalogue as it leaves the factory, with the factory's

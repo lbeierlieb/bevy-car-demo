@@ -18,7 +18,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::audio::EngineAudio;
 use crate::camera::ChaseCamera;
-use crate::car::{ActiveCar, Away, Car, CarSetup};
+use crate::car::{ActiveCar, Away, Car};
 use crate::ecu_ui::{self, EcuPanel};
 use crate::looks::{Looks, Motion};
 use crate::menu::kit::{self, Panel, Place};
@@ -1171,7 +1171,7 @@ fn fit(view: &mut DynoView, parts: Parts, hardware: EngineHardware, maps: Engine
         octane: old.octane,
     };
     let damage = car.drivetrain.engine.damage;
-    let setup = CarSetup::new(car.setup.build.clone(), parts, engine);
+    let setup = car.setup.changed(car.setup.build.clone(), parts, engine);
     *car = car.rebuilt(setup);
     car.drivetrain.engine.damage = damage;
     view.status = "Fitted.".to_string();

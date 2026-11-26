@@ -6,6 +6,7 @@
 
 use crate::car::CarSetup;
 use crate::chassis::{BRAKE_BALANCES, BRAKE_FORCES, CarBuild, PRESSURES, TOES};
+use crate::items::Item;
 use crate::net::wire::{Reader, Wire};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::ecu::{CamControl, Ecu, EcuModel};
@@ -14,9 +15,11 @@ use crate::physics::engine::parts::Parts;
 use crate::physics::engine::table::Table;
 use crate::physics::fuel::PUMP_OCTANE;
 
-/// A car as built: from it, `setup` makes the car the simulation runs.
+/// A car as built: from it, `setup` makes the car the simulation runs. On the wire it's
+/// the car's items and the tune; `build` and `parts` are what the items resolve to.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CarSpec {
+    pub car: Item,
     pub build: CarBuild,
     /// As installed in the car (`CarBuild::install`).
     pub parts: Parts,
@@ -32,6 +35,7 @@ const MOST_VALUES: usize = 4096;
 impl CarSpec {
     pub fn of(setup: &CarSetup) -> Self {
         Self {
+            car: setup.car.clone(),
             build: setup.build.clone(),
             parts: setup.engine.parts.clone(),
             ecu: setup.engine.build.ecu.clone(),
@@ -46,7 +50,9 @@ impl CarSpec {
             ecu: self.ecu.clone(),
             octane: PUMP_OCTANE,
         };
-        CarSetup::new(self.build.clone(), self.parts.clone(), engine)
+        let mut setup = CarSetup::new(self.build.clone(), self.parts.clone(), engine);
+        setup.car = self.car.clone();
+        setup
     }
 
     /// The engine's maps, if they come with the game (a factory engine on the cylinder
@@ -68,22 +74,16 @@ fn within(x: f32, range: &std::ops::RangeInclusive<f32>) -> bool {
 
 impl Wire for CarSpec {
     fn put(&self, out: &mut Vec<u8>) {
-        self.build.put(out);
-        let b = &self.build;
-        b.toe.put(out);
-        b.brake_force.put(out);
-        b.brake_balance.put(out);
-        self.parts.put(out);
+        self.car.put(out);
         self.ecu.put(out);
     }
 
     fn get(r: &mut Reader) -> Option<Self> {
-        let mut build: CarBuild = r.get()?;
-        build.toe = r.get()?;
-        build.brake_force = r.get()?;
-        build.brake_balance = r.get()?;
-        let parts: Parts = r.get()?;
+        let catalogue = r.catalogue()?;
+        // Items read only as they fit the catalogue (`Item::fine`).
+        let car: Item = r.get()?;
         let ecu: Ecu = r.get()?;
+        let (build, parts) = car.resolve(catalogue).ok()?;
         let settings = (0..2).all(|axle| {
             within(build.toe[axle], &TOES)
                 && within(build.pressure[axle], &PRESSURES)
@@ -91,12 +91,18 @@ impl Wire for CarSpec {
         }) && within(build.brake_force, &BRAKE_FORCES)
             && within(build.brake_balance, &BRAKE_BALANCES)
             && within(build.final_drive, &(2.0..=6.0));
-        // The engine must fit the car (which also says how long its headers can be).
-        let parts = build.install(parts).ok()?;
         let tune = ecu.model == parts.ecu
             && ecu.cylinders == parts.hardware().cylinders
             && ecu.cylinders > 0;
-        (settings && tune).then_some(Self { build, parts, ecu })
+        let parts_fine = within(parts.intake_timing, &(-10.0..=10.0))
+            && within(parts.exhaust_timing, &(-10.0..=10.0))
+            && within(parts.boost, &(0.3..=1.5));
+        (settings && tune && parts_fine).then_some(Self {
+            car,
+            build,
+            parts,
+            ecu,
+        })
     }
 }
 
@@ -268,11 +274,27 @@ mod tests {
 
     #[test]
     fn a_spec_out_of_range_is_refused() {
+        // A knob past its range, a part that isn't in the catalogue, a part in a slot of
+        // another kind, a slot that must have a part left empty.
         let mut spec = CarSpec::of(&CarSetup::default());
-        spec.build.brake_force = 5.0;
+        spec.car.knobs[0] = 5.0;
+        assert!(decode::<CarSpec>(&encode(&spec)).is_none());
+        let defs = CarSetup::default().build.catalogue.defs.len();
+        let mut spec = CarSpec::of(&CarSetup::default());
+        spec.car.slots.last_mut().unwrap().as_mut().unwrap().def = defs;
         assert!(decode::<CarSpec>(&encode(&spec)).is_none());
         let mut spec = CarSpec::of(&CarSetup::default());
-        spec.parts.chosen[0] = 99;
+        let seat = spec
+            .car
+            .all()
+            .iter()
+            .find(|i| i.slots.is_empty())
+            .unwrap()
+            .def;
+        spec.car.slots.last_mut().unwrap().as_mut().unwrap().def = seat;
+        assert!(decode::<CarSpec>(&encode(&spec)).is_none());
+        let mut spec = CarSpec::of(&CarSetup::default());
+        *spec.car.slots.last_mut().unwrap() = None;
         assert!(decode::<CarSpec>(&encode(&spec)).is_none());
         let mut spec = CarSpec::of(&CarSetup::default());
         spec.ecu.cylinders += 1;

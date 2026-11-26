@@ -12,7 +12,7 @@ use bevy_egui::egui::{self, Align2, Color32, FontId};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::camera::ChaseCamera;
-use crate::car::{ActiveCar, Away, Car, CarSetup};
+use crate::car::{ActiveCar, Away, Car};
 use crate::chassis::CarBuild;
 use crate::map::{MapLegend, MapMark, MapMarks};
 use crate::menu::kit::{self, Panel, Place};
@@ -316,7 +316,9 @@ fn scene_back(
 pub fn rebuild(car: &mut Car, build: CarBuild) {
     if build != car.setup.build {
         let engine = &car.setup.engine;
-        let setup = CarSetup::new(build, engine.parts.clone(), engine.build.clone());
+        let setup = car
+            .setup
+            .changed(build, engine.parts.clone(), engine.build.clone());
         *car = car.rebuilt(setup);
     }
 }
