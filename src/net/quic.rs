@@ -136,6 +136,9 @@ impl Drop for QuicLink {
     }
 }
 
+/// How long closing waits for what was sent to be acknowledged.
+const FINISH_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Carries messages over an established connection until either side ends it.
 async fn run(
     connection: wtransport::Connection,
@@ -207,6 +210,9 @@ async fn run(
         r = writing => r,
         r = measuring => r,
     };
+    // What was sent last (a refusal before closing) reaches the other side first: closed
+    // at once, the connection would drop it.
+    let _ = tokio::time::timeout(FINISH_TIMEOUT, send.finish()).await;
     connection.close(0u32.into(), b"bye");
     match ended {
         Ok(()) => ends.fail("closed".into()),
@@ -444,6 +450,7 @@ mod tests {
             protocol: PROTOCOL,
             map: Terrain::baked().fingerprint,
             name: "connection test".into(),
+            password: String::new(),
         };
         link.send(true, encode(&hello));
         let start = std::time::Instant::now();
