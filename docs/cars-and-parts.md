@@ -215,11 +215,12 @@ setups; a car driving the same steps to the bit).
 Scheduled events with rewards (weekly races, special parts), prices and earning, more
 chassis, trailers.
 
-## Still to settle (before the milestone that needs it)
+## Settled later (2026-11-26)
 
-- How fine the cargo grid is (10 cm cells?), and whether parts may lie on their side.
-- Whether "keeps one engine for you" generalises to any shop holding items shipped
-  there for you, and how many.
-- What a guest gets (the start car, gone when they leave?).
-- Items in a car's trunk when it's traded in or sold.
-- Limits: how many cars and items a garage holds.
+- The cargo grid has 10 cm cells; how the packer works is mine to decide (parts may be
+  turned every way). The player only sees "fits" or "no space for this part".
+- Any shop holds parts for a player (shipped there, or left), a reasonable amount each
+  (`SHOP_HOLD`: 20 items per player per shop).
+- A guest starts like any new player; everything is erased when they leave.
+- A car traded in or sold goes with what's in its trunk, after a warning.
+- Limits (large, only against endless growth): a garage holds 50 cars and 2000 items.
