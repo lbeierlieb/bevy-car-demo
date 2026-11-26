@@ -819,6 +819,41 @@ As built:
   the race editor uses the built-in
   catalogue (biggest car box); stable string ids for saved cars; a catalogue file.
 
+## Owning cars and parts (being planned with the user, 2026-11-26; nothing built)
+
+The game is about tuning every aspect of a car. Agreed so far (the user's answers):
+- **Parts are items** you own (a definition from the server's catalogue + condition),
+  fitted to cars or carried. A car is a chassis with parts in slots; the engine is a
+  long block plus bolt-ons. Body parts (bonnet, bumpers, wing…, more aero and drag; a
+  bonnet cut-out for a supercharger) and most other parts are chassis-specific.
+- **Money** is part of the plan, every price 0 € for now (earning comes later).
+- **Persistence** in a database: MySQL for a single server (and playing alone),
+  PostgreSQL for several server instances sharing it (a player active on one at a time).
+- **Garage park**: one shared place on the map, everyone their own garage there; storage
+  only (cars and parts), a limit high enough never to be hit by playing (it only keeps the
+  database from growing without end). Switching cars only there.
+- **Trunks** are a grid of their own per car, parts placed like Tetris (no folding seats;
+  seats are parts that can be taken out, giving a bigger grid); what's carried adds its
+  mass to the car (its place in the trunk).
+- **Shops** (unlimited stock, every chassis; no time, a cost for fitting and for parts
+  not brought): the **car shop** sells stock parts and fits any non-long-block part you
+  bring; the old part goes into your trunk (if it fits) or the shop discards it.
+  **Tuning shops** the same, with aftermarket parts (exhausts, sport cats, body parts).
+  A **tire shop** for wheels and tires (individual items, no spare wheel). The
+  **alignment shop** and the **dyno** stay; the **paint shop** paints every body part
+  fitted. The **engine shop** works only on long blocks (in the car or brought in a
+  trunk), sells nothing, keeps one engine for you (bring it in the van, come back with
+  the car, they swap). Repairs are new parts, except the engine shop's rebore (needing
+  oversize pistons). Shops deliver anything to the garage.
+- **Showrooms** may later sell only some chassis; **used car dealers** and a **used parts
+  shop** (buys and sells; new-part shops only sell); buying a car, the old one goes to the
+  garage or is traded in, as the player picks. A **marketplace**: players put up offers,
+  others buy (rare parts are traded).
+- A car that can't drive gets a **special rescue**: to a shop or a gas station.
+- Crashes don't damage cars. Wear to come for brakes, clutch and gearbox (too much
+  torque, synchros), as for the engine and tires now.
+- Lent cars in events: your own car, trunk and all, comes back as it was.
+
 ## Multiplayer (agreed with the user, 2026-11-19)
 
 A multiplayer sandbox first; the career comes back later, built on it. Native and web
