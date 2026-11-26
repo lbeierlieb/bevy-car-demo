@@ -10,6 +10,7 @@ pub mod body;
 pub mod buildings;
 pub mod camera;
 pub mod car;
+pub mod cargo;
 pub mod catalogue;
 pub mod chassis;
 pub mod chat;

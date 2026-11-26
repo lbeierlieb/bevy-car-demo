@@ -140,6 +140,8 @@ pub struct Chassis {
     pub insulation: f32,
     /// How often it turns up in traffic, relative to the others.
     pub traffic: f32,
+    /// Where it carries loose parts (see `cargo`).
+    pub hold: crate::cargo::Hold,
 }
 
 /// The anti-roll bars made for one axle of a chassis: solid bars of these diameters (mm),

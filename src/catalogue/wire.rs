@@ -4,6 +4,7 @@
 
 use super::{Catalogue, Clutch, Paint, Suspension, TireCompound};
 use crate::body::{Body, Detail, Tone};
+use crate::cargo::{Area, Hold};
 use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars};
 use crate::items::{Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim};
 use crate::net::wire::{Reader, Wire};
@@ -207,8 +208,22 @@ fields!(Chassis {
     body,
     eye,
     insulation,
-    traffic
+    traffic,
+    hold
 } text { name, class, about });
+fields!(Hold {
+    from,
+    left,
+    base,
+    areas
+});
+fields!(Area {
+    along,
+    across,
+    floor,
+    ceiling,
+    seat
+});
 
 impl Wire for Drive {
     fn put(&self, out: &mut Vec<u8>) {
@@ -621,10 +636,16 @@ impl Item {
     /// Whether the tree refers only to what's in `catalogue`, with each part in a slot
     /// of its kind, sizes, paints and knobs within what there is (the chassis it's in
     /// deciding the anti-roll bars' sizes).
+    /// A loose part (not a car) goes by the chassis it's made for, if any.
     pub fn fine(&self, catalogue: &Catalogue) -> bool {
-        let chassis = match catalogue.defs.get(self.def).map(|d| &d.does) {
-            Some(Does::Chassis(c)) => Some(*c),
-            _ => None,
+        let chassis = match catalogue.defs.get(self.def) {
+            Some(PartDef {
+                does: Does::Chassis(c),
+                ..
+            }) => Some(*c),
+            Some(def) => (def.fits.first())
+                .and_then(|name| catalogue.chassis.iter().position(|c| c.name == *name)),
+            None => None,
         };
         self.fine_in(catalogue, chassis)
     }

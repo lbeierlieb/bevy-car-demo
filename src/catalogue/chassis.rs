@@ -2,6 +2,7 @@
 
 use super::{Clutch, Paint, Suspension};
 use crate::body::{Body, Detail, Tone};
+use crate::cargo::{Area, Hold};
 use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars};
 use crate::physics::drivetrain::Drive;
 use crate::physics::fuel::Tank;
@@ -245,7 +246,29 @@ pub fn chassis() -> Vec<Chassis> {
         eye: [2.0, 1.1, 0.36],
         insulation: 0.4,
         traffic: 3.0,
+        // From the passenger's footwell to the hatch: the trunk under its cover, 0.7 m
+        // deep; the rear bench's place and the passenger seat's while they're out.
+        hold: Hold {
+            from: 1.75,
+            left: -0.6,
+            base: 0.2,
+            areas: vec![
+                area([15, 22], [0, 12], 3, 7, None),
+                area([8, 15], [0, 12], 1, 9, Some("Rear bench")),
+                area([0, 8], [7, 12], 0, 9, Some("Passenger seat")),
+            ],
+        },
     }]
+}
+
+fn area(along: [u8; 2], across: [u8; 2], floor: u8, ceiling: u8, seat: Option<&str>) -> Area {
+    Area {
+        along,
+        across,
+        floor,
+        ceiling,
+        seat: seat.map(String::from),
+    }
 }
 
 #[cfg(test)]

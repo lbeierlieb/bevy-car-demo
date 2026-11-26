@@ -24,6 +24,8 @@ pub struct CarSpec {
     /// As installed in the car (`CarBuild::install`).
     pub parts: Parts,
     pub ecu: Ecu,
+    /// The loose parts it carries (see `cargo`).
+    pub cargo: Vec<Item>,
 }
 
 /// Slack on settings' ranges for values a slider left a hair outside them.
@@ -39,6 +41,7 @@ impl CarSpec {
             build: setup.build.clone(),
             parts: setup.engine.parts.clone(),
             ecu: setup.engine.build.ecu.clone(),
+            cargo: setup.cargo.clone(),
         }
     }
 
@@ -52,6 +55,7 @@ impl CarSpec {
         };
         let mut setup = CarSetup::new(self.build.clone(), self.parts.clone(), engine);
         setup.car = self.car.clone();
+        setup.set_cargo(self.cargo.clone());
         setup
     }
 
@@ -76,6 +80,7 @@ impl Wire for CarSpec {
     fn put(&self, out: &mut Vec<u8>) {
         self.car.put(out);
         self.ecu.put(out);
+        self.cargo.put(out);
     }
 
     fn get(r: &mut Reader) -> Option<Self> {
@@ -83,6 +88,11 @@ impl Wire for CarSpec {
         // Items read only as they fit the catalogue (`Item::fine`).
         let car: Item = r.get()?;
         let ecu: Ecu = r.get()?;
+        // Loose parts (no cars), all with room in the hold.
+        let cargo: Vec<Item> = r.get()?;
+        let loose =
+            (cargo.iter()).all(|item| item.def(catalogue).kind != crate::items::Kind::Chassis);
+        (loose && crate::cargo::stow(catalogue, &car, &cargo).is_ok()).then_some(())?;
         let (build, parts) = car.resolve(catalogue).ok()?;
         let settings = (0..2).all(|axle| {
             within(build.toe[axle], &TOES)
@@ -102,6 +112,7 @@ impl Wire for CarSpec {
             build,
             parts,
             ecu,
+            cargo,
         })
     }
 }
@@ -299,5 +310,39 @@ mod tests {
         let mut spec = CarSpec::of(&CarSetup::default());
         spec.ecu.cylinders += 1;
         assert!(decode::<CarSpec>(&encode(&spec)).is_none());
+        // More in the trunk than there's room for, or a car in it.
+        let mut spec = CarSpec::of(&CarSetup::default());
+        let wheel = spec
+            .car
+            .fitted(&spec.build.catalogue, crate::items::Kind::Wheel)
+            .next()
+            .unwrap()
+            .clone();
+        spec.cargo = vec![wheel.clone()];
+        assert_eq!(decode::<CarSpec>(&encode(&spec)), Some(spec.clone()));
+        spec.cargo = vec![wheel.clone(), wheel];
+        assert!(decode::<CarSpec>(&encode(&spec)).is_none());
+        spec.cargo = vec![spec.car.clone()];
+        assert!(decode::<CarSpec>(&encode(&spec)).is_none());
+    }
+
+    #[test]
+    fn what_a_car_carries_weighs() {
+        let setup = CarSetup::default();
+        let mut spec = CarSpec::of(&setup);
+        let wheel = spec
+            .car
+            .fitted(&spec.build.catalogue, crate::items::Kind::Wheel)
+            .next()
+            .unwrap()
+            .clone();
+        spec.cargo = vec![wheel];
+        let laden = spec.setup_with(setup.engine.build.maps.clone());
+        let terrain = Terrain::flat();
+        let [empty, laden] = [setup, laden]
+            .map(|setup| crate::car::Car::spawn_at(0, setup, &terrain, 0.0, 0.0, 0.0));
+        assert!((laden.body.mass - empty.body.mass - 18.0).abs() < 1e-3);
+        // In the trunk, behind the centre of mass.
+        assert!(laden.body.center.z > empty.body.center.z);
     }
 }

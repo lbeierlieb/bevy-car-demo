@@ -61,6 +61,10 @@ pub struct CarSetup {
     /// The box around the body (and the wheels, where they stand out), in the chassis
     /// frame: what hits the ground, houses, trees and other cars.
     pub hull: Obb,
+    /// The loose parts it carries (see `cargo`), and each one's mass where it lies in the
+    /// chassis frame.
+    pub cargo: Vec<Item>,
+    pub cargo_load: Vec<(f32, Vec3)>,
 }
 
 impl CarSetup {
@@ -223,7 +227,22 @@ impl CarSetup {
             hull,
             car,
             build,
+            cargo: Vec::new(),
+            cargo_load: Vec::new(),
         }
+    }
+
+    /// The car carrying `cargo`: as many of them as it has room for, in order (one with no
+    /// room is left out; see `cargo::stow`).
+    pub fn set_cargo(&mut self, cargo: Vec<Item>) {
+        let catalogue = &self.build.catalogue;
+        let cargo = crate::cargo::fitting(catalogue, &self.car, cargo);
+        let stowed = crate::cargo::stow(catalogue, &self.car, &cargo).unwrap_or_default();
+        let masses = crate::cargo::masses(catalogue, &self.car, &cargo, &stowed);
+        self.cargo_load = (masses.into_iter())
+            .map(|(mass, at)| (mass, self.body_offset + at))
+            .collect();
+        self.cargo = cargo;
     }
 
     /// The car that `build` and `parts` (built as `engine`) make out of this one: the parts
@@ -232,6 +251,7 @@ impl CarSetup {
         let car = crate::items::assemble(&build.catalogue, Some(&self.car), &build, &parts);
         let mut setup = Self::new(build, parts, engine);
         setup.car = car.expect("every part of a car is in its catalogue");
+        setup.set_cargo(self.cargo.clone());
         setup
     }
 
@@ -468,6 +488,9 @@ impl Car {
         body.inertia = self.setup.inertia;
         body.center = Vec3::ZERO;
         body.load(self.fuel.mass(), self.setup.tank_at);
+        for &(mass, at) in &self.setup.cargo_load {
+            body.load(mass, at);
+        }
     }
 
     fn with_fuel_load(mut self) -> Self {
