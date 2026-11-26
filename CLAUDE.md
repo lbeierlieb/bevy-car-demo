@@ -824,6 +824,24 @@ As built:
 
 The whole plan, with milestones: `docs/cars-and-parts.md` (keep it up to date).
 
+**Built so far** (2026-11-26): milestone 1, parts as data (`src/items.rs`, the hatch's
+definitions in `catalogue/items.rs`). `PartDef` (string `id`, `Kind` of slot it goes in,
+`Does` what the game's code does with it, `fits` chassis names, size box, mass, price
+in cents, painted, `Knob`s, `SlotDef`s), `Item` (definition by place in
+`Catalogue::defs`, paint, `variant` (rim and tire sizes index `Rim::all`/
+`TireSize::all`, anti-roll bars the chassis' sizes), knob values, slots), `Trim` (a
+stock car's tree; one per chassis × factory engine). Engine slots sit in the long
+block (`LONG_BLOCK_SLOTS`), on the engine (`ENGINE_SLOTS`) or in the car (`CAR_SLOTS`);
+cam gear timing and boost are the engine item's knobs, brake force and balance the
+chassis', camber and toe each damper's, pressure each tire's. **The bridge**: the
+simulation and the shops still use `CarBuild` + `Parts`; `Item::resolve` works them
+out of a tree (the left corner of an axle counts), `items::assemble` puts a changed
+`CarBuild`/`Parts` back into a tree, keeping what they don't say (a new paint goes on
+every painted part). `CarSetup::car` is the tree; shops rebuild with
+`CarSetup::changed`. `CarSpec` on the wire is the tree and the tune (protocol 31);
+reading checks every item against the catalogue (`Item::fine`: in it, in a slot of
+its kind, required slots filled, knobs within range).
+
 The game is about tuning every aspect of a car. Agreed so far (the user's answers):
 - **Parts are items** you own (a definition from the server's catalogue + condition),
   fitted to cars or carried. A car is a chassis with parts in slots; the engine is a

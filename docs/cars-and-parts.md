@@ -122,7 +122,13 @@ paint. The hatchback's two:
 
 ## Milestones
 
-### 1. Parts as data
+### 1. Parts as data (done 2026-11-26)
+
+Built as below, with a bridge instead of rewriting the simulation: trees resolve to the
+`CarBuild` + `Parts` it builds from, and shops' changes are assembled back into the tree
+(see `CLAUDE.md`, "Owning cars and parts"). The chassis' own numbers (body, bay, mass…)
+stay in `Chassis` for now. Done before it: the catalogue down to the hatch and the B16
+(milestone 2's first step).
 
 The item model replacing `CarBuild` + `Parts`, with today's Vireo B16 as its first
 trim, coming out bit for bit as now (as the catalogue move was proved: dump and compare
