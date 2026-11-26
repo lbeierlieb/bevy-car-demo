@@ -5,6 +5,7 @@
 use super::{Catalogue, Clutch, Paint, Suspension, TireCompound};
 use crate::body::{Body, Detail, Tone};
 use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars};
+use crate::items::{Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim};
 use crate::net::wire::{Reader, Wire};
 use crate::physics::drivetrain::Drive;
 use crate::physics::engine::families::{Family, Layout, Version};
@@ -427,6 +428,227 @@ fields!(Slot {
     needs_turbo
 } text { name, about });
 
+listed!(Panel, Panel::ALL);
+listed!(Seat, Seat::ALL);
+
+impl Wire for Kind {
+    fn put(&self, out: &mut Vec<u8>) {
+        let tag: u8 = match self {
+            Kind::Chassis => 0,
+            Kind::Body(_) => 1,
+            Kind::Seat(_) => 2,
+            Kind::Wheel => 3,
+            Kind::Rim => 4,
+            Kind::Tire => 5,
+            Kind::Brake => 6,
+            Kind::Spring => 7,
+            Kind::Damper => 8,
+            Kind::AntiRollBar => 9,
+            Kind::Gearbox => 10,
+            Kind::FinalDrive => 11,
+            Kind::Differential => 12,
+            Kind::Clutch => 13,
+            Kind::Ecu => 14,
+            Kind::Engine => 15,
+            Kind::LongBlock => 16,
+            Kind::EnginePart(_) => 17,
+        };
+        tag.put(out);
+        match self {
+            Kind::Body(panel) => panel.put(out),
+            Kind::Seat(seat) => seat.put(out),
+            Kind::EnginePart(slot) => slot.put(out),
+            _ => {}
+        }
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        Some(match r.get::<u8>()? {
+            0 => Kind::Chassis,
+            1 => Kind::Body(r.get()?),
+            2 => Kind::Seat(r.get()?),
+            3 => Kind::Wheel,
+            4 => Kind::Rim,
+            5 => Kind::Tire,
+            6 => Kind::Brake,
+            7 => Kind::Spring,
+            8 => Kind::Damper,
+            9 => Kind::AntiRollBar,
+            10 => Kind::Gearbox,
+            11 => Kind::FinalDrive,
+            12 => Kind::Differential,
+            13 => Kind::Clutch,
+            14 => Kind::Ecu,
+            15 => Kind::Engine,
+            16 => Kind::LongBlock,
+            17 => Kind::EnginePart(r.get()?),
+            _ => return None,
+        })
+    }
+}
+
+impl Wire for Does {
+    fn put(&self, out: &mut Vec<u8>) {
+        match self {
+            Does::Chassis(c) => (0u8, *c).put(out),
+            Does::Nothing => 1u8.put(out),
+            Does::Wheel => 2u8.put(out),
+            Does::Rim => 3u8.put(out),
+            Does::Tire(c) => (4u8, *c).put(out),
+            Does::Brake => 5u8.put(out),
+            Does::Spring(k) => (6u8, *k).put(out),
+            Does::Damper(k) => (7u8, *k).put(out),
+            Does::AntiRollBar(a) => (8u8, *a).put(out),
+            Does::Gearbox(g) => (9u8, *g).put(out),
+            Does::FinalDrive => 10u8.put(out),
+            Does::Differential { limited_slip } => {
+                11u8.put(out);
+                limited_slip.put(out);
+            }
+            Does::Clutch(k) => (12u8, *k).put(out),
+            Does::Ecu(model) => {
+                13u8.put(out);
+                model.put(out);
+            }
+            Does::Engine => 14u8.put(out),
+            Does::Block { family, version } => {
+                15u8.put(out);
+                (*family, *version).put(out);
+            }
+            Does::EnginePart { slot, part } => {
+                16u8.put(out);
+                (*slot, *part).put(out);
+            }
+        }
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        Some(match r.get::<u8>()? {
+            0 => Does::Chassis(r.get()?),
+            1 => Does::Nothing,
+            2 => Does::Wheel,
+            3 => Does::Rim,
+            4 => Does::Tire(r.get()?),
+            5 => Does::Brake,
+            6 => Does::Spring(r.get()?),
+            7 => Does::Damper(r.get()?),
+            8 => Does::AntiRollBar(r.get::<usize>()?.min(1)),
+            9 => Does::Gearbox(r.get()?),
+            10 => Does::FinalDrive,
+            11 => Does::Differential {
+                limited_slip: r.get()?,
+            },
+            12 => Does::Clutch(r.get()?),
+            13 => Does::Ecu(r.get()?),
+            14 => Does::Engine,
+            15 => {
+                let (family, version) = r.get()?;
+                Does::Block { family, version }
+            }
+            16 => {
+                let (slot, part) = r.get()?;
+                Does::EnginePart { slot, part }
+            }
+            _ => return None,
+        })
+    }
+}
+
+fields!(Knob { low, high, default } text { name });
+fields!(SlotDef { kind, required } text { name });
+fields!(PartDef {
+    kind,
+    does,
+    fits,
+    size,
+    mass,
+    price,
+    painted,
+    knobs,
+    slots
+} text { id, name });
+fields!(Trim { car } text { id, name });
+
+/// How deep a tree of items goes at most (a car, its engine, its long block, a part).
+const ITEM_DEPTH: usize = 6;
+
+impl Wire for Item {
+    fn put(&self, out: &mut Vec<u8>) {
+        // Places past 255: definitions, and tire sizes.
+        (self.def as u16).put(out);
+        self.paint.put(out);
+        (self.variant as u16).put(out);
+        self.knobs.put(out);
+        self.slots.put(out);
+    }
+
+    /// Read only into a tree that's right for the reader's catalogue (`Item::fine`).
+    fn get(r: &mut Reader) -> Option<Self> {
+        let item = read_item(r, 0)?;
+        match r.catalogue() {
+            Some(catalogue) => item.fine(catalogue).then_some(item),
+            None => Some(item),
+        }
+    }
+}
+
+fn read_item(r: &mut Reader, depth: usize) -> Option<Item> {
+    (depth < ITEM_DEPTH).then_some(())?;
+    let def = usize::from(r.get::<u16>()?);
+    let paint = r.get()?;
+    let variant = usize::from(r.get::<u16>()?);
+    let knobs = r.get()?;
+    // As `Vec<Option<Item>>` puts them.
+    let n: u16 = r.get()?;
+    (n <= 256).then_some(())?;
+    let slots = (0..n)
+        .map(|_| match r.get::<bool>()? {
+            false => Some(None),
+            true => Some(Some(read_item(r, depth + 1)?)),
+        })
+        .collect::<Option<_>>()?;
+    Some(Item {
+        def,
+        paint,
+        variant,
+        knobs,
+        slots,
+    })
+}
+
+impl Item {
+    /// Whether the tree refers only to what's in `catalogue`, with each part in a slot
+    /// of its kind, sizes, paints and knobs within what there is (the chassis it's in
+    /// deciding the anti-roll bars' sizes).
+    pub fn fine(&self, catalogue: &Catalogue) -> bool {
+        let chassis = match catalogue.defs.get(self.def).map(|d| &d.does) {
+            Some(Does::Chassis(c)) => Some(*c),
+            _ => None,
+        };
+        self.fine_in(catalogue, chassis)
+    }
+
+    fn fine_in(&self, catalogue: &Catalogue, chassis: Option<usize>) -> bool {
+        let Some(def) = catalogue.defs.get(self.def) else {
+            return false;
+        };
+        let knobs = self.knobs.len() == def.knobs.len()
+            && (self.knobs.iter().zip(&def.knobs))
+                .all(|(x, knob)| (knob.low - 1e-3..=knob.high + 1e-3).contains(x));
+        let paint = match self.paint {
+            Some(paint) => def.painted && paint < catalogue.paints.len(),
+            None => !def.painted,
+        };
+        let slots = self.slots.len() == def.slots.len()
+            && (self.slots.iter().zip(&def.slots)).all(|(item, slot)| match item {
+                Some(item) => {
+                    (catalogue.defs.get(item.def)).is_some_and(|d| d.kind == slot.kind)
+                        && item.fine_in(catalogue, chassis)
+                }
+                None => !slot.required,
+            });
+        knobs && paint && slots && self.variant < def.variants(catalogue, chassis).max(1)
+    }
+}
+
 impl Wire for Catalogue {
     fn put(&self, out: &mut Vec<u8>) {
         self.chassis.put(out);
@@ -438,9 +660,11 @@ impl Wire for Catalogue {
         self.families.put(out);
         self.slots.put(out);
         self.start.put(out);
+        self.defs.put(out);
+        self.trims.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
-        let catalogue = Catalogue::new(
+        let mut catalogue = Catalogue::new(
             r.get()?,
             r.get()?,
             r.get()?,
@@ -451,6 +675,9 @@ impl Wire for Catalogue {
             r.get()?,
             r.get()?,
         );
+        catalogue.defs = r.get()?;
+        catalogue.trims = r.get()?;
+        catalogue.rehash();
         catalogue.holds_together().then_some(catalogue)
     }
 }
@@ -477,6 +704,36 @@ impl Catalogue {
                 && crate::physics::engine::parts::fits(self, &version.preset.chosen)
         };
         let slot = |slot: &Slot| !slot.parts.is_empty();
+        let does = |def: &PartDef| match def.does {
+            Does::Chassis(c) => c < self.chassis.len(),
+            Does::Tire(c) => c < self.compounds.len(),
+            Does::Spring(k) | Does::Damper(k) => k < self.suspensions.len(),
+            Does::Gearbox(g) => g < self.gearboxes.len(),
+            Does::Clutch(k) => k < self.clutches.len(),
+            Does::Block { family, version } => {
+                (self.families.get(family)).is_some_and(|f| version < f.versions.len())
+            }
+            Does::EnginePart { slot, part } => {
+                (self.slots.get(slot)).is_some_and(|s| part < s.parts.len())
+            }
+            _ => true,
+        };
+        let kind = |kind: &Kind| match kind {
+            Kind::EnginePart(slot) => *slot < self.slots.len(),
+            _ => true,
+        };
+        let def = |def: &PartDef| {
+            does(def)
+                && kind(&def.kind)
+                && def.slots.iter().all(|slot| kind(&slot.kind))
+                && def
+                    .knobs
+                    .iter()
+                    .all(|knob| knob.low <= knob.default && knob.default <= knob.high)
+        };
+        // Every trim makes a car (`resolve` needs a shared catalogue).
+        let shared = std::sync::Arc::new(self.clone());
+        let trim = |trim: &Trim| trim.car.fine(self) && trim.car.resolve(&shared).is_ok();
         let gearbox = |gearbox: &Gearbox| !gearbox.gears.is_empty();
         self.start < self.chassis.len()
             && !self.clutches.is_empty()
@@ -486,6 +743,8 @@ impl Catalogue {
             && self.slots.iter().all(slot)
             && (self.families.iter())
                 .all(|f| !f.versions.is_empty() && f.versions.iter().all(version))
+            && self.defs.iter().all(def)
+            && self.trims.iter().all(trim)
     }
 }
 

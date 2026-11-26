@@ -29,6 +29,7 @@ pub mod heli;
 pub mod help;
 pub mod hud;
 pub mod input;
+pub mod items;
 pub mod looks;
 pub mod map;
 pub mod menu;

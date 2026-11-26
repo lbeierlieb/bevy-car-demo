@@ -24,6 +24,8 @@ mod chassis;
 #[cfg(any(test, not(target_arch = "wasm32")))]
 mod engines;
 #[cfg(any(test, not(target_arch = "wasm32")))]
+pub mod items;
+#[cfg(any(test, not(target_arch = "wasm32")))]
 mod parts;
 mod wire;
 
@@ -49,6 +51,9 @@ pub struct Catalogue {
     pub slots: Vec<Slot>,
     /// The chassis a player starts in (with its base engine).
     pub start: usize,
+    /// Every part there is (see `items`), and the stock cars built of them.
+    pub defs: Vec<crate::items::PartDef>,
+    pub trims: Vec<crate::items::Trim>,
     /// Tells catalogues apart: two with the same fingerprint are the same.
     fingerprint: u64,
 }
@@ -113,16 +118,23 @@ impl Catalogue {
             families,
             slots,
             start,
+            defs: Vec::new(),
+            trims: Vec::new(),
             fingerprint: 0,
         };
-        catalogue.fingerprint = catalogue.hash();
+        catalogue.rehash();
         catalogue
+    }
+
+    /// Works the fingerprint out again, after a change.
+    pub fn rehash(&mut self) {
+        self.fingerprint = self.hash();
     }
 
     /// FNV-1a over everything in it.
     fn hash(&self) -> u64 {
         let text = format!(
-            "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{}",
+            "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{}{:?}{:?}",
             self.chassis,
             self.gearboxes,
             self.clutches,
@@ -131,7 +143,9 @@ impl Catalogue {
             self.compounds,
             self.families,
             self.slots,
-            self.start
+            self.start,
+            self.defs,
+            self.trims
         );
         text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash: u64, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
@@ -199,7 +213,7 @@ impl std::fmt::Debug for Catalogue {
 pub fn builtin() -> Shared {
     use std::sync::LazyLock;
     static BUILTIN: LazyLock<Shared> = LazyLock::new(|| {
-        Arc::new(Catalogue::new(
+        Arc::new(items::with_items(Catalogue::new(
             chassis::chassis(),
             chassis::gearboxes(),
             chassis::clutches(),
@@ -209,7 +223,7 @@ pub fn builtin() -> Shared {
             engines::families(),
             parts::slots(),
             DEFAULT_CHASSIS,
-        ))
+        )))
     });
     BUILTIN.clone()
 }
@@ -219,7 +233,7 @@ pub fn builtin() -> Shared {
 pub fn builtin_changed(change: impl FnOnce(&mut Catalogue)) -> Shared {
     let mut catalogue = Catalogue::clone(&builtin());
     change(&mut catalogue);
-    catalogue.fingerprint = catalogue.hash();
+    catalogue.rehash();
     Arc::new(catalogue)
 }
 
