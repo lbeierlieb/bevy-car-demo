@@ -853,6 +853,32 @@ so the server's start car, the showroom's "Drive it" and lent cars are trims);
 `LINEUP` counts stock cars (each chassis × factory engine); its straight is in a
 forest now, `OFFLINE=1 CARCAM="-6,1.3,0"` shows the car side on in the village.
 
+Milestone 3, the body in pieces (2026-11-26): `body.rs` builds the body from a `Dress`
+(the shell's colour and each fitted body part's, `items::dress` from the tree: the first
+of a pair of slots is the left one; `Side::Middle` for the single ones). Regions of the
+outlines are pieces: `Body::bumpers` (lengths in from the ends) below `bumper_top` (a
+crease point in every lower-body section), `Body::door` (x of the doors' edges; the
+door glass from the windscreen's base to the rear edge, a station added there), the
+bonnet (deck top up to the windscreen), the hatch (deck top behind the cabin, the tail
+above the bumper, the rear window), fenders (the sides ahead of the doors); the rest is
+the shell. Details belong to the piece they're on (`piece_at`). Lip, skirts, spoiler,
+diffuser and mirrors are shapes of their own (`add_ons`), drawn only with what they're
+fitted to. The shell is hollow: the lower body has inner faces (`Builder::skinned`; the
+bay's are 0.7 of the paint, the cabin's trim, the floor carpet), the deck is open under
+the greenhouse (whose floor is gone; sills along the cabin, a bulkhead at the
+windscreen's base), the greenhouse's painted panels have inner faces (headliner, trim),
+its glass none (the driver sees out). Loft ends are strips across (`Face::Cap`).
+`mechanicals.rs` draws what's under the body from the tree as a second mesh (cached by
+`mechanicals::key`): the engine from its long block's family (transverse: exhaust
+towards the bulkhead, gearbox on the left), intake runners by manifold, throttle by
+size, filter (box, sport panel, open cone), headers by length, a turbo and intercooler,
+the cam cover red on a reworked head, radiator, battery, seats per seat slot, a
+dashboard and carpet, the tank and the exhaust line (catalyst, silencer, tip by the
+fitted parts). `Looks::car` is the tree (protocol 32); `visuals` caches bodies by
+`Dress::key`. Shots: `UNFIT="Bonnet,Door"`, `FIT="FrontLip,SideSkirt,Diffuser"`,
+`FITPAINT=0` dress the lined-up or `OFFLINE` car (`TRIM=1`: OFFLINE's is the 1.8);
+never name a shot variable `STRIP` (the dev shell exports `STRIP`, the strip tool).
+
 The game is about tuning every aspect of a car. Agreed so far (the user's answers):
 - **Parts are items** you own (a definition from the server's catalogue + condition),
   fitted to cars or carried. A car is a chassis with parts in slots; the engine is a
@@ -1320,7 +1346,8 @@ catalogue entries, and things like swap subframes are named so they can be price
   from the nose and above the ground, plan taper, tumblehome, and details as boxes. The
   lower body is a loft with wheel wells; the cabin a loft with glass, roof and pillars;
   an open car's windscreen is a one-sided pane in a frame (two cabin points). One mesh
-  with vertex colours. The cockpit is placed by the chassis' eye point.
+  with vertex colours, in pieces (see "Owning cars and parts"). The cockpit is placed by
+  the chassis' eye point.
 - **Showroom (car dealers) and garage (parts shops)** are both in `garage/mod.rs`; both go through `start`
   and `fit`. A changed `CarBuild` respawns the car's entity (its meshes are children);
   an engine-only change swaps it in while driving.

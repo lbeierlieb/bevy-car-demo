@@ -1,7 +1,7 @@
 # Owning cars and parts: the plan
 
 Agreed with the user in rounds of questions on 2026-11-26 (the decisions are also short
-in `CLAUDE.md`, "Owning cars and parts"). Nothing of it is built yet. The milestones are
+in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–3 are built. The milestones are
 in the order they're meant to be built; each ends with clippy and tests passing and the
 game playable.
 
@@ -154,7 +154,13 @@ picks the trim (selling trims as such comes with the shops' rework in 6).
 - New data: dimensions, mass, wheels, track like an early-90s 3-door; B18; the two trims.
 - The body generator's outline redone for that look (the pieces come in 3).
 
-### 3. The body in pieces
+### 3. The body in pieces (done 2026-11-26)
+
+Built as below (see `CLAUDE.md`, "Owning cars and parts"). Side skirts are their own
+shape, not a region; mirrors are drawn only with their door, the lip with the front
+bumper, the spoiler with the hatch, the diffuser with the rear bumper. Lip, skirts and
+diffuser have definitions but no trim or shop fits them yet. The parts shop's engine
+stand still draws its own engine.
 
 - `body.rs` split: the shell, and each body part's mesh made from the shell's outline
   regions (bumpers, bonnet, fenders, doors, hatch, mirrors, skirts) or its own geometry
