@@ -155,9 +155,6 @@ impl Plugin for ClientPlugin {
     }
 }
 
-/// The most changes of our car kept waiting for the server's answer.
-const MOST_UNANSWERED: usize = 16;
-
 /// Builds the car the server said ours is now: in place of the active car (where it is,
 /// keeping the driver's settings), or the first one, by the spawn. The server's state of
 /// it follows (`Yours`). It's always placed (`ToServer::Place`): the server's copy of a car
@@ -283,11 +280,14 @@ pub struct Connection {
     map: HashMap<PlayerId, (MapPlayer, f64)>,
     /// When our car's state was last sent (s).
     sent: f64,
-    /// What our car was built of when last sent (or as the server built it).
+    /// What our car was built of when last told the server (or as the server built it).
     sent_spec: Option<CarSpec>,
-    /// What our car was built of in messages the server hasn't answered yet (it answers
-    /// each with the car it has), the latest last.
-    unanswered: VecDeque<CarSpec>,
+    /// Our requests the server hasn't answered yet (`ToClient::Done`), the latest last, and
+    /// the next one's number.
+    unanswered: VecDeque<u32>,
+    next_request: u32,
+    /// Our car as the server last said (built once our requests are all answered).
+    server_spec: Option<CarSpec>,
     /// What cars and parts there are, as the server told us (none before it has).
     pub catalogue: Option<Shared>,
     /// The car the server said ours is now, until it's built (`take_your_car`).
@@ -326,6 +326,29 @@ struct Report {
 }
 
 impl Connection {
+    /// A new request's number, waiting for its answer.
+    fn request(&mut self) -> u32 {
+        let id = self.next_request;
+        self.next_request = id.wrapping_add(1);
+        self.unanswered.push_back(id);
+        id
+    }
+
+    /// Asks the server for `works` on our car at the shop it's at (see `fitting`): the
+    /// car comes back as the server has it then.
+    pub fn work(&mut self, works: Vec<crate::fitting::Work>) {
+        if works.is_empty() {
+            return;
+        }
+        let id = self.request();
+        self.say(&ToServer::Work { id, works });
+    }
+
+    /// Whether requests of ours are still unanswered.
+    pub fn waiting(&self) -> bool {
+        !self.unanswered.is_empty()
+    }
+
     /// Asks the server for the maps of the engine whose hardware has `fingerprint` (once);
     /// they're kept with the maps baked here when they come (`workshop::at_hand`).
     pub fn ask_maps(&mut self, fingerprint: u64) {
@@ -370,6 +393,8 @@ impl Connection {
             sent: f64::NEG_INFINITY,
             sent_spec: None,
             unanswered: VecDeque::new(),
+            next_request: 0,
+            server_spec: None,
             catalogue: None,
             your_car: None,
             owned: OwnedView::default(),
@@ -747,15 +772,24 @@ fn receive(
                 connection.catalogue = Some(catalogue);
             }
             ToClient::YourCar(spec) => {
-                match connection.unanswered.iter().position(|sent| *sent == *spec) {
-                    // The server took a change of ours: nothing to do.
-                    Some(answered) => drop(connection.unanswered.drain(..=answered)),
-                    // Its own (or ours refused): built as told, nothing to tell it.
-                    None => {
-                        connection.unanswered.clear();
-                        connection.sent_spec = Some((*spec).clone());
-                        connection.your_car = Some(*spec);
-                    }
+                // Built as told once our requests are answered (a change of ours the
+                // server hasn't heard yet stays till then).
+                connection.server_spec = Some((*spec).clone());
+                if connection.unanswered.is_empty() {
+                    connection.sent_spec = Some((*spec).clone());
+                    connection.your_car = Some(*spec);
+                }
+            }
+            ToClient::Done { id } => {
+                connection
+                    .unanswered
+                    .retain(|&request| (request.wrapping_sub(id) as i32) > 0);
+                if connection.unanswered.is_empty()
+                    && let Some(spec) = connection.server_spec.clone()
+                {
+                    // Nothing to do if it's what we have (`take_your_car`).
+                    connection.sent_spec = Some(spec.clone());
+                    connection.your_car = Some(spec);
                 }
             }
             ToClient::Owned { owned, why } => {
@@ -958,12 +992,18 @@ fn send(
         return;
     };
     let spec = CarSpec::of(&car.setup);
-    if connection.sent_spec.as_ref() != Some(&spec) {
-        connection.say(&ToServer::Car(Box::new(spec.clone())));
-        if connection.unanswered.len() >= MOST_UNANSWERED {
-            connection.unanswered.pop_front();
+    if let Some(sent) = connection.sent_spec.clone()
+        && sent != spec
+    {
+        // Settings changed here (the alignment, paint, the dyno's tune) are asked for as
+        // works; parts changed here (the parts shop), whole.
+        if crate::fitting::only_settings(&sent, &spec) {
+            connection.work(crate::fitting::changes(&sent, &spec));
+        } else {
+            let id = connection.request();
+            let spec = Box::new(spec.clone());
+            connection.say(&ToServer::Car { id, spec });
         }
-        connection.unanswered.push_back(spec.clone());
         connection.sent_spec = Some(spec);
     }
     if let Some((step, state)) = prediction.place.take() {

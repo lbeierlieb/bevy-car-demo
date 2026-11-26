@@ -279,26 +279,59 @@ mod tests {
         peer.shadow.matched()
     }
 
-    /// A car changed in a shop goes to the server, which keeps it and says so; the game
-    /// doesn't build it again.
+    /// The server with a shop of `kind` where players start.
+    fn with_shop(server: &mut App, kind: crate::shops::ShopKind) {
+        let shop = crate::shops::Shop {
+            kind,
+            name: "Shop".to_string(),
+            at: Vec2::ZERO,
+            sells: Vec::new(),
+        };
+        let with = server.world_mut().remove_resource::<Server>().unwrap();
+        server.insert_resource(with.with_shops(vec![shop]));
+    }
+
+    /// The driven car repainted in the game (as the paint shop does), in the paint shops'
+    /// next paint: what it's built as now.
+    fn repaint(player: &mut App) -> crate::chassis::CarBuild {
+        let setup = car(player).setup.clone();
+        let mut build = setup.build.clone();
+        let paints = build.catalogue.shop_paints();
+        build.paint = *paints.iter().find(|&&p| p != build.paint).unwrap();
+        let engine = setup.engine.clone();
+        let painted = setup.changed(build.clone(), engine.parts, engine.build);
+        let rebuilt = car(player).rebuilt(painted);
+        *car(player) = rebuilt;
+        build
+    }
+
+    /// A car repainted at a paint shop goes to the server as works, which it does and says
+    /// so; the game doesn't build it again. Anywhere else the server refuses, and the game
+    /// builds the car as it was.
     #[test]
     fn the_server_takes_a_car_changed_in_a_shop() {
-        let listener = LoopbackListener::default();
-        let mut server = server(&listener);
-        let mut anna = driver(&listener, "Anna");
-        run(&mut [&mut server, &mut anna], 30);
-        let setup = car(&mut anna).setup.clone();
-        let mut build = setup.build.clone();
-        build.paint = (build.paint + 1) % build.catalogue.paints.len();
-        let painted = CarSetup::new(build.clone(), setup.engine.parts, setup.engine.build);
-        let rebuilt = car(&mut anna).rebuilt(painted);
-        *car(&mut anna) = rebuilt;
-        run(&mut [&mut server, &mut anna], 10);
-        let mut peers = server.world_mut().query::<&super::server::Peer>();
-        let peer = peers.single(server.world()).unwrap();
-        assert_eq!(peer.shadow.spec().map(|spec| &spec.build), Some(&build));
-        assert_eq!(car(&mut anna).setup.build, build);
-        assert!(connection(&anna).your_car.is_none());
+        for at_paint_shop in [true, false] {
+            let listener = LoopbackListener::default();
+            let mut server = server(&listener);
+            with_shop(
+                &mut server,
+                match at_paint_shop {
+                    true => crate::shops::ShopKind::Paint,
+                    false => crate::shops::ShopKind::Gas,
+                },
+            );
+            let mut anna = driver(&listener, "Anna");
+            run(&mut [&mut server, &mut anna], 60);
+            let before = car(&mut anna).setup.build.clone();
+            let build = repaint(&mut anna);
+            run(&mut [&mut server, &mut anna], 10);
+            let mut peers = server.world_mut().query::<&super::server::Peer>();
+            let peer = peers.single(server.world()).unwrap();
+            let kept = if at_paint_shop { &build } else { &before };
+            assert_eq!(peer.shadow.spec().map(|spec| &spec.build), Some(kept));
+            assert_eq!(car(&mut anna).setup.build, *kept);
+            assert!(connection(&anna).your_car.is_none());
+        }
     }
 
     #[test]
@@ -1049,6 +1082,7 @@ mod tests {
     fn a_players_car_is_kept_between_sessions() {
         let listener = LoopbackListener::default();
         let (file, mut server) = server_with_accounts(&listener, false);
+        with_shop(&mut server, crate::shops::ShopKind::Paint);
         let mut wrong = account_driver(&listener, "Anna", "guess");
         assert!(matches!(
             log_in(&mut server, &mut wrong),
@@ -1066,12 +1100,8 @@ mod tests {
             Status::Joined { .. }
         ));
         // Repainted in a shop, the engine worn.
-        let setup = car(&mut anna).setup.clone();
-        let mut build = setup.build.clone();
-        build.paint = (build.paint + 1) % build.catalogue.paints.len();
-        let painted = CarSetup::new(build.clone(), setup.engine.parts, setup.engine.build);
-        let rebuilt = car(&mut anna).rebuilt(painted);
-        *car(&mut anna) = rebuilt;
+        run(&mut [&mut server, &mut anna], 30);
+        let build = repaint(&mut anna);
         run(&mut [&mut server, &mut anna], 30);
         car(&mut anna).drivetrain.engine.damage.head_gasket = 0.25;
         run(&mut [&mut server, &mut anna], 30);

@@ -28,6 +28,7 @@ use crate::catalogue::Shared;
 use crate::chassis::{CarBuild, FACTORY_TOE};
 use crate::events::Event;
 use crate::events::round::{Action, Round};
+use crate::fitting::Work;
 use crate::heli::HeliPose;
 use crate::looks::{AxleLooks, Looks, Motion, WheelMotion};
 use crate::owned::{OwnedView, Stash};
@@ -40,7 +41,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 36;
+pub const PROTOCOL: u32 = 37;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -81,9 +82,19 @@ pub enum ToServer {
     Chat(String),
     /// About the events: into a lobby, out, the hunted's settings and choices.
     Event(Action),
-    /// What our car is built of, whole, whenever it changes in a shop (for the server to
-    /// drive the same car).
-    Car(Box<CarSpec>),
+    /// What our car is built of, whole, whenever a shop changed its parts here (for the
+    /// server to drive the same car); request `id` (answered with `ToClient::Done`).
+    Car {
+        id: u32,
+        spec: Box<CarSpec>,
+    },
+    /// Request `id`: works done to our car at the shop it's at (see `fitting`), all or
+    /// none; answered with the car (`YourCar`), what we own and why it wasn't done, if it
+    /// wasn't (`Owned`), then `Done`.
+    Work {
+        id: u32,
+        works: Vec<Work>,
+    },
     /// A car from the showroom: the catalogue's `chassis` with its factory engine
     /// `engine`, as it leaves the factory.
     Buy {
@@ -200,10 +211,15 @@ pub enum ToClient {
         text: Option<Blob>,
     },
     /// What we own besides the car we drive, after joining and whenever it changes; and
-    /// why something we asked (`ToServer::Stash`) wasn't done, if it wasn't.
+    /// why something we asked (`ToServer::Stash`, `Work`) wasn't done, if it wasn't.
     Owned {
         owned: Box<OwnedView>,
         why: Option<String>,
+    },
+    /// Our request `id` (`ToServer::Car`, `Work`) is answered: the `YourCar` before it is
+    /// the car as it is now.
+    Done {
+        id: u32,
     },
 }
 
@@ -339,9 +355,15 @@ impl Wire for ToServer {
                 4u8.put(out);
                 action.put(out);
             }
-            ToServer::Car(spec) => {
+            ToServer::Car { id, spec } => {
                 5u8.put(out);
+                id.put(out);
                 spec.put(out);
+            }
+            ToServer::Work { id, works } => {
+                13u8.put(out);
+                id.put(out);
+                works.put(out);
             }
             ToServer::Inputs { last, inputs } => {
                 6u8.put(out);
@@ -390,7 +412,14 @@ impl Wire for ToServer {
             2 => ToServer::State(r.get()?),
             3 => ToServer::Chat(r.get()?),
             4 => ToServer::Event(r.get()?),
-            5 => ToServer::Car(Box::new(r.get()?)),
+            5 => ToServer::Car {
+                id: r.get()?,
+                spec: Box::new(r.get()?),
+            },
+            13 => ToServer::Work {
+                id: r.get()?,
+                works: crate::fitting::read_works(r)?,
+            },
             6 => ToServer::Inputs {
                 last: r.get()?,
                 inputs: r.get()?,
@@ -527,6 +556,10 @@ impl Wire for ToClient {
                 owned.put(out);
                 why.put(out);
             }
+            ToClient::Done { id } => {
+                22u8.put(out);
+                id.put(out);
+            }
         }
     }
 
@@ -584,6 +617,7 @@ impl Wire for ToClient {
                 owned: Box::new(r.get()?),
                 why: r.get()?,
             },
+            22 => ToClient::Done { id: r.get()? },
             _ => return None,
         })
     }

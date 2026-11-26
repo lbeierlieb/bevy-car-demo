@@ -9,6 +9,7 @@ use super::server::Peer;
 use super::shadow::BakedMaps;
 use crate::cargo;
 use crate::catalogue::{Catalogue, Shared};
+use crate::fitting::{Bench, Fresh, Work};
 use crate::items::Item;
 use crate::owned::{GARAGE_CARS, GARAGE_PARTS, Owned, Parked, SHOP_HOLD, Source, Stash, name};
 use crate::saved::{self, Condition};
@@ -215,6 +216,94 @@ fn try_act(
     owned.touch();
     drive(peer, spec, baked);
     Ok(())
+}
+
+/// Does the works `peer` asked for (request `id`) at the shop their car is at, all or
+/// none, and tells them the car as it is now, what they own (and why it wasn't done, if it
+/// wasn't), and that the request is answered.
+pub fn work(
+    peer: &mut Peer,
+    id: u32,
+    works: &[Work],
+    shops: &[Shop],
+    catalogue: &Shared,
+    baked: &mut BakedMaps,
+) {
+    let why = match try_work(peer, works, shops, catalogue, baked) {
+        Ok(said) => said,
+        Err(why) => {
+            info!("Player {}: works not done: {why}", peer.id);
+            Some(why)
+        }
+    };
+    if let Some(spec) = peer.shadow.spec().cloned() {
+        peer.tell(&ToClient::YourCar(Box::new(spec)));
+    }
+    tell(peer, shops, why);
+    peer.tell(&ToClient::Done { id });
+}
+
+/// The works done (what the player should hear about it, if anything: parts thrown away),
+/// or why not.
+fn try_work(
+    peer: &mut Peer,
+    works: &[Work],
+    shops: &[Shop],
+    catalogue: &Shared,
+    baked: &mut BakedMaps,
+) -> Result<Option<String>, String> {
+    let shop = (peer.at_shop())
+        .and_then(|i| shops.get(i))
+        .ok_or("Stop at a shop for that")?;
+    let spec = peer.shadow.spec().cloned().ok_or("You have no car yet")?;
+    if peer.shadow.lent() {
+        return Err("Not while you drive a lent car".into());
+    }
+    let mut bench = Bench::new(catalogue, shop, &spec, peer.owned.held_at(&shop.name));
+    for work in works {
+        bench.work(work)?;
+    }
+    let done = bench.finish()?;
+    if done.spec == spec && done.held == peer.owned.held_at(&shop.name) {
+        return Ok(None);
+    }
+    // New tires, a new engine or turbo are new: the server says so, not the game.
+    let condition = (done.fresh != Fresh::default())
+        .then(|| peer.shadow.kept().map(|(_, car)| Condition::of(car)))
+        .flatten()
+        .map(|mut condition| {
+            renew(&mut condition, &done.fresh);
+            condition
+        });
+    if done.held != peer.owned.held_at(&shop.name) {
+        *peer.owned.held_at_mut(&shop.name) = done.held;
+        peer.owned.touch();
+    }
+    peer.shadow.set_spec(done.spec, baked);
+    if let Some(condition) = condition {
+        peer.shadow.set_condition(condition);
+    }
+    Ok((!done.thrown.is_empty()).then(|| {
+        format!(
+            "No room in the trunk or the shop for the old {}: thrown away",
+            done.thrown.join(", ")
+        )
+    }))
+}
+
+/// `condition` with what's `fresh` new.
+fn renew(condition: &mut Condition, fresh: &Fresh) {
+    for (tread, new) in condition.treads.iter_mut().zip(fresh.tires) {
+        if new {
+            *tread = Default::default();
+        }
+    }
+    if fresh.engine {
+        condition.damage = Default::default();
+    }
+    if fresh.turbo {
+        condition.damage.turbo = 0.0;
+    }
 }
 
 /// A player bought a car (`spec`): the one they drove goes into their garage, with what's

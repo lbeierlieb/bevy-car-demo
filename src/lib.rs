@@ -24,6 +24,7 @@ pub mod ecu_ui;
 pub mod editor;
 pub mod events;
 pub mod fences;
+pub mod fitting;
 pub mod garage;
 pub mod gas;
 pub mod grade;

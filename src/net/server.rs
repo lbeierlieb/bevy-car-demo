@@ -514,7 +514,7 @@ fn receive(
                         },
                     ));
                 }
-                ToServer::Car(spec) => {
+                ToServer::Car { id, spec } => {
                     // The car the server has now, whether it took the change or not (a
                     // lent car stays), with what's in the trunk as the server says.
                     let spec = super::stash::changed(&peer, *spec, &catalogue);
@@ -522,6 +522,11 @@ fn receive(
                     if let Some(spec) = peer.shadow.spec().cloned() {
                         peer.tell(&ToClient::YourCar(Box::new(spec)));
                     }
+                    peer.tell(&ToClient::Done { id });
+                }
+                ToServer::Work { id, works } => {
+                    let shops = &server.shops;
+                    super::stash::work(&mut peer, id, &works, shops, &catalogue.0, &mut baked);
                 }
                 ToServer::Maps { fingerprint } => {
                     let text = crate::physics::engine::store::packed(fingerprint);

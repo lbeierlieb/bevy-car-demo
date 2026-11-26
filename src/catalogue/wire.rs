@@ -638,7 +638,8 @@ impl Item {
     /// Whether the tree refers only to what's in `catalogue`, with each part in a slot
     /// of its kind (and the part a slot needs there), sizes, paints and knobs within what
     /// there is (the chassis it's in deciding the anti-roll bars' sizes).
-    /// A loose part (not a car) goes by the chassis it's made for, if any.
+    /// A loose part (not a car) goes by the chassis it's made for, if any, and may lack
+    /// parts its slots require (a gearbox without its final drive).
     pub fn fine(&self, catalogue: &Catalogue) -> bool {
         let chassis = match catalogue.defs.get(self.def) {
             Some(PartDef {
@@ -649,10 +650,11 @@ impl Item {
                 .and_then(|name| catalogue.chassis.iter().position(|c| c.name == *name)),
             None => None,
         };
-        self.fine_in(catalogue, chassis)
+        let car = (catalogue.defs.get(self.def)).is_some_and(|def| def.kind == Kind::Chassis);
+        self.fine_in(catalogue, chassis, car)
     }
 
-    fn fine_in(&self, catalogue: &Catalogue, chassis: Option<usize>) -> bool {
+    fn fine_in(&self, catalogue: &Catalogue, chassis: Option<usize>, whole: bool) -> bool {
         let Some(def) = catalogue.defs.get(self.def) else {
             return false;
         };
@@ -667,12 +669,12 @@ impl Item {
             && (self.slots.iter().zip(&def.slots)).all(|(item, slot)| match item {
                 Some(item) => {
                     (catalogue.defs.get(item.def)).is_some_and(|d| d.kind == slot.kind)
-                        && item.fine_in(catalogue, chassis)
+                        && item.fine_in(catalogue, chassis, whole)
                         && slot
                             .needs
                             .is_none_or(|n| self.slots.get(n).is_some_and(Option::is_some))
                 }
-                None => !slot.required,
+                None => !slot.required || !whole,
             });
         knobs && paint && slots && self.variant < def.variants(catalogue, chassis).max(1)
     }
