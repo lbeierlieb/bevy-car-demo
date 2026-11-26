@@ -35,10 +35,11 @@ use crate::events::rounds::{EventAction, Rounds, run_rounds};
 use crate::heli::HeliPose;
 use crate::looks::{Looks, Motion};
 use crate::online::join_spot;
+use crate::owned::Owned;
 use crate::physics::collision::{self, OBSTACLE};
 use crate::physics::engine::maps::EngineMaps;
 use crate::physics::rigid_body::RigidBody;
-use crate::shops::Shop;
+use crate::shops::{Shop, ShopKind};
 use crate::spec::CarSpec;
 use crate::terrain::{Spawn, Terrain};
 use crate::traffic::network::Network;
@@ -181,7 +182,11 @@ impl Server {
     }
 
     /// Saves every player's car and waits (a little) until it's done: the server stops.
-    pub fn save_everyone<'a>(&self, peers: impl Iterator<Item = &'a Peer>, catalogue: &Catalogue) {
+    pub fn save_everyone<'a>(
+        &self,
+        peers: impl Iterator<Item = &'a mut Peer>,
+        catalogue: &Catalogue,
+    ) {
         let Some(accounts) = &self.accounts else {
             return;
         };
@@ -265,10 +270,13 @@ pub struct Peer {
     chatted: VecDeque<f64>,
     /// Their car as the server drives it from their inputs.
     pub shadow: Shadow,
-    /// Whether their car is a ghost (see `haunt`), and the marker it stopped at, while it's
-    /// still near.
+    /// Whether their car is a ghost (see `haunt`), and the marker it stopped at (and the
+    /// shop's place in the list, if it's a shop's), while it's still near.
     pub ghost: bool,
-    at_marker: Option<(Vec2, bool)>,
+    at_marker: Option<Marker>,
+    /// What they own besides the car they drive, and its revision last saved.
+    pub owned: Owned,
+    owned_saved: u32,
 }
 
 /// What a player has been told of a car: its looks' revision and the name it shows, and
@@ -282,6 +290,12 @@ struct Told {
 impl Peer {
     pub(crate) fn tell(&mut self, message: &ToClient) {
         self.link.send(message.reliable(), encode(message));
+    }
+
+    /// The shop (its place in the server's list) whose marker their car stopped at, while
+    /// it's still near.
+    pub fn at_shop(&self) -> Option<usize> {
+        self.at_marker.and_then(|(_, shop)| shop)
     }
 }
 
@@ -316,6 +330,8 @@ fn accept(
             shadow: Shadow::default(),
             ghost: false,
             at_marker: None,
+            owned: Owned::default(),
+            owned_saved: 0,
         });
     }
 }
@@ -458,7 +474,7 @@ fn receive(
                             let admitted = Admitted {
                                 name: name.trim().to_string(),
                                 account: None,
-                                car: None,
+                                belongings: Default::default(),
                             };
                             names.insert(admitted.name.to_lowercase());
                             let (network, catalogue) = (network.as_deref(), &catalogue);
@@ -500,8 +516,9 @@ fn receive(
                 }
                 ToServer::Car(spec) => {
                     // The car the server has now, whether it took the change or not (a
-                    // lent car stays).
-                    peer.shadow.set_spec(*spec, &mut baked);
+                    // lent car stays), with what's in the trunk as the server says.
+                    let spec = super::stash::changed(&peer, *spec, &catalogue);
+                    peer.shadow.set_spec(spec, &mut baked);
                     if let Some(spec) = peer.shadow.spec().cloned() {
                         peer.tell(&ToClient::YourCar(Box::new(spec)));
                     }
@@ -518,9 +535,22 @@ fn receive(
                     if let Some(made) = made.filter(|made| engine < made.engines.len()) {
                         let car = CarSetup::factory_in(&catalogue, chassis, engine);
                         let spec = CarSpec::of(&car);
-                        info!("Player {} took a {} from the showroom", peer.id, made.name);
-                        peer.shadow.set_spec(spec.clone(), &mut baked);
-                        peer.tell(&ToClient::YourCar(Box::new(spec)));
+                        let why = super::stash::bought(&mut peer, spec, &mut baked).err();
+                        if why.is_none() {
+                            info!("Player {} took a {} from the showroom", peer.id, made.name);
+                        }
+                        super::stash::tell(&mut peer, &server.shops, why);
+                    }
+                }
+                ToServer::Stash(stash) => {
+                    super::stash::act(&mut peer, stash, &server.shops, &catalogue, &mut baked);
+                }
+                ToServer::Rescue { to } => {
+                    let to = server.shops.get(usize::from(to));
+                    let to = to.filter(|shop| matches!(shop.kind, ShopKind::Gas | ShopKind::Parts));
+                    if let Some(shop) = to {
+                        let (at, yaw) = crate::shops::kerb(&terrain, shop.at);
+                        peer.shadow.special_rescue(&terrain, at, yaw);
                     }
                 }
                 ToServer::Inputs { last, inputs } => {
@@ -570,7 +600,7 @@ fn receive(
                 left.push((peer.id, name.clone()));
             }
             if let (Some(accounts), Some(account)) = (&server.accounts, peer.account) {
-                save(&peer, accounts, &catalogue);
+                save(&mut peer, accounts, &catalogue);
                 accounts.release(account);
             }
             commands.entity(entity).despawn();
@@ -691,7 +721,11 @@ fn admit(
     catalogue: &Current,
     baked: &mut BakedMaps,
 ) -> String {
-    let Admitted { name, account, car } = admitted;
+    let Admitted {
+        name,
+        account,
+        belongings,
+    } = admitted;
     info!("{name} joined (player {})", peer.id);
     let id = peer.id;
     // Their car starts where their game puts it, by the spawn.
@@ -714,13 +748,9 @@ fn admit(
     });
     // What there is, and the car they start in: theirs as saved, else the start car.
     peer.tell(&ToClient::Catalogue(catalogue.0.clone()));
-    let saved = car.and_then(|text| match crate::saved::read(&catalogue.0, &text) {
-        Ok(saved) => Some(saved),
-        Err(e) => {
-            warn!("{name}'s saved car: {e}; they get the start car");
-            None
-        }
-    });
+    let (saved, owned) = super::stash::read(&catalogue.0, &belongings, &name);
+    peer.owned = owned;
+    peer.owned_saved = peer.owned.revision;
     let spec = match saved {
         Some((spec, condition)) => {
             peer.shadow.set_condition(condition);
@@ -731,16 +761,25 @@ fn admit(
     peer.shadow.set_spec(spec.clone(), baked);
     peer.tell(&ToClient::YourCar(Box::new(spec)));
     peer.tell(&ToClient::Shops(server.shops.clone()));
+    super::stash::tell(peer, &server.shops, None);
     peer.tell(&ToClient::Events(server.events.clone()));
     peer.account = account;
     peer.name = Some(name.clone());
     name
 }
 
-/// Saves `peer`'s car, if they have an account and the server has their car.
-fn save(peer: &Peer, accounts: &Accounts, catalogue: &Catalogue) {
-    if let (Some(account), Some((spec, car))) = (peer.account, peer.shadow.kept()) {
-        accounts.save(account, crate::saved::write(catalogue, spec, car));
+/// Saves what `peer` owns, if they have an account: everything if anything but their car
+/// driven changed since it was last saved, else that car (if the server has it).
+fn save(peer: &mut Peer, accounts: &Accounts, catalogue: &Catalogue) {
+    let Some(account) = peer.account else {
+        return;
+    };
+    if peer.owned.revision != peer.owned_saved {
+        accounts.save_all(account, super::stash::belongings(peer, catalogue));
+        peer.owned_saved = peer.owned.revision;
+    } else if let Some((spec, car)) = peer.shadow.kept() {
+        let condition = crate::saved::Condition::of(car);
+        accounts.save(account, crate::saved::write(catalogue, spec, &condition));
     }
 }
 
@@ -748,7 +787,7 @@ fn save(peer: &Peer, accounts: &Accounts, catalogue: &Catalogue) {
 /// refreshed.
 fn keep(
     mut server: ResMut<Server>,
-    peers: Query<&Peer>,
+    mut peers: Query<&mut Peer>,
     catalogue: Res<Current>,
     time: Res<Time<Real>>,
 ) {
@@ -766,11 +805,14 @@ fn keep(
     }
     if now - server.saved >= SAVE_EVERY {
         server.saved = now;
-        for peer in &peers {
-            save(peer, accounts, &catalogue);
+        for mut peer in &mut peers {
+            save(&mut peer, accounts, &catalogue);
         }
     }
 }
+
+/// A marker on the map, and the shop's place in the list if it's a shop's.
+type Marker = (Vec2, Option<usize>);
 
 /// A car stopped on a shop's or event's marker (within `MARKER_RADIUS`, slower than this,
 /// m/s) is a ghost until this far from it (m): a little farther than the game lets go.
@@ -785,17 +827,15 @@ const MARKER_LEAVE: f32 = 9.0;
 fn haunt(
     mut commands: Commands,
     (server, rounds, terrain): (Res<Server>, Res<Rounds>, Res<Terrain>),
-    mut markers: Local<Option<Vec<(Vec2, bool)>>>,
+    mut markers: Local<Option<Vec<Marker>>>,
     mut peers: Query<(Entity, &mut Peer, Option<&Realm>)>,
     traffic: Query<(&TrafficCar, Option<&Realm>)>,
 ) {
     // Each marker, and whether it's a gas station's.
     let markers = markers.get_or_insert_with(|| {
-        let shops = (server.shops.iter()).map(|shop| {
-            let gas = shop.kind == crate::shops::ShopKind::Gas;
-            (crate::shops::kerb(&terrain, shop.at).0, gas)
-        });
-        let events = server.events.iter().map(|event| (event.at, false));
+        let shops = (server.shops.iter().enumerate())
+            .map(|(i, shop)| (crate::shops::kerb(&terrain, shop.at).0, Some(i)));
+        let events = server.events.iter().map(|event| (event.at, None));
         shops.chain(events).collect()
     });
     let in_lobby: HashSet<PlayerId> = (rounds.iter())
@@ -847,7 +887,8 @@ fn haunt(
             commands.entity(entity).remove::<Visitor>();
         }
         peer.ghost = ghost;
-        peer.shadow.refuel = peer.at_marker.is_some_and(|(_, gas)| gas);
+        let shop = peer.at_shop().and_then(|i| server.shops.get(i));
+        peer.shadow.refuel = shop.is_some_and(|shop| shop.kind == ShopKind::Gas);
     }
 }
 

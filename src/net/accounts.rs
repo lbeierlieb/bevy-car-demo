@@ -16,13 +16,31 @@ pub const REFRESH: Duration = crate::db::REFRESH;
 #[cfg(target_arch = "wasm32")]
 pub const REFRESH: Duration = Duration::from_secs(10);
 
-/// Someone let in: the name they play as, their account (none for a guest) and their car
-/// as saved (if any).
+/// Where a car or an item is: the car driven, or in the garage.
+pub const DRIVEN: &str = "driven";
+pub const GARAGE: &str = "garage";
+
+/// The place of an item held at the shop called `shop`.
+pub fn held_at(shop: &str) -> String {
+    format!("shop {shop}")
+}
+
+/// What an account owns as saved: its car driven, the cars in its garage, and loose parts
+/// with where each is (`db::GARAGE` or `db::held_at`), all as text.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Belongings {
+    pub car: Option<String>,
+    pub garage: Vec<String>,
+    pub items: Vec<(String, String)>,
+}
+
+/// Someone let in: the name they play as, their account (none for a guest) and what they
+/// own as saved.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Admitted {
     pub name: String,
     pub account: Option<AccountId>,
-    pub car: Option<String>,
+    pub belongings: Belongings,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -86,12 +104,12 @@ mod native {
                                 account.name
                             },
                             account: Some(account.id),
-                            car: account.car,
+                            belongings: account.belongings,
                         },
                         Login::Guest(name) => Admitted {
                             name,
                             account: None,
-                            car: None,
+                            belongings: Belongings::default(),
                         },
                     });
                     (answer.peer, admitted)
@@ -99,9 +117,14 @@ mod native {
                 .collect()
         }
 
-        /// Saves `account`'s car (text, `saved::write`).
+        /// Saves `account`'s car driven (text, `saved::write`).
         pub fn save(&self, account: AccountId, car: String) {
             self.db.save(account, car);
+        }
+
+        /// Saves everything `account` owns.
+        pub fn save_all(&self, account: AccountId, belongings: Belongings) {
+            self.db.save_all(account, belongings);
         }
 
         /// The accounts playing here are still playing.
@@ -132,6 +155,7 @@ impl Accounts {
         Vec::new()
     }
     pub fn save(&self, _: AccountId, _: String) {}
+    pub fn save_all(&self, _: AccountId, _: Belongings) {}
     pub fn refresh(&self, _: Vec<AccountId>) {}
     pub fn release(&self, _: AccountId) {}
     pub fn flush(&self, _: Duration) -> bool {

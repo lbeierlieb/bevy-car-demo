@@ -1,0 +1,256 @@
+//! The server's side of what players own (see `owned`): what they own read from what was
+//! saved and back, and what they ask done with it.
+
+use bevy::prelude::*;
+
+use super::accounts::{Belongings, GARAGE, held_at};
+use super::protocol::ToClient;
+use super::server::Peer;
+use super::shadow::BakedMaps;
+use crate::cargo;
+use crate::catalogue::{Catalogue, Shared};
+use crate::items::Item;
+use crate::owned::{GARAGE_CARS, GARAGE_PARTS, Owned, Parked, SHOP_HOLD, Source, Stash, name};
+use crate::saved::{self, Condition};
+use crate::shops::{Shop, ShopKind};
+use crate::spec::CarSpec;
+
+/// What `belongings` (as saved) come to: the car driven, if it reads, and the rest.
+pub fn read(
+    catalogue: &Shared,
+    belongings: &Belongings,
+    who: &str,
+) -> (Option<(CarSpec, Condition)>, Owned) {
+    let car = (belongings.car.as_ref()).and_then(|text| match saved::read(catalogue, text) {
+        Ok(car) => Some(car),
+        Err(e) => {
+            warn!("{who}'s saved car: {e}; they get the start car");
+            None
+        }
+    });
+    let mut owned = Owned::default();
+    for text in &belongings.garage {
+        match saved::read(catalogue, text) {
+            Ok((spec, condition)) => owned.cars.push(Parked { spec, condition }),
+            Err(e) => warn!("A car in {who}'s garage: {e}; left out"),
+        }
+    }
+    for (place, text) in &belongings.items {
+        let items = saved::read_items(catalogue, text);
+        if place == GARAGE {
+            owned.parts.extend(items);
+        } else if let Some(shop) = place.strip_prefix(&held_at("")) {
+            owned.held_at_mut(shop).extend(items);
+        } else {
+            warn!("{who}'s parts at \"{place}\"? Left out");
+        }
+    }
+    (car, owned)
+}
+
+/// What `peer` owns as it's saved: their car driven (if the server has it) and the rest.
+pub fn belongings(peer: &Peer, catalogue: &Catalogue) -> Belongings {
+    let one = |item: &Item| saved::write_items(catalogue, std::slice::from_ref(item));
+    let owned = &peer.owned;
+    let held = (owned.held.iter())
+        .flat_map(|(shop, items)| items.iter().map(move |item| (held_at(shop), item)));
+    Belongings {
+        car: (peer.shadow.kept())
+            .map(|(spec, car)| saved::write(catalogue, spec, &Condition::of(car))),
+        garage: (owned.cars.iter())
+            .map(|parked| saved::write(catalogue, &parked.spec, &parked.condition))
+            .collect(),
+        items: (owned
+            .parts
+            .iter()
+            .map(|item| (GARAGE.to_string(), one(item))))
+        .chain(held.map(|(place, item)| (place, one(item))))
+        .collect(),
+    }
+}
+
+/// Tells `peer` what they own (and why what they asked wasn't done, if it wasn't).
+pub fn tell(peer: &mut Peer, shops: &[Shop], why: Option<String>) {
+    let owned = Box::new(peer.owned.view(shops));
+    peer.tell(&ToClient::Owned { owned, why });
+}
+
+/// `peer`'s car is built as `spec` from now on: the server's copy is built anew, and the
+/// player told.
+fn drive(peer: &mut Peer, spec: CarSpec, baked: &mut BakedMaps) {
+    peer.shadow.set_spec(spec, baked);
+    if let Some(spec) = peer.shadow.spec().cloned() {
+        peer.tell(&ToClient::YourCar(Box::new(spec)));
+    }
+}
+
+/// Does what `peer` asked (as far as the rules allow), and tells them what they own now.
+pub fn act(
+    peer: &mut Peer,
+    stash: Stash,
+    shops: &[Shop],
+    catalogue: &Catalogue,
+    baked: &mut BakedMaps,
+) {
+    let why = try_act(peer, stash, shops, catalogue, baked).err();
+    if let Some(why) = &why {
+        info!("Player {}: {stash:?} not done: {why}", peer.id);
+    }
+    tell(peer, shops, why);
+}
+
+fn try_act(
+    peer: &mut Peer,
+    stash: Stash,
+    shops: &[Shop],
+    catalogue: &Catalogue,
+    baked: &mut BakedMaps,
+) -> Result<(), String> {
+    let here = peer.at_shop().and_then(|i| Some((i, shops.get(i)?)));
+    let Some(mut spec) = peer.shadow.spec().cloned() else {
+        return Err("You have no car yet".into());
+    };
+    if peer.shadow.lent() {
+        return Err("Not while you drive a lent car".into());
+    }
+    let none = || "That's gone already".to_string();
+    let garage =
+        |here: Option<(usize, &Shop)>| here.is_some_and(|(_, shop)| shop.kind == ShopKind::Garage);
+    let owned = &mut peer.owned;
+    match stash {
+        Stash::Unload { item } => {
+            let (_, shop) = here.ok_or("Stop at a shop or the garage park to unload")?;
+            let part = spec.cargo.get(usize::from(item)).ok_or_else(none)?;
+            if shop.kind == ShopKind::Garage {
+                if owned.parts.len() >= GARAGE_PARTS {
+                    return Err("Your garage is full".into());
+                }
+                owned.parts.push(part.clone());
+            } else {
+                let held = owned.held_at_mut(&shop.name);
+                if held.len() >= SHOP_HOLD {
+                    return Err(format!(
+                        "{} holds {SHOP_HOLD} parts for you at most",
+                        shop.name
+                    ));
+                }
+                held.push(part.clone());
+            }
+            spec.cargo.remove(usize::from(item));
+        }
+        Stash::Load { item } => {
+            let (_, shop) = here.ok_or("Stop at a shop or the garage park to load")?;
+            let from = if shop.kind == ShopKind::Garage {
+                &mut owned.parts
+            } else {
+                owned.held_at_mut(&shop.name)
+            };
+            let part = from.get(usize::from(item)).ok_or_else(none)?;
+            if !cargo::fits(catalogue, &spec.car, &spec.cargo, part) {
+                return Err(format!(
+                    "No room in the trunk for the {}",
+                    name(catalogue, part)
+                ));
+            }
+            spec.cargo.push(from.remove(usize::from(item)));
+        }
+        Stash::ShipHome { from, item } => {
+            let (_, shop) = here.ok_or("Stop at a shop to ship parts to your garage")?;
+            if owned.parts.len() >= GARAGE_PARTS {
+                return Err("Your garage is full".into());
+            }
+            let part = match from {
+                Source::Trunk => {
+                    (spec.cargo.get(usize::from(item))).ok_or_else(none)?;
+                    spec.cargo.remove(usize::from(item))
+                }
+                Source::Here if shop.kind == ShopKind::Garage => {
+                    return Err("It's in your garage".into());
+                }
+                Source::Here => {
+                    let held = owned.held_at_mut(&shop.name);
+                    held.get(usize::from(item)).ok_or_else(none)?;
+                    held.remove(usize::from(item))
+                }
+            };
+            owned.parts.push(part);
+        }
+        Stash::Ship { item, shop: to } => {
+            if !garage(here) {
+                return Err("Parts are shipped to shops from the garage park".into());
+            }
+            let to = shops
+                .get(usize::from(to))
+                .filter(|shop| shop.kind != ShopKind::Garage);
+            let to = to.ok_or("Not a shop")?;
+            owned.parts.get(usize::from(item)).ok_or_else(none)?;
+            if owned.held_at(&to.name).len() >= SHOP_HOLD {
+                return Err(format!(
+                    "{} holds {SHOP_HOLD} parts for you at most",
+                    to.name
+                ));
+            }
+            let part = owned.parts.remove(usize::from(item));
+            owned.held_at_mut(&to.name).push(part);
+        }
+        Stash::Drive { car } => {
+            if !garage(here) {
+                return Err("Cars are switched at the garage park".into());
+            }
+            owned.cars.get(usize::from(car)).ok_or_else(none)?;
+            let Some((_, now)) = peer.shadow.kept() else {
+                return Err("Your car isn't there yet".into());
+            };
+            let condition = Condition::of(now);
+            let picked = owned.cars.remove(usize::from(car));
+            owned
+                .cars
+                .insert(usize::from(car), Parked { spec, condition });
+            owned.touch();
+            peer.shadow.set_condition(picked.condition);
+            drive(peer, picked.spec, baked);
+            return Ok(());
+        }
+    }
+    owned.touch();
+    drive(peer, spec, baked);
+    Ok(())
+}
+
+/// A player bought a car (`spec`): the one they drove goes into their garage, with what's
+/// in its trunk (refused if the garage is full).
+pub fn bought(peer: &mut Peer, spec: CarSpec, baked: &mut BakedMaps) -> Result<(), String> {
+    if peer.shadow.lent() {
+        return Err("Not while you drive a lent car".into());
+    }
+    if let Some((old, car)) = peer.shadow.kept() {
+        if peer.owned.cars.len() >= GARAGE_CARS {
+            return Err(format!("Your garage holds {GARAGE_CARS} cars at most"));
+        }
+        let parked = Parked {
+            spec: old.clone(),
+            condition: Condition::of(car),
+        };
+        peer.owned.cars.push(parked);
+        peer.owned.touch();
+    }
+    drive(peer, spec, baked);
+    Ok(())
+}
+
+/// What a player's game says their car is built of now (changed in a shop): the trunk is
+/// the server's to say, and the parts the shop took off go into it while there's room
+/// (else the shop keeps them).
+pub fn changed(peer: &Peer, mut spec: CarSpec, catalogue: &Catalogue) -> CarSpec {
+    let Some(now) = peer.shadow.spec() else {
+        return spec;
+    };
+    let mut cargo = now.cargo.clone();
+    for part in crate::owned::replaced(&now.car, &spec.car) {
+        if cargo::fits(catalogue, &spec.car, &cargo, &part) {
+            cargo.push(part);
+        }
+    }
+    spec.cargo = cargo::fitting(catalogue, &spec.car, cargo);
+    spec
+}

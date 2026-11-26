@@ -43,6 +43,7 @@ pub mod night;
 pub mod obstacles;
 pub mod online;
 pub mod osm;
+pub mod owned;
 pub mod paint;
 pub mod physics;
 #[cfg(not(target_arch = "wasm32"))]

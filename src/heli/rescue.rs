@@ -44,9 +44,11 @@ const HOLD_CLEARANCE: f32 = 4.0;
 const HOLD_REACH: f32 = 8.0;
 const LOWER_RATE: f32 = 12.0;
 /// How fast it carries a car on average over a long way (m/s), with this long more for
-/// speeding up and slowing down (s).
+/// speeding up and slowing down (s); faster over a very long way (the special rescue's, to
+/// a shop), which takes at most `LONGEST_CARRY` (s).
 const CARRY_SPEED: f32 = 10.0;
 const CARRY_EXTRA: f32 = 1.0;
+const LONGEST_CARRY: f32 = 30.0;
 /// How high it lifts the car over the straight line to the road: a share of the way,
 /// within these (m), and at least this far over the land, trees and houses in between,
 /// what's within `LIFT_REACH` of the way (m).
@@ -292,7 +294,10 @@ impl Carry {
             rotation: car.body.rotation,
             yaw: heading(car.body.rotation),
             lift,
-            duration: lifting + CARRY_EXTRA + distance / CARRY_SPEED + setting_down,
+            duration: lifting
+                + CARRY_EXTRA
+                + distance / CARRY_SPEED.max(distance / LONGEST_CARRY)
+                + setting_down,
             lifting,
             setting_down,
             hooked: flight.t,

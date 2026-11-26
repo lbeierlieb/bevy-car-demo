@@ -73,13 +73,13 @@ pub fn start() -> LocalLink {
             app.insert_resource(server).add_systems(
                 Update,
                 move |server: Res<Server>,
-                      peers: Query<&Peer>,
+                      mut peers: Query<&mut Peer>,
                       catalogue: Res<Current>,
                       mut saved: Local<bool>,
                       mut exit: MessageWriter<AppExit>| {
                     if stopping.load(Ordering::Relaxed) && !*saved {
                         *saved = true;
-                        server.save_everyone(peers.iter(), &catalogue);
+                        server.save_everyone(peers.iter_mut().map(|p| p.into_inner()), &catalogue);
                         exit.write(AppExit::Success);
                     }
                 },

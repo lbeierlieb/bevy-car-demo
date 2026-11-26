@@ -72,9 +72,8 @@ impl Condition {
     }
 }
 
-/// `spec` as built and `car`'s condition, as text.
-pub fn write(catalogue: &Catalogue, spec: &CarSpec, car: &Car) -> String {
-    let condition = Condition::of(car);
+/// `spec` as built and in `condition`, as text.
+pub fn write(catalogue: &Catalogue, spec: &CarSpec, condition: &Condition) -> String {
     let mut text = format!("# car-sim car\nversion {VERSION}\n");
     text += &format!("fuel {} {}\n", condition.fuel, condition.octane);
     for (corner, wear) in condition.treads.iter().enumerate() {
@@ -406,7 +405,7 @@ mod tests {
                 car.corners[2].tread.wear = [0.1, 0.2, 0.3, 0.2, 0.15];
                 car.drivetrain.engine.damage.cylinders[1].piston = 0.4;
                 car.drivetrain.engine.damage.head_gasket = 0.05;
-                let text = write(&catalogue, &spec, &car);
+                let text = write(&catalogue, &spec, &Condition::of(&car));
                 let (read, condition) = read(&catalogue, &text).expect("reads back");
                 assert_eq!(read, spec, "{text}");
                 assert_eq!(condition, Condition::of(&car));
@@ -418,7 +417,7 @@ mod tests {
     fn a_part_gone_from_the_catalogue_goes_from_the_car() {
         let catalogue = crate::catalogue::builtin();
         let (spec, car) = car(0, 0);
-        let text = write(&catalogue, &spec, &car);
+        let text = write(&catalogue, &spec, &Condition::of(&car));
         // The passenger seat isn't there any more: the car comes without it.
         let seat = (spec.car.slots.iter().flatten())
             .map(|item| &catalogue.defs[item.def])

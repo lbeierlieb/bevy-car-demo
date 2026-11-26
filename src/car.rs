@@ -20,6 +20,9 @@ use crate::storage::Folder;
 use crate::terrain::Terrain;
 use crate::wheels::{HUB_INERTIA, Wheel};
 
+/// A tank with less than this in it (L) leaves a car stranded (`Car::stranded`).
+pub const STRANDED_LITRES: f32 = 0.5;
+
 /// Everything the simulation needs to know about a car, worked out from what it's built
 /// of: a chassis and what's fitted to it (`build`), and an engine.
 #[derive(Clone, Debug)]
@@ -496,6 +499,15 @@ impl Car {
     fn with_fuel_load(mut self) -> Self {
         self.load_fuel();
         self
+    }
+
+    /// Whether it can't drive on: its engine wrecked, or its tank all but empty (what the
+    /// special rescue is for).
+    pub fn stranded(&self) -> bool {
+        self.drivetrain
+            .engine
+            .blown(&self.setup.engine.build.hardware)
+            || self.fuel.litres() < STRANDED_LITRES
     }
 
     /// Fills (or drains) the tank to `fill` (a share of it).

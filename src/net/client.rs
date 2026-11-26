@@ -34,6 +34,7 @@ use crate::events::Event;
 use crate::events::round::{Action, Round};
 use crate::heli::HeliPose;
 use crate::looks::{Ghost, Looks, Motion};
+use crate::owned::OwnedView;
 use crate::physics::collision::Obb;
 use crate::physics::collision::{self, OBSTACLE};
 use crate::physics::engine::maps::EngineMaps;
@@ -159,10 +160,12 @@ const MOST_UNANSWERED: usize = 16;
 
 /// Builds the car the server said ours is now: in place of the active car (where it is,
 /// keeping the driver's settings), or the first one, by the spawn. The server's state of
-/// it follows (`Yours`).
+/// it follows (`Yours`). It's always placed (`ToServer::Place`): the server's copy of a car
+/// built anew waits for that, which a car rebuilt alike wouldn't otherwise send.
 fn take_your_car(
     mut commands: Commands,
     mut connection: ResMut<Connection>,
+    mut prediction: ResMut<Prediction>,
     terrain: Res<Terrain>,
     active: Res<ActiveCar>,
     mut cars: Query<(Entity, &mut Car)>,
@@ -193,6 +196,7 @@ fn take_your_car(
         }
     };
     let setup = spec.setup_with(maps);
+    prediction.forget_end();
     match cars.iter_mut().find(|(_, car)| car.index == active.0) {
         Some((_, mut car)) if car.setup.build == setup.build => {
             let rebuilt = car.rebuilt(setup);
@@ -288,6 +292,10 @@ pub struct Connection {
     pub catalogue: Option<Shared>,
     /// The car the server said ours is now, until it's built (`take_your_car`).
     pub your_car: Option<CarSpec>,
+    /// What we own besides our car, as the server last said, and why the last thing we
+    /// asked of it wasn't done (with when that came, s on `Time<Real>`).
+    pub owned: OwnedView,
+    pub refused: Option<(String, f64)>,
     /// Engine maps asked the server for (by fingerprint), and those it hasn't got.
     maps_asked: HashSet<u64>,
     maps_missing: HashSet<u64>,
@@ -364,6 +372,8 @@ impl Connection {
             unanswered: VecDeque::new(),
             catalogue: None,
             your_car: None,
+            owned: OwnedView::default(),
+            refused: None,
             maps_asked: HashSet::new(),
             maps_missing: HashSet::new(),
             inputs: VecDeque::new(),
@@ -747,6 +757,10 @@ fn receive(
                         connection.your_car = Some(*spec);
                     }
                 }
+            }
+            ToClient::Owned { owned, why } => {
+                connection.owned = *owned;
+                connection.refused = why.map(|why| (why, now));
             }
             ToClient::Maps { fingerprint, text } => {
                 let text = text.and_then(|text| crate::physics::engine::store::unpack(&text.0));

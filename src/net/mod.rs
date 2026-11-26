@@ -15,6 +15,7 @@ pub mod protocol;
 pub mod quic;
 pub mod server;
 pub mod shadow;
+pub mod stash;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 pub mod wire;
@@ -1090,6 +1091,121 @@ mod tests {
         let car = car(&mut back);
         assert_eq!(car.setup.build.paint, build.paint, "the paint");
         assert_eq!(car.drivetrain.engine.damage.head_gasket, 0.25, "the wear");
+        let _ = std::fs::remove_file(file);
+    }
+
+    /// A player at the garage park: a part a shop took off goes into the trunk, is
+    /// unloaded into the garage and loaded again, left at a shop; a new car puts the old one
+    /// in the garage, and the old one is driven again. All of it is kept when they leave.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_player_keeps_cars_and_parts_in_their_garage() {
+        use crate::owned::{Source, Stash};
+        use crate::shops::{Shop, ShopKind};
+        let listener = LoopbackListener::default();
+        let (file, mut server) = server_with_accounts(&listener, false);
+        let shops = vec![
+            Shop {
+                kind: ShopKind::Garage,
+                name: "Garages".into(),
+                at: Vec2::ZERO,
+            },
+            Shop {
+                kind: ShopKind::Parts,
+                name: "Parts".into(),
+                at: Vec2::new(0.0, 500.0),
+            },
+        ];
+        let with = server.world_mut().remove_resource::<Server>().unwrap();
+        server.insert_resource(with.with_shops(shops));
+        let mut anna = account_driver(&listener, "Anna", "secret");
+        assert!(matches!(
+            log_in(&mut server, &mut anna),
+            Status::Joined { .. }
+        ));
+        let catalogue = car(&mut anna).setup.build.catalogue.clone();
+        let ids = |items: &[crate::items::Item]| -> Vec<String> {
+            (items.iter())
+                .map(|item| item.def(&catalogue).id.clone())
+                .collect()
+        };
+        let trunk = |anna: &mut App| ids(&car(anna).setup.cargo);
+        let ask = |anna: &mut App, stash: Stash| {
+            anna.world_mut()
+                .resource_mut::<Connection>()
+                .say(&protocol::ToServer::Stash(stash));
+        };
+        // A sport clutch fitted in a shop: the stock one goes into the trunk.
+        let setup = car(&mut anna).setup.clone();
+        let mut build = setup.build.clone();
+        build.clutch = 1;
+        let changed = setup.changed(
+            build,
+            setup.engine.parts.clone(),
+            setup.engine.build.clone(),
+        );
+        let rebuilt = car(&mut anna).rebuilt(changed);
+        *car(&mut anna) = rebuilt;
+        run(&mut [&mut server, &mut anna], 60);
+        assert_eq!(trunk(&mut anna), ["clutch.stock"]);
+        // Into the garage, and back.
+        ask(&mut anna, Stash::Unload { item: 0 });
+        run(&mut [&mut server, &mut anna], 30);
+        assert!(trunk(&mut anna).is_empty());
+        assert_eq!(ids(&connection(&anna).owned.parts), ["clutch.stock"]);
+        ask(&mut anna, Stash::Load { item: 0 });
+        run(&mut [&mut server, &mut anna], 30);
+        assert_eq!(trunk(&mut anna), ["clutch.stock"]);
+        assert!(connection(&anna).owned.parts.is_empty());
+        // Unloaded again and shipped to the parts shop, which holds it.
+        ask(&mut anna, Stash::Unload { item: 0 });
+        ask(&mut anna, Stash::Ship { item: 0, shop: 1 });
+        run(&mut [&mut server, &mut anna], 30);
+        assert_eq!(ids(connection(&anna).owned.held_at(1)), ["clutch.stock"]);
+        // Shipping from here to here isn't a thing.
+        ask(
+            &mut anna,
+            Stash::ShipHome {
+                from: Source::Here,
+                item: 0,
+            },
+        );
+        run(&mut [&mut server, &mut anna], 10);
+        assert!(connection(&anna).refused.is_some());
+        // A new car: the sport clutch one goes into the garage.
+        anna.world_mut()
+            .resource_mut::<Connection>()
+            .say(&protocol::ToServer::Buy {
+                chassis: 0,
+                engine: 1,
+            });
+        run(&mut [&mut server, &mut anna], 60);
+        assert_eq!(connection(&anna).owned.cars.len(), 1);
+        // Driven nearly dry.
+        let tank = car(&mut anna).setup.tank.litres;
+        car(&mut anna).refuel(5.0 / tank);
+        run(&mut [&mut server, &mut anna], 60);
+        assert!(car(&mut anna).setup.build.limited_slip, "the 1.8");
+        // The old one again, as it was (its tank full); the 1.8 goes into the garage.
+        ask(&mut anna, Stash::Drive { car: 0 });
+        run(&mut [&mut server, &mut anna], 60);
+        assert_eq!(car(&mut anna).setup.build.clutch, 1);
+        assert!(car(&mut anna).fuel.litres() > 40.0);
+        let garage = &connection(&anna).owned.cars;
+        assert_eq!(garage.len(), 1);
+        // Kept when she leaves.
+        anna.world_mut().resource_mut::<Connection>().close();
+        run(&mut [&mut server], 5);
+        let mut back = account_driver(&listener, "Anna", "secret");
+        assert!(matches!(
+            log_in(&mut server, &mut back),
+            Status::Joined { .. }
+        ));
+        run(&mut [&mut server, &mut back], 30);
+        assert_eq!(car(&mut back).setup.build.clutch, 1);
+        let owned = &connection(&back).owned;
+        assert_eq!(owned.cars.len(), 1);
+        assert_eq!(ids(owned.held_at(1)), ["clutch.stock"]);
         let _ = std::fs::remove_file(file);
     }
 

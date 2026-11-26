@@ -50,16 +50,19 @@ pub enum ShopKind {
     Gas,
     /// A chassis dyno, with the ECU's tuning.
     Dyno,
+    /// The garage park: everyone's own garage, for cars and parts.
+    Garage,
 }
 
 impl ShopKind {
-    pub const ALL: [ShopKind; 6] = [
+    pub const ALL: [ShopKind; 7] = [
         Self::Showroom,
         Self::Parts,
         Self::Alignment,
         Self::Paint,
         Self::Gas,
         Self::Dyno,
+        Self::Garage,
     ];
 
     /// Its word in a list of shops.
@@ -71,6 +74,7 @@ impl ShopKind {
             Self::Paint => "paint",
             Self::Gas => "gas",
             Self::Dyno => "dyno",
+            Self::Garage => "garage",
         }
     }
 
@@ -83,6 +87,7 @@ impl ShopKind {
             Self::Paint => "Paint shop",
             Self::Gas => "Gas station",
             Self::Dyno => "Dyno",
+            Self::Garage => "Garage park",
         }
     }
 
@@ -94,6 +99,7 @@ impl ShopKind {
             Self::Paint => [255, 110, 190],
             Self::Gas => [255, 200, 40],
             Self::Dyno => [255, 120, 30],
+            Self::Garage => [230, 230, 230],
         }
     }
 }
@@ -514,8 +520,8 @@ mod tests {
     fn a_wrong_line_says_where() {
         assert_eq!(
             parse("gas 1 2 Pumps\n# a comment\n\nbakery 3 4 Bread").unwrap_err(),
-            "line 4: not a kind of shop (showroom, parts, alignment, paint, gas, dyno): \
-             bakery 3 4 Bread"
+            "line 4: not a kind of shop (showroom, parts, alignment, paint, gas, dyno, \
+             garage): bakery 3 4 Bread"
         );
         assert!(parse("gas 1 Pumps").is_err());
         assert!(parse("gas 1 2").is_err());

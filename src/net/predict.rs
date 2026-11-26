@@ -69,6 +69,12 @@ impl Prediction {
         self.placed
     }
 
+    /// Forgets how the last step left our car: the next step takes it as placed (a car
+    /// built anew).
+    pub fn forget_end(&mut self) {
+        self.end = None;
+    }
+
     /// How many of the server's states differed from ours, of how many compared, since
     /// the last log (for tests).
     #[cfg(test)]

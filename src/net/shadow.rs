@@ -366,6 +366,24 @@ impl Shadow {
         });
     }
 
+    /// Whether the player drives a car lent for an event's round (theirs is kept).
+    pub fn lent(&self) -> bool {
+        self.own.is_some()
+    }
+
+    /// The special rescue: a car that can't drive (`Car::stranded`) carried by the rescue
+    /// helicopter to `at` (map x, z), facing `yaw` (a shop's marker). Nothing for a car that
+    /// can drive, or while a rescue is under way.
+    pub fn special_rescue(&mut self, terrain: &Terrain, at: Vec2, yaw: f32) {
+        if let Some(car) = &self.car
+            && car.stranded()
+            && !self.rescue.busy()
+            && self.own.is_none()
+        {
+            self.rescue.call(car, terrain, at, yaw);
+        }
+    }
+
     /// Whether the server has the car (the rescue helicopter is coming for it or carrying
     /// it): the player's input does nothing.
     pub fn taken(&self) -> bool {

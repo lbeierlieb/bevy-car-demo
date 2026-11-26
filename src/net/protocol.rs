@@ -30,6 +30,7 @@ use crate::events::Event;
 use crate::events::round::{Action, Round};
 use crate::heli::HeliPose;
 use crate::looks::{AxleLooks, Looks, Motion, WheelMotion};
+use crate::owned::{OwnedView, Stash};
 use crate::physics::collision::Obb;
 use crate::physics::engine::families::Layout;
 use crate::physics::suspension::ArmGeometry;
@@ -39,7 +40,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 34;
+pub const PROTOCOL: u32 = 35;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -111,6 +112,14 @@ pub enum ToServer {
     Place {
         step: u32,
         state: Vec<u8>,
+    },
+    /// Something done with what we own: a part loaded or unloaded, shipped, another car
+    /// driven (see `owned`).
+    Stash(Stash),
+    /// The special rescue: our car (one that can't drive) carried to the shop `to` (its
+    /// place in the list: a gas station or a parts shop).
+    Rescue {
+        to: u16,
     },
 }
 
@@ -189,6 +198,12 @@ pub enum ToClient {
     Maps {
         fingerprint: u64,
         text: Option<Blob>,
+    },
+    /// What we own besides the car we drive, after joining and whenever it changes; and
+    /// why something we asked (`ToServer::Stash`) wasn't done, if it wasn't.
+    Owned {
+        owned: Box<OwnedView>,
+        why: Option<String>,
     },
 }
 
@@ -352,6 +367,14 @@ impl Wire for ToServer {
                 10u8.put(out);
                 fingerprint.put(out);
             }
+            ToServer::Stash(stash) => {
+                11u8.put(out);
+                stash.put(out);
+            }
+            ToServer::Rescue { to } => {
+                12u8.put(out);
+                to.put(out);
+            }
         }
     }
 
@@ -387,6 +410,8 @@ impl Wire for ToServer {
             10 => ToServer::Maps {
                 fingerprint: r.get()?,
             },
+            11 => ToServer::Stash(r.get()?),
+            12 => ToServer::Rescue { to: r.get()? },
             _ => return None,
         })
     }
@@ -497,6 +522,11 @@ impl Wire for ToClient {
                 fingerprint.put(out);
                 text.put(out);
             }
+            ToClient::Owned { owned, why } => {
+                21u8.put(out);
+                owned.put(out);
+                why.put(out);
+            }
         }
     }
 
@@ -549,6 +579,10 @@ impl Wire for ToClient {
             20 => ToClient::Maps {
                 fingerprint: r.get()?,
                 text: r.get()?,
+            },
+            21 => ToClient::Owned {
+                owned: Box::new(r.get()?),
+                why: r.get()?,
             },
             _ => return None,
         })
