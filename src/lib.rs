@@ -61,6 +61,7 @@ pub mod storage;
 pub mod terrain;
 pub mod traffic;
 pub mod trees;
+pub mod trunk;
 pub mod tunes;
 pub mod ui;
 pub mod visuals;

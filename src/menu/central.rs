@@ -24,6 +24,7 @@ use crate::input::{
     WheelConfig, action_value,
 };
 use crate::net::{Connection, Status};
+use crate::shops::ShopKind;
 use crate::wheel_base::{ForceFeedback, WheelBase};
 
 pub struct CentralMenuPlugin;
@@ -201,6 +202,7 @@ struct Driving<'w, 's> {
     spectating: Option<Res<'w, Spectating>>,
     away: Res<'w, Away>,
     presses: ResMut<'w, MenuPresses>,
+    shops: Option<Res<'w, crate::shops::Shops>>,
 }
 
 #[derive(SystemParam)]
@@ -266,7 +268,7 @@ fn show(
         .back(Some(back))
         .show(ctx, |ui| match screen {
             Screen::Main => go = main(ui, &mut menu, &mut online, &mut commands, &mut exit),
-            Screen::Actions => actions(ui, &mut menu, &mut driving, &wheel.config),
+            Screen::Actions => actions(ui, &mut menu, &mut driving, &wheel.config, &mut online),
             Screen::Settings => {
                 for screen in [
                     Screen::Aids,
@@ -399,7 +401,13 @@ fn bound(config: &WheelConfig, action: Action) -> String {
 
 /// Things to do while driving, also for a controller without the buttons: reset, the
 /// map, the camera.
-fn actions(ui: &mut egui::Ui, menu: &mut CentralMenu, driving: &mut Driving, config: &WheelConfig) {
+fn actions(
+    ui: &mut egui::Ui,
+    menu: &mut CentralMenu,
+    driving: &mut Driving,
+    config: &WheelConfig,
+    online: &mut Online,
+) {
     let car = driving
         .cars
         .iter()
@@ -429,6 +437,43 @@ fn actions(ui: &mut egui::Ui, menu: &mut CentralMenu, driving: &mut Driving, con
         driving.presses.press(Action::View);
         menu.close();
     }
+    // The special rescue: a car that can't drive on, to the nearest gas station or parts
+    // shop (whether it goes is the server's call too).
+    let Some(connection) = online.connection.as_deref_mut() else {
+        return;
+    };
+    let Some(car) = car else {
+        return;
+    };
+    kit::section(ui, "Special rescue");
+    let stranded = can_reset && car.stranded();
+    let p = car.body.position.xz();
+    for kind in [ShopKind::Gas, ShopKind::Parts] {
+        let list = driving
+            .shops
+            .as_ref()
+            .map_or(&[][..], |shops| &shops.list[..]);
+        let nearest = (list.iter().enumerate())
+            .filter(|(_, placed)| placed.shop.kind == kind)
+            .min_by(|(_, a), (_, b)| a.marker.distance(p).total_cmp(&b.marker.distance(p)));
+        let Some((i, placed)) = nearest else {
+            continue;
+        };
+        let label = format!("To {}", placed.shop.name);
+        let far = format!("{:.1} km", placed.marker.distance(p) / 1000.0);
+        let go = ui
+            .add_enabled_ui(stranded, |ui| kit::button_with(ui, &label, &far))
+            .inner;
+        if go.clicked() {
+            connection.say(&crate::net::protocol::ToServer::Rescue { to: i as u16 });
+            menu.close();
+        }
+    }
+    kit::note(
+        ui,
+        "For a car that can't drive on (its engine wrecked, its tank empty): the rescue \
+         helicopter takes it to the nearest gas station or parts shop.",
+    );
 }
 
 fn toggle_fullscreen(windows: &mut Query<&mut Window>) {

@@ -210,11 +210,14 @@ pub struct AtShop {
     left: Option<usize>,
     /// Per kind of shop, whether the car just came into one (until its window is shown).
     came_in: [bool; ShopKind::ALL.len()],
+    /// The trunk and parts screens open over the shop's window, if any (see `trunk`).
+    pub stash: Vec<crate::trunk::Screen>,
 }
 
 impl AtShop {
     fn leave(&mut self) {
         self.left = self.shop.take();
+        self.stash.clear();
     }
 }
 
@@ -248,7 +251,13 @@ pub fn arrive(
     if !near(at.left) {
         at.left = None;
     }
-    if at.shop.is_some() && (!near(at.shop) || input.take_back()) {
+    if !near(at.shop) {
+        at.stash.clear();
+    }
+    if !at.stash.is_empty() && input.take_back() {
+        // Back a screen in the trunk and parts.
+        at.stash.pop();
+    } else if at.shop.is_some() && (!near(at.shop) || input.take_back()) {
         at.leave();
     }
     let stopped = car.body.velocity.length() < STOPPED;
@@ -279,8 +288,13 @@ pub fn shop_window(
     if placed.shop.kind != kind {
         return false;
     }
+    if !at.stash.is_empty() {
+        // The trunk and parts screens are up in its place.
+        return true;
+    }
     let came_in = std::mem::take(&mut at.came_in[kind as usize]);
     let title = format!("{} ({})", placed.shop.name, kind.title());
+    let mut stash = false;
     let leave = Panel::new("shop", &title)
         .place(Place::Right)
         .width(420.0)
@@ -288,12 +302,17 @@ pub fn shop_window(
         .show(ctx, |ui| {
             contents(ui, came_in);
             ui.add_space(4.0);
+            if kit::submenu(ui, crate::trunk::Screen::List.title()).clicked() {
+                stash = true;
+            }
             let leave = kit::button(ui, "Leave").clicked();
             kit::note(ui, "Or leave and drive off the marker.");
             leave
         });
     if leave {
         at.leave();
+    } else if stash {
+        at.stash.push(crate::trunk::Screen::List);
     }
     true
 }

@@ -15,8 +15,10 @@ fn main() {
             online::OnlinePlugin,
             // Esc, Start or the wheel's menu button: everything else.
             menu::central::CentralMenuPlugin,
-            // The shops a server puts on the map (none alone).
+            // The shops a server puts on the map (none alone), and at each the trunk and
+            // the parts kept there (the garage's at the garage park).
             shops::ShopsPlugin,
+            trunk::TrunkPlugin,
             // The events a server puts on the map: a car hunt (none alone).
             events::EventsPlugin,
             // (The car is the server's to give: `net::client::take_your_car`.)
