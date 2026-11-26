@@ -74,6 +74,11 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync", "time", "ma
 wtransport = { version = "0.7.2", default-features = false, features = ["ring", "self-signed", "dangerous-configuration"] }
 # The server tells a Telegram bot who joins and leaves (`bin/server.rs`).
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+# Accounts and what players own, in a database (`db.rs`): SQLite playing alone (and by
+# default on a server), MySQL or PostgreSQL for a server that wants one.
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "any", "sqlite-bundled", "mysql", "postgres", "tls-rustls-ring-webpki"] }
+# Passwords are kept as argon2 hashes.
+argon2 = "0.6"
 
 # Fast-ish debug builds: optimize dependencies, keep our own crate quick to compile.
 [profile.dev]

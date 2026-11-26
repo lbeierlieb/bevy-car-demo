@@ -1,0 +1,829 @@
+//! The server's database (native only: the web game never has one): accounts, the instance
+//! lock and what players own (their car, for now). SQLite (a file: playing alone, or a
+//! server by default), MySQL/MariaDB or PostgreSQL, by the URL's scheme, through sqlx's
+//! `Any` driver; each has its own migrations (`MIGRATIONS`), run on opening.
+//!
+//! A server talks to it through `Database`: a thread of its own runs the queries one after
+//! another (and the password hashing, which is slow on purpose), so the game's frames never
+//! wait for it; answers to logins come back to be picked up (`Database::answers`). The
+//! server's `user` commands use a `Store` directly.
+//!
+//! **Accounts** are a name (the name in the game, unique whatever the case) and a password,
+//! kept as an argon2 hash. **The instance lock**: several server instances may share one
+//! database, and a player plays on one at a time: logging in takes a row naming the
+//! instance, refreshed while they play (`REFRESH`), taken over by another instance once
+//! it's older than `STALE`, deleted when they leave. **Cars**: each account's car as text
+//! (`saved::write`), written while they play and when they leave.
+
+use std::sync::Mutex;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use argon2::Argon2;
+use argon2::password_hash::phc::PasswordHash;
+use argon2::password_hash::{PasswordHasher, PasswordVerifier};
+use sqlx::AnyPool;
+use sqlx::any::{AnyPoolOptions, AnyRow};
+use sqlx::{AssertSqlSafe, Row};
+
+/// An account's number in the database.
+pub type AccountId = i64;
+
+/// The account playing alone uses (made when first needed, without a password).
+pub const DEFAULT_USER: &str = "default";
+
+/// The longest name (characters).
+pub const NAME_LENGTH: usize = 24;
+
+/// How often a playing account's lock is refreshed, and how old one is when another
+/// instance may take it over.
+pub const REFRESH: Duration = Duration::from_secs(10);
+pub const STALE: Duration = Duration::from_secs(30);
+
+/// What a login with a wrong name or password is told (the same for both).
+const WRONG: &str = "Wrong name or password";
+
+/// An account logged in: its number, its name as made, and its car as saved (if any).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Account {
+    pub id: AccountId,
+    pub name: String,
+    pub car: Option<String>,
+}
+
+/// Who came in.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Login {
+    Account(Account),
+    /// A guest by this name: nothing of theirs is kept.
+    Guest(String),
+}
+
+/// Who a server lets in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Admission {
+    /// Accounts by their password, and (if allowed) guests: a name that isn't an account's,
+    /// without a password.
+    Accounts { guests: bool },
+    /// Playing alone: whoever comes is the default user (`DEFAULT_USER`).
+    Alone,
+}
+
+/// A name for an account or a guest: trimmed, 1 to `NAME_LENGTH` characters, no control
+/// characters.
+pub fn clean_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        Err("Give a name".into())
+    } else if name.chars().count() > NAME_LENGTH {
+        Err(format!("A name has at most {NAME_LENGTH} characters"))
+    } else if name.chars().any(char::is_control) {
+        Err("A name can't have control characters".into())
+    } else {
+        Ok(name.to_string())
+    }
+}
+
+/// What two names are the same as, whatever the case.
+fn folded(name: &str) -> String {
+    name.to_lowercase()
+}
+
+/// Milliseconds since the Unix epoch.
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
+/// The SQL dialects there are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Dialect {
+    Sqlite,
+    MySql,
+    Postgres,
+}
+
+/// Each migration's statements for each dialect, in order (the version after the n-th is
+/// n + 1).
+struct Migration {
+    sqlite: &'static [&'static str],
+    mysql: &'static [&'static str],
+    postgres: &'static [&'static str],
+}
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    sqlite: &[
+        "CREATE TABLE accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
+         folded TEXT NOT NULL UNIQUE, password TEXT NOT NULL, created BIGINT NOT NULL)",
+        "CREATE TABLE active (account BIGINT PRIMARY KEY, instance TEXT NOT NULL, \
+         refreshed BIGINT NOT NULL)",
+        "CREATE TABLE cars (id INTEGER PRIMARY KEY AUTOINCREMENT, owner BIGINT NOT NULL, \
+         data TEXT NOT NULL, saved BIGINT NOT NULL)",
+        "CREATE INDEX cars_owner ON cars (owner)",
+    ],
+    mysql: &[
+        "CREATE TABLE accounts (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(64) NOT \
+         NULL, folded VARCHAR(64) NOT NULL UNIQUE, password VARCHAR(255) NOT NULL, created \
+         BIGINT NOT NULL) CHARACTER SET utf8mb4",
+        "CREATE TABLE active (account BIGINT PRIMARY KEY, instance VARCHAR(64) NOT NULL, \
+         refreshed BIGINT NOT NULL) CHARACTER SET utf8mb4",
+        "CREATE TABLE cars (id BIGINT AUTO_INCREMENT PRIMARY KEY, owner BIGINT NOT NULL, \
+         data MEDIUMTEXT NOT NULL, saved BIGINT NOT NULL, INDEX cars_owner (owner)) \
+         CHARACTER SET utf8mb4",
+    ],
+    postgres: &[
+        "CREATE TABLE accounts (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, name \
+         TEXT NOT NULL, folded TEXT NOT NULL UNIQUE, password TEXT NOT NULL, created BIGINT \
+         NOT NULL)",
+        "CREATE TABLE active (account BIGINT PRIMARY KEY, instance TEXT NOT NULL, refreshed \
+         BIGINT NOT NULL)",
+        "CREATE TABLE cars (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, owner \
+         BIGINT NOT NULL, data TEXT NOT NULL, saved BIGINT NOT NULL)",
+        "CREATE INDEX cars_owner ON cars (owner)",
+    ],
+}];
+
+/// A connection to the database, for running its queries (async: `Database` runs them on
+/// a thread of its own, the `user` commands on a runtime of their own).
+pub struct Store {
+    pool: AnyPool,
+    dialect: Dialect,
+}
+
+/// A database error as text.
+fn text(e: sqlx::Error) -> String {
+    e.to_string()
+}
+
+impl Store {
+    /// Connects to the database at `url` and brings its tables up to date. A plain path
+    /// is an SQLite file; SQLite files are made if they aren't there.
+    pub async fn open(url: &str) -> Result<Self, String> {
+        sqlx::any::install_default_drivers();
+        let scheme = url.split_once(':').map_or("", |(scheme, _)| scheme);
+        let (dialect, url) = match scheme {
+            "sqlite" => (Dialect::Sqlite, url.to_string()),
+            "mysql" | "mariadb" => (Dialect::MySql, url.replacen("mariadb:", "mysql:", 1)),
+            "postgres" | "postgresql" => (Dialect::Postgres, url.to_string()),
+            _ if !url.contains("://") => (Dialect::Sqlite, format!("sqlite://{url}")),
+            other => return Err(format!("not a database URL scheme: {other}")),
+        };
+        let memory = url.contains(":memory:");
+        // An SQLite file is made if it isn't there.
+        let url = if dialect == Dialect::Sqlite && !memory && !url.contains("mode=") {
+            let joint = if url.contains('?') { '&' } else { '?' };
+            format!("{url}{joint}mode=rwc")
+        } else {
+            url
+        };
+        // SQLite writes one at a time anyway (and an in-memory one is one connection's).
+        let options = match dialect {
+            Dialect::Sqlite => AnyPoolOptions::new()
+                .max_connections(1)
+                .min_connections(1)
+                .idle_timeout(None)
+                .max_lifetime(None),
+            _ => AnyPoolOptions::new().max_connections(4),
+        };
+        let pool = options.connect(&url).await.map_err(text)?;
+        let store = Self { pool, dialect };
+        store.migrate().await?;
+        Ok(store)
+    }
+
+    /// `sql` with `?` placeholders in this dialect (PostgreSQL numbers them).
+    fn sql(&self, sql: &'static str) -> AssertSqlSafe<String> {
+        if self.dialect != Dialect::Postgres {
+            return AssertSqlSafe(sql.to_string());
+        }
+        let mut out = String::with_capacity(sql.len() + 8);
+        let mut n = 0;
+        for c in sql.chars() {
+            if c == '?' {
+                n += 1;
+                out += &format!("${n}");
+            } else {
+                out.push(c);
+            }
+        }
+        AssertSqlSafe(out)
+    }
+
+    /// Runs the migrations the database hasn't had yet.
+    async fn migrate(&self) -> Result<(), String> {
+        sqlx::query("CREATE TABLE IF NOT EXISTS schema_version (version BIGINT NOT NULL)")
+            .execute(&self.pool)
+            .await
+            .map_err(text)?;
+        let version: Option<i64> = sqlx::query("SELECT MAX(version) FROM schema_version")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(text)?
+            .try_get(0)
+            .map_err(text)?;
+        let version = version.unwrap_or(0).max(0) as usize;
+        if version > MIGRATIONS.len() {
+            return Err(format!(
+                "the database is of a newer version of the game ({version}, this one knows \
+                 up to {})",
+                MIGRATIONS.len()
+            ));
+        }
+        for (done, migration) in MIGRATIONS.iter().enumerate().skip(version) {
+            let statements = match self.dialect {
+                Dialect::Sqlite => migration.sqlite,
+                Dialect::MySql => migration.mysql,
+                Dialect::Postgres => migration.postgres,
+            };
+            let mut tx = self.pool.begin().await.map_err(text)?;
+            for statement in statements {
+                sqlx::query(*statement)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| format!("migration {}: {e}", done + 1))?;
+            }
+            sqlx::query(self.sql("INSERT INTO schema_version (version) VALUES (?)"))
+                .bind(done as i64 + 1)
+                .execute(&mut *tx)
+                .await
+                .map_err(text)?;
+            tx.commit().await.map_err(text)?;
+        }
+        Ok(())
+    }
+
+    /// The account of `name` (whatever the case): its number, name and password hash.
+    async fn account(&self, name: &str) -> Result<Option<(AccountId, String, String)>, String> {
+        let row: Option<AnyRow> =
+            sqlx::query(self.sql("SELECT id, name, password FROM accounts WHERE folded = ?"))
+                .bind(folded(name))
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(text)?;
+        row.map(|row| {
+            Ok((
+                row.try_get(0).map_err(text)?,
+                row.try_get(1).map_err(text)?,
+                row.try_get(2).map_err(text)?,
+            ))
+        })
+        .transpose()
+    }
+
+    /// Makes an account. An empty password is none: nobody can log in to it (the default
+    /// user's).
+    pub async fn add_user(&self, name: &str, password: &str) -> Result<AccountId, String> {
+        let name = clean_name(name)?;
+        if self.account(&name).await?.is_some() {
+            return Err(format!("There's already an account named {name}"));
+        }
+        let hash = hash(password)?;
+        sqlx::query(
+            self.sql("INSERT INTO accounts (name, folded, password, created) VALUES (?, ?, ?, ?)"),
+        )
+        .bind(&name)
+        .bind(folded(&name))
+        .bind(hash)
+        .bind(now_ms())
+        .execute(&self.pool)
+        .await
+        .map_err(text)?;
+        let (id, ..) = self.account(&name).await?.ok_or("the account went")?;
+        Ok(id)
+    }
+
+    /// Gives an account a new password.
+    pub async fn set_password(&self, name: &str, password: &str) -> Result<(), String> {
+        let hash = hash(password)?;
+        let done = sqlx::query(self.sql("UPDATE accounts SET password = ? WHERE folded = ?"))
+            .bind(hash)
+            .bind(folded(name))
+            .execute(&self.pool)
+            .await
+            .map_err(text)?;
+        if done.rows_affected() == 0 {
+            return Err(format!("There's no account named {}", name.trim()));
+        }
+        Ok(())
+    }
+
+    /// Removes an account and everything it owns.
+    pub async fn remove_user(&self, name: &str) -> Result<(), String> {
+        let Some((id, ..)) = self.account(name).await? else {
+            return Err(format!("There's no account named {}", name.trim()));
+        };
+        let mut tx = self.pool.begin().await.map_err(text)?;
+        for sql in [
+            "DELETE FROM cars WHERE owner = ?",
+            "DELETE FROM active WHERE account = ?",
+            "DELETE FROM accounts WHERE id = ?",
+        ] {
+            sqlx::query(self.sql(sql))
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(text)?;
+        }
+        tx.commit().await.map_err(text)
+    }
+
+    /// Every account's name and when it was made (ms since the epoch), by name.
+    pub async fn users(&self) -> Result<Vec<(String, i64)>, String> {
+        let rows = sqlx::query("SELECT name, created FROM accounts ORDER BY folded")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(text)?;
+        rows.iter()
+            .map(|row| Ok((row.try_get(0).map_err(text)?, row.try_get(1).map_err(text)?)))
+            .collect()
+    }
+
+    /// Lets someone in as `name` with `password` (empty: none), as `admission` allows,
+    /// taking their account's lock for `instance` (by force playing alone: nobody else
+    /// plays on that database).
+    pub async fn login(
+        &self,
+        name: &str,
+        password: &str,
+        admission: Admission,
+        instance: &str,
+    ) -> Result<Login, String> {
+        let (id, name) = match admission {
+            Admission::Alone => match self.account(DEFAULT_USER).await? {
+                Some((id, name, _)) => (id, name),
+                None => (self.add_user(DEFAULT_USER, "").await?, DEFAULT_USER.into()),
+            },
+            Admission::Accounts { guests } => {
+                let name = clean_name(name)?;
+                let account = self.account(&name).await?;
+                match account {
+                    None if password.is_empty() && guests => return Ok(Login::Guest(name)),
+                    None if password.is_empty() => {
+                        return Err("This server lets in only players with an account: \
+                                    give your account's name and password (its admin makes \
+                                    accounts)"
+                            .into());
+                    }
+                    Some(_) if password.is_empty() => {
+                        return Err(format!(
+                            "{name} is an account's name on this server: give its password"
+                        ));
+                    }
+                    None => return Err(WRONG.into()),
+                    Some((id, name, hash)) => {
+                        if !verify(password, &hash) {
+                            return Err(WRONG.into());
+                        }
+                        (id, name)
+                    }
+                }
+            }
+        };
+        let force = admission == Admission::Alone;
+        if !self.lock(id, instance, force).await? {
+            return Err(
+                "You're playing on another of this server's instances (if you just \
+                        left it, try again in half a minute)"
+                    .into(),
+            );
+        }
+        let car = self.car(id).await?;
+        Ok(Login::Account(Account { id, name, car }))
+    }
+
+    /// Takes account `id`'s lock for `instance`: whether it got it (its own, a stale one,
+    /// none there, or by `force`).
+    async fn lock(&self, id: AccountId, instance: &str, force: bool) -> Result<bool, String> {
+        let now = now_ms();
+        let stale = now - STALE.as_millis() as i64;
+        let taken = sqlx::query(self.sql(
+            "UPDATE active SET instance = ?, refreshed = ? WHERE account = ? AND \
+             (instance = ? OR refreshed < ? OR ?)",
+        ))
+        .bind(instance)
+        .bind(now)
+        .bind(id)
+        .bind(instance)
+        .bind(stale)
+        .bind(force)
+        .execute(&self.pool)
+        .await
+        .map_err(text)?;
+        if taken.rows_affected() > 0 {
+            return Ok(true);
+        }
+        let added = sqlx::query(
+            self.sql("INSERT INTO active (account, instance, refreshed) VALUES (?, ?, ?)"),
+        )
+        .bind(id)
+        .bind(instance)
+        .bind(now)
+        .execute(&self.pool)
+        .await;
+        if added.is_ok() {
+            return Ok(true);
+        }
+        // There's a row: ours after all (MySQL counts only rows it changed), or another's.
+        let holder: Option<AnyRow> =
+            sqlx::query(self.sql("SELECT instance FROM active WHERE account = ?"))
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(text)?;
+        let holder: Option<String> = holder.map(|row| row.try_get(0)).transpose().map_err(text)?;
+        Ok(holder.as_deref() == Some(instance))
+    }
+
+    /// Refreshes the locks of the accounts playing on `instance`.
+    pub async fn refresh(&self, instance: &str, accounts: &[AccountId]) -> Result<(), String> {
+        let now = now_ms();
+        for &id in accounts {
+            sqlx::query(
+                self.sql("UPDATE active SET refreshed = ? WHERE account = ? AND instance = ?"),
+            )
+            .bind(now)
+            .bind(id)
+            .bind(instance)
+            .execute(&self.pool)
+            .await
+            .map_err(text)?;
+        }
+        Ok(())
+    }
+
+    /// Lets go of account `id`'s lock (if `instance` still has it).
+    pub async fn release(&self, instance: &str, id: AccountId) -> Result<(), String> {
+        sqlx::query(self.sql("DELETE FROM active WHERE account = ? AND instance = ?"))
+            .bind(id)
+            .bind(instance)
+            .execute(&self.pool)
+            .await
+            .map_err(text)?;
+        Ok(())
+    }
+
+    /// Account `id`'s car as saved.
+    pub async fn car(&self, id: AccountId) -> Result<Option<String>, String> {
+        let row: Option<AnyRow> =
+            sqlx::query(self.sql("SELECT data FROM cars WHERE owner = ? ORDER BY id LIMIT 1"))
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(text)?;
+        row.map(|row| row.try_get(0)).transpose().map_err(text)
+    }
+
+    /// Saves account `id`'s car (one each, for now).
+    pub async fn save_car(&self, id: AccountId, car: &str) -> Result<(), String> {
+        let now = now_ms();
+        let updated = sqlx::query(self.sql("UPDATE cars SET data = ?, saved = ? WHERE owner = ?"))
+            .bind(car)
+            .bind(now)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(text)?;
+        if updated.rows_affected() == 0 && self.car(id).await?.is_none() {
+            sqlx::query(self.sql("INSERT INTO cars (owner, data, saved) VALUES (?, ?, ?)"))
+                .bind(id)
+                .bind(car)
+                .bind(now)
+                .execute(&self.pool)
+                .await
+                .map_err(text)?;
+        }
+        Ok(())
+    }
+}
+
+/// `password`'s argon2 hash (a PHC string); none for an empty password, which nothing
+/// matches.
+fn hash(password: &str) -> Result<String, String> {
+    if password.is_empty() {
+        return Ok(String::new());
+    }
+    Argon2::default()
+        .hash_password(password.as_bytes())
+        .map(|hash| hash.to_string())
+        .map_err(|e| format!("couldn't hash the password: {e}"))
+}
+
+/// Whether `password` is the one `hash` was made of.
+fn verify(password: &str, hash: &str) -> bool {
+    PasswordHash::new(hash).is_ok_and(|hash| {
+        Argon2::default()
+            .verify_password(password.as_bytes(), &hash)
+            .is_ok()
+    })
+}
+
+/// What the database thread is asked to do.
+enum Job {
+    Login {
+        peer: u32,
+        name: String,
+        password: String,
+        admission: Admission,
+    },
+    Save {
+        account: AccountId,
+        car: String,
+    },
+    Refresh(Vec<AccountId>),
+    Release(AccountId),
+    /// Answers once everything asked before is done.
+    Flush(Sender<()>),
+}
+
+/// The answer to a login: for whom (the server's player number), and who came in or why
+/// not.
+pub struct Answer {
+    pub peer: u32,
+    pub login: Result<Login, String>,
+}
+
+/// The database as a server uses it: a thread of its own runs what it's asked, in order.
+/// It ends when this is dropped, once it's done.
+pub struct Database {
+    jobs: Sender<Job>,
+    answers: Mutex<Receiver<Answer>>,
+}
+
+impl Database {
+    /// Opens the database at `url` (see `Store::open`) on a thread of its own, waiting
+    /// until it's open. `instance` names this server among the ones sharing it.
+    pub fn open(url: &str, instance: String) -> Result<Self, String> {
+        let (jobs, inbox) = channel::<Job>();
+        let (answer, answers) = channel::<Answer>();
+        let (opened, open) = channel::<Result<(), String>>();
+        let url = url.to_string();
+        std::thread::Builder::new()
+            .name("database".into())
+            .spawn(move || {
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(e) => {
+                        let _ = opened.send(Err(e.to_string()));
+                        return;
+                    }
+                };
+                let store = match runtime.block_on(Store::open(&url)) {
+                    Ok(store) => store,
+                    Err(e) => {
+                        let _ = opened.send(Err(e));
+                        return;
+                    }
+                };
+                let _ = opened.send(Ok(()));
+                for job in inbox {
+                    runtime.block_on(run(&store, &instance, job, &answer));
+                }
+                runtime.block_on(store.pool.close());
+            })
+            .map_err(|e| e.to_string())?;
+        open.recv()
+            .map_err(|_| "the database thread ended".to_string())??;
+        Ok(Self {
+            jobs,
+            answers: Mutex::new(answers),
+        })
+    }
+
+    fn ask(&self, job: Job) {
+        // The thread ends only with this.
+        let _ = self.jobs.send(job);
+    }
+
+    /// Asks to let player `peer` in as `name` with `password`; the answer comes through
+    /// `answers`.
+    pub fn login(&self, peer: u32, name: &str, password: &str, admission: Admission) {
+        self.ask(Job::Login {
+            peer,
+            name: name.to_string(),
+            password: password.to_string(),
+            admission,
+        });
+    }
+
+    /// Saves account `account`'s car.
+    pub fn save(&self, account: AccountId, car: String) {
+        self.ask(Job::Save { account, car });
+    }
+
+    /// Refreshes the locks of the accounts playing here.
+    pub fn refresh(&self, accounts: Vec<AccountId>) {
+        self.ask(Job::Refresh(accounts));
+    }
+
+    /// Lets go of an account's lock (they left).
+    pub fn release(&self, account: AccountId) {
+        self.ask(Job::Release(account));
+    }
+
+    /// The answers to logins that came since this was last asked.
+    pub fn answers(&self) -> Vec<Answer> {
+        let answers = self.answers.lock().expect("the answers");
+        answers.try_iter().collect()
+    }
+
+    /// Waits until everything asked so far is done, for at most `timeout`: whether it was.
+    pub fn flush(&self, timeout: Duration) -> bool {
+        let (done, wait) = channel();
+        self.ask(Job::Flush(done));
+        wait.recv_timeout(timeout).is_ok()
+    }
+}
+
+async fn run(store: &Store, instance: &str, job: Job, answer: &Sender<Answer>) {
+    let result = match job {
+        Job::Login {
+            peer,
+            name,
+            password,
+            admission,
+        } => {
+            let login = store.login(&name, &password, admission, instance).await;
+            if let Err(e) = &login {
+                bevy::log::info!("Player {peer} not let in as {name}: {e}");
+            }
+            let _ = answer.send(Answer { peer, login });
+            Ok(())
+        }
+        Job::Save { account, car } => store.save_car(account, &car).await,
+        Job::Refresh(accounts) => store.refresh(instance, &accounts).await,
+        Job::Release(account) => store.release(instance, account).await,
+        Job::Flush(done) => {
+            let _ = done.send(());
+            Ok(())
+        }
+    };
+    if let Err(e) = result {
+        bevy::log::warn!("The database: {e}");
+    }
+}
+
+/// A name for this server instance among the ones sharing a database: random enough.
+pub fn instance_name() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u128(now_ms() as u128);
+    hasher.write_u32(std::process::id());
+    format!("{:016x}", hasher.finish())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block<T>(f: impl Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(f)
+    }
+
+    const ACCOUNTS: Admission = Admission::Accounts { guests: false };
+    const GUESTS: Admission = Admission::Accounts { guests: true };
+
+    /// A store at `url` without anything in it (an earlier test's tables dropped).
+    async fn fresh(url: &str) -> Store {
+        let store = Store::open(url).await.unwrap();
+        if store.dialect == Dialect::Sqlite && url.contains(":memory:") {
+            return store;
+        }
+        for table in ["accounts", "active", "cars", "schema_version"] {
+            sqlx::query(AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
+                .execute(&store.pool)
+                .await
+                .unwrap();
+        }
+        store.pool.close().await;
+        Store::open(url).await.unwrap()
+    }
+
+    async fn accounts(url: &str) {
+        let store = fresh(url).await;
+        store.add_user("Anna", "secret").await.unwrap();
+        assert!(
+            store.add_user("anna", "other").await.is_err(),
+            "the same name"
+        );
+        let anna = store.login("anna", "secret", ACCOUNTS, "a").await.unwrap();
+        let Login::Account(anna) = anna else {
+            panic!("not an account")
+        };
+        assert_eq!(anna.name, "Anna");
+        assert_eq!(anna.car, None);
+        assert_eq!(
+            store.login("Anna", "wrong", ACCOUNTS, "a").await,
+            Err(WRONG.into())
+        );
+        assert_eq!(
+            store.login("Ben", "secret", ACCOUNTS, "a").await,
+            Err(WRONG.into())
+        );
+        // Guests only where allowed, and never by an account's name.
+        assert!(store.login("Ben", "", ACCOUNTS, "a").await.is_err());
+        assert_eq!(
+            store.login(" Ben ", "", GUESTS, "a").await,
+            Ok(Login::Guest("Ben".into()))
+        );
+        assert!(store.login("ANNA", "", GUESTS, "a").await.is_err());
+        // A new password.
+        store.set_password("ANNA", "new").await.unwrap();
+        assert!(store.login("Anna", "secret", ACCOUNTS, "a").await.is_err());
+        assert!(store.login("Anna", "new", ACCOUNTS, "a").await.is_ok());
+        assert_eq!(store.users().await.unwrap().len(), 1);
+        store.remove_user("anna").await.unwrap();
+        assert!(store.users().await.unwrap().is_empty());
+    }
+
+    async fn instances(url: &str) {
+        let store = fresh(url).await;
+        let id = store.add_user("Anna", "pw").await.unwrap();
+        assert!(store.login("Anna", "pw", ACCOUNTS, "one").await.is_ok());
+        // Again on the same instance is fine (the server refuses a second game itself).
+        assert!(store.login("Anna", "pw", ACCOUNTS, "one").await.is_ok());
+        assert!(store.login("Anna", "pw", ACCOUNTS, "two").await.is_err());
+        // Left: the other instance may.
+        store.release("one", id).await.unwrap();
+        assert!(store.login("Anna", "pw", ACCOUNTS, "two").await.is_ok());
+        // Gone silent for longer than `STALE`: taken over.
+        let old = now_ms() - STALE.as_millis() as i64 - 1000;
+        sqlx::query(store.sql("UPDATE active SET refreshed = ?"))
+            .bind(old)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        assert!(store.login("Anna", "pw", ACCOUNTS, "one").await.is_ok());
+        // Refreshed, it holds.
+        store.refresh("one", &[id]).await.unwrap();
+        assert!(store.login("Anna", "pw", ACCOUNTS, "two").await.is_err());
+    }
+
+    async fn cars(url: &str) {
+        let store = fresh(url).await;
+        let alone = store.login("whoever", "", Admission::Alone, "x").await;
+        let Ok(Login::Account(account)) = alone else {
+            panic!("not let in alone: {alone:?}")
+        };
+        assert_eq!(account.name, DEFAULT_USER);
+        store.save_car(account.id, "first").await.unwrap();
+        store
+            .save_car(account.id, &"second".repeat(5000))
+            .await
+            .unwrap();
+        let again = store.login("", "", Admission::Alone, "y").await;
+        let Ok(Login::Account(again)) = again else {
+            panic!("not let in again")
+        };
+        assert_eq!(again.id, account.id);
+        assert_eq!(again.car, Some("second".repeat(5000)));
+    }
+
+    const MEMORY: &str = "sqlite::memory:";
+
+    #[test]
+    fn accounts_log_in_by_their_password() {
+        block(accounts(MEMORY));
+    }
+
+    #[test]
+    fn a_player_plays_on_one_instance_at_a_time() {
+        block(instances(MEMORY));
+    }
+
+    #[test]
+    fn a_car_is_saved_and_loaded() {
+        block(cars(MEMORY));
+    }
+
+    /// The same on the database at `CAR_SIM_TEST_DB` (e.g. `postgres://…`, `mysql://…`),
+    /// whose tables it drops.
+    #[test]
+    #[ignore]
+    fn on_another_database() {
+        let url = std::env::var("CAR_SIM_TEST_DB").expect("CAR_SIM_TEST_DB");
+        block(async {
+            accounts(&url).await;
+            instances(&url).await;
+            cars(&url).await;
+        });
+    }
+
+    #[test]
+    fn the_database_thread_answers_logins() {
+        let db = Database::open(MEMORY, "test".into()).unwrap();
+        db.login(7, "Anna", "", GUESTS);
+        assert!(db.flush(Duration::from_secs(10)));
+        let answers = db.answers();
+        assert_eq!(answers.len(), 1);
+        assert_eq!(answers[0].peer, 7);
+        assert_eq!(answers[0].login, Ok(Login::Guest("Anna".into())));
+    }
+}
