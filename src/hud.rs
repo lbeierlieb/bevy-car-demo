@@ -66,7 +66,8 @@ impl Needles {
 
 /// While the server has the car (`car::Spectating`: the rescue helicopter carrying it),
 /// what it says about that in the upper middle of the screen (its first line large), the
-/// border pulsing.
+/// border's colour pulsing (its width stays: the frame's size counts it, and a frame
+/// growing wrapped the widest line's last letter).
 fn server_notice(
     mut contexts: EguiContexts,
     spectating: Option<Res<Spectating>>,
@@ -86,10 +87,11 @@ fn server_notice(
         .show(contexts.ctx_mut()?, |ui| {
             egui::Frame::new()
                 .fill(Color32::from_rgba_premultiplied(150, 20, 15, 225))
-                .stroke(Stroke::new(3.0 + 2.0 * pulse, border))
+                .stroke(Stroke::new(4.0, border))
                 .corner_radius(8.0)
                 .inner_margin(egui::Margin::symmetric(24, 14))
                 .show(ui, |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     ui.vertical_centered(|ui| {
                         ui.label(
                             egui::RichText::new(title)
