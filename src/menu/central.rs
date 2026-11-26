@@ -13,7 +13,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use super::curve;
 use super::kit::{self, Panel, rank};
 use super::nav::{MenuInput, MenuSet};
-use super::{Display, SIZES};
+use super::{CHASE_FOVS, DRIVER_FOVS, Display, SIZES};
 use crate::audio::SoundSettings;
 use crate::car::{ActiveCar, Away, Car, DriverAids, Spectating};
 use crate::graphics::{
@@ -775,6 +775,37 @@ fn display(ui: &mut egui::Ui, settings: &mut Settings, windows: &mut Query<&mut 
         ui,
         "Everything grows with the window; this scales it on top (the window's height \
          sets 100 %).",
+    );
+    let degrees = |v: f32| format!("{v:.0}°");
+    let mut fov = settings.display.driver_fov;
+    if kit::slider(
+        ui,
+        "Field of view (driver)",
+        &mut fov,
+        DRIVER_FOVS,
+        1.0,
+        degrees,
+    )
+    .changed()
+    {
+        settings.display.driver_fov = fov;
+    }
+    let mut fov = settings.display.chase_fov;
+    if kit::slider(
+        ui,
+        "Field of view (chase)",
+        &mut fov,
+        CHASE_FOVS,
+        1.0,
+        degrees,
+    )
+    .changed()
+    {
+        settings.display.chase_fov = fov;
+    }
+    kit::note(
+        ui,
+        "The view's height in degrees (vertical), as field of view calculators give it.",
     );
     if !cfg!(target_arch = "wasm32") {
         let mut full = windows

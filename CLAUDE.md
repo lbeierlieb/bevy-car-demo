@@ -122,7 +122,10 @@ As built (`src/menu/`):
 - `central.rs` (restructured at the user's wish, 2026-11-23): Main = In-game actions
   (reset, map, camera: pressed for the driver through `input::MenuPresses` as the
   wheel's next frame), Settings (Driving aids, Controls, Sound
-  (`audio::SoundSettings`: on/off, volume, `sound.cfg`), Display (UI size, fullscreen),
+  (`audio::SoundSettings`: on/off, volume, `sound.cfg`), Display (UI size, the driver's
+  and chase view's vertical field of view (`Display::driver_fov`/`chase_fov`, degrees,
+  `camera::apply_fov` puts them on the lens unless a shop's scene has it; asked for by
+  the user, 2026-11-26), fullscreen),
   Graphics (see "Graphics")),
   an event round's restart/leave, online players/leave or join, help and credits, quit
   ("Back to driving" removed at the user's wish, 2026-11-23: the prompt line says how). No engine or parking brake rows, no fullscreen on

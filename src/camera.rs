@@ -18,16 +18,17 @@ impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (switch_view, orbit, follow)
+            (apply_fov, switch_view, orbit, follow)
                 .chain()
                 .after(crate::car::sync_transforms),
         );
     }
 }
 
-/// Vertical field of view in the chase and driver's views.
-const CHASE_FOV: f32 = std::f32::consts::FRAC_PI_4;
-const DRIVER_FOV: f32 = 0.95;
+/// Vertical field of view in the chase and driver's views by default (the player sets
+/// them in the menu, `menu::Display`).
+pub const CHASE_FOV: f32 = std::f32::consts::FRAC_PI_4;
+pub const DRIVER_FOV: f32 = 0.95;
 /// The driver looks slightly down by default, so the gauges are in view.
 const DRIVER_PITCH: f32 = -0.08;
 /// The chase view's default height angle.
@@ -59,6 +60,9 @@ pub struct ChaseCamera {
     back: bool,
     /// The look stick's push, smoothed.
     stick: Vec2,
+    /// Vertical fields of view (radians), from the display settings.
+    chase_fov: f32,
+    driver_fov: f32,
 }
 
 impl Default for ChaseCamera {
@@ -73,6 +77,8 @@ impl Default for ChaseCamera {
             look_pitch: DRIVER_PITCH,
             back: false,
             stick: Vec2::ZERO,
+            chase_fov: CHASE_FOV,
+            driver_fov: DRIVER_FOV,
         }
     }
 }
@@ -86,9 +92,35 @@ impl ChaseCamera {
     /// The field of view and near plane for the view it's in.
     pub fn lens(&self) -> (f32, f32) {
         if self.driver {
-            (DRIVER_FOV, 0.02)
+            (self.driver_fov, 0.02)
         } else {
-            (CHASE_FOV, 0.1)
+            (self.chase_fov, 0.1)
+        }
+    }
+}
+
+/// Takes the fields of view from the display settings, onto the lens at once unless a
+/// shop's scene has the camera (it puts `lens` back on leaving).
+fn apply_fov(
+    display: Option<Res<crate::menu::Display>>,
+    away: Option<Res<crate::car::Away>>,
+    mut cameras: Query<(&mut ChaseCamera, &mut Projection)>,
+) {
+    let Some(display) = display else {
+        return;
+    };
+    let away = away.is_some_and(|away| away.0);
+    for (mut camera, mut projection) in &mut cameras {
+        let (driver, chase) = (
+            display.driver_fov.to_radians(),
+            display.chase_fov.to_radians(),
+        );
+        if camera.driver_fov == driver && camera.chase_fov == chase {
+            continue;
+        }
+        (camera.driver_fov, camera.chase_fov) = (driver, chase);
+        if !away && let Projection::Perspective(perspective) = &mut *projection {
+            (perspective.fov, perspective.near) = camera.lens();
         }
     }
 }

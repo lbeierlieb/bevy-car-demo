@@ -18,6 +18,9 @@ pub mod nav;
 pub const LAYOUT: Vec2 = Vec2::new(1280.0, 720.0);
 /// The range of the player's "UI size".
 pub const SIZES: std::ops::RangeInclusive<f32> = 0.7..=1.5;
+/// The ranges of the fields of view (vertical degrees): the driver's and the chase view's.
+pub const DRIVER_FOVS: std::ops::RangeInclusive<f32> = 30.0..=90.0;
+pub const CHASE_FOVS: std::ops::RangeInclusive<f32> = 35.0..=80.0;
 /// Fewest pixels per point, so a tiny window stays readable.
 const LEAST_PPP: f32 = 0.6;
 
@@ -44,11 +47,19 @@ impl Plugin for LookPlugin {
 pub struct Display {
     /// The player's scale on top of the window's (1: as laid out).
     pub ui_size: f32,
+    /// Vertical field of view from the driver's seat (degrees).
+    pub driver_fov: f32,
+    /// Vertical field of view of the chase view (degrees).
+    pub chase_fov: f32,
 }
 
 impl Default for Display {
     fn default() -> Self {
-        Self { ui_size: 1.0 }
+        Self {
+            ui_size: 1.0,
+            driver_fov: crate::camera::DRIVER_FOV.to_degrees().round(),
+            chase_fov: crate::camera::CHASE_FOV.to_degrees().round(),
+        }
     }
 }
 
@@ -56,18 +67,33 @@ impl Display {
     fn load() -> Self {
         let mut display = Self::default();
         for line in SETTINGS.load("display").unwrap_or_default().lines() {
-            if let Some(("ui_size", size)) = line.split_once(' ')
-                && let Ok(size) = size.trim().parse::<f32>()
-                && size.is_finite()
-            {
-                display.ui_size = size.clamp(*SIZES.start(), *SIZES.end());
+            let Some((key, value)) = line.split_once(' ') else {
+                continue;
+            };
+            let Ok(value) = value.trim().parse::<f32>() else {
+                continue;
+            };
+            if !value.is_finite() {
+                continue;
+            }
+            let clamp =
+                |range: std::ops::RangeInclusive<f32>| value.clamp(*range.start(), *range.end());
+            match key {
+                "ui_size" => display.ui_size = clamp(SIZES),
+                "driver_fov" => display.driver_fov = clamp(DRIVER_FOVS),
+                "chase_fov" => display.chase_fov = clamp(CHASE_FOVS),
+                _ => {}
             }
         }
         display
     }
 
     fn save(&self) {
-        if let Err(e) = SETTINGS.save("display", &format!("ui_size {}\n", self.ui_size)) {
+        let text = format!(
+            "ui_size {}\ndriver_fov {}\nchase_fov {}\n",
+            self.ui_size, self.driver_fov, self.chase_fov
+        );
+        if let Err(e) = SETTINGS.save("display", &text) {
             warn!("Couldn't save the display settings: {e}");
         }
     }
