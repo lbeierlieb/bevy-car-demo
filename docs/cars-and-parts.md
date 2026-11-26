@@ -1,7 +1,7 @@
 # Owning cars and parts: the plan
 
 Agreed with the user in rounds of questions on 2026-11-26 (the decisions are also short
-in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–4 are built. The milestones are
+in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–5 are built. The milestones are
 in the order they're meant to be built; each ends with clippy and tests passing and the
 game playable.
 
@@ -190,7 +190,16 @@ Not done: limiting login attempts, a last save when a dedicated server is stoppe
 - Saved: the player's car (item tree, fuel, tires, wear), loaded on joining instead of
   the start car.
 
-### 5. Garage park, several cars, trunks
+### 5. Garage park, several cars, trunks (done 2026-11-26)
+
+Built as below (see `CLAUDE.md`, "Owning cars and parts"). Before the shops' rework (6)
+loose parts come from the existing shops: what a shop's change takes off the car goes
+into the trunk while there's room (else the shop keeps it), and a car bought in the
+showroom puts the old one in the garage (no trade-in yet). Unloading and loading work at
+every shop and the garage park; shipping to the garage only from a shop. Nothing yet takes
+seats out, so the seats' areas of the hold stay closed in play. The special rescue only
+works for a car that can't drive (engine wrecked, tank under 0.5 L), to the nearest gas
+station or parts shop.
 
 - The garage park on the map (a kind in the shops file), the garage's scene: cars and
   parts listed, switch car, load and unload.

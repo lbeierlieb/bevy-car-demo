@@ -239,7 +239,7 @@ would move the car). `PLACE` works because `shot.sh` sets `CAR_SIM_TRUST_PLACEME
 Shops need `PLACE` at the building's point
 (the car lands on the marker and goes in): gas `-2603,-1736`, car dealer
 `-1476,-1213`, alignment `-1480,-1305`, paint `3500,-63`, parts `-1950,-3160`, dyno
-`-2601,-3784` (the shop's window takes the focus on its first row, so
+`-2601,-3784`, garage park `-2680,-1793` (the shop's window takes the focus on its first row, so
 `TAPS="Enter@200"` goes into the scene: onto the rollers, up to the pump…; older click
 coordinates in these notes are from before the menus, 2026-11-23, and are wrong now;
 the car hunt's marker `-95,2341`, its lobby window opens
@@ -915,6 +915,38 @@ Tests: `db::tests` (all dialects through `on_another_database`, ignored:
 started by hand from nixpkgs in the scratchpad), `saved::tests`,
 `a_players_car_is_kept_between_sessions`. Shots get a fresh `XDG_DATA_HOME` each
 (`DATA=dir` keeps one, e.g. to see a car come back); `JOIN` with `PASSWORD`.
+
+Milestone 5, garage park, several cars, trunks (2026-11-26): **holds** (`cargo.rs`):
+`Chassis::hold`, 10 cm cells in areas with a floor and ceiling each (the hatch's trunk
+0.7 × 1.2 × 0.4 m, the rear bench's and passenger seat's places only while their slot is
+empty); `Grid::pack` puts the largest first, turned every way, where its top ends lowest
+(a heightmap: things rest on things); packed afresh whenever the cargo changes, so it's the
+same everywhere and nothing about places is sent. `CarSpec::cargo`/`CarSetup::cargo` (a
+car's loose parts; `set_cargo` keeps what fits) and `cargo_load` (each part's mass where it
+lies, loaded on the body in `Car::load_fuel`); saved cars have a `cargo` section (format
+2). **Owned** (`owned.rs`, server `net/stash.rs`): `Owned` per `Peer` (garage cars as
+`Parked` spec + `Condition`, garage parts, parts held per shop name; limits `GARAGE_CARS`
+50, `GARAGE_PARTS` 2000, `SHOP_HOLD` 20), told as `ToClient::Owned { owned: OwnedView,
+why }` (`Connection::owned`, `refused`); `ToServer::Stash` (`Unload`, `Load`,
+`ShipHome`, `Ship`, `Drive`) by where the car stopped (`Peer::at_shop`, the marker's
+shop); `Buy` parks the old car in the garage; `ToServer::Car` keeps the server's cargo
+and adds what the shop took off (`owned::replaced`: parts swapped for another definition
+or size, with what's fitted to them) while it fits. The database: migration 2 (`cars.place`
+`driven`/`garage`, an `items` table, place `garage` or `shop NAME`); `Belongings`; the car
+driven saved alone unless `Owned::revision` moved (then `save_belongings`, all in one
+transaction). Every `YourCar` the game builds is placed (`Prediction::forget_end`): the
+server's copy of a car built anew waits for that. **Garage park**: shop kind `garage`
+(`Garagenpark Gerach`, (−2680, −1793)); `garage/park.rs`: its window (into the garage,
+your cars) and the hall 250 m under the marker (a bay per car, at least 3, the car driven in
+the first; parts on shelves at the back, `MOST_SHOWN` 120; rebuilt when what's in it
+changes; the camera looks at the car whose row has the focus); `trunk.rs`: "Trunk and
+parts" in every shop window (`AtShop::stash`, a stack of `trunk::Screen`s drawn in the
+shop window's place; back pops it). **Special rescue**: `ToServer::Rescue { to }` (a gas
+station or parts shop), `Shadow::special_rescue` only for `Car::stranded`; the central
+menu's in-game actions list the nearest of each; a carry takes at most `LONGEST_CARRY`
+(30 s). Shots: `CARAT=frame` buys the `CAR` then (so the first car goes into the garage);
+the garage park `PLACE="-2680,-1793,150"`, `TAPS="Enter@200"` into the hall. Protocol 35.
+Test: `a_player_keeps_cars_and_parts_in_their_garage`.
 
 The game is about tuning every aspect of a car. Agreed so far (the user's answers):
 - **Parts are items** you own (a definition from the server's catalogue + condition),
