@@ -238,7 +238,7 @@ drive" closes it, H brings it back). **Esc** (or a gamepad's Start, or a wheel b
 menu: in-game actions (resetting the car, the map, the camera), settings (driving aids,
 controls with four switchable profiles of bindings, force feedback, sound, display), the
 players online, help. Every menu and shop works with the arrows, Enter and Esc, a gamepad's
-D-pad (or left stick), A and B, or a wheel's buttons bound to the menu, as well as with
+D-pad, A and B, or a wheel's buttons bound to the menu, as well as with
 the mouse; while a menu has the focus, no key or button reaches the car (pedals and a
 wheel's steering do). A text field is a row like any other: choose starts typing, Enter
 keeps it, Esc throws it away. Menus and text grow with the window, whatever the display's scaling (the menu

@@ -501,8 +501,8 @@ fn controls(ui: &mut egui::Ui, config: &mut WheelConfig) -> Option<Screen> {
     }
     kit::note(
         ui,
-        "A gamepad works the menus as it is: the D-pad or left stick moves, A chooses, B \
-         goes back, Start opens this menu.",
+        "A gamepad works the menus as it is: the D-pad moves, A chooses, B goes back, \
+         Start opens this menu.",
     );
     go
 }

@@ -85,8 +85,10 @@ As built (`src/menu/`):
   the display's scaling; fonts and style; selectable labels off (one took the focus and
   dropped it). `to_points` turns `Camera::world_to_viewport` positions into points (the
   scenes' egui-painted screens and the shops' floating labels need it).
-- `nav.rs`: `MenuInput` from every device (keyboard arrows/Enter/Esc; any pad's D-pad or
-  left stick, South, East, Start, unless the driving has them bound; the wheel's buttons
+- `nav.rs`: `MenuInput` from every device (keyboard arrows/Enter/Esc; any pad's D-pad,
+  South, East, Start, unless the driving has them bound (no axes, not even the left
+  stick, since 2026-11-26: pedals report as sticks, and the user's clutch scrolled the
+  menus; the map zooms with shoulders and triggers as buttons); the wheel's buttons
   bound to `Action::Menu(Nav::…)`), held directions repeating (0.4 s, then 0.08 s). Pad
   and wheel directions and choose go into egui as arrow keys and Enter (`hand_to_egui`),
   so **egui's own focus navigation** moves between widgets. A menu calls `claim(ui,

@@ -1,6 +1,7 @@
 //! Working the menus with six buttons (up, down, left, right, choose, back) and a menu
-//! button, from any device: the keyboard (arrows, Enter, Esc), any gamepad (D-pad or left
-//! stick, South, East, Start; no setup) and wheel buttons bound to the menu actions.
+//! button, from any device: the keyboard (arrows, Enter, Esc), any gamepad (D-pad, South,
+//! East, Start; no setup) and wheel buttons bound to the menu actions. No axes: pedals
+//! report as sticks too, and a clutch held halfway scrolled the menus.
 //!
 //! The directions and "choose" go to egui as arrow keys and Enter, so egui's own focus
 //! moves between the widgets (sliders take left and right) and the focused one is
@@ -10,7 +11,6 @@
 //! `MenuInput`'s, taken by whichever menu is on top (see `MenuSet`).
 
 use bevy::input::InputSystems;
-use bevy::input::gamepad::GamepadAxis;
 use bevy::input::mouse::{AccumulatedMouseMotion, MouseButton};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiInput, EguiPreUpdateSet, PrimaryEguiContext, egui};
@@ -22,8 +22,6 @@ use crate::input::{Action, Capture, Input, JustBound, Nav, WheelConfig, WheelInp
 /// A held direction repeats after this long, then this often (s).
 const REPEAT_DELAY: f32 = 0.4;
 const REPEAT_EVERY: f32 = 0.08;
-/// How far a stick goes before it counts as a direction.
-const STICK: f32 = 0.55;
 
 /// The pad buttons a menu uses unless the driving has them bound.
 const PAD_CONFIRM: GamepadButton = GamepadButton::South;
@@ -82,7 +80,7 @@ pub enum Device {
 pub struct MenuInput {
     /// Directions pressed this frame, held ones repeating: up, down, left, right.
     pub pressed: [bool; 4],
-    /// The directions held, as an analog stick or ±1 (x right, y down).
+    /// The directions held, ±1 (x right, y down).
     pub held: Vec2,
     /// The same from pads and the wheel's menu buttons only (the keyboard's arrows steer
     /// the car where nothing has the focus: the map).
@@ -95,7 +93,8 @@ pub struct MenuInput {
     escape: bool,
     /// The menu button pressed and not yet taken.
     open: bool,
-    /// Zooming (the map): the pad's triggers or right stick, -1 out to 1 in.
+    /// Zooming (the map): the pad's shoulder buttons and triggers (as buttons), -1 out to
+    /// 1 in.
     pub zoom: f32,
     pub device: Device,
     /// How long each direction has been held, and when it last fired.
@@ -345,7 +344,6 @@ fn read(
 ) {
     let mut held = [false; 4];
     let mut pad_held = [false; 4];
-    let mut stick = Vec2::ZERO;
     let (mut confirm, mut back, mut open, mut zoom) = (false, false, false, 0.0);
     let mut device = None;
     // The keyboard: egui reads the arrows and Enter itself; Esc is "back" (unless it's a
@@ -394,36 +392,13 @@ fn read(
             held[i] |= down(button);
             pad_held[i] |= down(button);
         }
-        let left = Vec2::new(
-            pad.get(GamepadAxis::LeftStickX).unwrap_or(0.0),
-            -pad.get(GamepadAxis::LeftStickY).unwrap_or(0.0),
-        );
-        let sticks_bound = !focus.active
-            && profile.bindings.iter().any(|(_, b)| {
-                b.is_on(name)
-                    && matches!(
-                        b.input,
-                        Input::Pad(GamepadInput::Axis(
-                            GamepadAxis::LeftStickX | GamepadAxis::LeftStickY
-                        ))
-                    )
-            });
-        if !sticks_bound && left.length() > 0.2 {
-            stick += left;
-            held[0] |= left.y < -STICK;
-            held[1] |= left.y > STICK;
-            held[2] |= left.x < -STICK;
-            held[3] |= left.x > STICK;
-        }
         confirm |= pressed(PAD_CONFIRM);
         back |= pressed(PAD_BACK);
         open |= pressed(PAD_MENU);
-        let triggers = pad.get(GamepadButton::RightTrigger2).unwrap_or(0.0)
-            - pad.get(GamepadButton::LeftTrigger2).unwrap_or(0.0);
-        let shoulders = f32::from(u8::from(down(GamepadButton::RightTrigger)))
-            - f32::from(u8::from(down(GamepadButton::LeftTrigger)));
-        zoom += triggers + shoulders + pad.get(GamepadAxis::RightStickY).unwrap_or(0.0);
-        if pad.digital().get_just_pressed().next().is_some() || left.length() > STICK {
+        let zoom_in = down(GamepadButton::RightTrigger) || down(GamepadButton::RightTrigger2);
+        let zoom_out = down(GamepadButton::LeftTrigger) || down(GamepadButton::LeftTrigger2);
+        zoom += f32::from(u8::from(zoom_in)) - f32::from(u8::from(zoom_out));
+        if pad.digital().get_just_pressed().next().is_some() {
             device = Some(Device::Pad);
         }
     }
@@ -476,16 +451,9 @@ fn read(
             f32::from(u8::from(held[1])) - f32::from(u8::from(held[0])),
         )
     };
-    let analog = |digital: Vec2| {
-        if stick.length() > digital.length() {
-            stick.clamp_length_max(1.0)
-        } else {
-            digital
-        }
-    };
     input.pressed = pressed;
-    input.held = analog(digital(held));
-    input.pad_held = analog(digital(pad_held));
+    input.held = digital(held);
+    input.pad_held = digital(pad_held);
     input.confirm = confirm;
     // Typing, "back" is the field's (the keyboard's Esc goes to it anyway).
     input.escape = back && focus.text;
