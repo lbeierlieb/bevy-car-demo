@@ -1164,19 +1164,44 @@ mod tests {
                 .resource_mut::<Connection>()
                 .say(&protocol::ToServer::Stash(stash));
         };
-        // A sport clutch fitted in a shop: the stock one goes into the trunk.
-        let setup = car(&mut anna).setup.clone();
-        let mut build = setup.build.clone();
-        build.clutch = 1;
-        let changed = setup.changed(
-            build,
-            setup.engine.parts.clone(),
-            setup.engine.build.clone(),
-        );
-        let rebuilt = car(&mut anna).rebuilt(changed);
-        *car(&mut anna) = rebuilt;
+        let set_shops = |server: &mut App, shops: Vec<Shop>| {
+            let with = server.world_mut().remove_resource::<Server>().unwrap();
+            server.insert_resource(with.with_shops(shops));
+        };
+        // A sport clutch fitted (where the garage was, a tuning shop for a moment): the
+        // stock one goes into the trunk. A garage fits nothing.
+        let clutch = |anna: &mut App| {
+            let car = &car(anna).setup.car;
+            let slots = &car.def(&catalogue).slots;
+            let slot = slots
+                .iter()
+                .position(|s| s.kind == crate::items::Kind::Clutch);
+            let def = catalogue.defs.iter().position(|d| d.id == "clutch.sport");
+            let work = crate::fitting::Work::Fit {
+                slots: vec![vec![slot.unwrap() as u8]],
+                supply: crate::fitting::Supply::Part {
+                    def: def.unwrap() as u16,
+                    variant: 0,
+                    paint: 0,
+                },
+            };
+            anna.world_mut()
+                .resource_mut::<Connection>()
+                .work(vec![work]);
+        };
+        clutch(&mut anna);
+        run(&mut [&mut server, &mut anna], 30);
+        assert!(trunk(&mut anna).is_empty());
+        assert!(connection(&anna).refused.is_some());
+        let mut tuning = shops.clone();
+        tuning[0].kind = ShopKind::Tuning;
+        tuning[0].sells = vec!["clutch.*".into()];
+        set_shops(&mut server, tuning);
+        clutch(&mut anna);
         run(&mut [&mut server, &mut anna], 60);
         assert_eq!(trunk(&mut anna), ["clutch.stock"]);
+        assert_eq!(car(&mut anna).setup.build.clutch, 1);
+        set_shops(&mut server, shops.clone());
         // Into the garage, and back.
         ask(&mut anna, Stash::Unload { item: 0 });
         run(&mut [&mut server, &mut anna], 30);
@@ -1203,10 +1228,6 @@ mod tests {
         assert!(connection(&anna).refused.is_some());
         // A new car (where the garage was, a car dealer for a moment): the sport clutch
         // one goes into the garage.
-        let set_shops = |server: &mut App, shops: Vec<Shop>| {
-            let with = server.world_mut().remove_resource::<Server>().unwrap();
-            server.insert_resource(with.with_shops(shops));
-        };
         let mut dealer = shops.clone();
         dealer[0].kind = ShopKind::Showroom;
         dealer[0].sells = vec!["vireo.*".into()];
@@ -1217,6 +1238,10 @@ mod tests {
                 .say(&protocol::ToServer::Buy { trim: 1, trade_in });
         };
         buy(&mut anna, false);
+        run(&mut [&mut server, &mut anna], 60);
+        assert_eq!(connection(&anna).owned.cars.len(), 1);
+        // Another, the first traded in: the garage holds as many as before.
+        buy(&mut anna, true);
         run(&mut [&mut server, &mut anna], 60);
         assert_eq!(connection(&anna).owned.cars.len(), 1);
         set_shops(&mut server, shops.clone());

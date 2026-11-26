@@ -1028,15 +1028,14 @@ fn send(
         && sent != spec
     {
         // Settings changed here (the alignment, paint, the dyno's tune) are asked for as
-        // works; parts changed here (the parts shop), whole.
+        // works. Parts are only ever changed by asking (`Connection::work`): anything else
+        // goes back to the server's car.
         if crate::fitting::only_settings(&sent, &spec) {
             connection.work(crate::fitting::changes(&sent, &spec));
-        } else {
-            let id = connection.request();
-            let spec = Box::new(spec.clone());
-            connection.say(&ToServer::Car { id, spec });
+            connection.sent_spec = Some(spec);
+        } else if !connection.waiting() {
+            connection.your_car = connection.server_spec.clone();
         }
-        connection.sent_spec = Some(spec);
     }
     if let Some((step, state)) = prediction.place.take() {
         connection.say(&ToServer::Place { step, state });

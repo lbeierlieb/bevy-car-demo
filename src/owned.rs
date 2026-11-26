@@ -269,48 +269,11 @@ pub fn name(catalogue: &Catalogue, item: &Item) -> String {
     }
 }
 
-/// The parts of `old` (a car's tree) that `new` (the same car changed) no longer has:
-/// each one swapped for a part of another kind or size, or taken off, with what was fitted
-/// to it. Settings and paint aren't parts.
-pub fn replaced(old: &Item, new: &Item) -> Vec<Item> {
-    let mut gone = Vec::new();
-    for (o, n) in old.slots.iter().zip(&new.slots) {
-        match (o, n) {
-            (Some(o), Some(n)) if o.def == n.def && o.variant == n.variant => {
-                gone.extend(replaced(o, n));
-            }
-            (Some(o), _) => gone.push(o.clone()),
-            (None, _) => {}
-        }
-    }
-    gone
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::catalogue::builtin;
     use crate::net::wire::{decode_with, encode};
-
-    #[test]
-    fn what_a_shop_takes_off_is_what_was_replaced() {
-        let catalogue = builtin();
-        let base = &catalogue.trims[0].car;
-        let sport = &catalogue.trims[1].car;
-        let gone = replaced(base, sport);
-        let names: Vec<String> = gone.iter().map(|i| i.def(&catalogue).id.clone()).collect();
-        // The steel rims and their tires, the brakes, the differential (in the same
-        // gearbox), the long block; the paint and the knobs aren't parts.
-        assert_eq!(
-            names.iter().filter(|n| *n == "rim.steel").count(),
-            4,
-            "{names:?}"
-        );
-        assert!(names.contains(&"differential.open".to_string()));
-        assert!(names.iter().any(|n| n == "b16"), "{names:?}");
-        assert!(!names.iter().any(|n| n == "gearbox" || n == "engine"));
-        assert!(replaced(base, base).is_empty());
-    }
 
     #[test]
     fn what_a_player_owns_goes_over_the_wire() {

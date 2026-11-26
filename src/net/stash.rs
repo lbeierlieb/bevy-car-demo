@@ -371,20 +371,3 @@ fn bought(
     drive(peer, spec, baked);
     Ok(())
 }
-
-/// What a player's game says their car is built of now (changed in a shop): the trunk is
-/// the server's to say, and the parts the shop took off go into it while there's room
-/// (else the shop keeps them).
-pub fn changed(peer: &Peer, mut spec: CarSpec, catalogue: &Catalogue) -> CarSpec {
-    let Some(now) = peer.shadow.spec() else {
-        return spec;
-    };
-    let mut cargo = now.cargo.clone();
-    for part in crate::owned::replaced(&now.car, &spec.car) {
-        if cargo::fits(catalogue, &spec.car, &cargo, &part) {
-            cargo.push(part);
-        }
-    }
-    spec.cargo = cargo::fitting(catalogue, &spec.car, cargo);
-    spec
-}

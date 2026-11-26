@@ -41,7 +41,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 38;
+pub const PROTOCOL: u32 = 39;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -82,12 +82,6 @@ pub enum ToServer {
     Chat(String),
     /// About the events: into a lobby, out, the hunted's settings and choices.
     Event(Action),
-    /// What our car is built of, whole, whenever a shop changed its parts here (for the
-    /// server to drive the same car); request `id` (answered with `ToClient::Done`).
-    Car {
-        id: u32,
-        spec: Box<CarSpec>,
-    },
     /// Request `id`: works done to our car at the shop it's at (see `fitting`), all or
     /// none; answered with the car (`YourCar`), what we own and why it wasn't done, if it
     /// wasn't (`Owned`), then `Done`.
@@ -216,7 +210,7 @@ pub enum ToClient {
         owned: Box<OwnedView>,
         why: Option<String>,
     },
-    /// Our request `id` (`ToServer::Car`, `Work`) is answered: the `YourCar` before it is
+    /// Our request `id` (`ToServer::Work`) is answered: the `YourCar` before it is
     /// the car as it is now.
     Done {
         id: u32,
@@ -355,11 +349,6 @@ impl Wire for ToServer {
                 4u8.put(out);
                 action.put(out);
             }
-            ToServer::Car { id, spec } => {
-                5u8.put(out);
-                id.put(out);
-                spec.put(out);
-            }
             ToServer::Work { id, works } => {
                 13u8.put(out);
                 id.put(out);
@@ -412,10 +401,6 @@ impl Wire for ToServer {
             2 => ToServer::State(r.get()?),
             3 => ToServer::Chat(r.get()?),
             4 => ToServer::Event(r.get()?),
-            5 => ToServer::Car {
-                id: r.get()?,
-                spec: Box::new(r.get()?),
-            },
             13 => ToServer::Work {
                 id: r.get()?,
                 works: crate::fitting::read_works(r)?,
