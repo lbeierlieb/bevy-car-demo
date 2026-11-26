@@ -32,6 +32,7 @@ pub mod input;
 pub mod items;
 pub mod looks;
 pub mod map;
+pub mod mechanicals;
 pub mod menu;
 pub mod name_tags;
 pub mod net;

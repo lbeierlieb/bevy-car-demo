@@ -325,6 +325,33 @@ impl Builder {
         self.oriented_box((a + b) / 2.0, axes, size, color);
     }
 
+    /// A cylinder from `a` to `b` of `radius`, with `sides` facets and capped ends.
+    pub(crate) fn cylinder(
+        &mut self,
+        a: Vec3,
+        b: Vec3,
+        radius: f32,
+        sides: usize,
+        color: [f32; 3],
+    ) {
+        let along = (b - a).normalize_or_zero();
+        if along == Vec3::ZERO {
+            return;
+        }
+        let u = along.any_orthonormal_vector();
+        let v = along.cross(u);
+        let rim = |k: usize| {
+            let angle = std::f32::consts::TAU * k as f32 / sides as f32;
+            (u * angle.cos() + v * angle.sin()) * radius
+        };
+        for k in 0..sides {
+            let (p, q) = (rim(k), rim(k + 1));
+            self.quad(a + p, a + q, b + q, b + p, color);
+            self.triangle(a, a + q, a + p, color);
+            self.triangle(b, b + p, b + q, color);
+        }
+    }
+
     /// Skins a loft over `sections`: each is the right half of a cross-section, from its
     /// bottom on the centreline around the outside to its top on the centreline, at one z
     /// (sections ordered towards +z). `skin` gives each face's colours: the segments

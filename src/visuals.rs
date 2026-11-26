@@ -44,7 +44,7 @@ enum PartKind {
     },
 }
 
-/// A car's body mesh.
+/// A car's body mesh, or what's under it.
 #[derive(Component)]
 struct Body;
 
@@ -74,6 +74,8 @@ struct Shared {
     wheel: Handle<Mesh>,
     bar: Handle<Mesh>,
     bodies: HashMap<(u64, usize, u64), Handle<Mesh>>,
+    /// What's under each body (see `mechanicals`), made once per chassis and tree.
+    unders: HashMap<(u64, usize, u64), Handle<Mesh>>,
     /// Each chassis' lamp lenses, head and tail (lit at night, `night::Glow`).
     lamps: HashMap<(u64, usize), [Handle<Mesh>; 2]>,
 }
@@ -168,6 +170,20 @@ fn add_car_meshes(
                 meshes.add(chassis.body.mesh(&chassis.wheels(), &dress))
             })
             .clone();
+        let under = (shared.unders)
+            .entry((
+                build.catalogue.fingerprint(),
+                build.chassis,
+                crate::mechanicals::key(&looks.car),
+            ))
+            .or_insert_with(|| {
+                meshes.add(crate::mechanicals::mesh(
+                    &build.catalogue,
+                    build.chassis(),
+                    &looks.car,
+                ))
+            })
+            .clone();
         // A ghost's lamps aren't lit (they'd be solid on a see-through car).
         let lamps = glow.as_ref().filter(|_| !ghost).map(|glow| {
             let [head, tail] = shared
@@ -199,6 +215,12 @@ fn add_car_meshes(
                             body.spawn((Mesh3d(mesh), MeshMaterial3d(material), NotShadowCaster));
                         }
                     });
+                parent.spawn((
+                    Body,
+                    Mesh3d(under),
+                    MeshMaterial3d(m.of(None).clone()),
+                    Transform::from_translation(looks.body_offset),
+                ));
                 for corner in 0..4 {
                     let mut part = |kind, mesh: &Handle<Mesh>| {
                         parent.spawn((
