@@ -46,6 +46,7 @@ pub mod physics;
 pub mod race_editor;
 pub mod relief;
 pub mod rumble;
+pub mod saved;
 pub mod scenery;
 pub mod shops;
 pub mod sim;

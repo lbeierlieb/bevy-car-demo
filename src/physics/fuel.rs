@@ -60,6 +60,14 @@ impl Fuel {
         }
     }
 
+    /// `litres` of fuel of `octane` (RON), as a tank was left.
+    pub fn with(litres: f32, octane: f32) -> Self {
+        Self {
+            octane,
+            ..Self::new(litres)
+        }
+    }
+
     /// What's left (L).
     pub fn litres(&self) -> f32 {
         self.litres as f32

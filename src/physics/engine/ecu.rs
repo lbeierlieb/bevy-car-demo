@@ -419,10 +419,19 @@ pub struct TuneOrigin {
 /// settings and maps are only written for ECUs that have it.
 impl Ecu {
     pub fn to_text(&self, engine: &str) -> String {
+        self.write_text(engine, self.model.cam_control())
+    }
+
+    /// As `to_text`, with the cam control's settings and maps whatever the ECU (a saved
+    /// car's ECU comes back exactly as it was).
+    pub fn to_text_whole(&self, engine: &str) -> String {
+        self.write_text(engine, true)
+    }
+
+    fn write_text(&self, engine: &str, cams: bool) -> String {
         let mut text = format!("# car-sim ECU tune\nengine {engine}\n");
         text += &format!("ecu {}\n", self.model.key());
         text += &format!("cylinders {}\n", self.cylinders);
-        let cams = self.model.cam_control();
         for (key, value) in self.settings() {
             if cams || !key.starts_with("cam_") {
                 text += &format!("{key} {value}\n");
