@@ -1,7 +1,8 @@
 //! What a player owns, at shops: every shop's window has "Trunk and parts", screens of
 //! what's in the car's trunk and what's here (the garage at the garage park, else what the
 //! shop holds for them): load, unload, ship to the garage, and from the garage to a shop.
-//! The garage park's window also lists the cars in the garage, to drive another. All of it
+//! The garage park's window also lists the cars in the garage, to drive another (see
+//! `garage::park` for the garage itself). All of it
 //! is asked of the server (`owned::Stash`), which answers with what they own now (and the
 //! car, when it changed).
 
@@ -15,7 +16,7 @@ use crate::menu::kit::{self, Panel, Place};
 use crate::net::Connection;
 use crate::net::protocol::ToServer;
 use crate::owned::{Source, Stash, name};
-use crate::shops::{AtShop, ShopKind, Shops, shop_window};
+use crate::shops::{AtShop, ShopKind, Shops};
 
 /// How long the server's word on why something wasn't done stays up (s).
 const REFUSAL: f64 = 8.0;
@@ -50,7 +51,7 @@ pub struct TrunkPlugin;
 
 impl Plugin for TrunkPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(EguiPrimaryContextPass, (garage_window, window));
+        app.add_systems(EguiPrimaryContextPass, window);
     }
 }
 
@@ -78,33 +79,6 @@ pub fn car_name(catalogue: &Catalogue, car: &Item) -> String {
 /// A part's mass with what's fitted to it, and its box, for a row's right side.
 fn detail(catalogue: &Catalogue, item: &Item) -> String {
     format!("{:.0} kg", crate::cargo::mass(catalogue, item))
-}
-
-/// The garage park's own window: the cars in the garage (and the trunk and parts, as
-/// every shop has).
-fn garage_window(
-    mut contexts: EguiContexts,
-    (shops, mut at): (Res<Shops>, ResMut<AtShop>),
-    connection: Option<Res<Connection>>,
-) -> Result {
-    let cars = connection.as_ref().map_or(0, |c| c.owned.cars.len());
-    let parts = connection.as_ref().map_or(0, |c| c.owned.parts.len());
-    let mut go = None;
-    let ctx = contexts.ctx_mut()?;
-    shop_window(ctx, &shops, &mut at, ShopKind::Garage, |ui, _| {
-        kit::note(
-            ui,
-            "Your own garage, for the cars and parts you aren't using.",
-        );
-        if kit::submenu_with(ui, "Your cars", &cars.to_string()).clicked() {
-            go = Some(Screen::Cars);
-        }
-        kit::info(ui, "Parts in the garage", &parts.to_string());
-    });
-    if let Some(screen) = go {
-        at.stash.push(screen);
-    }
-    Ok(())
 }
 
 /// The screens, while one is open at a shop.

@@ -310,6 +310,24 @@ impl CarSetup {
         setup
     }
 
+    /// The car `car` (a car's tree) makes, carrying `cargo`, only to be looked at (in a
+    /// garage): blank engine maps and tune, never to be driven. None if it isn't a car.
+    pub fn looked_at(catalogue: &Shared, car: &Item, cargo: &[Item]) -> Option<Self> {
+        use crate::physics::engine::{ecu::Ecu, maps::EngineMaps};
+        let (build, parts) = car.resolve(catalogue).ok()?;
+        let hardware = parts.hardware();
+        let engine = EngineBuild {
+            ecu: Ecu::blank(&hardware, parts.ecu),
+            hardware,
+            maps: EngineMaps::blank(),
+            octane: crate::physics::fuel::PUMP_OCTANE,
+        };
+        let mut setup = Self::new(build, parts, engine);
+        setup.car = car.clone();
+        setup.set_cargo(cargo.to_vec());
+        Some(setup)
+    }
+
     pub fn axle(&self, front: bool) -> &AxleSetup {
         if front { &self.front } else { &self.rear }
     }

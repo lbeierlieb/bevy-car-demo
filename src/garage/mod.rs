@@ -31,13 +31,14 @@ use crate::wheels::{self, TireSize, Wheel};
 use crate::workshop::{self, Work};
 
 mod bay;
+pub mod park;
 mod showroom;
 
 pub struct GaragePlugin;
 
 impl Plugin for GaragePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((bay::BayPlugin, showroom::ShowroomPlugin))
+        app.add_plugins((bay::BayPlugin, showroom::ShowroomPlugin, park::ParkPlugin))
             .add_systems(Update, (open, bake.run_if(resource_exists::<Garage>)));
     }
 }

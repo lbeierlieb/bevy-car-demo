@@ -240,7 +240,8 @@ pub fn arrive(
     }
     ghost.0 = false;
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
-        *at = AtShop::default();
+        // (No car for a frame while one built anew takes its place: still in the shop.
+        // Gone from the server, the shops go, and `place` lets go of the shop.)
         return;
     };
     let p = car.body.position.xz();

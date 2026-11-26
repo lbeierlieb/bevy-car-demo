@@ -278,17 +278,24 @@ fn key(c: char) -> KeyCode {
 
 /// CAR="chassis[,engine]": start in that car of the catalogue (its place in it, and the
 /// factory's engine option for it): from the server's showroom, or offline the built-in
-/// catalogue's.
+/// catalogue's. CARAT=frame buys it at that frame, not at once (the car given first then
+/// goes into the garage).
 fn pick_car(
     mut commands: Commands,
     terrain: Res<crate::terrain::Terrain>,
     connection: Option<ResMut<crate::net::Connection>>,
     cars: Query<(Entity, &crate::car::Car)>,
     mut done: Local<bool>,
+    mut frame: Local<u32>,
 ) {
     let Ok(spec) = std::env::var("CAR") else {
         return;
     };
+    *frame += 1;
+    let at: u32 = std::env::var("CARAT").map_or(0, |at| at.parse().unwrap());
+    if *frame < at {
+        return;
+    }
     let Ok((entity, car)) = cars.single() else {
         return;
     };
