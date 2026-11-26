@@ -143,7 +143,10 @@ setups; a car driving the same steps to the bit).
 - The existing shops (garage, paint, alignment, dyno, showroom) keep working on the new
   model, still the client's word as now.
 
-### 2. One car
+### 2. One car (done 2026-11-26)
+
+Built as below; the showroom still offers the chassis with an engine choice, which now
+picks the trim (selling trims as such comes with the shops' rework in 6).
 
 - The catalogue down to the hatchback (other chassis, the engine families but the B
   series, their baked maps go; traffic is hatchbacks in trims and paints; the showroom

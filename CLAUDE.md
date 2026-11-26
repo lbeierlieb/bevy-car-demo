@@ -211,7 +211,7 @@ As built (`src/menu/`):
   (commands in README, "The map and baking it"; a bake takes about 20 s). The native
 apps load `assets/gerach.terrain` at startup, so they see a re-bake at once (tests use
 the embedded copy, `Terrain::baked`, the fallback otherwise); commit the re-baked file.
-- Engine maps of every factory engine of the built-in catalogue (only the B16 since
+- Engine maps of every factory engine of the built-in catalogue (B16 and B18 since
   2026-11-26, see `catalogue/engines.rs`), plus two engines tests measure against (W20,
   `EngineHardware::default`; B16T, `EngineHardware::turbo`), are baked into
   `src/physics/engine/baked/<code>.maps` (listed in `engine/store.rs`'s `BAKED`). After changing `cycle.rs`, `maps.rs` (outside
@@ -841,6 +841,17 @@ every painted part). `CarSetup::car` is the tree; shops rebuild with
 `CarSetup::changed`. `CarSpec` on the wire is the tree and the tune (protocol 31);
 reading checks every item against the catalogue (`Item::fine`: in it, in a slot of
 its kind, required slots filled, knobs within range).
+Milestone 2 (one car): the Vireo is an early-90s three-door (4.07 m, 2.57 m wheelbase,
+14" wheels, 820 kg sprung; a cabin point's glazing 2 is a painted side with the rear
+window glazed: the C pillar), engines B16 and B18 (baked), trims `vireo.1-6` (steel
+rims, 185/60 R14, solid front discs, rear drums, open differential) and `vireo.1-8`
+(15" alloys, 195/55 R15, vented discs, rear discs, limited slip, roof spoiler: an item,
+not drawn until the body is in pieces) from `catalogue/items.rs`'s `trim_specs`. A
+factory car is its trim's (`CarSetup::factory_in`, `to_look_at`, via `items::trim_of`;
+so the server's start car, the showroom's "Drive it" and lent cars are trims);
+`assemble` keeps a part that does the same as asked (steel rims stay steel). Shots:
+`LINEUP` counts stock cars (each chassis × factory engine); its straight is in a
+forest now, `OFFLINE=1 CARCAM="-6,1.3,0"` shows the car side on in the village.
 
 The game is about tuning every aspect of a car. Agreed so far (the user's answers):
 - **Parts are items** you own (a definition from the server's catalogue + condition),
@@ -1244,13 +1255,13 @@ catalogue entries, and things like swap subframes are named so they can be price
 
 - **Catalogues** (data in a `catalogue::Catalogue`, the server's, see "Server
   catalogue"; entries referred to by their place; engine versions also by code). The
-  built-in one (`src/catalogue/`): `chassis.rs` has the chassis (only the Vireo hot hatch with the B16 since 2026-11-26,
+  built-in one (`src/catalogue/`): `chassis.rs` has the chassis (only the Vireo hatch, B16 and B18, since 2026-11-26,
   see "Owning cars and parts"; the other twelve (Minim, Linnet, Tarn, Halden, Skarn,
   Harrow, Calder, Rheon, Vespera, Wisp, Drover, Carrow) and their engines are in git
   history before that; names are made up, no real cars), gearboxes (the two
   transverse ones), clutches, suspension kits and paints (the tire
   compounds' rubber is `physics/tire.rs`'s `COMPOUNDS`, named in `catalogue/parts.rs`).
-  `engines.rs` has the families (the B series, version B16; `EngineHardware::default`
+  `engines.rs` has the families (the B series, versions B16 and B18; `EngineHardware::default`
   is still the W20 2-litre four everything is scaled from). Tests needing another kind
   of car change the one: `catalogue::builtin_changed` (heavier, rear-wheel drive…).
 - **A car** is a `CarBuild` (chassis, paint, gearbox, clutch, final drive, limited-slip,
