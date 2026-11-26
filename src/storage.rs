@@ -16,6 +16,17 @@ pub struct Folder {
     pub web_prefix: &'static str,
 }
 
+/// The folder for the game's data (`~/.local/share/car-sim`, or under `XDG_DATA_HOME`):
+/// playing alone's database.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn data_dir() -> Option<std::path::PathBuf> {
+    use std::path::{Path, PathBuf};
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".local/share")))?;
+    Some(base.join("car-sim"))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl Folder {
     fn dir(&self) -> Option<std::path::PathBuf> {

@@ -4,6 +4,7 @@
 //! own (see "Multiplayer" in the notes). `ServerPlugin` and `ClientPlugin` do nothing until there's a `Server` or a
 //! `Connection` resource.
 
+pub mod accounts;
 pub mod client;
 pub mod link;
 #[cfg(not(target_arch = "wasm32"))]
@@ -970,6 +971,126 @@ mod tests {
         };
         assert!(why.starts_with("Press Ctrl+F5"), "{why}");
         assert!(why.ends_with("(The server has another map)"), "{why}");
+    }
+
+    /// A server keeping accounts in a database of its own (a file, so the test can make
+    /// an account first): its path, and the server.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn server_with_accounts(
+        listener: &LoopbackListener,
+        guests: bool,
+    ) -> (std::path::PathBuf, App) {
+        let file = std::env::temp_dir().join(format!(
+            "car-sim-test-{}-{}.db",
+            std::process::id(),
+            crate::db::instance_name()
+        ));
+        let url = format!("sqlite://{}", file.display());
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let store = crate::db::Store::open(&url).await.unwrap();
+                store.add_user("Anna", "secret").await.unwrap();
+            });
+        let accounts = accounts::Accounts::open(&url, guests).unwrap();
+        let mut app = server(listener);
+        let with = app.world_mut().remove_resource::<Server>().unwrap();
+        app.insert_resource(with.with_accounts(accounts));
+        (file, app)
+    }
+
+    /// A player logging in as `name` with `password` (no car of their own until the
+    /// server gives one), who drives.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn account_driver(listener: &LoopbackListener, name: &str, password: &str) -> App {
+        let terrain = Terrain::flat();
+        let car = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, 0.0, 0.0, 0.0);
+        let connection = Connection::login(listener.connect(), name, password, &terrain);
+        let mut app = app_on(terrain);
+        app.add_systems(Update, crate::looks::show_cars)
+            .add_plugins((ClientPlugin, crate::sim::SimPlugin, crate::car::CarPlugin))
+            .init_resource::<ActiveCar>()
+            .init_resource::<crate::input::WheelInput>()
+            .insert_resource(connection);
+        app.world_mut().spawn((
+            Transform::default(),
+            Looks::of(&car.setup),
+            Motion::of(&car),
+            car,
+        ));
+        app
+    }
+
+    /// Runs until the player's joined or refused (the database answers on a thread of
+    /// its own), then a while longer.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn log_in(server: &mut App, player: &mut App) -> Status {
+        for _ in 0..500 {
+            run(&mut [&mut *server, &mut *player], 1);
+            if !matches!(connection(player).status, Status::Joining) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        run(&mut [server, player], 60);
+        connection(player).status.clone()
+    }
+
+    /// A player logs in to their account; their car, changed and worn, is kept when they
+    /// leave and is theirs again, as it was, when they come back. Wrong passwords and
+    /// guests (where there are none) are refused.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_players_car_is_kept_between_sessions() {
+        let listener = LoopbackListener::default();
+        let (file, mut server) = server_with_accounts(&listener, false);
+        let mut wrong = account_driver(&listener, "Anna", "guess");
+        assert!(matches!(
+            log_in(&mut server, &mut wrong),
+            Status::Refused(_)
+        ));
+        let mut guest = account_driver(&listener, "Ben", "");
+        assert!(matches!(
+            log_in(&mut server, &mut guest),
+            Status::Refused(_)
+        ));
+
+        let mut anna = account_driver(&listener, "anna", "secret");
+        assert!(matches!(
+            log_in(&mut server, &mut anna),
+            Status::Joined { .. }
+        ));
+        // Repainted in a shop, the engine worn.
+        let setup = car(&mut anna).setup.clone();
+        let mut build = setup.build.clone();
+        build.paint = (build.paint + 1) % build.catalogue.paints.len();
+        let painted = CarSetup::new(build.clone(), setup.engine.parts, setup.engine.build);
+        let rebuilt = car(&mut anna).rebuilt(painted);
+        *car(&mut anna) = rebuilt;
+        run(&mut [&mut server, &mut anna], 30);
+        car(&mut anna).drivetrain.engine.damage.head_gasket = 0.25;
+        run(&mut [&mut server, &mut anna], 30);
+        // Twice at once is once too many.
+        let mut again = account_driver(&listener, "Anna", "secret");
+        assert!(matches!(
+            log_in(&mut server, &mut again),
+            Status::Refused(_)
+        ));
+        anna.world_mut().resource_mut::<Connection>().close();
+        run(&mut [&mut server], 5);
+
+        let mut back = account_driver(&listener, "Anna", "secret");
+        assert!(matches!(
+            log_in(&mut server, &mut back),
+            Status::Joined { .. }
+        ));
+        run(&mut [&mut server, &mut back], 60);
+        let car = car(&mut back);
+        assert_eq!(car.setup.build.paint, build.paint, "the paint");
+        assert_eq!(car.drivetrain.engine.damage.head_gasket, 0.25, "the wear");
+        let _ = std::fs::remove_file(file);
     }
 
     #[test]

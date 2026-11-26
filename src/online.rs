@@ -1,6 +1,7 @@
-//! Playing alone or on a server: the start menu (name, server address, "Play alone",
-//! "Join server"; on the web only the name and "Join", for the server the page came
-//! from; alone is joining the game's own server, `net::local`), what's shown while
+//! Playing alone or on a server: the start menu (name, password, server address, "Play
+//! alone", "Join server"; on the web only the name, password and "Join", for the server the
+//! page came from; the password is an account's on the server, none for a guest, and never
+//! kept; alone is joining the game's own server, `net::local`), what's shown while
 //! joining or when it fails (the players and leaving are in
 //! the central menu), name tags (`name_tags`), and the players the
 //! server puts on the map (`MapCars`), and the chat (`chat`). Joined, the car is put in a lane near the spawn
@@ -36,6 +37,7 @@ impl Plugin for OnlinePlugin {
                 open: true,
                 alone: false,
                 settings,
+                password: String::new(),
             })
             .add_systems(Update, (place_on_joining, show_on_map))
             .add_systems(EguiPrimaryContextPass, menu);
@@ -49,6 +51,8 @@ pub struct Menu {
     /// Whether the server joined is the game's own (playing alone).
     pub alone: bool,
     settings: Settings,
+    /// The account's password, for joining (never kept).
+    password: String,
 }
 
 impl Menu {
@@ -172,6 +176,8 @@ fn menu(
         let alone = !web && kit::button(ui, "Play alone").clicked();
         kit::section(ui, "Your name");
         kit::text_field(ui, &mut settings.name, "", 1);
+        kit::section(ui, "Password");
+        kit::password_field(ui, &mut menu.password, "None: as a guest");
         // On the web, the page's server is joined: no address to give.
         if !web {
             kit::section(ui, "Server");
@@ -186,7 +192,8 @@ fn menu(
         if joined {
             settings.save();
             let link = net::connect(&settings.address);
-            commands.insert_resource(Connection::new(link, settings.name.trim(), &terrain));
+            let (name, password) = (settings.name.trim(), &menu.password);
+            commands.insert_resource(Connection::login(link, name, password, &terrain));
             menu.open = false;
             menu.alone = false;
         }

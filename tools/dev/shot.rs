@@ -125,7 +125,8 @@ fn say(mut frame: Local<u32>, connection: Option<ResMut<crate::net::Connection>>
 }
 
 /// The controls screen is closed unless INTRO=1, the start menu unless MENU=1;
-/// JOIN="address" joins that server as NAME (or "Shot") at once, else the shot plays
+/// JOIN="address" joins that server as NAME (or "Shot", with PASSWORD if it's an
+/// account) at once, else the shot plays
 /// alone (on the game's own server), unless OFFLINE=1 or LINEUP (no server at all: a
 /// join would move the car; OFFLINE drives the built-in catalogue's first car, as no
 /// server gives one).
@@ -153,7 +154,9 @@ fn start_online(
     if let Ok(address) = std::env::var("JOIN") {
         let name = std::env::var("NAME").unwrap_or_else(|_| "Shot".into());
         let link = crate::net::connect(&address);
-        commands.insert_resource(crate::net::Connection::new(link, &name, &terrain));
+        let password = std::env::var("PASSWORD").unwrap_or_default();
+        let connection = crate::net::Connection::login(link, &name, &password, &terrain);
+        commands.insert_resource(connection);
         menu.open = false;
     } else if std::env::var("OFFLINE").is_ok() {
         let (p, yaw) = terrain.road_spawns(&crate::terrain::Spawn::DEFAULT, 1, 0.0)[0];

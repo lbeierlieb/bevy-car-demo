@@ -1,7 +1,8 @@
 //! Playing alone (native only): a server of the game's own, on a thread of its own, joined
 //! in memory like any server. It has the repo's shops and events and the default traffic,
-//! so playing alone is playing online with nobody else there. It stops when its link is
-//! dropped (the `Connection` goes).
+//! so playing alone is playing online with nobody else there. What the player has is kept
+//! in an SQLite file in the game's data folder (`alone.db`, as the default user). It stops
+//! when its link is dropped (the `Connection` goes), saving the player's car first.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,8 +12,11 @@ use std::time::Duration;
 use bevy::app::AppExit;
 use bevy::prelude::*;
 
+use super::accounts::Accounts;
 use super::link::{Link, Loopback, LoopbackListener};
+use super::server::Peer;
 use super::{MapPlayers, Server, run_server, server_app};
+use crate::catalogue::Current;
 use crate::terrain::Terrain;
 
 /// The shops and events of the game's own server.
@@ -20,6 +24,21 @@ const SHOPS: &str = include_str!("../../assets/shops.cfg");
 const EVENTS: &str = include_str!("../../assets/events.cfg");
 /// Traffic cars around the player.
 const TRAFFIC: usize = crate::traffic::DEFAULT_CARS;
+/// How long quitting waits for the server to save the player's car (s).
+const LAST_SAVE: f32 = 4.0;
+
+/// Where playing alone keeps what the player has (tests keep nothing).
+fn database() -> Option<String> {
+    if cfg!(test) {
+        return Some("sqlite::memory:".into());
+    }
+    let dir = crate::storage::data_dir()?;
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        warn!("Couldn't make {}: {e}", dir.display());
+        return None;
+    }
+    Some(format!("sqlite://{}", dir.join("alone.db").display()))
+}
 
 /// Starts the game's own server and joins it: the link is there at once (the server
 /// answers once it's up).
@@ -42,10 +61,25 @@ pub fn start() -> LocalLink {
                     Vec::new()
                 }))
                 .with_events(events(app.world().resource::<Terrain>()));
+            let accounts = database().map(|url| Accounts::alone(&url).map_err(|e| (url, e)));
+            let server = match accounts {
+                Some(Ok(accounts)) => server.with_accounts(accounts),
+                Some(Err((url, e))) => {
+                    warn!("Playing alone without keeping anything: {url}: {e}");
+                    server
+                }
+                None => server,
+            };
             app.insert_resource(server).add_systems(
                 Update,
-                move |mut exit: MessageWriter<AppExit>| {
-                    if stopping.load(Ordering::Relaxed) {
+                move |server: Res<Server>,
+                      peers: Query<&Peer>,
+                      catalogue: Res<Current>,
+                      mut saved: Local<bool>,
+                      mut exit: MessageWriter<AppExit>| {
+                    if stopping.load(Ordering::Relaxed) && !*saved {
+                        *saved = true;
+                        server.save_everyone(peers.iter(), &catalogue);
                         exit.write(AppExit::Success);
                     }
                 },
@@ -118,9 +152,14 @@ impl Link for LocalLink {
 impl Drop for LocalLink {
     fn drop(&mut self) {
         self.close();
-        // Not joined: the server's last frame may still take a moment, and quitting
-        // shouldn't wait for it.
-        self.thread.take();
+        // The server saves the player's car before it stops: quitting waits for that a
+        // little, not for ever.
+        if let Some(thread) = self.thread.take() {
+            let started = std::time::Instant::now();
+            while !thread.is_finished() && started.elapsed().as_secs_f32() < LAST_SAVE {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
     }
 }
 
@@ -142,6 +181,7 @@ mod tests {
                 protocol: PROTOCOL,
                 map: terrain.fingerprint,
                 name: "Anna".into(),
+                password: String::new(),
             }),
         );
         let mut welcome = false;

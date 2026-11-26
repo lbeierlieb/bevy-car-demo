@@ -79,6 +79,8 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "any", "sqlite-bundled", "mysql", "postgres", "tls-rustls-ring-webpki"] }
 # Passwords are kept as argon2 hashes.
 argon2 = "0.6"
+# The server's `user` commands ask for passwords without showing them.
+rpassword = "7"
 
 # Fast-ish debug builds: optimize dependencies, keep our own crate quick to compile.
 [profile.dev]

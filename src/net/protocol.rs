@@ -39,7 +39,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 32;
+pub const PROTOCOL: u32 = 33;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -67,10 +67,13 @@ pub fn clean_chat(text: &str) -> Option<String> {
 /// Client to server.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ToServer {
+    /// Joining: the game's protocol and map, and who's joining (an account's name and
+    /// password; a guest's name without one).
     Hello {
         protocol: u32,
         map: u64,
         name: String,
+        password: String,
     },
     State(CarState),
     /// A chat message for everyone.
@@ -301,11 +304,13 @@ impl Wire for ToServer {
                 protocol,
                 map,
                 name,
+                password,
             } => {
                 0u8.put(out);
                 protocol.put(out);
                 map.put(out);
                 name.put(out);
+                password.put(out);
             }
             ToServer::State(state) => {
                 2u8.put(out);
@@ -356,6 +361,8 @@ impl Wire for ToServer {
                 protocol: r.get()?,
                 map: r.get()?,
                 name: r.get()?,
+                // Older games say no password: they're told the version is wrong.
+                password: if r.done() { String::new() } else { r.get()? },
             },
             2 => ToServer::State(r.get()?),
             3 => ToServer::Chat(r.get()?),

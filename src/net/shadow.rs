@@ -39,6 +39,7 @@ use crate::car::{Car, DriverInput, ResetRule, heading};
 use crate::heli::HeliPose;
 use crate::heli::rescue::{Rescue, fly};
 use crate::physics::engine::maps::{EngineMaps, fingerprint};
+use crate::saved::Condition;
 use crate::sim::{STEP, step_car};
 use crate::snapshot;
 use crate::spec::CarSpec;
@@ -163,6 +164,8 @@ pub struct Shadow {
     taken: bool,
     /// Whether the car may be refuelled (stopped at a gas station).
     pub refuel: bool,
+    /// The condition a saved car was left in, for the car once it has a state.
+    condition: Option<Condition>,
     report: Report,
 }
 
@@ -235,6 +238,20 @@ impl Shadow {
             self.baking = Some((print, bake(hardware)));
         }
         self.spec = Some(spec);
+    }
+
+    /// The car, once it has a state, is in `condition` (a saved car's: its fuel and wear).
+    pub fn set_condition(&mut self, condition: Condition) {
+        self.condition = Some(condition);
+    }
+
+    /// The player's own car as the server has it, while it has a state: what it's built of
+    /// and the car (their own while they drive a lent one), for saving.
+    pub fn kept(&self) -> Option<(&CarSpec, &Car)> {
+        match &self.own {
+            Some((spec, car)) => Some((spec.as_ref()?, car)),
+            None => Some((self.spec.as_ref()?, self.car.as_ref()?)),
+        }
     }
 
     /// The driver's inputs in the steps up to `last`, the latest last, come at server
@@ -582,6 +599,14 @@ impl Shadow {
             spot.put(&mut car, terrain);
             self.moved = self.moved.wrapping_add(1);
             moved = true;
+        }
+        if let Some(condition) = fresh.then(|| self.condition.take()).flatten() {
+            // As it was left (a move, so the player's game takes it up).
+            condition.apply(&mut car);
+            if !moved {
+                self.moved = self.moved.wrapping_add(1);
+                moved = true;
+            }
         }
         // Driven on to where it's due from the inputs kept (a placement from long ago, a
         // car whose engine was baking: from where it was put).

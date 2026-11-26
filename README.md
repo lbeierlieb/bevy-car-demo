@@ -94,12 +94,17 @@ pull request.
 
 ## Multiplayer
 
-The game starts with a menu: **Play alone**, or **Join server** with your name and the
-server's address (`host`, `host:port` or `https://host:port`; the port is 4433 unless
-said otherwise). The web version only asks for your name and joins the server the page
-came from. **Play alone** (native only) starts a server of the game's own in the
-background and joins it: the same map, traffic, shops and events as on a server
-(`assets/shops.cfg`, `assets/events.cfg`), with nobody else there. On a server each player
+The game starts with a menu: **Play alone**, or **Join server** with your name, password
+and the server's address (`host`, `host:port` or `https://host:port`; the port is 4433
+unless said otherwise). The name and password are your account's on that server (its
+admin makes accounts); without a password you join as a guest, if the server lets guests
+in (nothing of a guest's is kept). The web version only asks for your name and password
+and joins the server the page came from. **Play alone** (native only) starts a server of
+the game's own in the background and joins it: the same map, traffic, shops and events as
+on a server (`assets/shops.cfg`, `assets/events.cfg`), with nobody else there. Your car
+(what it's built of, its tune, fuel and wear) is kept: playing alone in
+`~/.local/share/car-sim/alone.db`, on a server with an account in its database; you start
+in it next time. On a server each player
 drives their own car (physics and
 force feedback stay on your machine) and sees the others near them (within 600 m), with
 their names over the cars; the list of players (top left) has **Leave the server**.
@@ -153,8 +158,27 @@ A server is a program of its own, run headless:
 ```sh
 cargo run --bin server -- --cert fullchain.pem --key key.pem   # options: --port, --traffic, --max-players,
                                                                # --map-players, --map-near, --chat, --name-tags, --shops, --events,
-                                                               # --spawn, --telegram-token-file with --telegram-chat-file
+                                                               # --spawn, --telegram-token-file with --telegram-chat-file,
+                                                               # --database (or --database-file), --guests
 ```
+
+With `--database` players log in to accounts and their cars are kept: an SQLite file
+(`--database cars.db`, or `sqlite:///var/lib/car-sim/car-sim.db`), MySQL/MariaDB
+(`mysql://user:password@host/db`) or PostgreSQL (`postgres://user:password@host/db`); the
+tables are made and updated when the server starts. `--database-file` reads the URL from
+a file (when it has a password). Several servers may share a MySQL or PostgreSQL
+database: a player plays on one at a time. `--guests on` lets in players without an
+account too (by a name that isn't an account's, without a password). The admin makes
+accounts with the same program:
+
+```sh
+server --database cars.db user add Anna        # asks for the password (or reads a line on stdin)
+server --database cars.db user password Anna   # a new password
+server --database cars.db user remove Anna     # the account and everything it has
+server --database cars.db user list
+```
+
+Without `--database` everyone plays by the name they give, and nothing is kept.
 
 Who a player sees of the others on their map (M) is the server's choice:
 `--map-players self` (nobody), `near` (within `--map-near` metres, 200 by default; the
@@ -202,6 +226,8 @@ joins this server):
             # port = 4433; traffic = 20; maxPlayers = 32;
             # mapPlayers = "near"; mapNear = 200;  # others on the map: "self", "near" or "all"
             # chat = true; nameTags = true;
+            # Accounts and saved cars (null: none, everyone by name), and guests:
+            # database = "sqlite:///var/lib/car-sim/car-sim.db"; guests = false;
             # Where the shops are (null: none), e.g. the repo's list:
             # shops = "${car-sim}/assets/shops.cfg";
             # Where the events are (null: none), e.g. the repo's list:
@@ -222,7 +248,12 @@ joins this server):
 ```
 
 The server runs as `car-sim.service` (`journalctl -u car-sim` shows who joins and
-leaves) and takes up renewed certificates by itself, without dropping anyone. With
+leaves) and takes up renewed certificates by itself, without dropping anyone. Players
+log in to accounts, kept with their cars in an SQLite file under `/var/lib/car-sim`
+(`database` can be a MySQL or PostgreSQL URL instead; `databaseFile` a file holding one,
+read as a systemd credential); `sudo car-sim-user add NAME` makes an account (also
+`password NAME`, `remove NAME`, `list`), and `guests = true` lets in players without
+one. With
 `telegram` set, a Telegram bot tells the chat when the server starts and who joins and
 leaves (with how many are on). Make the bot with @BotFather and put its token in one
 file and the chat id in another (nothing else in them; the service reads both as
@@ -357,6 +388,7 @@ tire grip force, cyan for roll centres.
 | `src/body.rs` | Procedural low-poly car bodies |
 | `src/lib.rs`, `src/main.rs` | The shared `WorldPlugin` and `CorePlugin`; the sandbox app |
 | `src/net/`, `src/online.rs`, `src/bin/server.rs` | Multiplayer: protocol, server, client, WebTransport; the start menu; the server app |
+| `src/db.rs`, `src/net/accounts.rs`, `src/saved.rs` | The server's database (accounts, the instance lock, saved cars); a saved car as text |
 | `src/editor/`, `src/bin/editor.rs` | The map editor |
 | `src/race_editor/`, `src/bin/races.rs` | The race editor |
 | `src/osm.rs` | The map file's reader and writer (shared with the bake) |

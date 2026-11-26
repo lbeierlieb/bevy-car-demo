@@ -6,6 +6,9 @@
 //!        [--map-players self|near|all] [--map-near 200] [--chat on|off]
 //!        [--name-tags on|off] [--shops shops.cfg] [--events events.cfg]
 //!        [--spawn "x z [heading]"] [--telegram-token-file token --telegram-chat-file chat]
+//!        [--database URL | --database-file file] [--guests on|off]
+//! server --database URL user add|password|remove NAME
+//! server --database URL user list
 //! ```
 //!
 //! `--map-players` says who a player sees of the others on their map: nobody (`self`),
@@ -17,6 +20,17 @@
 //! start: a map point (x east, z south, m, as the gizmos (1) and the map show them) and a
 //! compass heading to face along the road there (without one, the way with more road
 //! behind); without it, the game's default in Gerach.
+//!
+//! With `--database` (`sqlite:///var/lib/car-sim/car-sim.db`, a plain path to an SQLite
+//! file, `mysql://user:password@host/db` or `postgres://user:password@host/db`) players log
+//! in to accounts and their cars are kept; `--guests on` lets in players without one too
+//! (by a name that isn't an account's, without a password; nothing of theirs is kept).
+//! Accounts are made by the server's admin: `user add NAME` asks for the password, `user
+//! password NAME` sets a new one, `user remove NAME` deletes the account and what it has,
+//! `user list` lists them (a password is read from the terminal, or a line on standard
+//! input). `--database-file` reads the URL from a file (a secret, when it has a password).
+//! Several servers may share a PostgreSQL or MySQL database: a player plays on one
+//! at a time. Without a database everyone plays by the name they give, and nothing's kept.
 //!
 //! Without a certificate it makes a throwaway one: only the native game joins that, with
 //! `CAR_SIM_INSECURE=1` (for development).
@@ -32,11 +46,15 @@ fn main() {
     use car_sim::net::quic::{Certificate, QuicListener};
     use car_sim::*;
 
-    let options = match Options::parse(std::env::args().skip(1)) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(at) = args.iter().position(|arg| arg == "user") {
+        std::process::exit(users(&args[..at], &args[at + 1..]));
+    }
+    let options = match Options::parse(args.into_iter()) {
         Ok(options) => options,
         Err(e) => {
             eprintln!(
-                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--map-players self|near|all] [--map-near 200] [--chat on|off]\n       [--name-tags on|off] [--shops shops.cfg] [--events events.cfg]\n       [--spawn \"x z [heading]\"] [--telegram-token-file token --telegram-chat-file chat]"
+                "{e}\n\nusage: server [--port 4433] [--cert fullchain.pem --key key.pem] [--traffic 20] [--max-players 32]\n       [--map-players self|near|all] [--map-near 200] [--chat on|off]\n       [--name-tags on|off] [--shops shops.cfg] [--events events.cfg]\n       [--spawn \"x z [heading]\"] [--telegram-token-file token --telegram-chat-file chat]\n       [--database URL | --database-file file] [--guests on|off]\n       server --database URL user add|password|remove NAME | user list"
             );
             std::process::exit(2);
         }
@@ -56,6 +74,16 @@ fn main() {
         },
         _ => None,
     };
+    let accounts = match &options.database {
+        Some(url) => match net::accounts::Accounts::open(url, options.guests) {
+            Ok(accounts) => Some(accounts),
+            Err(e) => {
+                eprintln!("--database: {e}");
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
     let listener = match QuicListener::bind(options.port, certificate) {
         Ok(listener) => listener,
         Err(e) => {
@@ -64,8 +92,12 @@ fn main() {
         }
     };
 
+    let mut server = net::Server::new(listener);
+    if let Some(accounts) = accounts {
+        server = server.with_accounts(accounts);
+    }
     let mut app = net::server_app(
-        net::Server::new(listener)
+        server
             .with_max_players(options.max_players)
             .with_map(options.map_players)
             .with_chat(options.chat)
@@ -107,6 +139,8 @@ struct Options {
     spawn: car_sim::terrain::Spawn,
     telegram_token_file: Option<std::path::PathBuf>,
     telegram_chat_file: Option<std::path::PathBuf>,
+    database: Option<String>,
+    guests: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -126,6 +160,8 @@ impl Options {
             spawn: car_sim::terrain::Spawn::DEFAULT,
             telegram_token_file: None,
             telegram_chat_file: None,
+            database: None,
+            guests: false,
         };
         fn number<T: std::str::FromStr>(arg: &str, value: Option<String>) -> Result<T, String> {
             let value = value.ok_or(format!("{arg} needs a value"))?;
@@ -159,16 +195,23 @@ impl Options {
                     options.spawn = car_sim::terrain::Spawn::parse(&text)
                         .map_err(|e| format!("--spawn: {e}"))?;
                 }
-                "--chat" | "--name-tags" => {
+                "--database" => {
+                    options.database = Some(args.next().ok_or("--database needs a URL")?)
+                }
+                "--database-file" => {
+                    let file = args.next().ok_or("--database-file needs a file")?;
+                    options.database = Some(secret(std::path::Path::new(&file))?);
+                }
+                "--chat" | "--name-tags" | "--guests" => {
                     let on = match args.next().as_deref() {
                         Some("on") => true,
                         Some("off") => false,
                         _ => return Err(format!("{arg} needs on or off")),
                     };
-                    if arg == "--chat" {
-                        options.chat = on;
-                    } else {
-                        options.name_tags = on;
+                    match arg.as_str() {
+                        "--chat" => options.chat = on,
+                        "--guests" => options.guests = on,
+                        _ => options.name_tags = on,
                     }
                 }
                 "--telegram-token-file" => {
@@ -214,11 +257,128 @@ impl Options {
         if options.cert.is_some() != options.key.is_some() {
             return Err("--cert and --key go together".into());
         }
+        if options.guests && options.database.is_none() {
+            return Err("--guests goes with --database (without one, everyone's a guest)".into());
+        }
         if options.telegram_token_file.is_some() != options.telegram_chat_file.is_some() {
             return Err("--telegram-token-file and --telegram-chat-file go together".into());
         }
         Ok(options)
     }
+}
+
+/// The `user` commands on the database `--database` (in `before` or `after`) names:
+/// `after` is the command and its name. The process's exit code.
+#[cfg(not(target_arch = "wasm32"))]
+fn users(before: &[String], after: &[String]) -> i32 {
+    let mut database = None;
+    let mut words = Vec::new();
+    let mut args = before.iter().chain(after);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--database" => database = args.next().cloned(),
+            "--database-file" => match args.next().map(|file| secret(std::path::Path::new(file))) {
+                Some(Ok(url)) => database = Some(url),
+                Some(Err(e)) => {
+                    eprintln!("{e}");
+                    return 1;
+                }
+                None => {
+                    eprintln!("--database-file needs a file");
+                    return 2;
+                }
+            },
+            other if other.starts_with("--") => {
+                eprintln!("user: unknown option {other}");
+                return 2;
+            }
+            _ => {}
+        }
+    }
+    let mut args = after.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--database" || arg == "--database-file" {
+            args.next();
+        } else {
+            words.push(arg.as_str());
+        }
+    }
+    let Some(url) = database else {
+        eprintln!("user: which database? (--database URL)");
+        return 2;
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let done = runtime.block_on(async {
+        let store = car_sim::db::Store::open(&url).await?;
+        match words.as_slice() {
+            ["add", name] => {
+                let name = car_sim::db::clean_name(name)?;
+                let password = new_password(&name)?;
+                store.add_user(&name, &password).await?;
+                println!("Made the account {name}");
+            }
+            ["password", name] => {
+                let password = new_password(name)?;
+                store.set_password(name, &password).await?;
+                println!("{name} has a new password");
+            }
+            ["remove", name] => {
+                store.remove_user(name).await?;
+                println!("Removed the account {name} and everything it had");
+            }
+            ["list"] => {
+                for (name, created) in store.users().await? {
+                    let days = (std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_millis() as i64)
+                        - created)
+                        / 86_400_000;
+                    println!("{name}\t(made {days} days ago)");
+                }
+            }
+            _ => {
+                return Err(
+                    "user add NAME, user password NAME, user remove NAME or user list".to_string(),
+                );
+            }
+        }
+        Ok::<(), String>(())
+    });
+    match done {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
+}
+
+/// A new password for `name`: asked twice on the terminal, or a line of standard input.
+#[cfg(not(target_arch = "wasm32"))]
+fn new_password(name: &str) -> Result<String, String> {
+    use std::io::IsTerminal;
+    let password = if std::io::stdin().is_terminal() {
+        let first = rpassword::prompt_password(format!("{name}'s password: "))
+            .map_err(|e| e.to_string())?;
+        let again = rpassword::prompt_password("Again: ").map_err(|e| e.to_string())?;
+        if first != again {
+            return Err("The passwords differ".into());
+        }
+        first
+    } else {
+        let mut line = String::new();
+        std::io::stdin()
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?;
+        line.trim_end_matches(['\r', '\n']).to_string()
+    };
+    if password.is_empty() {
+        return Err("An empty password isn't one".into());
+    }
+    Ok(password)
 }
 
 /// Every minute, how many players and traffic cars there are.

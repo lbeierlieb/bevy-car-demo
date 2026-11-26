@@ -571,6 +571,15 @@ pub fn note(ui: &mut Ui, text: &str) {
 /// back on the row. With `rows` over 1 it takes several lines: Enter is a new line, and
 /// leaving it (Esc, a click elsewhere) keeps the text. Changed when the text was kept.
 pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str, rows: usize) -> Response {
+    field(ui, text, hint, rows, false)
+}
+
+/// A one-line field like `text_field` whose text never shows (dots instead).
+pub fn password_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
+    field(ui, text, hint, 1, true)
+}
+
+fn field(ui: &mut Ui, text: &mut String, hint: &str, rows: usize, secret: bool) -> Response {
     // The same id whether it's the row or the field being typed in.
     let id = ui.next_auto_id().with("text field");
     let edit_id = id.with("editing");
@@ -580,7 +589,7 @@ pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str, rows: usize) -> Re
         let edit = if rows > 1 {
             egui::TextEdit::multiline(&mut draft).desired_rows(rows)
         } else {
-            egui::TextEdit::singleline(&mut draft)
+            egui::TextEdit::singleline(&mut draft).password(secret)
         };
         // Esc is the field's: left to egui, it drops the focus before the field sees it,
         // and the menu would give it to its first row.
@@ -637,11 +646,13 @@ pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str, rows: usize) -> Re
         egui::StrokeKind::Inside,
     );
     let (shown, color) = if text.is_empty() {
-        (hint, WEAK)
+        (hint.to_string(), WEAK)
+    } else if secret {
+        ("•".repeat(text.chars().count()), TEXT)
     } else {
-        (text.as_str(), TEXT)
+        (text.clone(), TEXT)
     };
-    let galley = painter.layout(shown.to_string(), font, color, rect.width() - 28.0 - 50.0);
+    let galley = painter.layout(shown, font, color, rect.width() - 28.0 - 50.0);
     let top = if rows > 1 {
         rect.top() + 10.0
     } else {

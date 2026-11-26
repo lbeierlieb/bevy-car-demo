@@ -331,8 +331,15 @@ impl Connection {
         self.maps_missing.contains(&fingerprint)
     }
 
-    /// Joins a server over `link` as `name`, playing on `terrain`'s map.
+    /// Joins a server over `link` as `name` (a guest, or playing alone), playing on
+    /// `terrain`'s map.
     pub fn new(link: impl Link, name: &str, terrain: &Terrain) -> Self {
+        Self::login(link, name, "", terrain)
+    }
+
+    /// Joins a server over `link` as `name` with `password` (an account's; empty: a guest),
+    /// playing on `terrain`'s map.
+    pub fn login(link: impl Link, name: &str, password: &str, terrain: &Terrain) -> Self {
         let mut connection = Self {
             link: Box::new(link),
             status: Status::Joining,
@@ -369,6 +376,7 @@ impl Connection {
             protocol: PROTOCOL,
             map: terrain.fingerprint,
             name: name.to_string(),
+            password: password.to_string(),
         });
         connection
     }

@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::prelude::*;
 
+use super::accounts::{AccountId, Accounts, Admitted};
 use super::link::{Link, Listener};
 use super::protocol::{
     CarId, CarState, MapPlayer, PROTOCOL, PlayerId, SERVER, ToClient, ToServer, clean_chat,
@@ -28,7 +29,7 @@ use super::shadow::{BakedMaps, Shadow, Spot, Tick};
 use super::wire::{decode_with, encode};
 use super::{ClockOffset, NEAR, RATES, SEND_RATE};
 use crate::car::CarSetup;
-use crate::catalogue::Current;
+use crate::catalogue::{Catalogue, Current};
 use crate::events::Event;
 use crate::events::rounds::{EventAction, Rounds, run_rounds};
 use crate::heli::HeliPose;
@@ -57,6 +58,10 @@ const MAP_RATE: f64 = 1.0;
 /// The most chat lines a player may write within `CHAT_WINDOW` seconds.
 const CHAT_LINES: usize = 5;
 const CHAT_WINDOW: f64 = 10.0;
+/// How often the cars of players with an account are saved (s; and when they leave).
+const SAVE_EVERY: f64 = 60.0;
+/// How long a server stopping waits for the database to save everyone (s).
+const LAST_SAVE: f64 = 3.0;
 /// How often everyone's ping is sent (per second).
 const PING_RATE: f64 = 0.5;
 /// How near other players are shown on the map by default (m).
@@ -90,7 +95,7 @@ impl Plugin for ServerPlugin {
             .insert_resource(Time::<Fixed>::from_hz(crate::sim::CHASSIS_HZ))
             .add_systems(
                 Update,
-                (accept, receive, run_shadows, run_rounds, haunt, send)
+                (accept, receive, keep, run_shadows, run_rounds, haunt, send)
                     .chain()
                     .run_if(resource_exists::<Server>),
             )
@@ -133,6 +138,12 @@ pub struct Server {
     events: Vec<Event>,
     /// Where players start.
     spawn: Spawn,
+    /// Who's let in and what's kept for them (none: everyone by their name, nothing
+    /// kept).
+    accounts: Option<Accounts>,
+    /// When the players' cars were last saved, and their accounts' locks refreshed (s).
+    saved: f64,
+    refreshed: f64,
     /// When states, and the map's players, were last sent (s).
     sent: f64,
     map_sent: f64,
@@ -151,9 +162,34 @@ impl Server {
             shops: Vec::new(),
             events: Vec::new(),
             spawn: Spawn::DEFAULT,
+            accounts: None,
+            saved: 0.0,
+            refreshed: 0.0,
             sent: 0.0,
             map_sent: f64::NEG_INFINITY,
             pings_sent: f64::NEG_INFINITY,
+        }
+    }
+
+    /// Lets players in by their accounts (and guests, as `accounts` says), and keeps their
+    /// cars.
+    pub fn with_accounts(self, accounts: Accounts) -> Self {
+        Self {
+            accounts: Some(accounts),
+            ..self
+        }
+    }
+
+    /// Saves every player's car and waits (a little) until it's done: the server stops.
+    pub fn save_everyone<'a>(&self, peers: impl Iterator<Item = &'a Peer>, catalogue: &Catalogue) {
+        let Some(accounts) = &self.accounts else {
+            return;
+        };
+        for peer in peers {
+            save(peer, accounts, catalogue);
+        }
+        if !accounts.flush(std::time::Duration::from_secs_f64(LAST_SAVE)) {
+            warn!("The database didn't save every car in time");
         }
     }
 
@@ -206,8 +242,12 @@ pub struct Peer {
     /// Their car's number (from `CarNumbers`, like the traffic's).
     pub car: CarId,
     link: Box<dyn Link>,
-    /// Their name, once they've said hello.
+    /// Their name, once they're let in.
     pub name: Option<String>,
+    /// Their account (none: a guest, or a server without accounts), and whether they said
+    /// hello and wait to be let in.
+    pub account: Option<AccountId>,
+    logging_in: bool,
     /// When they were last heard from (s).
     heard: f64,
     /// Their car's latest state and looks (with a revision counting the changes), and what
@@ -263,6 +303,8 @@ fn accept(
             car: numbers.take(),
             link,
             name: None,
+            account: None,
+            logging_in: false,
             heard: now(&time),
             state: None,
             looks: None,
@@ -281,7 +323,12 @@ fn accept(
 /// Reads what every player said, and lets go of the ones who left or fell silent.
 fn receive(
     mut commands: Commands,
-    (server, terrain, mut baked, tick): (Res<Server>, Res<Terrain>, ResMut<BakedMaps>, Res<Tick>),
+    (mut server, terrain, mut baked, tick): (
+        ResMut<Server>,
+        Res<Terrain>,
+        ResMut<BakedMaps>,
+        Res<Tick>,
+    ),
     (network, catalogue): (Option<Res<Network>>, Res<Current>),
     time: Res<Time<Real>>,
     mut peers: Query<(Entity, &mut Peer, Option<&mut Transform>, Option<&Realm>)>,
@@ -289,7 +336,18 @@ fn receive(
     mut actions: MessageWriter<EventAction>,
 ) {
     let now = now(&time);
-    let mut present = peers.iter().filter(|(_, p, ..)| p.name.is_some()).count();
+    // Saying hello counts: a server is full for those waiting to be let in too.
+    let mut present = (peers.iter())
+        .filter(|(_, p, ..)| p.name.is_some() || p.logging_in)
+        .count();
+    // Who the database let in, or why not; and who's playing (an account plays once).
+    let mut answers: HashMap<PlayerId, Result<Admitted, String>> = (server.accounts.as_mut())
+        .map(|accounts| accounts.answers().into_iter().collect())
+        .unwrap_or_default();
+    let mut playing: HashSet<AccountId> = peers.iter().filter_map(|(_, p, ..)| p.account).collect();
+    let mut names: HashSet<String> = (peers.iter())
+        .filter_map(|(_, p, ..)| Some(p.name.as_ref()?.to_lowercase()))
+        .collect();
     // What everyone else has to be told afterwards.
     let mut joined = Vec::new();
     let mut left = Vec::new();
@@ -310,6 +368,37 @@ fn receive(
             peer.revision += 1;
             peer.looks_of = Some(spec);
         }
+        if let Some(answer) = answers.remove(&peer.id) {
+            peer.logging_in = false;
+            let answer = answer.and_then(|admitted| {
+                if admitted
+                    .account
+                    .is_some_and(|account| playing.contains(&account))
+                {
+                    Err("You're already playing on this server".to_string())
+                } else if names.contains(&admitted.name.to_lowercase()) {
+                    Err(format!("{} is playing here already", admitted.name))
+                } else {
+                    Ok(admitted)
+                }
+            });
+            match answer {
+                Ok(admitted) => {
+                    playing.extend(admitted.account);
+                    names.insert(admitted.name.to_lowercase());
+                    let (network, catalogue) = (network.as_deref(), &catalogue);
+                    let name = admit(
+                        &mut peer, admitted, &server, &terrain, network, catalogue, &mut baked,
+                    );
+                    joined.push((peer.id, name));
+                }
+                Err(why) => {
+                    present = present.saturating_sub(1);
+                    peer.tell(&ToClient::Refused(why));
+                    peer.link.close();
+                }
+            }
+        }
         while let Some(bytes) = peer.link.receive() {
             let Some(message) = decode_with::<ToServer>(&bytes, Some(&catalogue)) else {
                 let why = "Your game sent something the server couldn't read";
@@ -324,7 +413,8 @@ fn receive(
                     protocol,
                     map,
                     name,
-                } if peer.name.is_none() => {
+                    password,
+                } if peer.name.is_none() && !peer.logging_in => {
                     let refusal = if protocol != PROTOCOL {
                         Some(format!(
                             "The server runs version {PROTOCOL} of the game's protocol, \
@@ -357,40 +447,30 @@ fn receive(
                         peer.link.close();
                         break;
                     }
-                    let name = name.trim().to_string();
-                    info!("{name} joined (player {})", peer.id);
-                    let id = peer.id;
-                    // Their car starts where their game puts it, by the spawn.
-                    let spot = (network.as_deref())
-                        .and_then(|network| join_spot(&terrain, network, &server.spawn, id));
-                    if let Some((at, yaw)) = spot {
-                        let spot = Spot {
-                            at,
-                            yaw,
-                            parked: true,
-                            hold: 0.0,
-                        };
-                        peer.shadow.put(&terrain, spot);
-                    }
-                    let car = peer.car;
-                    peer.tell(&ToClient::Welcome {
-                        you: id,
-                        car,
-                        chat: server.chat,
-                        spawn: server.spawn,
-                    });
-                    // What there is, and the car they start in.
-                    peer.tell(&ToClient::Catalogue(catalogue.0.clone()));
-                    let spec = CarSpec::of(&CarSetup::factory_in(&catalogue, catalogue.start, 0));
-                    peer.shadow.set_spec(spec.clone(), &mut baked);
-                    peer.tell(&ToClient::YourCar(Box::new(spec)));
-                    peer.tell(&ToClient::Shops(server.shops.clone()));
-                    peer.tell(&ToClient::Events(server.events.clone()));
-                    joined.push((id, name.clone()));
                     present += 1;
-                    peer.name = Some(name);
+                    match server.accounts.as_mut() {
+                        // Let in once the database says so.
+                        Some(accounts) => {
+                            accounts.login(peer.id, &name, &password);
+                            peer.logging_in = true;
+                        }
+                        None => {
+                            let admitted = Admitted {
+                                name: name.trim().to_string(),
+                                account: None,
+                                car: None,
+                            };
+                            names.insert(admitted.name.to_lowercase());
+                            let (network, catalogue) = (network.as_deref(), &catalogue);
+                            let name = admit(
+                                &mut peer, admitted, &server, &terrain, network, catalogue,
+                                &mut baked,
+                            );
+                            joined.push((peer.id, name));
+                        }
+                    }
                 }
-                // Nothing else before hello.
+                // Nothing else before they're let in.
                 _ if peer.name.is_none() => {}
                 ToServer::Hello { .. } => {}
                 ToServer::Event(action) => {
@@ -489,11 +569,24 @@ fn receive(
                 info!("{name} left (player {})", peer.id);
                 left.push((peer.id, name.clone()));
             }
+            if let (Some(accounts), Some(account)) = (&server.accounts, peer.account) {
+                save(&peer, accounts, &catalogue);
+                accounts.release(account);
+            }
             commands.entity(entity).despawn();
         } else if silent > FROZEN || peer.state.is_none() {
             commands.entity(entity).remove::<(Anchor, Visitor)>();
         } else {
             commands.entity(entity).insert(Anchor);
+        }
+    }
+
+    // Let in, but gone meanwhile: their account is free again.
+    if let Some(accounts) = &server.accounts {
+        for admitted in answers.into_values().flatten() {
+            if let Some(account) = admitted.account {
+                accounts.release(account);
+            }
         }
     }
 
@@ -583,6 +676,98 @@ fn receive(
             if peer.name.is_some() && peer.id != id {
                 peer.tell(&ToClient::Left { id });
             }
+        }
+    }
+}
+
+/// Lets a player in: where their car starts, what there is, the car (as saved, or the
+/// start car) and where the shops and events are. Their name.
+fn admit(
+    peer: &mut Peer,
+    admitted: Admitted,
+    server: &Server,
+    terrain: &Terrain,
+    network: Option<&Network>,
+    catalogue: &Current,
+    baked: &mut BakedMaps,
+) -> String {
+    let Admitted { name, account, car } = admitted;
+    info!("{name} joined (player {})", peer.id);
+    let id = peer.id;
+    // Their car starts where their game puts it, by the spawn.
+    let spot = network.and_then(|network| join_spot(terrain, network, &server.spawn, id));
+    if let Some((at, yaw)) = spot {
+        let spot = Spot {
+            at,
+            yaw,
+            parked: true,
+            hold: 0.0,
+        };
+        peer.shadow.put(terrain, spot);
+    }
+    let car_id = peer.car;
+    peer.tell(&ToClient::Welcome {
+        you: id,
+        car: car_id,
+        chat: server.chat,
+        spawn: server.spawn,
+    });
+    // What there is, and the car they start in: theirs as saved, else the start car.
+    peer.tell(&ToClient::Catalogue(catalogue.0.clone()));
+    let saved = car.and_then(|text| match crate::saved::read(&catalogue.0, &text) {
+        Ok(saved) => Some(saved),
+        Err(e) => {
+            warn!("{name}'s saved car: {e}; they get the start car");
+            None
+        }
+    });
+    let spec = match saved {
+        Some((spec, condition)) => {
+            peer.shadow.set_condition(condition);
+            spec
+        }
+        None => CarSpec::of(&CarSetup::factory_in(catalogue, catalogue.start, 0)),
+    };
+    peer.shadow.set_spec(spec.clone(), baked);
+    peer.tell(&ToClient::YourCar(Box::new(spec)));
+    peer.tell(&ToClient::Shops(server.shops.clone()));
+    peer.tell(&ToClient::Events(server.events.clone()));
+    peer.account = account;
+    peer.name = Some(name.clone());
+    name
+}
+
+/// Saves `peer`'s car, if they have an account and the server has their car.
+fn save(peer: &Peer, accounts: &Accounts, catalogue: &Catalogue) {
+    if let (Some(account), Some((spec, car))) = (peer.account, peer.shadow.kept()) {
+        accounts.save(account, crate::saved::write(catalogue, spec, car));
+    }
+}
+
+/// Keeps what players have: their cars saved now and then, their accounts' locks
+/// refreshed.
+fn keep(
+    mut server: ResMut<Server>,
+    peers: Query<&Peer>,
+    catalogue: Res<Current>,
+    time: Res<Time<Real>>,
+) {
+    let now = now(&time);
+    let server = &mut *server;
+    let Some(accounts) = &server.accounts else {
+        return;
+    };
+    if now - server.refreshed >= super::accounts::REFRESH.as_secs_f64() {
+        server.refreshed = now;
+        let playing: Vec<AccountId> = peers.iter().filter_map(|peer| peer.account).collect();
+        if !playing.is_empty() {
+            accounts.refresh(playing);
+        }
+    }
+    if now - server.saved >= SAVE_EVERY {
+        server.saved = now;
+        for peer in &peers {
+            save(peer, accounts, &catalogue);
         }
     }
 }

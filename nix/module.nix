@@ -15,6 +15,11 @@
 #
 #   services.car-sim.telegram = { tokenFile = "/run/secrets/…"; chatIdFile = "/run/secrets/…"; };
 #
+# Players log in to accounts, kept with their cars in an SQLite file under
+# /var/lib/car-sim (or `database` / `databaseFile`: MySQL or PostgreSQL). The admin makes
+# accounts with `sudo car-sim-user add NAME` (also `password NAME`, `remove NAME`, `list`);
+# `guests = true` lets in players without one.
+#
 # The server takes up a renewed certificate by itself (it looks for changed files every
 # minute), so renewals don't drop anyone.
 self:
@@ -35,6 +40,31 @@ let
     ;
   packages = self.packages.${pkgs.stdenv.hostPlatform.system};
   cert = config.security.acme.certs.${cfg.domain};
+  # How the server is told its database, if it has one.
+  databaseArgs =
+    if cfg.databaseFile != null then
+      [
+        "--database-file"
+        "%d/database"
+      ]
+    else
+      lib.optionals (cfg.database != null) [
+        "--database"
+        cfg.database
+      ];
+  # The admin's account command: as the service's user with a database URL (an SQLite file
+  # stays the service's), as root with a URL file (it may be root's alone).
+  userCommand = pkgs.writeShellScriptBin "car-sim-user" (
+    if cfg.databaseFile != null then
+      ''
+        exec ${lib.getExe cfg.package} --database-file ${lib.escapeShellArg cfg.databaseFile} user "$@"
+      ''
+    else
+      ''
+        exec ${pkgs.util-linux}/bin/runuser -u car-sim -- ${lib.getExe cfg.package} --database ${lib.escapeShellArg (toString cfg.database)} user "$@"
+      ''
+  );
+  hasDatabase = cfg.database != null || cfg.databaseFile != null;
 in
 {
   options.services.car-sim = {
@@ -172,6 +202,39 @@ in
       '';
     };
 
+    database = mkOption {
+      type = types.nullOr types.str;
+      default = "sqlite:///var/lib/car-sim/car-sim.db";
+      example = "postgres://car-sim@localhost/car-sim";
+      description = ''
+        Where accounts and what players own are kept: an SQLite file (under
+        /var/lib/car-sim, the service's state directory), or a MySQL/MariaDB
+        (`mysql://user:password@host/db`) or PostgreSQL (`postgres://…`) database, which
+        several servers may share (a player plays on one at a time). Null: no accounts,
+        everyone plays by the name they give and nothing is kept. Make accounts with
+        `sudo car-sim-user add NAME`.
+      '';
+    };
+
+    databaseFile = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "/run/secrets/car-sim-database";
+      description = ''
+        A file holding the database's URL instead of {option}`services.car-sim.database`
+        (when it has a password: kept out of the Nix store, read as a systemd credential).
+      '';
+    };
+
+    guests = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Whether players without an account may play too, by a name that isn't an
+        account's and without a password (nothing of theirs is kept).
+      '';
+    };
+
     telegram = {
       tokenFile = mkOption {
         type = types.nullOr types.str;
@@ -218,7 +281,13 @@ in
           assertion = (cfg.telegram.tokenFile != null) == (cfg.telegram.chatIdFile != null);
           message = "services.car-sim.telegram.tokenFile and chatIdFile go together";
         }
+        {
+          assertion = cfg.guests -> hasDatabase;
+          message = "services.car-sim.guests needs a database (without one, everyone's a guest)";
+        }
       ];
+
+      environment.systemPackages = lib.optional hasDatabase userCommand;
 
       # A user of its own (not `DynamicUser`: that can't share its name with the
       # certificate's group).
@@ -280,6 +349,11 @@ in
                 ++ lib.optional (cfg.spawn.heading != null) cfg.spawn.heading
               ))
             ]
+            ++ databaseArgs
+            ++ lib.optionals hasDatabase [
+              "--guests"
+              (if cfg.guests then "on" else "off")
+            ]
             # The credentials' copies (%d: the service's credentials directory).
             ++ lib.optionals (cfg.telegram.tokenFile != null) [
               "--telegram-token-file"
@@ -288,10 +362,15 @@ in
               "%d/telegram-chat"
             ]
           );
-          LoadCredential = lib.optionals (cfg.telegram.tokenFile != null) [
-            "telegram-token:${cfg.telegram.tokenFile}"
-            "telegram-chat:${cfg.telegram.chatIdFile}"
-          ];
+          LoadCredential =
+            lib.optionals (cfg.telegram.tokenFile != null) [
+              "telegram-token:${cfg.telegram.tokenFile}"
+              "telegram-chat:${cfg.telegram.chatIdFile}"
+            ]
+            ++ lib.optional (cfg.databaseFile != null) "database:${cfg.databaseFile}";
+          # The SQLite file's home (/var/lib/car-sim).
+          StateDirectory = "car-sim";
+          StateDirectoryMode = "0750";
           Restart = "on-failure";
           RestartSec = 5;
           User = "car-sim";
