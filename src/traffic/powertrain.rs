@@ -449,7 +449,6 @@ mod tests {
                 .unwrap()
                 .2
         };
-        assert!(time("Vespera", 0.0) < time("Carrow", 0.0));
-        assert!(time("Vespera", 1.0) < time("Vespera", 0.0));
+        assert!(time("Vireo", 1.0) < time("Vireo", 0.0));
     }
 }

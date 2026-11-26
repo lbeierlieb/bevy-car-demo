@@ -211,11 +211,12 @@ As built (`src/menu/`):
   (commands in README, "The map and baking it"; a bake takes about 20 s). The native
 apps load `assets/gerach.terrain` at startup, so they see a re-bake at once (tests use
 the embedded copy, `Terrain::baked`, the fallback otherwise); commit the re-baked file.
-- Engine maps of every factory engine of the built-in catalogue (22, see
-  `catalogue/engines.rs`) are baked into `src/physics/engine/baked/<code>.maps` (listed
-  in `engine/store.rs`'s `BAKED`). After changing `cycle.rs`, `maps.rs` (outside
+- Engine maps of every factory engine of the built-in catalogue (only the B16 since
+  2026-11-26, see `catalogue/engines.rs`), plus two engines tests measure against (W20,
+  `EngineHardware::default`; B16T, `EngineHardware::turbo`), are baked into
+  `src/physics/engine/baked/<code>.maps` (listed in `engine/store.rs`'s `BAKED`). After changing `cycle.rs`, `maps.rs` (outside
   their tests; any edit counts, their text is in the fingerprint) or a factory engine's
-  cylinder side, re-bake all of them (about 40 s, 1.5 MB of text changes) or
+  cylinder side, re-bake all of them (a few seconds) or
   `stock_maps_are_current` and the tests that expect baked maps fail:
   `nix develop -c bash -c 'CARGO_TARGET_DIR=/repo/target/sandbox cargo test --profile release-dev bake_stock_maps -- --ignored'`.
   A new factory version needs an (empty) file there first, for `include_str!`, and a
@@ -372,7 +373,7 @@ as built, in order:
    leaves the factory in one dull paint, no choice (asked for by the user, 2026-11-22, so
    there's a reason to paint): `PAINTS` is the 10 shop paints (`SHOP_PAINTS`), then 11
    factory ones (beige, putty, primer grey…; the paint shop never offers those); traffic
-   is in its factory paint, a `PAINTED` fifth in a shop paint (so a painted car can still
+   is in a factory paint (any, since there's one chassis), a `PAINTED` fifth in a shop paint (so a painted car can still
    hide in it). Protocol 15. Since
    2026-11-22 (asked for by the user) a scene like the alignment bay's (`paint.rs`): "Into
    the paint booth" puts the car (drawn from `Looks`, engine off) in a spray booth 240 m
@@ -456,10 +457,10 @@ Baunach, (−87, 2286), the `amenity=parking` area's centroid):
 - Options (the hunted's): head start (10 s), time until the hunted wins (10 min),
   traffic (on), "hunters can reset" (on; R calls the rescue
   helicopter, whose time is the penalty for crashing; "to the start" was dropped at the
-  user's wish, 2026-11-22; the hunted can never reset), cars ("player cars" (default) or "muscle vs
-  rally": hunters get the Harrow muscle car with the 5.0 V8 (M50, its base engine), the
-  hunted the Skarn rally car, factory builds, full and on fresh tires; a lent car leaves
-  no trace, players get their own car back afterwards as it was), how the hunters win
+  user's wish, 2026-11-22; the hunted can never reset), cars ("player cars" (default) or "factory
+  cars": everyone is lent the start car, factory-built, full and on fresh tires (was
+  "muscle vs rally" until the other chassis went, 2026-11-26); a lent car leaves no
+  trace, players get their own car back afterwards as it was), how the hunters win
   (`Catch`: "Tag them" (default) or "Stop them"; added 2026-11-22, the user: tagging is
   the objective, with one or two hunters stopping the hunted is near impossible).
 - Everyone starts near the marker; hunters are held for the head start. Name tags on and
@@ -1225,14 +1226,15 @@ catalogue entries, and things like swap subframes are named so they can be price
 
 - **Catalogues** (data in a `catalogue::Catalogue`, the server's, see "Server
   catalogue"; entries referred to by their place; engine versions also by code). The
-  built-in one (`src/catalogue/`): `chassis.rs` has the chassis (13: Minim city car, Vireo hot hatch (the default, B16), Linnet
-  roadster, Tarn coupé, Halden saloon, Skarn rally car, Harrow muscle car,
-  Calder mid-engined, Rheon rear-engined, Vespera supercar, Wisp track-day special,
-  Drover pickup, Carrow van; names are made up, no real cars), gearboxes (8, of three
-  kinds: transverse, inline, transaxle), clutches, suspension kits and paints (the tire
+  built-in one (`src/catalogue/`): `chassis.rs` has the chassis (only the Vireo hot hatch with the B16 since 2026-11-26,
+  see "Owning cars and parts"; the other twelve (Minim, Linnet, Tarn, Halden, Skarn,
+  Harrow, Calder, Rheon, Vespera, Wisp, Drover, Carrow) and their engines are in git
+  history before that; names are made up, no real cars), gearboxes (the two
+  transverse ones), clutches, suspension kits and paints (the tire
   compounds' rubber is `physics/tire.rs`'s `COMPOUNDS`, named in `catalogue/parts.rs`).
-  `engines.rs` has the families (12 families, 22 factory versions, codes
-  like W20T; W is today's 2-litre four, R the high-revving four with switching cams).
+  `engines.rs` has the families (the B series, version B16; `EngineHardware::default`
+  is still the W20 2-litre four everything is scaled from). Tests needing another kind
+  of car change the one: `catalogue::builtin_changed` (heavier, rear-wheel drive…).
 - **A car** is a `CarBuild` (chassis, paint, gearbox, clutch, final drive, limited-slip,
   suspension, a `Wheel` per axle) plus its engine's `Parts` (family, version, a part per slot, ECU).
   `CarSetup::new` works everything the simulation needs out of them: the engine's and
@@ -1411,7 +1413,8 @@ and without traction control; `trace_power_slide` prints one step by step
   now spins with the bot.
 - With the bot, mid- and rear-engined cars still spin (plausible), as does the 6.2 V8
   Harrow floored in second, and the 5-litre V8s snap back; the other front-engined cars
-  are caught (asserted by `a_power_slide_can_be_caught`).
+  were caught (asserted by `a_power_slide_can_be_caught` until the rear-wheel-drive cars
+  went, 2026-11-26).
 - Tire compounds (`tire::COMPOUNDS`, agreed with the user; touring added later: least
   grip, best at 55 °C, lasts longest, rolls easiest): street (grips from cold,
   best at 65 °C, lets go gently past the peak, overheats when driven hard), sport, race

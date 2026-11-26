@@ -495,13 +495,33 @@ mod tests {
         assert!(all > speed, "all-wheel drive {all} m/s, front {speed} m/s");
     }
 
+    /// The hatch (of `catalogue`) with its engine turbocharged and boosted hard, to spin
+    /// its wheels.
+    fn strong_hatch(catalogue: &crate::catalogue::Shared) -> CarSetup {
+        let build = crate::chassis::CarBuild::factory_in(catalogue, 0);
+        let mut parts = build
+            .install(crate::physics::engine::parts::Parts::turbo())
+            .unwrap();
+        parts.chosen[crate::catalogue::TURBO] = 3;
+        parts.boost = 1.5;
+        let engine = crate::physics::engine::EngineBuild::new(parts.hardware(), parts.ecu);
+        CarSetup::new(build, parts, engine)
+    }
+
     #[test]
     fn traction_control_keeps_a_big_engine_from_spinning_its_wheels() {
         let terrain = Terrain::baked();
         let (p, yaw) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
-        // The muscle car with the 6.2 V8, floored in first.
+        // The strong hatch, floored in first.
         let launch = |traction_control: bool| {
-            let mut car = Car::spawn_at(0, CarSetup::factory(6, 1), &terrain, p.x, p.y, yaw);
+            let mut car = Car::spawn_at(
+                0,
+                strong_hatch(&crate::catalogue::builtin()),
+                &terrain,
+                p.x,
+                p.y,
+                yaw,
+            );
             car.warm_tires();
             car.traction_control = traction_control;
             run(&mut car, &terrain, 1.0);
@@ -510,8 +530,8 @@ mod tests {
                 ..default()
             };
             run(&mut car, &terrain, 2.5);
-            let radius = car.setup.rear.tire.radius;
-            let wheels = (car.corners[2].omega + car.corners[3].omega) / 2.0 * radius;
+            let radius = car.setup.front.tire.radius;
+            let wheels = (car.corners[0].omega + car.corners[1].omega) / 2.0 * radius;
             (car.forward_speed(), wheels)
         };
         let (speed, wheels) = launch(true);
@@ -524,15 +544,17 @@ mod tests {
             wheels > 1.5 * spinning,
             "wheels at {wheels} m/s, car at {spinning}"
         );
-        assert!(speed > spinning + 2.0, "{speed} against {spinning} m/s");
+        assert!(speed > spinning + 1.0, "{speed} against {spinning} m/s");
     }
 
     #[test]
     fn traction_control_works_in_reverse() {
         let terrain = Terrain::flat();
-        // The muscle car with the 6.2 V8, floored in reverse.
+        // The strong hatch made to drive its rear wheels (weight going onto them in
+        // reverse, which the front-wheel drive gains), floored in reverse.
+        let rear = crate::catalogue::builtin_changed(|c| c.chassis[0].drive = Drive::Rear);
         let launch = |traction_control: bool| {
-            let mut car = Car::spawn_at(0, CarSetup::factory(6, 1), &terrain, 0.0, 400.0, 0.0);
+            let mut car = Car::spawn_at(0, strong_hatch(&rear), &terrain, 0.0, 400.0, 0.0);
             car.warm_tires();
             car.traction_control = traction_control;
             car.drivetrain.shift_to(&car.setup.engine, -1);

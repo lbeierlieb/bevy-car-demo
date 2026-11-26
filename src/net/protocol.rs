@@ -938,7 +938,7 @@ mod tests {
         use crate::events::hunt::{Cars, Catch, Ending, Outcome as HuntOutcome, Settings};
         use crate::events::round::*;
         let settings = Settings {
-            cars: Cars::MuscleVsRally,
+            cars: Cars::Factory,
             hunters_reset: false,
             ..Settings::default()
         };

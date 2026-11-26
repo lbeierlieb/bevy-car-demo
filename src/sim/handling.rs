@@ -162,25 +162,6 @@ fn print_state(car: &Car, t: f32) {
     );
 }
 
-/// Front-engined rear-wheel-drive cars, stock: a slide on the power can be caught without
-/// spinning or snapping round the other way.
-#[test]
-fn a_power_slide_can_be_caught() {
-    // Tarn W20, Halden S30, Harrow V35.
-    for (chassis, option) in [(3, 0), (4, 1), (6, 2)] {
-        let slide = power_slide(CarSetup::factory(chassis, option), false);
-        assert!(slide.deepest > 6.0, "{chassis}: no slide: {slide:?}");
-        assert!(
-            !slide.spun() && slide.snap_back < 30.0,
-            "{chassis}: {slide:?}"
-        );
-        assert!(
-            slide.end_slip.abs() < 2.0 && slide.end_yaw.abs() < 3.0,
-            "{chassis}: {slide:?}"
-        );
-    }
-}
-
 /// Prints how each car's power slide goes, without and with traction control, for tuning
 /// the tires: `cargo test --profile release-dev power_slides -- --ignored --nocapture`.
 #[test]
@@ -213,7 +194,7 @@ fn power_slides() {
 #[test]
 #[ignore]
 fn trace_power_slide() {
-    let spec = std::env::var("SLIDE_CAR").unwrap_or("3,0".into());
+    let spec = std::env::var("SLIDE_CAR").unwrap_or("0,0".into());
     let [chassis, option] = [0, 1].map(|i| spec.split(',').nth(i).unwrap().parse().unwrap());
     println!(
         "{:?}",
@@ -247,7 +228,7 @@ fn tire_temperatures() {
     let catalogue = crate::catalogue::builtin();
     for (tires, compound) in catalogue.compounds.iter().enumerate() {
         for speed in [8.0, 14.0, 17.0, 19.0] {
-            let factory = CarSetup::factory(3, 0);
+            let factory = CarSetup::factory(0, 0);
             let build = factory.build.clone().on_compound(tires);
             let setup = CarSetup::new(build, factory.engine.parts, factory.engine.build);
             circle(setup, speed, 120, |second, car| {
@@ -317,7 +298,7 @@ fn cruising_consumption(setup: CarSetup, speed: f32) -> f32 {
 /// The coupé's 2-litre burns about what such a car does at 100 km/h.
 #[test]
 fn cruising_consumption_is_plausible() {
-    let consumption = cruising_consumption(CarSetup::factory(3, 0), 100.0 / 3.6);
+    let consumption = cruising_consumption(CarSetup::factory(0, 0), 100.0 / 3.6);
     assert!(
         (5.0..9.0).contains(&consumption),
         "{consumption:.1} L/100 km"
@@ -347,7 +328,7 @@ fn consumption() {
 /// fuel the engine got.
 fn starved(litres: f32) -> f32 {
     let terrain = Terrain::flat();
-    let mut car = Car::spawn_at(0, CarSetup::factory(3, 0), &terrain, 0.0, 0.0, 0.0);
+    let mut car = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, 0.0, 0.0, 0.0);
     car.refuel(litres / car.setup.tank.litres);
     car.drivetrain.gear = 2;
     let dt = 1.0 / CHASSIS_HZ as f32;
@@ -375,7 +356,7 @@ fn drive_into(obstacle: crate::physics::collision::Upright, speed: f32, seconds:
     use crate::physics::collision::Obstacles;
     let mut terrain = Terrain::flat();
     terrain.obstacles = Obstacles::new(vec![obstacle], 8.0);
-    let mut car = Car::spawn_at(0, CarSetup::factory(3, 0), &terrain, 0.0, 0.0, 0.0);
+    let mut car = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, 0.0, 0.0, 0.0);
     let dt = 1.0 / CHASSIS_HZ as f32;
     // Let it settle on its springs, then send it off.
     for _ in 0..60 {
@@ -443,7 +424,7 @@ fn a_car_stops_at_a_fence_and_a_guard_rail() {
 #[test]
 fn a_car_on_its_roof_rests_on_it() {
     let terrain = Terrain::flat();
-    let mut car = Car::spawn_at(0, CarSetup::factory(3, 0), &terrain, 0.0, 0.0, 0.0);
+    let mut car = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, 0.0, 0.0, 0.0);
     car.body.position.y += 2.0;
     car.body.rotation = Quat::from_rotation_z(std::f32::consts::PI);
     let dt = 1.0 / CHASSIS_HZ as f32;
@@ -461,8 +442,8 @@ fn a_car_on_its_roof_rests_on_it() {
 #[test]
 fn two_cars_collide() {
     let terrain = Terrain::flat();
-    let mut a = Car::spawn_at(0, CarSetup::factory(3, 0), &terrain, 0.0, 0.0, 0.0);
-    let mut b = Car::spawn_at(1, CarSetup::factory(4, 0), &terrain, 0.0, -12.0, 0.0);
+    let mut a = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, 0.0, 0.0, 0.0);
+    let mut b = Car::spawn_at(1, CarSetup::factory(0, 0), &terrain, 0.0, -12.0, 0.0);
     let dt = 1.0 / CHASSIS_HZ as f32;
     a.body.velocity = Vec3::new(0.0, 0.0, -15.0);
     for _ in 0..(2.0 / dt) as usize {
@@ -516,34 +497,34 @@ fn cornering_heat(setup: CarSetup, radius: f32, share: f32, seconds: f32) -> [f3
 /// the light car's stay cool and the heavy car's cook.
 #[test]
 fn tires_are_sized_for_their_cars() {
+    // A heavier hatch runs its tires hotter at the same share of its grip, wider ones less.
     use crate::physics::tire::STREET;
-    let spread = |sized: bool| {
-        let temperatures: Vec<f32> = [0, 3, 11]
-            .into_iter()
-            .map(|chassis| {
-                let factory = CarSetup::factory(chassis, 0);
-                let mut build = factory.build.clone().on_compound(STREET);
-                if !sized {
-                    build.wheels = crate::catalogue::builtin().chassis[3]
-                        .wheels
-                        .map(|wheel| wheel.with_compound(STREET));
-                }
-                let setup = CarSetup::new(build, factory.engine.parts, factory.engine.build);
-                let name = setup.name.clone();
-                let [front, rear] = cornering_heat(setup, 40.0, 0.7, 60.0);
-                println!("{name} (sized {sized}): outside treads {front:.0} °C, {rear:.0} °C");
-                front.max(rear)
-            })
-            .collect();
-        let hottest = temperatures.iter().copied().fold(f32::MIN, f32::max);
-        let coolest = temperatures.iter().copied().fold(f32::MAX, f32::min);
-        hottest - coolest
+    let catalogue = crate::catalogue::builtin_changed(|c| c.chassis[0].mass += 450.0);
+    let hottest = |wide: bool| {
+        let factory = CarSetup::factory_in(&catalogue, 0, 0);
+        let mut build = factory.build.clone().on_compound(STREET);
+        if wide {
+            let wheel = crate::wheels::Wheel {
+                rim: crate::wheels::Rim {
+                    diameter: 17,
+                    width: 75,
+                },
+                tire: crate::wheels::TireSize {
+                    width: 235,
+                    aspect: 40,
+                    rim: 17,
+                },
+                compound: STREET,
+            };
+            build.wheels = [wheel; 2];
+        }
+        let setup = CarSetup::new(build, factory.engine.parts, factory.engine.build);
+        let [front, rear] = cornering_heat(setup, 40.0, 0.7, 60.0);
+        println!("wide {wide}: outside treads {front:.0} °C, {rear:.0} °C");
+        front.max(rear)
     };
-    let (sized, same) = (spread(true), spread(false));
-    assert!(
-        sized < 0.7 * same && sized < 25.0,
-        "{sized} against {same} K"
-    );
+    let (narrow, wide) = (hottest(false), hottest(true));
+    assert!(wide < narrow - 2.0, "{wide} against {narrow} °C");
 }
 
 /// Prints how warm every car as it leaves the factory gets its outside treads at 70 % of
@@ -595,7 +576,7 @@ fn factory_pressures_suit_the_tires() {
 #[test]
 fn tires_hold_a_parked_car() {
     let terrain = Terrain::flat();
-    let mut car = Car::spawn_at(0, CarSetup::factory(3, 0), &terrain, 0.0, 0.0, 0.0);
+    let mut car = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, 0.0, 0.0, 0.0);
     let dt = 1.0 / CHASSIS_HZ as f32;
     for _ in 0..(2.0 / dt) as usize {
         step_car(&mut car, &terrain, dt);
@@ -681,7 +662,7 @@ fn factory_cars_roll_like_real_ones() {
 /// A stiffer front bar rolls the coupé less and moves more of the load across the front.
 #[test]
 fn a_stiffer_front_bar_moves_the_load_forward() {
-    let factory = CarSetup::factory(3, 0);
+    let factory = CarSetup::factory(0, 0);
     let mut build = factory.build.clone();
     build.bars[0] = build.chassis().bars[0].sizes.len() - 1;
     let stiff = CarSetup::new(

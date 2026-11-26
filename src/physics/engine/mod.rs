@@ -594,7 +594,10 @@ mod tests {
 
     #[test]
     fn the_turbo_boosts_up_to_its_wastegate() {
-        let na = EngineBuild::default();
+        let na = EngineBuild::new(
+            super::parts::Parts::stock().hardware(),
+            ecu::EcuModel::Stock,
+        );
         let build = EngineBuild::new(EngineHardware::turbo(), ecu::EcuModel::Stock);
         let rpm = 5000.0;
         let engine = run_flat_out(&build, rpm, 6.0);

@@ -154,24 +154,16 @@ impl Round {
     }
 
     /// The chassis (its place in `catalogue`) lent to `player` for the round, with its
-    /// base engine, if it lends cars ("muscle vs rally": the hunted the rally car, the
-    /// hunters the muscle car with its smaller V8).
+    /// base engine, if it lends cars ("factory cars": everyone the start car).
     pub fn lent_chassis(
         &self,
         catalogue: &crate::catalogue::Catalogue,
-        player: PlayerId,
+        _player: PlayerId,
     ) -> Option<usize> {
-        let name = match &self.game {
-            Game::Hunt(settings) if settings.cars == hunt::Cars::MuscleVsRally => {
-                if self.host == player {
-                    "Skarn"
-                } else {
-                    "Harrow"
-                }
-            }
-            _ => return None,
-        };
-        catalogue.find_chassis(name)
+        match &self.game {
+            Game::Hunt(settings) if settings.cars == hunt::Cars::Factory => Some(catalogue.start),
+            _ => None,
+        }
     }
 
     /// How a race or time trial under way stands.

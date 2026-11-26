@@ -26,17 +26,17 @@ pub const DURATION: (u16, u16) = (60, 3600);
 pub enum Cars {
     /// Everyone their own.
     Own,
-    /// The hunters a muscle car, the hunted a rally car (lent for the round).
-    MuscleVsRally,
+    /// Everyone a factory-new start car, full and on fresh tires (lent for the round).
+    Factory,
 }
 
 impl Cars {
-    pub const ALL: [Cars; 2] = [Self::Own, Self::MuscleVsRally];
+    pub const ALL: [Cars; 2] = [Self::Own, Self::Factory];
 
     pub fn title(self) -> &'static str {
         match self {
             Self::Own => "Player cars",
-            Self::MuscleVsRally => "Muscle vs rally",
+            Self::Factory => "Factory cars",
         }
     }
 }

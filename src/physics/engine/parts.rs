@@ -446,16 +446,19 @@ impl Parts {
         Self::factory_in(&crate::catalogue::builtin(), code)
     }
 
-    /// The stock naturally aspirated 2-litre four (of the built-in catalogue).
+    /// The built-in catalogue's stock engine, the hot hatch's 1.6 four.
     #[cfg(any(test, not(target_arch = "wasm32")))]
     pub fn stock() -> Self {
-        Self::factory("W20").expect("the 2-litre four")
+        Self::factory("B16").expect("the 1.6 four")
     }
 
-    /// The stock turbo 2-litre four: low compression pistons and the medium turbo.
+    /// The 1.6 four turbocharged: low compression pistons and the medium turbo.
     #[cfg(test)]
     pub fn turbo() -> Self {
-        Self::factory("W20T").expect("the 2-litre turbo four")
+        let mut parts = Self::stock();
+        parts.chosen[crate::catalogue::PISTONS] = 1;
+        parts.chosen[crate::catalogue::TURBO] = 2;
+        parts
     }
 
     pub fn family(&self) -> &Family {
@@ -547,43 +550,40 @@ mod tests {
     #[test]
     fn the_presets_are_the_stock_engines() {
         let stock = Parts::stock().hardware();
-        assert_eq!(stock.name, "W20 2.0 four");
+        assert_eq!(stock.name, "B16 1.6 four");
+        let block = &builtin().families[0].versions[0].block;
         assert_eq!(
             stock,
             EngineHardware {
                 name: stock.name.clone(),
-                ..EngineHardware::default()
+                ..block.clone()
             }
         );
         let turbo = Parts::turbo().hardware();
-        assert_eq!(turbo.name, "W20T 2.0 turbo four");
-        assert_eq!(turbo.compression_ratio, 8.8);
+        assert_eq!(turbo.compression_ratio, block.compression_ratio - 1.7);
         let charger = turbo.turbo.unwrap();
         assert_eq!(charger.wastegate.spring, 0.6e5);
-        assert_eq!(charger.wastegate.area, 3e-4);
-        assert_eq!(Parts::factory("W20T"), Some(Parts::turbo()));
     }
 
     #[test]
     fn parts_are_sized_for_the_engine() {
-        // A stroker crank adds 7 % to any block; a turbo for a 6.2 V8 flows three times
-        // what one for a 2-litre does, on wheels 1.75 times the size.
-        let mut parts = Parts::factory("M62").unwrap();
+        // A stroker crank adds 7 % to any block, and a turbo for the bigger engine flows
+        // 7 % more, on wheels as much bigger as its flow's square root.
+        let mut parts = Parts::stock();
         let stock = parts.hardware();
         parts.chosen[1] = 2;
         parts.chosen[TURBO] = 2;
         let built = parts.hardware();
         let grown = built.displacement() / stock.displacement();
         assert!((grown - 1.07).abs() < 0.002, "{grown}");
-        assert_eq!(built.name, "M-series V8 6.6 turbo, modified");
+        assert_eq!(built.name, "B-series four 1.7 turbo, modified");
         let (big, small) = (
             built.turbo.unwrap(),
             Parts::turbo().hardware().turbo.unwrap(),
         );
         let wheels = big.compressor.diameter / small.compressor.diameter;
-        assert!((wheels - 3.3f32.sqrt()).abs() < 0.01, "{wheels}");
-        assert!(big.max_speed() < small.max_speed());
-        assert_eq!(parts.label(1, 2), "Stroker (98.4 mm, 6.6 l)");
+        assert!((wheels - grown.sqrt()).abs() < 0.01, "{wheels}");
+        assert_eq!(parts.label(1, 2), "Stroker (89.5 mm, 1.7 l)");
         assert_eq!(parts.label(TURBO, 2), "Medium");
     }
 
@@ -594,9 +594,9 @@ mod tests {
         let hardware = parts.hardware();
         assert_eq!(hardware.exhaust.header_length, 0.6);
         // It's still the factory's engine, in a tight car.
-        assert_eq!(hardware.name, "W20 2.0 four");
+        assert_eq!(hardware.name, "B16 1.6 four");
         parts.chosen[HEADERS] = 1;
-        assert_eq!(parts.hardware().exhaust.header_length, 0.45);
+        assert_eq!(parts.hardware().exhaust.header_length, 0.39);
     }
 
     #[test]

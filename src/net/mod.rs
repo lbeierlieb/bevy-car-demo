@@ -185,33 +185,24 @@ mod tests {
         app
     }
 
-    /// A player in a car of `chassis` at (x, 0), joined to the server behind `listener`.
-    fn player(listener: &LoopbackListener, name: &str, chassis: usize, x: f32) -> App {
-        player_on(listener, name, chassis, Vec2::new(x, 0.0), Terrain::flat())
+    /// A player in the start car at (x, 0), joined to the server behind `listener`.
+    fn player(listener: &LoopbackListener, name: &str, x: f32) -> App {
+        player_on(listener, name, Vec2::new(x, 0.0), Terrain::flat())
     }
 
-    fn player_on(
-        listener: &LoopbackListener,
-        name: &str,
-        chassis: usize,
-        at: Vec2,
-        terrain: Terrain,
-    ) -> App {
-        player_over(listener.connect(), name, chassis, at, terrain)
+    fn player_on(listener: &LoopbackListener, name: &str, at: Vec2, terrain: Terrain) -> App {
+        player_over(listener.connect(), name, at, terrain)
     }
 
     /// The same, over `link`.
-    fn player_over(
-        link: impl link::Link + 'static,
-        name: &str,
-        chassis: usize,
-        at: Vec2,
-        terrain: Terrain,
-    ) -> App {
-        let car = Car::spawn_at(0, CarSetup::factory(chassis, 0), &terrain, at.x, at.y, 0.0);
+    fn player_over(link: impl link::Link + 'static, name: &str, at: Vec2, terrain: Terrain) -> App {
+        let car = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, at.x, at.y, 0.0);
         let mut connection = Connection::new(link, name, &terrain);
         // That car, from the showroom (the server gives everyone its first car).
-        connection.say(&protocol::ToServer::Buy { chassis, engine: 0 });
+        connection.say(&protocol::ToServer::Buy {
+            chassis: 0,
+            engine: 0,
+        });
         let mut app = app_on(terrain);
         app.add_systems(Update, crate::looks::show_cars)
             .add_plugins(ClientPlugin)
@@ -345,7 +336,7 @@ mod tests {
 
     /// The same, over `link`.
     fn driver_over(link: impl link::Link + 'static, name: &str, at: Vec2) -> App {
-        let mut app = player_over(link, name, 3, at, Terrain::flat());
+        let mut app = player_over(link, name, at, Terrain::flat());
         app.add_plugins((crate::sim::SimPlugin, crate::car::CarPlugin))
             .init_resource::<crate::input::WheelInput>();
         let engine = car(&mut app).setup.engine.clone();
@@ -760,8 +751,8 @@ mod tests {
     fn players_near_each_other_see_each_other() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
-        let mut ben = player(&listener, "Ben", 0, 100.0);
+        let mut anna = player(&listener, "Anna", 0.0);
+        let mut ben = player(&listener, "Ben", 100.0);
         run(&mut [&mut server, &mut anna, &mut ben], 60);
         assert!(matches!(connection(&anna).status, Status::Joined { .. }));
         assert_eq!(
@@ -798,7 +789,7 @@ mod tests {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
         let mut anna = driver(&listener, "Anna");
-        let mut ben = player(&listener, "Ben", 0, 30.0);
+        let mut ben = player(&listener, "Ben", 30.0);
         run(&mut [&mut server, &mut anna, &mut ben], 60);
         let heli = |app: &mut App, id: Option<protocol::CarId>| {
             (app.world_mut().query::<&RemoteCar>())
@@ -876,8 +867,8 @@ mod tests {
     fn everyone_hears_everyones_ping() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
-        let mut ben = player(&listener, "Ben", 0, 100.0);
+        let mut anna = player(&listener, "Anna", 0.0);
+        let mut ben = player(&listener, "Ben", 100.0);
         // Every two seconds.
         run(&mut [&mut server, &mut anna, &mut ben], 150);
         for app in [&anna, &ben] {
@@ -899,8 +890,8 @@ mod tests {
     fn players_far_apart_see_each_other_once_near() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, -480.0);
-        let mut ben = player(&listener, "Ben", 3, 480.0);
+        let mut anna = player(&listener, "Anna", -480.0);
+        let mut ben = player(&listener, "Ben", 480.0);
         run(&mut [&mut server, &mut anna, &mut ben], 60);
         assert_eq!(connection(&anna).players.len(), 1, "knows who's there");
         assert!(remote(&mut anna).is_empty() && remote(&mut ben).is_empty());
@@ -922,8 +913,8 @@ mod tests {
             let listener = LoopbackListener::default();
             let mut server = server(&listener);
             server.world_mut().resource_mut::<Server>().map = map;
-            let mut anna = player(&listener, "Anna", 3, 0.0);
-            let mut ben = player(&listener, "Ben", 3, 400.0);
+            let mut anna = player(&listener, "Anna", 0.0);
+            let mut ben = player(&listener, "Ben", 400.0);
             run(&mut [&mut server, &mut anna, &mut ben], 90);
             let now = anna.world().resource::<Time<Real>>().elapsed_secs_f64();
             let far: Vec<_> = connection(&anna).on_map(now).collect();
@@ -944,7 +935,7 @@ mod tests {
         assert!((far[0].position.x - 400.0).abs() < 1.0, "{:?}", far[0]);
         assert_eq!(near.len(), 1);
         // Ben's paint, pointing his way (the factory car faces -z at yaw 0).
-        assert_eq!(far[0].paint, CarSetup::factory(3, 0).build.paint);
+        assert_eq!(far[0].paint, CarSetup::factory(0, 0).build.paint);
         assert!(far[0].forward.distance(Vec2::NEG_Y) < 0.01, "{:?}", far[0]);
     }
 
@@ -952,7 +943,7 @@ mod tests {
     fn a_player_on_another_map_is_refused() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut anna = player(&listener, "Anna", 0.0);
         let mut terrain = Terrain::flat();
         terrain.fingerprint = 42;
         let ben = Connection::new(listener.connect(), "Ben", &terrain);
@@ -968,7 +959,7 @@ mod tests {
     fn a_stale_web_page_is_told_to_reload() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut anna = player(&listener, "Anna", 0.0);
         let mut terrain = Terrain::flat();
         terrain.fingerprint = 42;
         let ben = Connection::new(listener.connect_from_browser(), "Ben", &terrain);
@@ -985,8 +976,8 @@ mod tests {
     fn a_player_who_leaves_is_gone_for_the_others() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
-        let mut ben = player(&listener, "Ben", 3, 50.0);
+        let mut anna = player(&listener, "Anna", 0.0);
+        let mut ben = player(&listener, "Ben", 50.0);
         run(&mut [&mut server, &mut anna, &mut ben], 60);
         assert_eq!(remote(&mut anna).len(), 1);
         ben.world_mut().resource_mut::<Connection>().close();
@@ -1009,9 +1000,9 @@ mod tests {
     fn players_chat_with_everyone() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut anna = player(&listener, "Anna", 0.0);
         run(&mut [&mut server, &mut anna], 10);
-        let mut ben = player(&listener, "Ben", 3, 900.0);
+        let mut ben = player(&listener, "Ben", 900.0);
         run(&mut [&mut server, &mut anna, &mut ben], 10);
         assert!(connection(&anna).chat_on);
         let anna_writes = |app: &mut App, text: &str| {
@@ -1046,8 +1037,8 @@ mod tests {
         server
             .add_plugins(ServerPlugin)
             .insert_resource(Server::new(listener.clone()).with_chat(false));
-        let mut anna = player(&listener, "Anna", 3, 0.0);
-        let mut ben = player(&listener, "Ben", 3, 50.0);
+        let mut anna = player(&listener, "Anna", 0.0);
+        let mut ben = player(&listener, "Ben", 50.0);
         run(&mut [&mut server, &mut anna, &mut ben], 10);
         assert!(!connection(&anna).chat_on);
         anna.world_mut().resource_mut::<Connection>().write("Hello");
@@ -1062,8 +1053,8 @@ mod tests {
         server
             .add_plugins(ServerPlugin)
             .insert_resource(Server::new(listener.clone()).with_name_tags(false));
-        let mut anna = player(&listener, "Anna", 3, 0.0);
-        let mut ben = player(&listener, "Ben", 3, 50.0);
+        let mut anna = player(&listener, "Anna", 0.0);
+        let mut ben = player(&listener, "Ben", 50.0);
         run(&mut [&mut server, &mut anna, &mut ben], 60);
         let seen = remote(&mut anna);
         assert_eq!(seen.len(), 1);
@@ -1088,7 +1079,7 @@ mod tests {
                 .with_events(events.clone())
                 .with_spawn(spawn),
         );
-        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut anna = player(&listener, "Anna", 0.0);
         assert_eq!(connection(&anna).spawn, Spawn::DEFAULT);
         run(&mut [&mut server, &mut anna], 10);
         assert_eq!(connection(&anna).shops, shops);
@@ -1110,8 +1101,8 @@ mod tests {
                 }
             },
         );
-        let mut anna = player(&listener, "Anna", 3, 0.0);
-        let mut ben = player(&listener, "Ben", 3, 50.0);
+        let mut anna = player(&listener, "Anna", 0.0);
+        let mut ben = player(&listener, "Ben", 50.0);
         run(&mut [&mut server, &mut anna, &mut ben], 60);
         ben.world_mut().resource_mut::<Connection>().close();
         run(&mut [&mut server, &mut anna], 5);
@@ -1129,8 +1120,8 @@ mod tests {
     fn cars_that_overlap_each_push_themselves_off() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
-        let mut ben = player(&listener, "Ben", 3, 30.0);
+        let mut anna = player(&listener, "Anna", 0.0);
+        let mut ben = player(&listener, "Ben", 30.0);
         run(&mut [&mut server, &mut anna, &mut ben], 30);
         // Ben's car is put right beside Anna's, overlapping it by half a metre (and Anna's
         // game sees it there after the delay).
@@ -1158,8 +1149,8 @@ mod tests {
         };
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
-        let mut ben = player(&listener, "Ben", 3, 30.0);
+        let mut anna = player(&listener, "Anna", 0.0);
+        let mut ben = player(&listener, "Ben", 30.0);
         run(&mut [&mut server, &mut anna, &mut ben], 30);
         anna.insert_resource(WantsGhost(true));
         run(&mut [&mut server, &mut anna, &mut ben], 30);
@@ -1196,7 +1187,7 @@ mod tests {
             .insert_resource(Server::new(listener.clone()));
         let terrain = Terrain::baked();
         let (spawn, _) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
-        let mut anna = player_on(&listener, "Anna", 3, spawn, terrain);
+        let mut anna = player_on(&listener, "Anna", spawn, terrain);
         run(&mut [&mut server, &mut anna], 120);
         let on_server: Vec<(u32, Vec3, Looks)> = (server.world_mut())
             .query::<(&TrafficCar, &Transform, &Looks)>()
@@ -1234,13 +1225,12 @@ mod tests {
             .insert_resource(Server::new(listener.clone()));
         let terrain = Terrain::baked();
         let (spawn, _) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
-        let mut anna = player_on(&listener, "Anna", 3, spawn, terrain);
+        let mut anna = player_on(&listener, "Anna", spawn, terrain);
         run(&mut [&mut server, &mut anna], 60);
         // Ben joins with traffic already numbered.
         let mut ben = player_on(
             &listener,
             "Ben",
-            0,
             spawn + Vec2::new(0.0, 20.0),
             Terrain::baked(),
         );
@@ -1285,18 +1275,16 @@ mod tests {
             .insert_resource(Server::new(listener.clone()));
         let terrain = Terrain::baked();
         let (spawn, _) = terrain.road_spawns(&Spawn::DEFAULT, 1, 0.0)[0];
-        let mut anna = player_on(&listener, "Anna", 3, spawn, terrain);
+        let mut anna = player_on(&listener, "Anna", spawn, terrain);
         let mut ben = player_on(
             &listener,
             "Ben",
-            0,
             spawn + Vec2::new(0.0, 20.0),
             Terrain::baked(),
         );
         let mut cleo = player_on(
             &listener,
             "Cleo",
-            0,
             spawn + Vec2::new(0.0, -20.0),
             Terrain::baked(),
         );
@@ -1367,9 +1355,9 @@ mod tests {
         let events = crate::events::parse("hunt 0 0 Hunt").unwrap();
         let mut server = server(&listener);
         (server.world_mut().resource_mut::<Server>()).set_events(events);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
-        let mut ben = player(&listener, "Ben", 3, 6.0);
-        let mut cleo = player(&listener, "Cleo", 3, 40.0);
+        let mut anna = player(&listener, "Anna", 0.0);
+        let mut ben = player(&listener, "Ben", 6.0);
+        let mut cleo = player(&listener, "Cleo", 40.0);
         let mut all = [&mut server, &mut anna, &mut ben, &mut cleo];
         run(&mut all, 20);
         let id = |app: &App| match connection(app).status {
@@ -1491,7 +1479,7 @@ mod tests {
         use crate::car::Held;
         use crate::events::{Events, Placed, lobby::LobbyPlugin};
         let event = crate::events::parse("hunt 0 0 Hunt").unwrap().remove(0);
-        let mut app = player(listener, name, 3, x);
+        let mut app = player(listener, name, x);
         app.add_plugins(LobbyPlugin)
             .init_resource::<Held>()
             .init_resource::<ButtonInput<KeyCode>>()
@@ -1598,29 +1586,27 @@ mod tests {
         let settings = Settings {
             head_start: 2,
             hunters_reset: false,
-            cars: Cars::MuscleVsRally,
+            cars: Cars::Factory,
             traffic: false,
             ..Settings::default()
         };
         act(all[h], Action::Game(Game::Hunt(settings)));
         act(all[h], Action::Start);
         run(&mut all, 10);
-        let chassis = |app: &mut App| car(app).setup.build.chassis().name.clone();
-        assert_eq!(chassis(all[h]), "Skarn", "the hunted's rally car");
-        assert_eq!(chassis(all[k]), "Harrow", "the hunter's muscle car");
+        // Lent cars come full.
+        let full = car(all[1]).setup.tank.litres;
+        let fuel = |app: &mut App| car(app).fuel.litres();
+        assert!((fuel(all[1]) - full).abs() < 0.01, "Anna's lent car");
         // The server lends the same.
         let on_server = |server: &mut App| {
             let mut peers = server.world_mut().query::<&super::server::Peer>();
-            let mut names: Vec<String> = (peers.iter(server.world()))
-                .filter_map(|peer| Some(peer.shadow.car()?.setup.build.chassis().name.clone()))
+            let mut litres: Vec<f32> = (peers.iter(server.world()))
+                .filter_map(|peer| Some(peer.shadow.car()?.fuel.litres()))
                 .collect();
-            names.sort();
-            names
+            litres.sort_by(f32::total_cmp);
+            litres
         };
-        assert_eq!(on_server(all[0]), ["Harrow", "Skarn"]);
-        let parts = car(all[k]).setup.engine.parts.clone();
-        let family = parts.family();
-        assert_eq!(family.versions[parts.version].code, "M50", "the smaller V8");
+        assert!(on_server(all[0]).iter().all(|&l| (l - full).abs() < 0.01));
         assert!(
             all[k].world().resource::<Held>().0,
             "held for the head start"
@@ -1650,9 +1636,11 @@ mod tests {
         // The hunted stands still and is caught; both have their own cars back.
         run(&mut all, 60 * 11);
         assert!(!round(all[h]).unwrap().running());
-        assert_eq!(chassis(all[h]), "Tarn");
-        assert_eq!(chassis(all[k]), "Tarn");
-        assert_eq!(on_server(all[0]), ["Tarn", "Tarn"]);
+        assert!(
+            on_server(all[0])
+                .iter()
+                .any(|&l| (l - annas_fuel).abs() < 0.01)
+        );
         assert!(
             (car(all[1]).fuel.litres() - annas_fuel).abs() < 0.01,
             "Anna's own"
@@ -1706,7 +1694,7 @@ mod tests {
     fn racer(listener: &LoopbackListener, name: &str, x: f32) -> App {
         use crate::car::Held;
         use crate::events::{Events, Placed, lobby::LobbyPlugin};
-        let mut app = player(listener, name, 3, x);
+        let mut app = player(listener, name, x);
         app.add_plugins(LobbyPlugin)
             .init_resource::<Held>()
             .init_resource::<ButtonInput<KeyCode>>()
@@ -1951,7 +1939,7 @@ mod tests {
     fn a_state_overtaking_the_looks_still_shows_the_car() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);
-        let mut anna = player(&listener, "Anna", 3, 0.0);
+        let mut anna = player(&listener, "Anna", 0.0);
         let link = Overtaking {
             link: listener.connect(),
             held: Default::default(),

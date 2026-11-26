@@ -214,6 +214,15 @@ pub fn builtin() -> Shared {
     BUILTIN.clone()
 }
 
+/// The built-in catalogue changed by `change` (for tests: the variations of the one car).
+#[cfg(test)]
+pub fn builtin_changed(change: impl FnOnce(&mut Catalogue)) -> Shared {
+    let mut catalogue = Catalogue::clone(&builtin());
+    change(&mut catalogue);
+    catalogue.fingerprint = catalogue.hash();
+    Arc::new(catalogue)
+}
+
 impl Catalogue {
     /// E.g. `205/55 R16 street on 16×7.0"`.
     pub fn wheel_label(&self, wheel: &crate::wheels::Wheel) -> String {

@@ -515,7 +515,7 @@ mod tests {
         catalogue.chassis[0].gearbox = catalogue.gearboxes.len();
         assert_eq!(decode::<Catalogue>(&encode(&catalogue)), None);
         let mut catalogue = Catalogue::clone(&builtin());
-        catalogue.chassis[2].engines.push("Q99".into());
+        catalogue.chassis[0].engines.push("Q99".into());
         assert_eq!(decode::<Catalogue>(&encode(&catalogue)), None);
     }
 }

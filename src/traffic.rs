@@ -655,13 +655,18 @@ impl Around<'_> {
         let (leg, s, _) =
             spawner.spots[free[(rng.next() * free.len() as f32) as usize % free.len()]];
         let chassis = rng.pick(catalogue.chassis.iter().map(|chassis| chassis.traffic));
-        // Mostly the dull factory paint, now and then one from a paint shop, as players'
-        // cars might be.
+        // Mostly a dull factory paint (any, so that one chassis doesn't make all traffic
+        // look alike), now and then one from a paint shop, as players' cars might be.
         let shop = catalogue.shop_paints();
+        let factory: Vec<usize> = (0..catalogue.paints.len())
+            .filter(|&paint| !catalogue.paints[paint].shop)
+            .collect();
         let paint = if rng.next() < PAINTED && !shop.is_empty() {
             shop[(rng.next() * shop.len() as f32) as usize % shop.len()]
-        } else {
+        } else if factory.is_empty() {
             catalogue.chassis[chassis].paint
+        } else {
+            factory[(rng.next() * factory.len() as f32) as usize % factory.len()]
         };
         let keen = rng.range(KEEN);
         let seed = rng.0;

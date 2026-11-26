@@ -384,15 +384,7 @@ mod tests {
 
     #[test]
     fn every_cabin_is_its_own() {
-        let shape = |name: &str| {
-            CabinShape::of(
-                crate::catalogue::builtin()
-                    .chassis
-                    .iter()
-                    .find(|c| c.name == name)
-                    .unwrap(),
-            )
-        };
+        let hatch = || crate::catalogue::builtin().chassis[0].clone();
         for chassis in &crate::catalogue::builtin().chassis {
             let cabin = CabinShape::of(chassis);
             assert!(cabin.modes.is_sorted(), "{}", chassis.name);
@@ -407,16 +399,26 @@ mod tests {
                 chassis.name
             );
         }
-        // A van booms lower than a city car.
-        assert!(shape("Carrow").modes[0] < shape("Minim").modes[0]);
-        // A saloon keeps out more than a stripped rally car.
-        assert!(shape("Halden").leak < 0.5 * shape("Skarn").leak);
+        // A longer cabin booms lower.
+        let mut long = hatch();
+        for point in &mut long.body.cabin[1..] {
+            point[0] += 0.8;
+        }
+        let shape = CabinShape::of(&hatch());
+        assert!(CabinShape::of(&long).modes[0] < shape.modes[0]);
+        // A quiet saloon's body keeps out more than a stripped one.
+        let (mut quiet, mut stripped) = (hatch(), hatch());
+        (quiet.insulation, stripped.insulation) = (1.0, 0.0);
+        assert!(CabinShape::of(&quiet).leak < 0.5 * CabinShape::of(&stripped).leak);
         // The engine right behind the driver comes through brighter than one up front.
-        assert!(shape("Calder").transmission > shape("Harrow").transmission);
+        let mut mid = hatch();
+        mid.bay.engine_at = mid.eye[0] - mid.body.front_overhang + 0.6;
+        assert!(CabinShape::of(&mid).transmission > shape.transmission);
         // Without a roof, it's mostly heard as from outside.
-        assert_eq!(shape("Linnet").enclosed, OPEN);
-        assert_eq!(shape("Wisp").enclosed, OPEN);
-        assert_eq!(shape("Halden").enclosed, 1.0);
+        let mut open = hatch();
+        open.body.cabin.truncate(2);
+        assert_eq!(CabinShape::of(&open).enclosed, OPEN);
+        assert_eq!(shape.enclosed, 1.0);
     }
 
     #[test]

@@ -8,31 +8,13 @@
 use super::hardware::EngineHardware;
 use super::maps::{EngineMaps, fingerprint};
 
-/// The maps baked with the game, by the factory code of their engine.
+/// The maps baked with the game, by the factory code of their engine; and two engines
+/// the tests measure against (`REFERENCES`).
 #[cfg(any(test, not(target_arch = "wasm32")))]
-const BAKED: [(&str, &str); 22] = [
-    ("A10", include_str!("baked/a10.maps")),
-    ("A10T", include_str!("baked/a10t.maps")),
-    ("B12", include_str!("baked/b12.maps")),
+const BAKED: [(&str, &str); 3] = [
     ("B16", include_str!("baked/b16.maps")),
-    ("B16S", include_str!("baked/b16s.maps")),
-    ("D52", include_str!("baked/d52.maps")),
-    ("F40", include_str!("baked/f40.maps")),
-    ("H30", include_str!("baked/h30.maps")),
-    ("H36T", include_str!("baked/h36t.maps")),
-    ("L65", include_str!("baked/l65.maps")),
-    ("M50", include_str!("baked/m50.maps")),
-    ("M62", include_str!("baked/m62.maps")),
-    ("R20", include_str!("baked/r20.maps")),
-    ("R24", include_str!("baked/r24.maps")),
-    ("S30", include_str!("baked/s30.maps")),
-    ("S30T", include_str!("baked/s30t.maps")),
-    ("V35", include_str!("baked/v35.maps")),
-    ("V40", include_str!("baked/v40.maps")),
     ("W20", include_str!("baked/w20.maps")),
-    ("W20T", include_str!("baked/w20t.maps")),
-    ("X20T", include_str!("baked/x20t.maps")),
-    ("X25T", include_str!("baked/x25t.maps")),
+    ("B16T", include_str!("baked/b16t.maps")),
 ];
 
 /// None on the web, which has no maps baked with it.
@@ -106,6 +88,19 @@ mod tests {
                     .map_or("", |(_, text)| *text);
                 stock.push((hardware, file, text));
             }
+        }
+        // The engines tests measure against: the 2-litre four everything is scaled from,
+        // and the 1.6 turbocharged.
+        let references = [
+            ("W20", EngineHardware::default()),
+            ("B16T", EngineHardware::turbo()),
+        ];
+        for (code, hardware) in references {
+            let file = format!("{}.maps", code.to_lowercase());
+            let text = (BAKED.iter())
+                .find(|(baked, _)| *baked == code)
+                .map_or("", |(_, text)| *text);
+            stock.push((hardware, file, text));
         }
         stock
     }

@@ -238,12 +238,15 @@ mod tests {
         (std::array::from_fn(deviation), sum[0] / n)
     }
 
-    /// Light and heavy cars pull the wheel alike near the limit (Minim city car, Drover
-    /// pickup), and the pull grows with the cornering.
+    /// Light and heavy cars pull the wheel alike near the limit (the hatch, and the hatch
+    /// 900 kg heavier), and the pull grows with the cornering.
     #[test]
     fn light_and_heavy_cars_pull_alike() {
-        for chassis in [0, 11] {
-            let setup = CarSetup::factory(chassis, 0);
+        let heavy = crate::catalogue::builtin_changed(|c| c.chassis[0].mass += 900.0);
+        for (chassis, setup) in [CarSetup::factory(0, 0), CarSetup::factory_in(&heavy, 0, 0)]
+            .into_iter()
+            .enumerate()
+        {
             let (mild, _) = cornering(setup.clone(), 0.3);
             let (hard, _) = cornering(setup, 0.7);
             // Turning left, the tires pull the wheels back to the right.
@@ -253,20 +256,21 @@ mod tests {
     }
 
     /// The steering shakes on a rough road and hardly on a smooth one, and the front wheels
-    /// putting the power down tug at it over the bumps (Minim, front-wheel drive), unlike
-    /// the rear ones (Tarn coupé).
+    /// putting the power down tug at it over the bumps (the hatch, front-wheel drive), unlike
+    /// the rear ones (the hatch made to drive its rear wheels).
     #[test]
     fn bumps_and_driven_front_wheels_come_through() {
-        let minim = CarSetup::factory(0, 0);
-        let (smooth, _) = shake(minim.clone(), 16.0, false);
-        let (rough, _) = shake(minim.clone(), 256.0, false);
-        let (floored, _) = shake(minim, 256.0, true);
+        let hatch = CarSetup::factory(0, 0);
+        let (smooth, _) = shake(hatch.clone(), 16.0, false);
+        let (rough, _) = shake(hatch.clone(), 256.0, false);
+        let (floored, _) = shake(hatch, 256.0, true);
         assert!(rough[0] > 3.0 * smooth[0], "{rough:?} against {smooth:?}");
         assert!(floored[0] > 1.5 * rough[0], "{floored:?} against {rough:?}");
         assert!(floored[4] > 0.01, "the driveshafts: {floored:?}");
-        let tarn = CarSetup::factory(3, 0);
-        let (rough, _) = shake(tarn.clone(), 256.0, false);
-        let (floored, _) = shake(tarn, 256.0, true);
+        let rear = crate::catalogue::builtin_changed(|c| c.chassis[0].drive = Drive::Rear);
+        let rear = CarSetup::factory_in(&rear, 0, 0);
+        let (rough, _) = shake(rear.clone(), 256.0, false);
+        let (floored, _) = shake(rear, 256.0, true);
         assert!(floored[0] < 1.3 * rough[0], "{floored:?} against {rough:?}");
         assert_eq!(floored[4], 0.0);
     }

@@ -1193,7 +1193,7 @@ mod tests {
         use crate::snapshot::{load, save};
         let terrain = Terrain::baked();
         let (p, yaw) = terrain.road_spawns(&crate::terrain::Spawn::DEFAULT, 1, 0.0)[0];
-        let setup = CarSetup::factory(5, 0);
+        let setup = CarSetup::factory(0, 0);
         let mut car = Car::spawn_at(0, setup.clone(), &terrain, p.x, p.y, yaw);
         car.drivetrain.shift_to(&car.setup.engine, 1);
         drive_about(&mut car, &terrain, 0.0, 4.0);
@@ -1214,7 +1214,7 @@ mod tests {
         use crate::snapshot::{load, save};
         let terrain = Terrain::flat();
         // The van's in fifth, a gear the city car's box has; then sixth.
-        let mut van = Car::spawn_at(0, CarSetup::factory(12, 0), &terrain, 0.0, 0.0, 0.0);
+        let mut van = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, 0.0, 0.0, 0.0);
         let mut minim = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, 0.0, 0.0, 0.0);
         let top = minim.setup.engine.top_gear();
         van.drivetrain.gear = top;

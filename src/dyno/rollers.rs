@@ -362,16 +362,16 @@ mod tests {
     use crate::car::CarSetup;
     use crate::terrain::Terrain;
 
-    fn on_rollers(chassis: usize) -> (Car, Rollers) {
+    fn on_rollers(setup: CarSetup) -> (Car, Rollers) {
         let terrain = Terrain::flat();
-        let mut car = Car::spawn_at(0, CarSetup::factory(chassis, 0), &terrain, 0.0, 0.0, 0.0);
+        let mut car = Car::spawn_at(0, setup, &terrain, 0.0, 0.0, 0.0);
         let rollers = Rollers::new(&mut car);
         (car, rollers)
     }
 
     #[test]
     fn a_run_goes_through_the_gears_and_pulls_in_fourth() {
-        let (mut car, mut rollers) = on_rollers(3);
+        let (mut car, mut rollers) = on_rollers(CarSetup::factory(0, 0));
         let fuel = car.fuel.litres();
         let mut gears = Vec::new();
         let (mut time, mut top_warm_up, mut shifting, mut pull_from) = (0.0, 0.0, 0.0, None);
@@ -416,7 +416,7 @@ mod tests {
             wheel < 0.9 * crank && wheel > 0.75 * crank,
             "{wheel} whp of {crank} hp"
         );
-        assert!((130.0..200.0).contains(&crank), "{crank} hp");
+        assert!((100.0..160.0).contains(&crank), "{crank} hp");
         // The wheels' torque follows the crank's.
         for sample in samples.iter().skip(2) {
             let share = sample.wheel_torque() / sample.crank;
@@ -425,7 +425,7 @@ mod tests {
     }
     #[test]
     fn a_hold_holds_the_rpm_at_the_throttle_set() {
-        let (mut car, mut rollers) = on_rollers(3);
+        let (mut car, mut rollers) = on_rollers(CarSetup::factory(0, 0));
         rollers.hold = Some(Hold {
             rpm: 4000.0,
             throttle: 0.3,
@@ -462,8 +462,11 @@ mod tests {
 
     #[test]
     fn all_wheel_drive_loses_more() {
-        // The rally car drives all four wheels.
-        let (mut car, mut rollers) = on_rollers(5);
+        // The hatch made to drive all four wheels.
+        let catalogue = crate::catalogue::builtin_changed(|c| {
+            c.chassis[0].drive = crate::physics::drivetrain::Drive::All { front: 0.4 };
+        });
+        let (mut car, mut rollers) = on_rollers(CarSetup::factory_in(&catalogue, 0, 0));
         rollers.finish(&mut car);
         assert_eq!(rollers.stage, Stage::Done);
         let crank = rollers
@@ -482,7 +485,7 @@ mod tests {
     #[test]
     fn every_car_gets_through_a_run() {
         for chassis in 0..crate::catalogue::builtin().chassis.len() {
-            let (mut car, mut rollers) = on_rollers(chassis);
+            let (mut car, mut rollers) = on_rollers(CarSetup::factory(chassis, 0));
             let name = &car.setup.name.clone();
             let mut time = 0.0;
             let mut warm_up = 0.0;
