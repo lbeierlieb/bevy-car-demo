@@ -1311,6 +1311,10 @@ pub struct Capturing {
     start: Vec<(Entity, GamepadInput, f32)>,
     /// The pedal found so far, and its value farthest from rest.
     pedal: Option<(Entity, GamepadInput, f32, f32)>,
+    /// Keys (no entity) and buttons pressed since the capture began: one binds when it's
+    /// let go, so it does nothing as what it was just bound to. A key or button already
+    /// down when the capture began (the Enter that began it) isn't among them.
+    pressed: Vec<(Option<Entity>, Input)>,
 }
 
 impl Capturing {
@@ -1319,13 +1323,16 @@ impl Capturing {
             action,
             start: Vec::new(),
             pedal: None,
+            pressed: Vec::new(),
         }
     }
 }
 
 /// Steering binds to the first axis turned well away from its starting value, buttons and
-/// shifter gates to the first button pressed, and pedals to the first axis pushed through
-/// most of its travel, once it's released again.
+/// shifter gates to the first button (or key) pressed, once it's let go (bound while held,
+/// the press would count as one of what it was bound to: "Menu back" left the bindings at
+/// once), and pedals to the first axis pushed through most of its travel, once it's
+/// released again.
 fn capture(
     mut capture: ResMut<Capture>,
     mut config: ResMut<WheelConfig>,
@@ -1345,15 +1352,43 @@ fn capture(
     };
     let mut found = None;
     // Any control but one taking a whole axis takes a key.
-    if !action.whole_axis()
-        && let Some(&key) = gamepads.keys.get_just_pressed().find(|k| KEYS.contains(k))
-    {
-        found = Some(Binding::key(key));
+    if !action.whole_axis() {
+        for &key in gamepads
+            .keys
+            .get_just_pressed()
+            .filter(|k| KEYS.contains(k))
+        {
+            capturing.pressed.push((None, Input::Key(key)));
+        }
+        let released = |&(entity, input): &(Option<Entity>, Input)| match input {
+            Input::Key(key) => entity.is_none() && gamepads.keys.just_released(key),
+            Input::Pad(_) => false,
+        };
+        if let Some(&(_, Input::Key(key))) = capturing.pressed.iter().find(|p| released(p)) {
+            found = Some(Binding::key(key));
+        }
     }
     // A handbrake can be a lever (an axis) or a button.
     if found.is_none() && (!action.analog() || action == Action::Handbrake) {
-        for (_, name, gamepad) in &gamepads.gamepads {
-            if let Some(&button) = gamepad.digital().get_just_pressed().next() {
+        for (entity, name, gamepad) in &gamepads.gamepads {
+            for &button in gamepad.digital().get_just_pressed() {
+                let input = Input::Pad(GamepadInput::Button(button));
+                capturing.pressed.push((Some(entity), input));
+            }
+            let released = capturing
+                .pressed
+                .iter()
+                .find_map(|&(e, input)| match input {
+                    Input::Pad(GamepadInput::Button(button))
+                        if e == Some(entity) && gamepad.digital().just_released(button) =>
+                    {
+                        Some(button)
+                    }
+                    _ => None,
+                });
+            if found.is_none()
+                && let Some(button) = released
+            {
                 found = Some(binding(name, GamepadInput::Button(button), 0.0, 1.0));
             }
         }
@@ -1613,6 +1648,116 @@ mod tests {
         world.run_system_once(read_wheel).unwrap();
         let wheel = world.resource::<WheelInput>();
         assert_eq!((wheel.throttle, wheel.steer_keys), (None, 0.0));
+    }
+
+    /// A frame of binding: the capture, then the wheel read as the game does.
+    fn bind_frame(world: &mut World) -> bool {
+        use bevy::ecs::system::RunSystemOnce;
+        world.run_system_once(capture).unwrap();
+        world.run_system_once(read_wheel).unwrap();
+        let back = world.resource::<WheelInput>().nav_held(Nav::Back);
+        // The frame's presses and releases are over.
+        world.resource_mut::<ButtonInput<KeyCode>>().clear();
+        let mut pads = world.query::<&mut Gamepad>();
+        for mut pad in pads.iter_mut(world) {
+            pad.digital_mut().clear();
+        }
+        back
+    }
+
+    fn set_button(world: &mut World, pad: Entity, button: GamepadButton, down: bool) {
+        let mut gamepad = world.get_mut::<Gamepad>(pad).unwrap();
+        if down {
+            gamepad.digital_mut().press(button);
+        } else {
+            gamepad.digital_mut().release(button);
+        }
+        let value = f32::from(u8::from(down));
+        (gamepad.analog_mut()).set(GamepadInput::Button(button), value);
+        let mut reported = world.resource_mut::<Reported>();
+        reported.0.insert((pad, GamepadInput::Button(button)));
+    }
+
+    #[test]
+    fn a_button_binds_when_let_go_and_does_nothing_meanwhile() {
+        let mut world = World::new();
+        world.insert_resource(WheelConfig {
+            active: 2,
+            ..default()
+        });
+        world.init_resource::<WheelBase>();
+        world.init_resource::<Reported>();
+        world.init_resource::<WheelInput>();
+        world.init_resource::<JustBound>();
+        world.init_resource::<ButtonInput<KeyCode>>();
+        let pad = world
+            .spawn((Name::new("Fake Wheel"), Gamepad::default()))
+            .id();
+        let back = GamepadButton::Other(5);
+        world.insert_resource(Capture(Some(Capturing::new(Action::Menu(Nav::Back)))));
+        // Pressed: nothing bound yet, nothing pressed.
+        set_button(&mut world, pad, back, true);
+        assert!(!bind_frame(&mut world));
+        assert!(world.resource::<Capture>().0.is_some());
+        assert!(!bind_frame(&mut world));
+        // Let go: bound, and still nothing pressed.
+        set_button(&mut world, pad, back, false);
+        assert!(!bind_frame(&mut world));
+        assert!(world.resource::<Capture>().0.is_none());
+        assert!(world.resource::<JustBound>().0);
+        let labels = world
+            .resource::<WheelConfig>()
+            .profile()
+            .labels(Action::Menu(Nav::Back));
+        assert_eq!(labels.len(), 1);
+        assert!(!bind_frame(&mut world));
+        // The next press is "back".
+        set_button(&mut world, pad, back, true);
+        assert!(bind_frame(&mut world));
+    }
+
+    #[test]
+    fn what_was_down_when_binding_began_isnt_bound() {
+        let mut world = World::new();
+        world.insert_resource(WheelConfig::default());
+        world.init_resource::<WheelBase>();
+        world.init_resource::<Reported>();
+        world.init_resource::<WheelInput>();
+        world.init_resource::<JustBound>();
+        world.init_resource::<ButtonInput<KeyCode>>();
+        world.init_resource::<Capture>();
+        let pad = world.spawn((Name::new("Pad"), Gamepad::default())).id();
+        // South (choose) and a key, pressed before the capture: the press that began it.
+        set_button(&mut world, pad, GamepadButton::South, true);
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyJ);
+        bind_frame(&mut world);
+        world.insert_resource(Capture(Some(Capturing::new(Action::View))));
+        bind_frame(&mut world);
+        set_button(&mut world, pad, GamepadButton::South, false);
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::KeyJ);
+        bind_frame(&mut world);
+        assert!(world.resource::<Capture>().0.is_some());
+        // A key pressed and let go in the capture is bound, on its release.
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyK);
+        bind_frame(&mut world);
+        assert!(world.resource::<Capture>().0.is_some());
+        assert!(!world.resource::<WheelInput>().view);
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::KeyK);
+        bind_frame(&mut world);
+        assert!(world.resource::<Capture>().0.is_none());
+        assert!(!world.resource::<WheelInput>().view);
+        let config = world.resource::<WheelConfig>();
+        let views: Vec<_> = config.profile().bindings_of(Action::View).collect();
+        assert!(views.iter().any(|b| b.input == Input::Key(KeyCode::KeyK)));
+        assert!(!views.iter().any(|b| b.input == Input::Key(KeyCode::KeyJ)));
     }
 
     #[test]

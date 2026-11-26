@@ -556,9 +556,9 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) -> Opt
                 Action::Steer => "turn the wheel left…".to_string(),
                 Action::LookSide => "push the stick left…".to_string(),
                 Action::LookUp => "push the stick up…".to_string(),
-                Action::Gate(_) => "move the lever into the gate…".to_string(),
+                Action::Gate(_) => "move the lever into the gate and out…".to_string(),
                 _ if action.analog() => "press it fully, then release…".to_string(),
-                _ => "press it…".to_string(),
+                _ => "press and release it…".to_string(),
             }
         } else {
             let names = bound(config, action);

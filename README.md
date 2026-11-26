@@ -287,8 +287,8 @@ works alongside as far as the profile in use binds keys. Bindings live in four
 profiles: the first is the keyboard's defaults, the others start empty (set one up for a
 gamepad, one for a wheel) and are switched in the menu (Esc, Settings, Controls,
 "Profile in use"). Open "Bindings of …", choose a control's row, then press a key or move
-the control: turn the wheel left, press a pedal fully and release it, press a button (up
-to two inputs each; Left clears a row). "Set up the menu buttons, one by
+the control: turn the wheel left, press a pedal fully and release it, press and release
+a button or key (up to two inputs each; Left clears a row). "Set up the menu buttons, one by
 one" binds the wheel's buttons for working the menus (menu, up, down, left, right,
 choose, back), so the wheel alone does everything afterwards. Pedals can rest at either end of their axis. The
 bindings and settings are saved to `~/.config/car-sim/wheel.cfg` (on the web, in the

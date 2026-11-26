@@ -150,8 +150,10 @@ As built (`src/menu/`):
   swings round the car up to π), back to the front when let go. Fixed, never bindable: Esc (menu), H, T, 1, 2, F11, and the
   menus' arrows/Enter. `wheel.cfg`: `active N`, `profile N name`, then its `bind` lines
   (`key:KeyW`, `axis:…`, `button:…`); a file from before has its bindings put in profile
-  2 ("Wheel"), in use. While a key is bound (and the frame after), egui gets no key
-  events. A pad's standard buttons work the menus while one has the focus even if the
+  2 ("Wheel"), in use. Keys and buttons bind when let go, and only one pressed
+  during the binding (the Enter that began it isn't bound); bound on the press, it
+  counted at once as what it was bound to ("Menu back" left the bindings; the user,
+  2026-11-26). While a key is bound (and the frame after), egui gets no key events. A pad's standard buttons work the menus while one has the focus even if the
   profile drives with them, outside only when it doesn't.
 - The map (M) moves with the arrow keys (asked for by the user): `map::take_arrows`
   takes them before `read_wheel`, so they don't steer while it's open.
