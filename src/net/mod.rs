@@ -807,6 +807,15 @@ mod tests {
                 .and_then(|car| car.latest()?.heli)
         };
         assert_eq!(heli(&mut ben, None), None);
+        // Whether the car is scripted (shown as it went, never guessed ahead) as `app`
+        // has it.
+        let scripted = |app: &mut App, id: Option<protocol::CarId>| {
+            (app.world_mut().query::<&RemoteCar>())
+                .iter(app.world())
+                .find(|car| id.is_none_or(|id| car.id == id))
+                .is_some_and(|car| car.latest().is_some_and(|state| state.scripted))
+        };
+        assert!(!scripted(&mut ben, None));
         let start = car(&mut anna).body.position;
         // Anna presses R: the server has her car from then on.
         let press = |anna: &mut App, on: bool| {
@@ -834,6 +843,7 @@ mod tests {
         let hers = heli(&mut anna, ours).expect("Anna doesn't see her helicopter");
         let his = heli(&mut ben, None).expect("Ben doesn't see it");
         assert!(hers.position.distance(his.position) < 5.0);
+        assert!(scripted(&mut anna, ours) && scripted(&mut ben, None));
         // Carried up, her car with it.
         let mut highest = f32::NEG_INFINITY;
         for _ in 0..600 {
@@ -859,6 +869,7 @@ mod tests {
         assert!(compared > 5);
         assert_eq!(after, before, "corrected after being given it back");
         assert_eq!(heli(&mut ben, None), None, "flown off");
+        assert!(!scripted(&mut ben, None), "driven again");
     }
 
     #[test]

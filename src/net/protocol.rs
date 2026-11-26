@@ -39,7 +39,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 28;
+pub const PROTOCOL: u32 = 29;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -244,6 +244,10 @@ pub struct CarState {
     pub motion: Motion,
     /// A ghost: stopped at a shop (or just left one), nothing collides with it.
     pub ghost: bool,
+    /// Nobody drives it, the server moves it (its rescue helicopter has it): nothing a
+    /// game does changes where it goes, so games show it as it went, a little late
+    /// (between states), rather than guessing ahead.
+    pub scripted: bool,
     /// The rescue helicopter that's coming for the car, carrying it or flying off (its
     /// time on the same clock as the state's).
     pub heli: Option<HeliPose>,
@@ -563,6 +567,7 @@ impl Wire for CarState {
         self.angular_velocity.put(out);
         self.motion.put(out);
         self.ghost.put(out);
+        self.scripted.put(out);
         self.heli.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -574,6 +579,7 @@ impl Wire for CarState {
             angular_velocity: r.get()?,
             motion: r.get()?,
             ghost: r.get()?,
+            scripted: r.get()?,
             heli: r.get()?,
         })
     }
@@ -886,6 +892,7 @@ mod tests {
             angular_velocity: Vec3::Y,
             motion: Motion::default(),
             ghost: true,
+            scripted: false,
             heli: None,
         };
         let bytes = encode(&ToServer::State(state));

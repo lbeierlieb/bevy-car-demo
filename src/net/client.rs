@@ -68,8 +68,14 @@ const GONE: f64 = 2.0;
 /// What we've been told of a car (its looks and name) is kept this long after it was
 /// last heard of (s): the server tells it again when the car comes back into range.
 const FORGET: f64 = 30.0;
-/// States kept per car: the last two give the acceleration.
-const KEPT: usize = 2;
+/// States kept per car: the last two give the acceleration, a scripted car is shown
+/// between them (a third of a second near, at 30 a second).
+const KEPT: usize = 12;
+/// How long before the latest the server's word could have come a scripted car is shown
+/// (`CarState::scripted`): three states near, so it's always between two.
+const SCRIPTED_DELAY: f64 = 0.1;
+/// How far past its latest state a scripted car is carried on, should none come (s).
+const SCRIPTED_AHEAD: f64 = 0.1;
 /// A player on the map is carried on along their way for this long past where they were
 /// last sent (once a second), and gone when not sent for this long (s).
 const MAP_PREDICT: f64 = 1.5;
@@ -418,23 +424,21 @@ impl Connection {
 
     /// When (the server's clock) a remote car is met and shown as of in our step `step`,
     /// `heard` being the latest the server's word could have come by now: when the server
-    /// drives that step of ours. Not so a car the server's rescue helicopter is carrying
-    /// (the helicopter is shown as heard), nor our own car shown as the server drives it:
-    /// those as heard (as long before as the step is). Nor any while our steps don't run
-    /// ahead of what's heard as they should (a game not simulating its car).
+    /// drives that step of ours. Not so a scripted car (`CarState::scripted`, nothing we do
+    /// changes where it goes): that's shown as it went, `SCRIPTED_DELAY` before what's
+    /// heard. Our own car shown as the server drives it, and any while our steps don't run
+    /// ahead of what's heard as they should (a game not simulating its car), as heard (as
+    /// long before as the step is).
     fn meet_time(&self, step: u32, heard: f64, car: CarId, latest: &CarState) -> f64 {
         let back = self.last_step().map_or(0.0, |last| {
             f64::from(last.wrapping_sub(step) as i32) * f64::from(sim::STEP)
         });
         let heard = heard - back;
+        if latest.scripted {
+            return heard - SCRIPTED_DELAY;
+        }
         match self.step_time(step) {
-            Some(time)
-                if AHEAD.contains(&(time - heard))
-                    && latest.heli.is_none()
-                    && Some(car) != self.car =>
-            {
-                time
-            }
+            Some(time) if AHEAD.contains(&(time - heard)) && Some(car) != self.car => time,
             _ => heard,
         }
     }
@@ -492,6 +496,52 @@ impl RemoteCar {
         self.states.back()
     }
 
+    /// As of when (the server's clock) it was last drawn.
+    pub fn shown_at(&self) -> f64 {
+        self.met
+    }
+
+    /// Where its rescue helicopter is at `time` (the server's clock), as `at` has the car:
+    /// between the poses around it if the car is scripted (each pose's time is its
+    /// state's), else carried on from the latest.
+    pub fn heli_at(&self, time: f64) -> Option<HeliPose> {
+        let latest = self.states.back()?.heli?;
+        let poses = self.states.iter().filter_map(|state| state.heli);
+        let after = poses.clone().position(|pose| pose.time > time);
+        let pose = match after {
+            Some(0) => poses.clone().next()?,
+            Some(after) if self.states.back()?.scripted => {
+                let (a, b) = (poses.clone().nth(after - 1)?, poses.clone().nth(after)?);
+                let u = ((time - a.time) / (b.time - a.time)) as f32;
+                let h = (b.time - a.time) as f32;
+                let (position, velocity) =
+                    hermite(a.position, a.velocity, b.position, b.velocity, h, u);
+                HeliPose {
+                    time,
+                    position,
+                    velocity,
+                    rotation: a.rotation.slerp(b.rotation, u).normalize(),
+                    cable: a.cable + (b.cable - a.cable) * u,
+                    hooked: a.hooked,
+                }
+            }
+            _ => {
+                let limit = if self.states.back()?.scripted {
+                    SCRIPTED_AHEAD
+                } else {
+                    PREDICT
+                };
+                let ahead = (time - latest.time).clamp(0.0, limit) as f32;
+                HeliPose {
+                    time,
+                    position: latest.position + latest.velocity * ahead,
+                    ..latest
+                }
+            }
+        };
+        Some(pose)
+    }
+
     /// Where it is (to run into) as of our step `step`, by `connection`'s word, `heard`
     /// being the latest the server's word could have come by now (its clock).
     fn body_at(
@@ -505,11 +555,24 @@ impl RemoteCar {
         Some(body_of(&self.at(time).0, looks))
     }
 
-    /// Where it is at `time` (the server's clock), and how long after its latest state:
-    /// carried on from that, and pushed as our car pushed it since (`Kick`).
-    fn at(&self, time: f64) -> (Kinematics, f32) {
-        let (mut at, ahead) = predict(&self.states, time);
-        let latest = self.states.back().map_or(f64::MIN, |state| state.time);
+    /// Where it is at `time` (the server's clock), the state that's from and how long after
+    /// it: carried on from its latest state (a scripted car between its states, as long
+    /// as there are some after `time`), and pushed as our car pushed it since (`Kick`).
+    fn at(&self, time: f64) -> (Kinematics, usize, f32) {
+        let last = self.states.len() - 1;
+        let (mut at, from, ahead) = match self.states[last] {
+            latest if latest.scripted && time < latest.time => interpolate(&self.states, time),
+            latest if latest.scripted => {
+                let time = time.min(latest.time + SCRIPTED_AHEAD);
+                let (at, ahead) = predict(&self.states, time);
+                (at, last, ahead)
+            }
+            _ => {
+                let (at, ahead) = predict(&self.states, time);
+                (at, last, ahead)
+            }
+        };
+        let latest = self.states[last].time;
         for kick in &self.kicks {
             if kick.time > latest && kick.time <= time {
                 at.velocity += kick.velocity;
@@ -517,7 +580,7 @@ impl RemoteCar {
                 at.position += kick.velocity * (time - kick.time) as f32;
             }
         }
-        (at, ahead)
+        (at, from, ahead)
     }
 }
 
@@ -910,6 +973,7 @@ fn send(
             angular_velocity: car.body.angular_velocity,
             motion: *motion,
             ghost,
+            scripted: false,
             heli: None,
         }));
     }
@@ -1010,22 +1074,27 @@ fn move_cars(
         // (A state from a push on shows how it went.)
         let latest = latest.time;
         car.kicks.retain(|kick| kick.time > latest);
-        let (by_now, ahead) = car.at(time);
+        let (by_now, from, ahead) = car.at(time);
         (transform.translation, transform.rotation) = car.drawn.follow(&by_now, dt);
-        // The wheels roll on as fast as they did between the last two states.
-        let (before, latest) = (car.states.front().unwrap(), car.states.back().unwrap());
-        *motion = latest.motion;
         // In a race without contact, a car with a name (in a round, a player's) is one.
-        let ghostly = latest.ghost || (ghost_players.0 && tagged);
+        let ghostly = car.states.back().unwrap().ghost || (ghost_players.0 && tagged);
         if ghostly && !ghost {
             commands.entity(entity).insert(Ghost);
         } else if !ghostly && ghost {
             commands.entity(entity).remove::<Ghost>();
         }
-        if latest.time > before.time {
-            let between = (latest.time - before.time) as f32;
-            for (wheel, was) in motion.wheels.iter_mut().zip(&before.motion.wheels) {
-                wheel.spin += (wheel.spin - was.spin) / between * ahead;
+        // As the state it's from, the wheels rolling on as fast as they did from it to the
+        // next (from the one before to the latest).
+        *motion = car.states[from].motion;
+        if let Some(last) = car.states.len().checked_sub(2) {
+            let first = from.min(last);
+            let (before, after) = (&car.states[first], &car.states[first + 1]);
+            if after.time > before.time {
+                let between = (after.time - before.time) as f32;
+                let wheels = after.motion.wheels.iter().zip(&before.motion.wheels);
+                for (wheel, (to, was)) in motion.wheels.iter_mut().zip(wheels) {
+                    wheel.spin += (to.spin - was.spin) / between * ahead;
+                }
             }
         }
         car.body = looks.map(|looks| body_of(&by_now, looks));
@@ -1123,6 +1192,46 @@ fn predict(states: &VecDeque<CarState>, time: f64) -> (Kinematics, f32) {
     };
     let ahead = (time - latest.time).clamp(0.0, PREDICT) as f32;
     (latest.kinematics().ahead(acceleration, ahead), ahead)
+}
+
+/// Where a car was at `time` (its clock), before its latest state: on a cubic through the
+/// positions and velocities of its states around it (as the first, before that), the
+/// state before it and how long after that.
+fn interpolate(states: &VecDeque<CarState>, time: f64) -> (Kinematics, usize, f32) {
+    match states.iter().position(|state| state.time > time) {
+        Some(after) if after > 0 => {
+            let (a, b) = (&states[after - 1], &states[after]);
+            let h = (b.time - a.time) as f32;
+            let since = (time - a.time) as f32;
+            let u = since / h;
+            let (position, velocity) =
+                hermite(a.position, a.velocity, b.position, b.velocity, h, u);
+            let at = Kinematics {
+                position,
+                rotation: a.rotation.slerp(b.rotation, u).normalize(),
+                velocity,
+                angular_velocity: a.angular_velocity.lerp(b.angular_velocity, u),
+            };
+            (at, after - 1, since)
+        }
+        _ => (states[0].kinematics(), 0, 0.0),
+    }
+}
+
+/// The position and velocity a share `u` of the way from `a` (moving at `va`) to `b` (at
+/// `vb`), `h` seconds apart: the cubic Hermite curve through both.
+fn hermite(a: Vec3, va: Vec3, b: Vec3, vb: Vec3, h: f32, u: f32) -> (Vec3, Vec3) {
+    let (u2, u3) = (u * u, u * u * u);
+    let position = a * (2.0 * u3 - 3.0 * u2 + 1.0)
+        + va * h * (u3 - 2.0 * u2 + u)
+        + b * (-2.0 * u3 + 3.0 * u2)
+        + vb * h * (u3 - u2);
+    let velocity = (a * (6.0 * u2 - 6.0 * u)
+        + va * h * (3.0 * u2 - 4.0 * u + 1.0)
+        + b * (-6.0 * u2 + 6.0 * u)
+        + vb * h * (3.0 * u2 - 2.0 * u))
+        / h;
+    (position, velocity)
 }
 
 /// Where a car is drawn: moving as it's predicted to and closing on where that is, so a
@@ -1350,6 +1459,7 @@ mod tests {
             angular_velocity: Vec3::new(0.0, yaw_rate, 0.0),
             motion: Motion::default(),
             ghost: false,
+            scripted: false,
             heli: None,
         }
     }
@@ -1378,6 +1488,40 @@ mod tests {
     }
 
     #[test]
+    fn a_scripted_car_is_shown_on_its_way_between_its_states() {
+        // Braking hard in a tight bend, states 30 a second: what dead reckoning overshoots.
+        let states: VecDeque<CarState> = (0..KEPT)
+            .map(|n| CarState {
+                scripted: true,
+                ..on_circle(15.0, 10.0, 6.0, n as f64 / 30.0)
+            })
+            .collect();
+        let car = RemoteCar {
+            id: 1,
+            states,
+            heard: 0.0,
+            body: None,
+            met: 0.0,
+            kicks: Vec::new(),
+            drawn: Drawn::default(),
+        };
+        let latest = car.states.back().unwrap().time;
+        let mut worst: f32 = 0.0;
+        for n in 0..=30 {
+            let time = latest - SCRIPTED_DELAY + f64::from(n) * SCRIPTED_DELAY / 30.0;
+            let (shown, from, since) = car.at(time);
+            let truth = on_circle(15.0, 10.0, 6.0, time);
+            worst = worst.max(shown.position.distance(truth.position));
+            assert!((car.states[from].time + f64::from(since) - time).abs() < 1e-6);
+        }
+        assert!(worst < 0.005, "{worst} m off its way");
+        // Past its latest state it's carried on only so far.
+        let (held, ..) = car.at(latest + 1.0);
+        let (ahead, ..) = car.at(latest + SCRIPTED_AHEAD);
+        assert_eq!(held.position, ahead.position);
+    }
+
+    #[test]
     fn a_car_braking_to_a_stop_stays_stopped() {
         let state = |time: f64, speed: f32| CarState {
             time,
@@ -1387,6 +1531,7 @@ mod tests {
             angular_velocity: Vec3::new(0.0, 0.2, 0.0),
             motion: Motion::default(),
             ghost: false,
+            scripted: false,
             heli: None,
         };
         // 2 m/s, braking at 6 m/s²: stopped after 1/3 s, 0.33 m on.

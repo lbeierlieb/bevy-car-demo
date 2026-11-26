@@ -834,6 +834,7 @@ fn send(
                     angular_velocity: car.body.angular_velocity,
                     motion: Motion::of(car),
                     ghost: peer.ghost,
+                    scripted: peer.shadow.taken(),
                     heli: peer.shadow.heli(stamp),
                 },
                 None => CarState {
@@ -866,6 +867,7 @@ fn send(
                 angular_velocity: car.body.angular_velocity,
                 motion: *motion,
                 ghost: false,
+                scripted: false,
                 heli: None,
             },
             looks: looks.clone(),

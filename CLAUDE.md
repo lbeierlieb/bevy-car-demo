@@ -599,7 +599,16 @@ anywhere; `Chase`, the hunt's flight) and `rescue.rs`.
   driven, simulated, predicted, checked or force-fed, hidden, its engine hushed, its body
   and `Transform` following the remote car of our number (`client::spectate`), which is
   drawn and heard (helicopter from `CarState::heli`) like any other; the HUD shows the
-  notice (`hud::server_notice`, first line large). Set down, the server gives it back as
+  notice (`hud::server_notice`, first line large). **Scripted cars** (protocol 29,
+  asked for by the user, 2026-11-26): while the server has a car (`Shadow::taken`) its
+  states carry `CarState::scripted` ("nothing a game does changes where it goes"), and
+  every game shows it `SCRIPTED_DELAY` (0.1 s) before what's heard, on a cubic between
+  the states around that time (`client::interpolate`; `KEPT` 12 states), carried on at
+  most `SCRIPTED_AHEAD` past the latest, instead of dead reckoning it (which overshot as
+  the helicopter sped up, slowed and set down); its rescue helicopter is drawn at the
+  same time between its poses (`RemoteCar::heli_at`, `fly_flown`), so the cable stays on
+  the roof. Generic, for later transports; the hunt's helicopter (not a car) is still
+  dead reckoned (`a_scripted_car_is_shown_on_its_way_between_its_states`). Set down, the server gives it back as
   a move (`Yours::moved`, notice none), the client takes it up and predicts again
   (`the_server_rescues_a_players_car_while_their_game_looks_on`). The menu's reset row is
   enabled whenever we're driving: whether R does anything is the server's call. No sound
@@ -691,8 +700,8 @@ Built (phases 0, 1, 2 and the start of 3):
   `their(now)` met cars ~v × (RTT + 30 ms) too near (1.95 m at 7.7 m/s, 100 ms each
   way). `Yours::time` is when the server's step that drove `Yours::step` ended (its
   clock); `Connection::step_time` maps any step of ours to the server's clock, and
-  `meet_time` carries every remote car to the time of our step (not cars a helicopter
-  carries, nor our own spectated car; not while our steps don't run, or more than
+  `meet_time` carries every remote car to the time of our step (not scripted cars
+  (see "Helicopters"), nor our own spectated car; not while our steps don't run, or more than
   `AHEAD` off what's heard). Bodies are placed per step (`place_bodies`, `FixedUpdate`
   before `push_off_remote_cars`) and drawn as of the last step (`move_cars`). A push our
   car gives a remote car is a `Kick` (velocity change from `collision::resolve` on the

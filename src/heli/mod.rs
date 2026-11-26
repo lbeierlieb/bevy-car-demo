@@ -543,12 +543,14 @@ fn keep_in_view(
 }
 
 /// Helicopters flown elsewhere are drawn where their latest pose says they are by now,
-/// closing on that smoothly; ones not heard of for a while go.
+/// closing on that smoothly; a scripted car's rescue (`CarState::scripted`) exactly as of
+/// when the car is shown, between its poses, so the cable stays on the roof. Ones not
+/// heard of for a while go.
 fn fly_flown(
     mut commands: Commands,
     time: Res<Time<Real>>,
     connection: Option<Res<Connection>>,
-    roofs: Query<(&Transform, &Looks), Without<Heli>>,
+    roofs: Query<(&Transform, &Looks, Option<&RemoteCar>), Without<Heli>>,
     mut helis: Query<(Entity, &mut Flown, &mut Heli, &mut Transform)>,
 ) {
     let now = time.elapsed_secs_f64();
@@ -559,28 +561,38 @@ fn fly_flown(
             commands.entity(entity).despawn();
             continue;
         }
-        let pose = flown.pose;
-        let ahead = their.map_or(0.0, |t| {
-            (t - pose.time).clamp(0.0, f64::from(PREDICT)) as f32
-        });
-        let wanted = pose.position + pose.velocity * ahead;
-        let position = match flown.drawn {
-            Some(drawn) if drawn.distance(wanted) < 30.0 => {
-                let moved = drawn + pose.velocity * dt;
-                moved.lerp(wanted, 1.0 - (-dt / SMOOTHING).exp())
-            }
-            _ => wanted,
-        };
-        flown.drawn = Some(position);
-        transform.translation = position;
-        transform.rotation = transform
-            .rotation
-            .slerp(pose.rotation, 1.0 - (-dt / SMOOTHING).exp());
+        let scripted = (flown.load)
+            .and_then(|car| roofs.get(car).ok()?.2)
+            .filter(|car| car.latest().is_some_and(|state| state.scripted))
+            .and_then(|car| car.heli_at(car.shown_at()));
+        let pose = scripted.unwrap_or(flown.pose);
+        if scripted.is_some() {
+            flown.drawn = Some(pose.position);
+            transform.translation = pose.position;
+            transform.rotation = pose.rotation;
+        } else {
+            let ahead = their.map_or(0.0, |t| {
+                (t - pose.time).clamp(0.0, f64::from(PREDICT)) as f32
+            });
+            let wanted = pose.position + pose.velocity * ahead;
+            let position = match flown.drawn {
+                Some(drawn) if drawn.distance(wanted) < 30.0 => {
+                    let moved = drawn + pose.velocity * dt;
+                    moved.lerp(wanted, 1.0 - (-dt / SMOOTHING).exp())
+                }
+                _ => wanted,
+            };
+            flown.drawn = Some(position);
+            transform.translation = position;
+            transform.rotation = transform
+                .rotation
+                .slerp(pose.rotation, 1.0 - (-dt / SMOOTHING).exp());
+        }
         transform.scale = Vec3::ONE;
         heli.cable = pose.cable;
         heli.load = (flown.load.filter(|_| pose.hooked))
             .and_then(|car| roofs.get(car).ok())
-            .map(|(at, looks)| at.transform_point(roof(looks)));
+            .map(|(at, looks, _)| at.transform_point(roof(looks)));
     }
 }
 
