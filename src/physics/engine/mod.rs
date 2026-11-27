@@ -992,7 +992,7 @@ mod tests {
         // The small turbo with its wastegate held shut to 1.5 bar: its compressor runs out
         // of breath at high rpm and spins past its limit.
         let mut parts = parts::Parts::turbo();
-        parts.chosen[12] = 1;
+        parts.chosen[crate::catalogue::TURBO] = 1;
         parts.boost = 1.5;
         let build = EngineBuild::new(parts.hardware(), ecu::EcuModel::Stock);
         let engine = run_flat_out(&build, 6000.0, 10.0);

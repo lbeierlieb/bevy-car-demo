@@ -13,7 +13,7 @@
 use crate::catalogue::Catalogue;
 use crate::chassis::{BRAKE_BALANCES, BRAKE_FORCES, CarBuild, Misfit, PRESSURES, TOES};
 use crate::physics::engine::ecu::EcuModel;
-use crate::physics::engine::parts::Parts;
+use crate::physics::engine::parts::{Effect, Parts};
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Body panels, each painted, all optional (a missing one only adds drag, once that's
@@ -86,6 +86,11 @@ pub enum Kind {
     LongBlock,
     /// One of the catalogue's engine slots (`Catalogue::slots`, by its place).
     EnginePart(usize),
+    /// An exhaust manifold, made for an engine family: it decides how the exhaust is
+    /// gathered, and carries the turbos (if it has mounts for them).
+    Manifold,
+    /// A turbo, on one of a manifold's mounts.
+    Turbo,
 }
 
 /// What a part does, as far as the game's code knows kinds of parts.
@@ -130,6 +135,12 @@ pub enum Does {
     EnginePart {
         slot: usize,
         part: usize,
+    },
+    /// The exhaust manifold `manifold` of an engine family (both by their places in the
+    /// catalogue: `Family::manifolds`).
+    Manifold {
+        family: usize,
+        manifold: usize,
     },
 }
 
@@ -278,6 +289,8 @@ pub struct PartDef {
     pub does: Does,
     /// The chassis it's made for (their names); none: any.
     pub fits: Vec<String>,
+    /// The engines it's made for (families' names or versions' codes); none: any.
+    pub engines: Vec<String>,
     /// The box it's packed in: length, width, height (m).
     pub size: [f32; 3],
     pub mass: f32,
@@ -493,8 +506,36 @@ impl Item {
         parts.intake_timing = engine.knobs[0];
         parts.exhaust_timing = engine.knobs[1];
         parts.boost = engine.knobs[2];
-        // Engine parts sit in the long block, on the engine and in the car.
+        if let Some(why) = engine_misfit(catalogue, engine) {
+            return Err(Unfit(why));
+        }
+        let manifold = engine.nth(catalogue, Kind::Manifold, 0)?;
+        let Does::Manifold {
+            family: made_for,
+            manifold: m,
+        } = manifold.def(catalogue).does
+        else {
+            return Err(Unfit("not an exhaust manifold".into()));
+        };
+        if made_for != family {
+            return Err(Unfit(
+                "the exhaust manifold is made for another engine".into(),
+            ));
+        }
+        parts.manifold = m;
+        // The turbos on its mounts (all the same, `engine_misfit` saw to that).
+        let turbo = (manifold.fitted(catalogue, Kind::Turbo).next())
+            .map(|turbo| &turbo.def(catalogue).does);
+        // Engine parts sit in the long block, on the engine and in the car, turbos on the
+        // manifold's mounts (none: the slot's first part, which stands for none).
         for (slot, chosen) in parts.chosen.iter_mut().enumerate() {
+            if catalogue.slots[slot].mounted {
+                *chosen = match turbo {
+                    Some(&Does::EnginePart { slot: s, part }) if s == slot => part,
+                    _ => 0,
+                };
+                continue;
+            }
             let kind = Kind::EnginePart(slot);
             let part = [block, engine, self]
                 .iter()
@@ -508,6 +549,70 @@ impl Item {
         let parts = build.install(parts)?;
         Ok((build, parts))
     }
+}
+
+/// Why `item`'s tree breaks the engines' rules, if it does: a part in an engine of another
+/// family than it's made for (`PartDef::engines`), a manifold whose turbo mounts aren't
+/// all empty or all the same turbo set alike, an engine with a turbo and a supercharger.
+pub fn engine_misfit(catalogue: &Catalogue, item: &Item) -> Option<String> {
+    let def = catalogue.defs.get(item.def)?;
+    let defs = |item: &Item| catalogue.defs.get(item.def);
+    if def.kind == Kind::Manifold {
+        let mounts: Vec<&Option<Item>> = (def.slots.iter().zip(&item.slots))
+            .filter(|(slot, _)| slot.kind == Kind::Turbo)
+            .map(|(_, turbo)| turbo)
+            .collect();
+        let turbos: Vec<&Item> = mounts.iter().filter_map(|turbo| turbo.as_ref()).collect();
+        if let Some(first) = turbos.first() {
+            if turbos.len() < mounts.len() {
+                return Some(format!("The {} takes a turbo on every mount", def.name));
+            }
+            if (turbos.iter()).any(|turbo| turbo.def != first.def || turbo.knobs != first.knobs) {
+                return Some(format!("The turbos on the {} must be the same", def.name));
+            }
+        }
+    }
+    if def.kind == Kind::Engine {
+        let block = (def.slots.iter().zip(&item.slots))
+            .find(|(slot, _)| slot.kind == Kind::LongBlock)
+            .and_then(|(_, block)| block.as_ref());
+        if let Some(Does::Block { family, version }) = block.and_then(defs).map(|d| &d.does)
+            && let Some(family) = catalogue.families.get(*family)
+            && let Some(version) = family.versions.get(*version)
+        {
+            let fits = |engines: &[String]| {
+                engines.is_empty()
+                    || (engines.iter()).any(|e| *e == family.name || *e == version.code)
+            };
+            if let Some(part) = (item.all().into_iter())
+                .filter_map(defs)
+                .find(|part| !fits(&part.engines))
+            {
+                return Some(format!(
+                    "The {} isn't made for the {} {}",
+                    part.name.to_lowercase(),
+                    version.code,
+                    version.name
+                ));
+            }
+        }
+        let parts = item.all();
+        let turbo = (parts.iter())
+            .filter_map(|part| defs(part))
+            .any(|part| part.kind == Kind::Turbo);
+        let supercharger = (parts.iter()).filter_map(|part| defs(part)).any(|part| {
+            let Does::EnginePart { slot, part } = part.does else {
+                return false;
+            };
+            (catalogue.slots.get(slot).and_then(|s| s.parts.get(part))).is_some_and(|part| {
+                (part.effects.iter()).any(|effect| matches!(effect, Effect::Supercharger(_)))
+            })
+        });
+        if turbo && supercharger {
+            return Some("A turbo and a supercharger don't go together".into());
+        }
+    }
+    (item.slots.iter().flatten()).find_map(|child| engine_misfit(catalogue, child))
 }
 
 /// What a Roots blower needs (and a bonnet with a cut-out provides).
@@ -779,6 +884,44 @@ pub fn assemble(
                 engine_part(slot)
             })?;
         }
+        swap(catalogue, engine, Kind::Manifold, paint, |_, _| {
+            let does = Does::Manifold {
+                family: parts.family,
+                manifold: parts.manifold,
+            };
+            def(Kind::Manifold, does)
+        })?;
+        // The turbo on every one of its mounts (the same items if they're the same), or
+        // on none.
+        let turbo = (0..slots)
+            .find(|&slot| catalogue.slots[slot].mounted && parts.chosen[slot] != 0)
+            .map(|slot| def(Kind::Turbo, engine_does(parts, slot)))
+            .transpose()?;
+        let holders = engine.def(catalogue).slots.clone();
+        for (slot, manifold) in holders.iter().zip(&mut engine.slots) {
+            let (Kind::Manifold, Some(manifold)) = (slot.kind, manifold) else {
+                continue;
+            };
+            let mounts = manifold.def(catalogue).slots.clone();
+            let mut mounted = false;
+            for (slot, place) in mounts.iter().zip(&mut manifold.slots) {
+                if slot.kind != Kind::Turbo {
+                    continue;
+                }
+                mounted = true;
+                *place = match turbo {
+                    Some(d) if place.as_ref().is_some_and(|old| old.def == d) => place.take(),
+                    Some(d) => Some(Item::new(catalogue, d, paint)),
+                    None => None,
+                };
+            }
+            if turbo.is_some() && !mounted {
+                return Err(Unfit(format!(
+                    "the {} has no mounts for a turbo",
+                    manifold.def(catalogue).name.to_lowercase()
+                )));
+            }
+        }
         def(Kind::Engine, Does::Engine)
     })?;
     for slot in 0..slots {
@@ -991,6 +1134,7 @@ mod tests {
         build.final_drive = 4.1;
         build.paint = 2;
         parts.chosen[crate::catalogue::TURBO] = 2;
+        parts.manifold = parts.turbo_manifold().unwrap();
         parts.boost = 0.9;
         parts.ecu = EcuModel::Programmable;
         let parts = build.install(parts).unwrap();

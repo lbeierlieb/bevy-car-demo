@@ -1619,7 +1619,11 @@ mod tests {
         assert!(no_cat.muffle < high_flow.muffle && high_flow.muffle < stock.muffle);
         let big_bore = ExhaustSound::of(&with("Exhaust pipe", 1));
         assert!(big_bore.bore > 1.1);
-        let [short, long] = [1, 2].map(|part| ExhaustSound::of(&with("Exhaust manifold", part)));
+        let [short, long] = [1, 2].map(|manifold| {
+            let mut parts = Parts::stock();
+            parts.manifold = manifold;
+            ExhaustSound::of(&parts.hardware())
+        });
         assert!(short.header > stock.header && stock.header > long.header);
         assert_eq!(
             ExhaustSound::of(&with(crate::catalogue::TURBO_SLOT, 2)).turbine,

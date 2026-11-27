@@ -32,11 +32,12 @@ mod wire;
 #[cfg(any(test, not(target_arch = "wasm32")))]
 pub use chassis::DEFAULT_CHASSIS;
 #[cfg(any(test, not(target_arch = "wasm32")))]
-pub use parts::{HEADERS, INTERCOOLER, PISTONS, TURBO};
+pub use parts::{INTERCOOLER, PISTONS, SUPERCHARGER, TURBO};
 
-/// The built-in catalogue's slot for a turbo or a supercharger, and its superchargers (the
-/// game draws them by these names).
-pub const TURBO_SLOT: &str = "Turbo or supercharger";
+/// The built-in catalogue's slots for turbos (on the exhaust manifold's mounts) and for a
+/// supercharger, and its superchargers (the game draws them by these names).
+pub const TURBO_SLOT: &str = "Turbo";
+pub const SUPERCHARGER_SLOT: &str = "Supercharger";
 pub const ROOTS: &str = "Roots blower";
 pub const CENTRIFUGAL: &str = "Centrifugal supercharger";
 

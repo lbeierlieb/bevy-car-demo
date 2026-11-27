@@ -297,6 +297,29 @@ pub struct Intercooler {
     pub area: f32,
 }
 
+/// What an exhaust manifold's primaries end in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Collector {
+    /// A collector into the pipe (tuned headers, a cast manifold).
+    Tuned,
+    /// A turbine's inlet.
+    Turbine,
+}
+
+impl Collector {
+    pub const ALL: [Collector; 2] = [Collector::Tuned, Collector::Turbine];
+}
+
+/// How an exhaust manifold gathers the cylinders' exhaust: primaries of a length (m) into
+/// `branches` collectors, each taking as many cylinders (a V engine's pair of manifolds:
+/// two, one per bank; a 10-into-1: one).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Manifold {
+    pub primary_length: f32,
+    pub collector: Collector,
+    pub branches: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Exhaust {
     /// Header primary length from valve to collector (m).

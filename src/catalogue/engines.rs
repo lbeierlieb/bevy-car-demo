@@ -4,10 +4,10 @@
 use std::f32::consts::PI;
 
 use super::parts::SLOTS;
-use crate::physics::engine::families::{Family, Layout, Version, relative_size};
+use crate::physics::engine::families::{Family, Layout, ManifoldDef, Version, relative_size};
 use crate::physics::engine::hardware::{
-    BottomEnd, CamProfile, Cooling, EngineHardware, Exhaust, FLOAT_MARGIN, Intake, ROD_MARGIN,
-    ValveLayout, ValveTrain,
+    BottomEnd, CamProfile, Collector, Cooling, EngineHardware, Exhaust, FLOAT_MARGIN, Intake,
+    Manifold, ROD_MARGIN, ValveLayout, ValveTrain,
 };
 use crate::physics::engine::parts::{Preset, round_to};
 
@@ -178,6 +178,83 @@ fn version(
 
 fn none(_: &mut Preset) {}
 
+/// A manifold: its id and name, primaries (mm) into `branches` collectors, or into as many
+/// turbine inlets (`mounts`).
+fn manifold(id: &str, name: &str, primary: f32, branches: u32, mounts: bool) -> ManifoldDef {
+    ManifoldDef {
+        id: id.into(),
+        name: name.into(),
+        manifold: Manifold {
+            primary_length: primary / 1000.0,
+            collector: if mounts {
+                Collector::Turbine
+            } else {
+                Collector::Tuned
+            },
+            branches,
+        },
+        mounts,
+    }
+}
+
+/// The B series' manifolds: the cast 4-into-1 (its primaries the blocks' headers), short
+/// and long-tube headers, and a turbo manifold (the turbo where the cast one's collector is).
+fn b_manifolds() -> Vec<ManifoldDef> {
+    vec![
+        manifold(
+            "b.manifold.stock",
+            "Stock cast 4-into-1 manifold",
+            700.0,
+            1,
+            false,
+        ),
+        manifold("b.headers.short", "Short 4-into-1 headers", 390.0, 1, false),
+        manifold(
+            "b.headers.long-tube",
+            "Long-tube 4-2-1 headers",
+            960.0,
+            1,
+            false,
+        ),
+        manifold("b.manifold.turbo", "Turbo manifold", 700.0, 1, true),
+    ]
+}
+
+/// The R series' manifolds, a pair (one per bank) but for the 10-into-1, whose primaries
+/// cross over the valley from the far bank to one big turbo.
+fn r_manifolds() -> Vec<ManifoldDef> {
+    vec![
+        manifold(
+            "r.manifolds.stock",
+            "Stock cast manifolds (pair)",
+            500.0,
+            2,
+            false,
+        ),
+        manifold(
+            "r.headers.long-tube",
+            "Long-tube headers (pair)",
+            690.0,
+            2,
+            false,
+        ),
+        manifold(
+            "r.manifolds.turbo",
+            "Turbo manifolds (pair)",
+            500.0,
+            2,
+            true,
+        ),
+        manifold(
+            "r.manifold.turbo-crossover",
+            "10-into-1 turbo manifold (crossover)",
+            900.0,
+            1,
+            true,
+        ),
+    ]
+}
+
 pub fn families() -> Vec<Family> {
     vec![
         Family {
@@ -232,6 +309,7 @@ pub fn families() -> Vec<Family> {
                     none,
                 ),
             ],
+            manifolds: b_manifolds(),
         },
         Family {
             name: "R-series V10".into(),
@@ -265,6 +343,7 @@ pub fn families() -> Vec<Family> {
                 },
                 none,
             )],
+            manifolds: r_manifolds(),
         },
     ]
 }
@@ -304,6 +383,21 @@ mod tests {
                 assert_eq!(
                     found.map(|(f, _)| &catalogue.families[f].name),
                     Some(&family.name)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_factory_manifolds_are_the_blocks_headers() {
+        for family in &builtin().families {
+            for version in &family.versions {
+                let manifold = &family.manifolds[version.preset.manifold];
+                assert!(!manifold.mounts, "{}", version.code);
+                assert_eq!(
+                    manifold.manifold.primary_length, version.block.exhaust.header_length,
+                    "{}",
+                    version.code
                 );
             }
         }

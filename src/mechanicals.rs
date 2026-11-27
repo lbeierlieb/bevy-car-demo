@@ -126,11 +126,13 @@ fn engine_bay(
     };
     let family = &catalogue.families[family];
     let cylinders = family.versions[version].block.cylinders.max(1) as usize;
-    use crate::catalogue::{CENTRIFUGAL, ROOTS, TURBO_SLOT};
-    let charger = named(TURBO_SLOT);
+    use crate::catalogue::{CENTRIFUGAL, ROOTS, SUPERCHARGER_SLOT};
+    let charger = named(SUPERCHARGER_SLOT);
     let roots = charger == Some(ROOTS);
     let centrifugal = charger == Some(CENTRIFUGAL);
-    let turbo = charger.is_some_and(|turbo| turbo != "None") && !roots && !centrifugal;
+    // The exhaust manifold, and the turbos on its mounts.
+    let manifold = engine.fitted(catalogue, Kind::Manifold).next();
+    let turbo = manifold.is_some_and(|m| m.fitted(catalogue, Kind::Turbo).next().is_some());
     if turbo && named("Intercooler").is_some_and(|cooler| cooler != "None") {
         let y = body.floor + 0.12;
         b.cuboid(
@@ -176,10 +178,16 @@ fn engine_bay(
         _ => 0.035,
     };
     // The exhaust manifold: primaries from the head to a collector behind the engine,
-    // lower the longer they are.
-    let (out, drop) = match named("Exhaust manifold") {
-        Some("Short headers") => (0.4, 0.4),
-        Some("Long-tube headers") => (0.5, 0.05),
+    // lower the longer they are (than the family's own manifold's).
+    let primaries = |item: &Item| match item.def(catalogue).does {
+        Does::Manifold { family, manifold } => (catalogue.families.get(family))
+            .and_then(|f| Some((f.manifolds.get(manifold)?, f.manifolds.first()?)))
+            .map(|(m, stock)| m.manifold.primary_length / stock.manifold.primary_length),
+        _ => None,
+    };
+    let (out, drop) = match manifold.and_then(primaries) {
+        Some(share) if share < 0.8 => (0.4, 0.4),
+        Some(share) if share > 1.2 => (0.5, 0.05),
         _ => (0.46, 0.22),
     };
     let (collectors, mouth) = if vee {
@@ -715,13 +723,16 @@ mod tests {
         // A turbo shows.
         let chassis = &catalogue.chassis[0];
         let car = &catalogue.trims[0].car;
-        let mut turbo = car.clone();
-        let slot = (catalogue.slots.iter())
-            .position(|s| s.name == crate::catalogue::TURBO_SLOT)
-            .unwrap();
-        let def = (catalogue.defs.iter())
-            .position(|d| d.does == Does::EnginePart { slot, part: 2 })
-            .unwrap();
+        let setup = crate::car::CarSetup::factory(0, 0);
+        let mut parts = setup.engine.parts.clone();
+        parts.chosen[crate::catalogue::TURBO] = 2;
+        parts.manifold = parts.turbo_manifold().unwrap();
+        let turbo = crate::items::assemble(&catalogue, Some(car), &setup.build, &parts).unwrap();
+        assert_eq!(
+            part(&catalogue, &turbo, crate::catalogue::TURBO_SLOT),
+            Some("Medium")
+        );
+        let slot = crate::catalogue::SUPERCHARGER;
         fn swap(item: &mut Item, catalogue: &Catalogue, slot: usize, def: usize) {
             let kinds: Vec<Kind> = (item.def(catalogue).slots.iter()).map(|s| s.kind).collect();
             for (kind, child) in kinds.into_iter().zip(&mut item.slots) {
@@ -734,18 +745,13 @@ mod tests {
                 }
             }
         }
-        swap(&mut turbo, &catalogue, slot, def);
-        assert_eq!(
-            part(&catalogue, &turbo, crate::catalogue::TURBO_SLOT),
-            Some("Medium")
-        );
         let (plain, boosted) = (
             triangles(&mesh(&catalogue, chassis, car)),
             triangles(&mesh(&catalogue, chassis, &turbo)),
         );
         assert!(boosted > plain, "{boosted} vs {plain}");
         // So do the superchargers.
-        for part in [4, 5] {
+        for part in [1, 2] {
             let def = (catalogue.defs.iter())
                 .position(|d| d.does == Does::EnginePart { slot, part })
                 .unwrap();

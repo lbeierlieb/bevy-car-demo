@@ -150,7 +150,8 @@ impl Condition {
             match wear {
                 Wear::HeadGasket => damage.head_gasket = at(0),
                 Wear::Bearings => damage.bearings = at(0),
-                Wear::Turbo => damage.turbo = at(0),
+                // Any turbo failed fails the boost.
+                Wear::Turbo => damage.turbo = damage.turbo.max(at(0)),
                 Wear::Clutch => clutch = at(0),
                 Wear::Gears => gears = std::array::from_fn(at),
                 _ => {}

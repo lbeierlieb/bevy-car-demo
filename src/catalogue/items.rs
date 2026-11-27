@@ -16,10 +16,11 @@ use crate::physics::engine::hardware::CamDrive;
 use crate::physics::tire::STREET;
 use crate::wheels::Wheel;
 
-/// Where the catalogue's engine slots are: in the long block, on the engine, or in the
-/// car (by their places in `slots`).
+/// Where the catalogue's engine slots are: in the long block, on the engine (the exhaust
+/// manifold, a slot of its own, after the first), or in the car (by their places in
+/// `slots`). The turbos' slot is none of them: turbos go on the manifold's mounts.
 pub const LONG_BLOCK_SLOTS: [usize; 9] = [0, 1, 2, 3, 4, 5, 6, 7, 19];
-pub const ENGINE_SLOTS: [usize; 6] = [8, 9, 10, 11, 12, 18];
+pub const ENGINE_SLOTS: [usize; 5] = [8, 9, 10, 12, 18];
 pub const CAR_SLOTS: [usize; 5] = [16, 14, 15, 17, 13];
 
 /// `catalogue` with its part definitions and trims.
@@ -52,6 +53,7 @@ struct Def {
     kind: Kind,
     does: Does,
     fits: Vec<String>,
+    engines: Vec<String>,
     size: [f32; 3],
     mass: f32,
     painted: bool,
@@ -72,6 +74,7 @@ impl Def {
             kind,
             does,
             fits: Vec::new(),
+            engines: Vec::new(),
             size,
             mass,
             painted: false,
@@ -92,6 +95,11 @@ impl Def {
 
     fn fits(mut self, chassis: &str) -> Self {
         self.fits.push(chassis.into());
+        self
+    }
+
+    fn engines(mut self, engine: &str) -> Self {
+        self.engines.push(engine.into());
         self
     }
 
@@ -127,6 +135,7 @@ impl Def {
             kind: self.kind,
             does: self.does,
             fits: self.fits,
+            engines: self.engines,
             size: self.size,
             mass: self.mass,
             price: 0,
@@ -246,10 +255,9 @@ fn engine_part_size(name: &str) -> ([f32; 3], f32) {
         "Camshafts" => ([0.6, 0.1, 0.1], 4.0),
         "Valve springs" | "Cam phasers" => ([0.3, 0.2, 0.1], 1.5),
         "Intake manifold" => ([0.5, 0.3, 0.25], 4.0),
-        "Exhaust manifold" => ([0.5, 0.3, 0.3], 6.0),
         "Air filter" => ([0.3, 0.3, 0.2], 1.0),
         "Throttle body" => ([0.15, 0.15, 0.15], 1.0),
-        super::TURBO_SLOT => ([0.35, 0.3, 0.3], 9.0),
+        super::TURBO_SLOT | super::SUPERCHARGER_SLOT => ([0.35, 0.3, 0.3], 9.0),
         "Intercooler" => ([0.7, 0.2, 0.1], 5.0),
         "Catalyst" => ([0.5, 0.2, 0.2], 5.0),
         "Silencer" => ([0.6, 0.35, 0.2], 7.0),
@@ -650,6 +658,7 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
     let engine_slot = |s: usize| slot(&catalogue.slots[s].name, Kind::EnginePart(s), true);
     let mut engine_slots = vec![slot("Long block", Kind::LongBlock, true)];
     engine_slots.extend(ENGINE_SLOTS.map(engine_slot));
+    engine_slots.insert(2, slot("Exhaust manifold", Kind::Manifold, true));
     add(Def::new(
         "engine",
         "Engine",
@@ -682,23 +691,67 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             add(def);
         }
     }
+    for (f, family) in catalogue.families.iter().enumerate() {
+        let cylinders = family.versions.first().map_or(4, |v| v.block.cylinders) as f32;
+        for (m, made) in family.manifolds.iter().enumerate() {
+            // A turbo mount on each branch: a V's on each bank, an inline engine's in turn.
+            let branches = made.mounts();
+            let mounts = (0..branches).map(|branch| {
+                let name = match (branches, family.layout.is_vee(), branch) {
+                    (1, ..) => "Turbo".to_string(),
+                    (2, true, 0) => "Turbo, left bank".to_string(),
+                    (2, true, _) => "Turbo, right bank".to_string(),
+                    (2, false, 0) => "Turbo, front".to_string(),
+                    (2, false, _) => "Turbo, rear".to_string(),
+                    _ => format!("Turbo {}", branch + 1),
+                };
+                slot(&name, Kind::Turbo, false)
+            });
+            // Cast iron, heavier with a turbine flange; a pair as long as the engine.
+            let mass = 1.5 * cylinders * if made.mounts { 1.3 } else { 1.0 };
+            let size = [family.length.max(0.5), 0.35, 0.3];
+            add(Def::new(
+                &made.id,
+                &made.name,
+                Kind::Manifold,
+                Does::Manifold {
+                    family: f,
+                    manifold: m,
+                },
+                size,
+                mass,
+            )
+            .engines(&family.name)
+            .slots(mounts.collect()));
+        }
+    }
     for (s, kind) in catalogue.slots.iter().enumerate() {
         let (size, mass) = engine_part_size(&kind.name);
         for (p, part) in kind.parts.iter().enumerate() {
-            // The turbo's slot keeps its parts' old ids (saved cars have them).
+            // Nothing on a mount is an empty mount.
+            if kind.mounted && p == 0 {
+                continue;
+            }
+            // The turbos and superchargers keep their parts' old ids (saved cars have
+            // them), from when they shared a slot.
             let prefix = match kind.name.as_str() {
-                super::TURBO_SLOT => "turbocharger".to_string(),
+                super::TURBO_SLOT | super::SUPERCHARGER_SLOT => "turbocharger".to_string(),
                 name => slug(name),
+            };
+            let slot_kind = if kind.mounted {
+                Kind::Turbo
+            } else {
+                Kind::EnginePart(s)
             };
             let mut def = Def::new(
                 &format!("{prefix}.{}", slug(&part.name)),
                 &format!("{} ({})", part.name, kind.name.to_lowercase()),
-                Kind::EnginePart(s),
+                slot_kind,
                 Does::EnginePart { slot: s, part: p },
                 size,
                 mass,
             );
-            // "None": no turbo, no intercooler, no catalyst.
+            // "None": no supercharger, no intercooler, no catalyst.
             def.absent = part.name == "None";
             // What wears in the engine sits on the part it's in.
             def.wear = match kind.name.as_str() {
@@ -708,7 +761,7 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
                 "Cylinder head" => Some(Wear::Valves),
                 "Head gasket" => Some(Wear::HeadGasket),
                 "Crankshaft" => Some(Wear::Bearings),
-                super::TURBO_SLOT if !is_supercharger(part) => Some(Wear::Turbo),
+                _ if kind.mounted => Some(Wear::Turbo),
                 _ => None,
             };
             // Pistons come in the bore sizes.
@@ -737,12 +790,6 @@ fn moves_overhead_cams(part: &crate::physics::engine::parts::Part) -> bool {
         }
         _ => false,
     })
-}
-
-/// Whether `part` is a supercharger.
-fn is_supercharger(part: &crate::physics::engine::parts::Part) -> bool {
-    use crate::physics::engine::parts::Effect;
-    (part.effects.iter()).any(|effect| matches!(effect, Effect::Supercharger(_)))
 }
 
 /// What sets a stock car apart: its factory engine, wheels (front and rear), rims,

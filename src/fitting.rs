@@ -18,7 +18,11 @@
 //!   pressure), dynos the engine's (cam timing, boost) and the ECU's tune, paint shops
 //!   paint any painted part.
 //! - A new part is one the shop sells (its list in the shops file), made for the car's
-//!   chassis; parts brought come from the trunk or what the shop holds for the player.
+//!   chassis (and an engine's part for the engine's family: exhaust manifolds); parts
+//!   brought come from the trunk or what the shop holds for the player.
+//! - Turbos go on an exhaust manifold's mounts: on every mount the same turbo, or none
+//!   (`mounts` are the paths to fill at once); a turbo and a supercharger exclude each
+//!   other (`items::engine_misfit`).
 //! - What comes off goes into the trunk while there's room, else the shop holds it (up to
 //!   `SHOP_HOLD`), else it's thrown away. A part standing for nothing (no turbo) is never
 //!   kept.
@@ -258,6 +262,66 @@ fn chassis_name<'a>(catalogue: &'a Catalogue, car: &Item) -> &'a str {
 /// Whether `def` is made for the chassis called `chassis` (or any).
 pub fn made_for(def: &PartDef, chassis: &str) -> bool {
     def.fits.is_empty() || def.fits.iter().any(|c| c == chassis)
+}
+
+/// The engine family and version of the engine on the way down `path` (in the car or a
+/// loose part), if there's one with a long block.
+pub fn engine_on(
+    catalogue: &Catalogue,
+    tree: (&Item, &[Item], &[Item]),
+    path: &[u8],
+) -> Option<(usize, usize)> {
+    let (root, rest) = root_of(tree.0, tree.1, tree.2, path)?;
+    let engine = (0..=rest.len())
+        .filter_map(|n| item_at(root, &rest[..n]))
+        .find(|item| item.def(catalogue).kind == Kind::Engine)?;
+    match engine
+        .fitted(catalogue, Kind::LongBlock)
+        .next()?
+        .def(catalogue)
+        .does
+    {
+        Does::Block { family, version } => Some((family, version)),
+        _ => None,
+    }
+}
+
+/// Whether `def` is made for an engine of `family`'s `version` (or any; parts with no
+/// engine named are made for any, and anything goes where there's no engine).
+pub fn made_for_engine(
+    catalogue: &Catalogue,
+    def: &PartDef,
+    engine: Option<(usize, usize)>,
+) -> bool {
+    let Some((family, version)) = engine else {
+        return true;
+    };
+    let Some(family) = catalogue.families.get(family) else {
+        return true;
+    };
+    let code = family.versions.get(version).map(|v| v.code.as_str());
+    def.engines.is_empty()
+        || (def.engines.iter()).any(|e| *e == family.name || Some(e.as_str()) == code)
+}
+
+/// The turbo mounts of the manifold holding the mount at `path`, if it's a mount: a shop
+/// fits a turbo on all of them at once.
+pub fn mounts(catalogue: &Catalogue, tree: (&Item, &[Item], &[Item]), path: &[u8]) -> Vec<Path> {
+    let Some((Kind::Turbo, _)) = slot_kinds_in(catalogue, tree, path) else {
+        return Vec::new();
+    };
+    let (holder_path, _) = path.split_at(path.len() - 1);
+    let Some(manifold) = item_in(tree, holder_path) else {
+        return Vec::new();
+    };
+    (manifold.def(catalogue).slots.iter().enumerate())
+        .filter(|(_, slot)| slot.kind == Kind::Turbo)
+        .map(|(i, _)| {
+            let mut mount = holder_path.to_vec();
+            mount.push(i as u8);
+            mount
+        })
+        .collect()
 }
 
 /// What a shop sells that goes into a slot of `kind` in a car of `chassis`: part
@@ -626,6 +690,12 @@ impl<'a> Bench<'a> {
     pub fn finish(mut self) -> Result<Done, String> {
         let catalogue = self.catalogue;
         if let Some(why) = needs_missing(catalogue, &self.car) {
+            return Err(why);
+        }
+        let mut all = std::iter::once(&self.car)
+            .chain(&self.cargo)
+            .chain(&self.held);
+        if let Some(why) = all.find_map(|item| crate::items::engine_misfit(catalogue, item)) {
             return Err(why);
         }
         if !self.car.fine(catalogue) {
@@ -1217,7 +1287,7 @@ mod tests {
             .unwrap()
             .def(&catalogue);
         let turbo = (engine_def.slots.iter())
-            .position(|slot| slot.kind == Kind::EnginePart(crate::catalogue::TURBO))
+            .position(|slot| slot.kind == Kind::EnginePart(crate::catalogue::SUPERCHARGER))
             .unwrap() as u8;
         let blower = Work::Fit {
             slots: vec![vec![engine, turbo]],
@@ -1255,6 +1325,193 @@ mod tests {
                 .supercharger
                 .is_some_and(|s| !s.roots)
         );
+    }
+
+    /// The path of the engine's exhaust manifold in `spec`'s car.
+    fn manifold_at(catalogue: &Catalogue, spec: &CarSpec) -> Path {
+        let engine = slots_of(catalogue, &spec.car, Kind::Engine)[0];
+        let engine_def = item_at(&spec.car, &[engine]).unwrap().def(catalogue);
+        let manifold = (engine_def.slots.iter())
+            .position(|slot| slot.kind == Kind::Manifold)
+            .unwrap();
+        vec![engine, manifold as u8]
+    }
+
+    /// The turbos fitted on `spec`'s manifold, by their ids (empty mounts as "-").
+    fn turbos(catalogue: &Catalogue, spec: &CarSpec) -> Vec<String> {
+        let manifold = item_at(&spec.car, &manifold_at(catalogue, spec)).unwrap();
+        (manifold.def(catalogue).slots.iter().zip(&manifold.slots))
+            .filter(|(slot, _)| slot.kind == Kind::Turbo)
+            .map(|(_, turbo)| {
+                turbo
+                    .as_ref()
+                    .map_or("-".into(), |t| t.def(catalogue).id.clone())
+            })
+            .collect()
+    }
+
+    const TUNING: &[&str] = &["b.*", "r.*", "turbocharger.*"];
+
+    #[test]
+    fn long_tubes_have_no_mount_for_a_turbo() {
+        let catalogue = builtin();
+        let before = spec(0);
+        let tuning = shop(ShopKind::Tuning, TUNING);
+        let manifold = manifold_at(&catalogue, &before);
+        let headers = Work::Fit {
+            slots: vec![manifold.clone()],
+            supply: new(&catalogue, "b.headers.long-tube"),
+        };
+        let done = run(&catalogue, &tuning, &before, std::slice::from_ref(&headers)).unwrap();
+        assert!(turbos(&catalogue, &done.spec).is_empty());
+        assert_eq!(done.spec.parts.manifold, 2);
+        let carried: Vec<&str> = (done.spec.cargo.iter())
+            .map(|item| item.def(&catalogue).id.as_str())
+            .collect();
+        assert_eq!(carried, ["b.manifold.stock"]);
+        // Nowhere to put a turbo on them; on the turbo manifold, it goes on its mount.
+        let mut mount = manifold.clone();
+        mount.push(0);
+        let turbo = Work::Fit {
+            slots: vec![mount],
+            supply: new(&catalogue, "turbocharger.medium"),
+        };
+        assert!(run(&catalogue, &tuning, &before, &[headers, turbo.clone()]).is_err());
+        let turbo_manifold = Work::Fit {
+            slots: vec![manifold],
+            supply: new(&catalogue, "b.manifold.turbo"),
+        };
+        let done = run(&catalogue, &tuning, &before, &[turbo_manifold, turbo]).unwrap();
+        assert_eq!(turbos(&catalogue, &done.spec), ["turbocharger.medium"]);
+        let hardware = done.spec.parts.hardware();
+        assert!(hardware.turbo.is_some());
+        // Until milestone 2 the B16 with the turbo manifold and the medium turbo is the
+        // engine the old turbo slot made (the maps baked for it).
+        let mut old = crate::physics::engine::parts::Parts::turbo();
+        old.chosen[crate::catalogue::PISTONS] = 0;
+        old.header_room = done.spec.parts.header_room;
+        assert_eq!(hardware, old.hardware());
+    }
+
+    #[test]
+    fn a_turbo_goes_on_every_mount_alike() {
+        let catalogue = builtin();
+        let before = CarSpec::of(&CarSetup::factory(1, 0));
+        let tuning = shop(ShopKind::Tuning, TUNING);
+        let manifold = manifold_at(&catalogue, &before);
+        let pair = Work::Fit {
+            slots: vec![manifold.clone()],
+            supply: new(&catalogue, "r.manifolds.turbo"),
+        };
+        // With the pair of turbo manifolds on, a mount is either side of it.
+        let mut bench = Bench::new(&catalogue, &tuning, &before, &[]);
+        bench.work(&pair).unwrap();
+        let tree = (&bench.car, &bench.cargo[..], &bench.held[..]);
+        let mut first = manifold.clone();
+        first.push(0);
+        let mounts = mounts(&catalogue, tree, &first);
+        assert_eq!(mounts.len(), 2);
+        assert!(super::mounts(&catalogue, tree, &manifold).is_empty());
+        let both = Work::Fit {
+            slots: mounts.clone(),
+            supply: new(&catalogue, "turbocharger.small"),
+        };
+        let done = run(&catalogue, &tuning, &before, &[pair.clone(), both]).unwrap();
+        assert_eq!(turbos(&catalogue, &done.spec), ["turbocharger.small"; 2]);
+        assert_eq!(done.spec.parts.chosen[crate::catalogue::TURBO], 1);
+        assert!(done.spec.parts.hardware().turbo.is_some());
+        // One side alone, or different turbos either side, won't do.
+        let fit = |mount: &Path, id: &str| Work::Fit {
+            slots: vec![mount.clone()],
+            supply: new(&catalogue, id),
+        };
+        let one = run(
+            &catalogue,
+            &tuning,
+            &before,
+            &[pair.clone(), fit(&mounts[0], "turbocharger.small")],
+        )
+        .unwrap_err();
+        assert!(one.contains("every mount"), "{one}");
+        let mixed = run(
+            &catalogue,
+            &tuning,
+            &before,
+            &[
+                pair,
+                fit(&mounts[0], "turbocharger.small"),
+                fit(&mounts[1], "turbocharger.large"),
+            ],
+        )
+        .unwrap_err();
+        assert!(mixed.contains("the same"), "{mixed}");
+        // The 10-into-1 has one mount, for one big turbo.
+        let crossover = Work::Fit {
+            slots: vec![manifold.clone()],
+            supply: new(&catalogue, "r.manifold.turbo-crossover"),
+        };
+        let done = run(
+            &catalogue,
+            &tuning,
+            &before,
+            &[crossover, fit(&first, "turbocharger.large")],
+        )
+        .unwrap();
+        assert_eq!(turbos(&catalogue, &done.spec), ["turbocharger.large"]);
+    }
+
+    #[test]
+    fn a_turbo_and_a_supercharger_dont_go_together() {
+        let catalogue = builtin();
+        let before = spec(0);
+        let tuning = shop(ShopKind::Tuning, TUNING);
+        let manifold = manifold_at(&catalogue, &before);
+        let mut mount = manifold.clone();
+        mount.push(0);
+        let engine = manifold[0];
+        let engine_def = item_at(&before.car, &[engine]).unwrap().def(&catalogue);
+        let charger = (engine_def.slots.iter())
+            .position(|slot| slot.kind == Kind::EnginePart(crate::catalogue::SUPERCHARGER))
+            .unwrap() as u8;
+        let works = [
+            Work::Fit {
+                slots: vec![manifold],
+                supply: new(&catalogue, "b.manifold.turbo"),
+            },
+            Work::Fit {
+                slots: vec![mount],
+                supply: new(&catalogue, "turbocharger.small"),
+            },
+            Work::Fit {
+                slots: vec![vec![engine, charger]],
+                supply: new(&catalogue, "turbocharger.centrifugal-supercharger"),
+            },
+        ];
+        assert!(run(&catalogue, &tuning, &before, &works[..2]).is_ok());
+        let err = run(&catalogue, &tuning, &before, &works).unwrap_err();
+        assert!(err.contains("supercharger"), "{err}");
+    }
+
+    #[test]
+    fn a_manifold_fits_only_its_engine_family() {
+        let catalogue = builtin();
+        let before = CarSpec::of(&CarSetup::factory(1, 0));
+        let tuning = shop(ShopKind::Tuning, TUNING);
+        let manifold = manifold_at(&catalogue, &before);
+        let fit = |id: &str| Work::Fit {
+            slots: vec![manifold.clone()],
+            supply: new(&catalogue, id),
+        };
+        let err = run(&catalogue, &tuning, &before, &[fit("b.manifold.stock")]).unwrap_err();
+        assert!(err.contains("R80"), "{err}");
+        let done = run(&catalogue, &tuning, &before, &[fit("r.headers.long-tube")]).unwrap();
+        assert_eq!(done.spec.parts.manifold, 1);
+        // What the shop offers for the slot is only the family's.
+        let r = engine_on(&catalogue, (&before.car, &[], &[]), &manifold);
+        let b_stock = &catalogue.defs[usize::from(def(&catalogue, "b.manifold.stock"))];
+        let r_stock = &catalogue.defs[usize::from(def(&catalogue, "r.manifolds.stock"))];
+        assert!(!made_for_engine(&catalogue, b_stock, r));
+        assert!(made_for_engine(&catalogue, r_stock, r));
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! car it fits into. The catalogue says which there are (see `catalogue::engines` for
 //! the built-in ones).
 
-use super::hardware::EngineHardware;
+use super::hardware::{EngineHardware, Manifold};
 use super::parts::Preset;
 
 /// How the cylinders are arranged, which is what an engine sounds like.
@@ -99,6 +99,31 @@ pub struct Family {
     pub height: f32,
     pub mass: f32,
     pub versions: Vec<Version>,
+    /// The exhaust manifolds made for the family (the first is the factory's).
+    pub manifolds: Vec<ManifoldDef>,
+}
+
+/// An exhaust manifold made for an engine family: how it gathers the exhaust, and whether
+/// each of its branches has a mount for a turbo (a manifold without mounts can't carry
+/// one). One item, even when it's a pair (a V engine's, one per bank).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ManifoldDef {
+    /// Stable, for saved cars and items: e.g. `b.headers.long-tube`.
+    pub id: String,
+    pub name: String,
+    pub manifold: Manifold,
+    pub mounts: bool,
+}
+
+impl ManifoldDef {
+    /// How many turbos it carries when filled.
+    pub fn mounts(&self) -> u32 {
+        if self.mounts {
+            self.manifold.branches
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -102,14 +102,14 @@ mod tests {
     use crate::physics::engine::parts::Parts;
     use crate::physics::engine::{Engine, EngineBuild};
 
-    /// The stock 1.6 with the catalogue's supercharger `name` in the turbo's slot.
+    /// The stock 1.6 with the catalogue's supercharger `name` in its slot.
     pub fn charged(name: &str) -> EngineHardware {
         let mut parts = Parts::stock();
-        let slot = &parts.catalogue.slots[crate::catalogue::TURBO];
+        let slot = &parts.catalogue.slots[crate::catalogue::SUPERCHARGER];
         let part = (slot.parts.iter())
             .position(|part| part.name == name)
             .expect("a supercharger");
-        parts.chosen[crate::catalogue::TURBO] = part;
+        parts.chosen[crate::catalogue::SUPERCHARGER] = part;
         parts.hardware()
     }
 

@@ -11,8 +11,8 @@ use bevy_egui::egui;
 use crate::car::Car;
 use crate::catalogue::Catalogue;
 use crate::fitting::{
-    HELD, IN_TRUNK, Path, Supply, Work, bore_name, fits_into, item_in, loose, made_for, new_paints,
-    slot_kinds_in, wares, wheel_of,
+    HELD, IN_TRUNK, Path, Supply, Work, bore_name, engine_on, fits_into, item_in, loose, made_for,
+    made_for_engine, mounts, new_paints, slot_kinds_in, wares, wheel_of,
 };
 use crate::items::{Does, Item, Kind, OVERSIZES};
 use crate::menu::kit;
@@ -121,6 +121,23 @@ impl<'a> Bench<'a> {
 
     fn kinds(&self, path: &[u8]) -> Option<(Kind, Option<Kind>)> {
         slot_kinds_in(self.catalogue, self.tree(), path)
+    }
+
+    /// What the shop sells for the slot of `kind` at `path`: made for the car's chassis
+    /// and for the engine there (exhaust manifolds).
+    fn wares_for(&self, kind: Kind, path: &[u8]) -> Vec<Supply> {
+        let engine = engine_on(self.catalogue, self.tree(), path);
+        let made = wares(self.catalogue, self.shop, kind, chassis_name(self));
+        (made.into_iter())
+            .filter(|ware| match ware {
+                Supply::Part { def, .. } => made_for_engine(
+                    self.catalogue,
+                    &self.catalogue.defs[usize::from(*def)],
+                    engine,
+                ),
+                _ => true,
+            })
+            .collect()
     }
 }
 
@@ -512,7 +529,7 @@ fn slot_screen(
         }
     }
     kit::section(ui, &format!("New from {}", bench.shop.name));
-    let made = wares(catalogue, bench.shop, kind, chassis_name(bench));
+    let made = bench.wares_for(kind, path);
     if kind == Kind::Wheel && bench.shop.kind == ShopKind::Tire {
         if kit::submenu(ui, "A new wheel: rim and tire").clicked() {
             *go = Some(Screen::NewWheel(path.clone()));
@@ -527,9 +544,10 @@ fn slot_screen(
     }
     kit::section(ui, "Brought");
     let chassis = chassis_name(bench);
+    let engine = engine_on(catalogue, bench.tree(), path);
     let fits = |item: &Item| {
         let def = item.def(catalogue);
-        def.kind == kind && made_for(def, chassis)
+        def.kind == kind && made_for(def, chassis) && made_for_engine(catalogue, def, engine)
     };
     let trunk = &bench.car.setup.cargo;
     let mut any = false;
@@ -637,6 +655,17 @@ fn fit_buttons(
     ask: &mut Option<Work>,
 ) {
     let car = &bench.car.setup.car;
+    // A turbo goes on every mount of its manifold at once.
+    let mounts = mounts(bench.catalogue, bench.tree(), path);
+    if mounts.len() > 1 {
+        if kit::button(ui, "Fit one on every mount").clicked() {
+            *ask = Some(Work::Fit {
+                slots: mounts,
+                supply,
+            });
+        }
+        return;
+    }
     if kit::button(ui, "Fit it here").clicked() {
         *ask = Some(Work::Fit {
             slots: vec![path.clone()],
@@ -670,7 +699,7 @@ fn ware_screen(
     let Some((kind, _)) = bench.kinds(path) else {
         return;
     };
-    let made = wares(catalogue, bench.shop, kind, chassis_name(bench));
+    let made = bench.wares_for(kind, path);
     let Some(ware) = made.get(n) else {
         return;
     };

@@ -1,15 +1,15 @@
 //! The built-in catalogue's engine parts and tire compounds.
 
-use super::{CENTRIFUGAL, ROOTS, TURBO_SLOT, TireCompound};
+use super::{CENTRIFUGAL, ROOTS, SUPERCHARGER_SLOT, TURBO_SLOT, TireCompound};
 use crate::physics::engine::parts::{
     Change, Effect, Field, Part, Readout, Regrind, Slot, SuperchargerKit, TurboKit,
 };
 use crate::physics::tire::{COMPOUNDS, RACE, SPORT, STREET, TOURING};
 
 pub const PISTONS: usize = 0;
-/// The exhaust manifold's slot: how long its primaries can be depends on the car.
-pub const HEADERS: usize = 9;
-pub const TURBO: usize = 12;
+/// The turbos' slot (they go on the exhaust manifold's mounts) and the superchargers'.
+pub const TURBO: usize = 11;
+pub const SUPERCHARGER: usize = 12;
 /// The intercooler's slot: it only matters with a turbo.
 pub const INTERCOOLER: usize = 13;
 /// How many slots there are.
@@ -66,6 +66,7 @@ fn slot(name: &str, about: &str, readout: Readout, parts: Vec<Part>) -> Slot {
         parts,
         readout,
         needs_turbo: false,
+        mounted: false,
     }
 }
 
@@ -262,17 +263,6 @@ pub fn slots() -> Vec<Slot> {
             ],
         ),
         slot(
-            "Exhaust manifold",
-            "Header length tunes the scavenging during the valve overlap. Long primaries \
-             need room around the engine: what fits depends on the car",
-            Readout::Headers,
-            vec![
-                stock(),
-                part("Short headers", &[times(HeaderLength, 0.56, 0.01)]),
-                part("Long-tube headers", &[times(HeaderLength, 1.375, 0.01)]),
-            ],
-        ),
-        slot(
             "Air filter",
             "Less restriction ahead of the throttle (or the compressor)",
             Readout::Nothing,
@@ -292,18 +282,29 @@ pub fn slots() -> Vec<Slot> {
                 part("Biggest", &[times(ThrottleDiameter, 1.18, 1e-3)]),
             ],
         ),
+        Slot {
+            mounted: true,
+            ..slot(
+                TURBO_SLOT,
+                "A small turbo spools early; a big one can hold more boost at high rpm. \
+                 Turbos go on a turbo manifold's mounts, the same on each",
+                Readout::Nothing,
+                vec![
+                    part("None", &[]),
+                    part("Small", &[turbo(0.044, 0.048, 4.5e-4, 1.6e-5, 6e-4)]),
+                    part("Medium", &[turbo(0.05, 0.054, 6e-4, 2.5e-5, 3e-4)]),
+                    part("Large", &[turbo(0.058, 0.062, 8e-4, 4.2e-5, 3e-4)]),
+                ],
+            )
+        },
         slot(
-            TURBO_SLOT,
-            "A small turbo spools early; a big one can hold more boost at high rpm. A \
-             Roots blower boosts from idle, takes power off the crank and heats the charge \
-             (it sticks up through a bonnet with a cut-out); a centrifugal supercharger's \
-             boost rises with the revs",
+            SUPERCHARGER_SLOT,
+            "A Roots blower boosts from idle, takes power off the crank and heats the \
+             charge (it sticks up through a bonnet with a cut-out); a centrifugal \
+             supercharger's boost rises with the revs. Not with a turbo",
             Readout::Nothing,
             vec![
                 part("None", &[]),
-                part("Small", &[turbo(0.044, 0.048, 4.5e-4, 1.6e-5, 6e-4)]),
-                part("Medium", &[turbo(0.05, 0.054, 6e-4, 2.5e-5, 3e-4)]),
-                part("Large", &[turbo(0.058, 0.062, 8e-4, 4.2e-5, 3e-4)]),
                 part(
                     ROOTS,
                     &[Effect::Supercharger(SuperchargerKit {

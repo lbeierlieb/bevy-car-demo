@@ -7,7 +7,7 @@
 //! means baking the maps again; the rest act live.
 
 use super::ecu::EcuModel;
-use super::families::{Family, Version, relative_size};
+use super::families::{Family, ManifoldDef, Version, relative_size};
 use super::hardware::{
     CamProfile, Compressor, Diverter, EngineHardware, Intercooler, Turbine, Turbo, Wastegate,
 };
@@ -23,6 +23,9 @@ pub struct Slot {
     pub readout: Readout,
     /// Its parts only do something with a turbo (an intercooler).
     pub needs_turbo: bool,
+    /// Its parts go on the exhaust manifold's turbo mounts, one on each (turbos), not into
+    /// a slot of the engine's; the first stands for none.
+    pub mounted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -414,10 +417,12 @@ pub fn round_to(value: f32, step: f32) -> f32 {
 }
 
 /// What the factory fits to a version of an engine: a part per slot (by its place in the
-/// slot), the wastegate's spring and the ECU.
+/// slot), the exhaust manifold (by its place in the family's), the wastegate's spring and
+/// the ECU.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Preset {
     pub chosen: Vec<usize>,
+    pub manifold: usize,
     pub boost: f32,
     pub ecu: EcuModel,
 }
@@ -427,6 +432,7 @@ impl Preset {
     pub fn stock(slots: usize) -> Self {
         Self {
             chosen: vec![0; slots],
+            manifold: 0,
             boost: 0.6,
             ecu: EcuModel::Stock,
         }
@@ -444,6 +450,8 @@ pub struct Parts {
     pub version: usize,
     /// The part fitted in each of the catalogue's `slots`, by its place in the slot.
     pub chosen: Vec<usize>,
+    /// The exhaust manifold, by its place in the family's `manifolds`.
+    pub manifold: usize,
     /// How far the block is bored over (a step of `items::OVERSIZES`).
     pub bore: usize,
     /// Cam timing (crank degrees; intake advanced, exhaust retarded).
@@ -465,6 +473,7 @@ impl Parts {
             family,
             version,
             chosen: preset.chosen.clone(),
+            manifold: preset.manifold,
             bore: 0,
             intake_timing: 0.0,
             exhaust_timing: 0.0,
@@ -492,13 +501,25 @@ impl Parts {
         Self::factory("B16").expect("the 1.6 four")
     }
 
-    /// The 1.6 four turbocharged: low compression pistons and the medium turbo.
+    /// The 1.6 four turbocharged: low compression pistons, the turbo manifold and the
+    /// medium turbo on it.
     #[cfg(test)]
     pub fn turbo() -> Self {
         let mut parts = Self::stock();
         parts.chosen[crate::catalogue::PISTONS] = 1;
         parts.chosen[crate::catalogue::TURBO] = 2;
+        parts.manifold = parts.turbo_manifold().expect("a turbo manifold");
         parts
+    }
+
+    /// The family's exhaust manifold fitted.
+    pub fn manifold(&self) -> &ManifoldDef {
+        &self.family().manifolds[self.manifold]
+    }
+
+    /// The first of the family's manifolds with turbo mounts, if it has one.
+    pub fn turbo_manifold(&self) -> Option<usize> {
+        (self.family().manifolds.iter()).position(|manifold| manifold.mounts)
     }
 
     /// One cam works both the intake and the exhaust valves (a pushrod engine or a single
@@ -552,7 +573,10 @@ impl Parts {
         {
             hardware.bore = round_to(hardware.bore + mm * 1e-3, 1e-5);
         }
-        // Where the primaries the manifold should have don't fit, shorter ones are made.
+        // The manifold's primaries; where they don't fit, shorter ones are made.
+        if let Some(manifold) = self.family().manifolds.get(self.manifold) {
+            hardware.exhaust.header_length = manifold.manifold.primary_length;
+        }
         let room = round_to(self.header_room, 0.01);
         hardware.exhaust.header_length = hardware.exhaust.header_length.min(room);
         hardware.intake_timing = self.intake_timing;
@@ -593,6 +617,15 @@ impl Parts {
             format!("{name} ({detail})")
         }
     }
+
+    /// What the family's manifold `manifold` comes to on this engine, e.g. "Long-tube
+    /// 4-2-1 headers (960 mm)".
+    pub fn manifold_label(&self, manifold: usize) -> String {
+        let mut fitted = self.clone();
+        fitted.manifold = manifold;
+        let detail = Readout::Headers.of(&fitted.hardware());
+        format!("{} ({detail})", self.family().manifolds[manifold].name)
+    }
 }
 
 /// Whether `catalogue`'s parts all fit `parts`' slots.
@@ -604,7 +637,7 @@ pub fn fits(catalogue: &Catalogue, chosen: &[usize]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalogue::{HEADERS, INTERCOOLER, TURBO, builtin};
+    use crate::catalogue::{INTERCOOLER, TURBO, builtin};
 
     #[test]
     fn one_cam_in_the_block_moves_both_rows_of_valves() {
@@ -672,8 +705,33 @@ mod tests {
         assert_eq!(hardware.exhaust.header_length, 0.6);
         // It's still the factory's engine, in a tight car.
         assert_eq!(hardware.name, "B16 1.6 four");
-        parts.chosen[HEADERS] = 1;
+        parts.manifold = 1;
         assert_eq!(parts.hardware().exhaust.header_length, 0.39);
+    }
+
+    /// The manifolds' primaries are what the header parts made of the blocks' headers
+    /// before the manifolds were made for each family (short ones 0.56 times as long,
+    /// long tubes 1.375 times, rounded to centimetres), so no engine changed.
+    #[test]
+    fn the_manifolds_are_the_old_headers() {
+        let catalogue = builtin();
+        let length = |id: &str| {
+            (catalogue.families.iter().flat_map(|f| &f.manifolds))
+                .find(|m| m.id == id)
+                .map(|m| m.manifold.primary_length)
+                .unwrap()
+        };
+        let (b, r) = (0.7, 0.5);
+        assert_eq!(length("b.manifold.stock"), b);
+        assert_eq!(length("b.headers.short"), round_to(b * 0.56, 0.01));
+        assert_eq!(length("b.headers.long-tube"), round_to(b * 1.375, 0.01));
+        assert_eq!(length("b.manifold.turbo"), b);
+        assert_eq!(length("r.manifolds.stock"), r);
+        assert_eq!(length("r.headers.long-tube"), round_to(r * 1.375, 0.01));
+        assert_eq!(length("r.manifolds.turbo"), r);
+        let mut parts = Parts::factory("R80").unwrap();
+        parts.manifold = 1;
+        assert_eq!(parts.manifold_label(1), "Long-tube headers (pair) (690 mm)");
     }
 
     #[test]
@@ -709,6 +767,17 @@ mod tests {
                 let factory = Parts::of_version(&catalogue, f, v);
                 let stock = factory.hardware();
                 assert_eq!(stock.name, format!("{} {}", version.code, version.name));
+                for (m, manifold) in family.manifolds.iter().enumerate() {
+                    let mut parts = factory.clone();
+                    parts.manifold = m;
+                    let hardware = parts.hardware();
+                    // Until the turbine's inlet is simulated, a turbo manifold without
+                    // turbos is the cast one.
+                    if m != version.preset.manifold && !manifold.mounts {
+                        assert_ne!(hardware, stock, "{}: {}", version.code, manifold.name);
+                    }
+                    assert!(!parts.manifold_label(m).is_empty());
+                }
                 for (i, slot) in catalogue.slots.iter().enumerate() {
                     for (j, part) in slot.parts.iter().enumerate() {
                         let mut parts = factory.clone();

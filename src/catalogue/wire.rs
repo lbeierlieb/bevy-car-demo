@@ -12,10 +12,11 @@ use crate::items::{
 use crate::net::wire::{Reader, Wire};
 use crate::physics::brakes::Brake;
 use crate::physics::drivetrain::Drive;
-use crate::physics::engine::families::{Family, Layout, Version};
+use crate::physics::engine::families::{Family, Layout, ManifoldDef, Version};
 use crate::physics::engine::hardware::{
-    BottomEnd, CamDrive, CamProfile, Compressor, Cooling, Diverter, EngineHardware, Exhaust,
-    Intake, Intercooler, Supercharger, Turbine, Turbo, ValveLayout, ValveTrain, Wastegate,
+    BottomEnd, CamDrive, CamProfile, Collector, Compressor, Cooling, Diverter, EngineHardware,
+    Exhaust, Intake, Intercooler, Manifold, Supercharger, Turbine, Turbo, ValveLayout, ValveTrain,
+    Wastegate,
 };
 use crate::physics::engine::parts::{
     Change, Effect, Field, Part, Preset, Readout, Regrind, Slot, SuperchargerKit, TurboKit,
@@ -114,6 +115,7 @@ listed!(Field, Field::ALL);
 listed!(Readout, Readout::ALL);
 listed!(Layout, Layout::ALL);
 listed!(CamDrive, CamDrive::ALL);
+listed!(Collector, Collector::ALL);
 
 fields!(Detail { at, size, tone });
 fields!(Tank { litres, at, height });
@@ -391,7 +393,12 @@ fields!(EngineHardware {
     cooling,
     inertia
 } text { name });
-fields!(Preset { chosen, boost, ecu });
+fields!(Preset {
+    chosen,
+    manifold,
+    boost,
+    ecu
+});
 fields!(Version { block, preset } text { code, name });
 fields!(Family {
     layout,
@@ -399,8 +406,29 @@ fields!(Family {
     width,
     height,
     mass,
-    versions
+    versions,
+    manifolds
 } text { name, about });
+
+impl Wire for Manifold {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.primary_length.put(out);
+        self.collector.put(out);
+        self.branches.put(out);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        let manifold = Self {
+            primary_length: r.get()?,
+            collector: r.get()?,
+            branches: r.get()?,
+        };
+        let fine = (0.05..=3.0).contains(&manifold.primary_length)
+            && (1..=crate::physics::engine::damage::MAX_CYLINDERS as u32)
+                .contains(&manifold.branches);
+        fine.then_some(manifold)
+    }
+}
+fields!(ManifoldDef { manifold, mounts } text { id, name });
 
 fields!(Regrind {
     duration,
@@ -511,7 +539,8 @@ fields!(Part { effects } text { name });
 fields!(Slot {
     parts,
     readout,
-    needs_turbo
+    needs_turbo,
+    mounted
 } text { name, about });
 
 listed!(Panel, Panel::ALL);
@@ -539,6 +568,8 @@ impl Wire for Kind {
             Kind::Engine => 15,
             Kind::LongBlock => 16,
             Kind::EnginePart(_) => 17,
+            Kind::Manifold => 18,
+            Kind::Turbo => 19,
         };
         tag.put(out);
         match self {
@@ -568,6 +599,8 @@ impl Wire for Kind {
             15 => Kind::Engine,
             16 => Kind::LongBlock,
             17 => Kind::EnginePart(r.get()?),
+            18 => Kind::Manifold,
+            19 => Kind::Turbo,
             _ => return None,
         })
     }
@@ -612,6 +645,10 @@ impl Wire for Does {
                 17u8.put(out);
                 aero.put(out);
             }
+            Does::Manifold { family, manifold } => {
+                18u8.put(out);
+                (*family, *manifold).put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -642,6 +679,10 @@ impl Wire for Does {
                 Does::EnginePart { slot, part }
             }
             17 => Does::Body(r.get()?),
+            18 => {
+                let (family, manifold) = r.get()?;
+                Does::Manifold { family, manifold }
+            }
             _ => return None,
         })
     }
@@ -667,6 +708,7 @@ fields!(PartDef {
     kind,
     does,
     fits,
+    engines,
     size,
     mass,
     price,
@@ -753,6 +795,7 @@ impl Item {
         };
         let car = (catalogue.defs.get(self.def)).is_some_and(|def| def.kind == Kind::Chassis);
         self.fine_in(catalogue, chassis, car)
+            && crate::items::engine_misfit(catalogue, self).is_none()
     }
 
     fn fine_in(&self, catalogue: &Catalogue, chassis: Option<usize>, whole: bool) -> bool {
@@ -839,6 +882,12 @@ impl Catalogue {
                 && !version.block.cams.is_empty()
                 && crate::physics::engine::parts::fits(self, &version.preset.chosen)
         };
+        let family = |family: &Family| {
+            !family.versions.is_empty()
+                && family.versions.iter().all(version)
+                && (family.versions.iter())
+                    .all(|version| version.preset.manifold < family.manifolds.len())
+        };
         let slot = |slot: &Slot| !slot.parts.is_empty();
         let does = |def: &PartDef| match def.does {
             Does::Chassis(c) => c < self.chassis.len(),
@@ -851,6 +900,9 @@ impl Catalogue {
             }
             Does::EnginePart { slot, part } => {
                 (self.slots.get(slot)).is_some_and(|s| part < s.parts.len())
+            }
+            Does::Manifold { family, manifold } => {
+                (self.families.get(family)).is_some_and(|f| manifold < f.manifolds.len())
             }
             _ => true,
         };
@@ -881,8 +933,7 @@ impl Catalogue {
             && self.chassis.iter().all(chassis)
             && self.gearboxes.iter().all(gearbox)
             && self.slots.iter().all(slot)
-            && (self.families.iter())
-                .all(|f| !f.versions.is_empty() && f.versions.iter().all(version))
+            && self.families.iter().all(family)
             && self.defs.iter().all(def)
             && self.trims.iter().all(trim)
             && self.assemblies.iter().all(assembly)
