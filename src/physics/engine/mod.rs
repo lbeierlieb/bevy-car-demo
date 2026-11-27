@@ -718,6 +718,64 @@ mod tests {
         (torque, power.0, power.1)
     }
 
+    /// The R-series V10, two valves on pushrods: its torque early and flat, its power
+    /// peaking well short of a four-valve engine's speeds, like a big American V10's.
+    #[test]
+    fn the_pushrod_v10_pulls_low_and_broad() {
+        let catalogue = crate::catalogue::builtin();
+        let (f, v) = catalogue.find_engine("R80").unwrap();
+        let parts = crate::physics::engine::parts::Parts::of_version(&catalogue, f, v);
+        let hardware = parts.hardware();
+        assert!(EngineMaps::stock(&hardware).is_some(), "baked maps");
+        let build = EngineBuild::new(hardware, parts.ecu);
+        let hardware = &build.hardware;
+        assert_eq!(hardware.redline(), 6000.0);
+        let (mut torque, mut power) = ((0.0f32, 0.0), (0.0f32, 0.0));
+        let mut curve = Vec::new();
+        let mut rpm = 1500.0;
+        while rpm <= build.ecu.rev_limit - 100.0 {
+            let at = run_flat_out(&build, rpm, 3.0).torque(&build, rpm);
+            let kilowatts = at * rpm * 2.0 * PI / 60.0 / 1000.0;
+            curve.push((rpm, at.round(), kilowatts.round()));
+            if at > torque.0 {
+                torque = (at, rpm);
+            }
+            if kilowatts > power.0 {
+                power = (kilowatts, rpm);
+            }
+            rpm += 200.0;
+        }
+        println!("{curve:?}");
+        assert!((610.0..670.0).contains(&torque.0), "{torque:?}");
+        assert!((3400.0..=4400.0).contains(&torque.1), "{torque:?}");
+        assert!((285.0..315.0).contains(&power.0), "{power:?}");
+        assert!((4400.0..=5600.0).contains(&power.1), "{power:?}");
+        // About 630 N·m at 3600 rpm and 300 kW at 4600.
+        let at = |rpm: f32| run_flat_out(&build, rpm, 3.0).torque(&build, rpm);
+        assert!((at(3600.0) - 630.0).abs() < 25.0, "{}", at(3600.0));
+        let kilowatts = at(4600.0) * 4600.0 * 2.0 * PI / 60.0 / 1000.0;
+        assert!((kilowatts - 300.0).abs() < 12.0, "{kilowatts}");
+        // Over 80 % of the peak torque from 2000 to 5200 rpm.
+        assert!(
+            (curve.iter())
+                .filter(|(rpm, ..)| (2000.0..=5200.0).contains(rpm))
+                .all(|&(_, at, _)| at > 0.8 * torque.0),
+            "{curve:?}"
+        );
+        // The pushrods and big valves are heavy: stiff springs for a modest redline, and
+        // rods for it like any other engine's.
+        let valves = &hardware.valves;
+        let reference = EngineHardware::default();
+        assert!(valves.moving_mass() > 2.0 * reference.valves.mass);
+        let float = valves.float_rpm(&hardware.cams[0]);
+        assert!((6000.0..6600.0).contains(&float), "{float} rpm");
+        assert!((300.0..600.0).contains(&valves.seat_force), "{valves:?}");
+        assert!(hardware.rod_load(6000.0, 80e5) < 0.7);
+        // Its cam's late intake closing on a wide lobe separation overlaps little: it
+        // idles low.
+        assert!(build.ecu.idle_rpm < 950.0, "{}", build.ecu.idle_rpm);
+    }
+
     #[test]
     fn every_factory_engine_idles_and_pulls() {
         let catalogue = crate::catalogue::builtin();
@@ -738,13 +796,14 @@ mod tests {
                     torque / litres,
                     power / litres,
                 );
-                // Naturally aspirated engines make 85 to 125 N·m a litre, turbo engines
-                // on their stock boost a good deal more; power peaks in the upper half.
+                // Naturally aspirated engines make 75 (a big, lazy pushrod V) to 125 N·m a
+                // litre, turbo engines on their stock boost a good deal more; power peaks
+                // in the upper half.
                 let per_litre = torque / litres;
                 let expected = if build.hardware.turbo.is_some() {
                     125.0..200.0
                 } else {
-                    85.0..125.0
+                    75.0..125.0
                 };
                 assert!(
                     expected.contains(&per_litre),

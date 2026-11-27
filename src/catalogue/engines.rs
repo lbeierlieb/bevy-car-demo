@@ -7,7 +7,7 @@ use super::parts::SLOTS;
 use crate::physics::engine::families::{Family, Layout, Version, relative_size};
 use crate::physics::engine::hardware::{
     BottomEnd, CamProfile, Cooling, EngineHardware, Exhaust, FLOAT_MARGIN, Intake, ROD_MARGIN,
-    ValveTrain,
+    ValveLayout, ValveTrain,
 };
 use crate::physics::engine::parts::{Preset, round_to};
 
@@ -30,20 +30,57 @@ struct Block {
     inertia: f32,
     /// How well the head flows (see `EngineHardware::port_flow`).
     flow: f32,
+    /// Its valvetrain.
+    head: Head,
+}
+
+/// Where a block's cams are and what they move.
+#[derive(Clone, Copy)]
+struct Head {
+    layout: ValveLayout,
+    /// Valve lift over the lifter's, and the lifter's and pushrod's mass (kg; see
+    /// `ValveTrain`).
+    rocker_ratio: f32,
+    cam_side_mass: f32,
+    rollers: bool,
+    /// Valve lift relative to the bore.
+    lift: f32,
+}
+
+impl Head {
+    /// Two cams over four valves, as on the 2-litre four.
+    const TWIN_CAM: Self = Self {
+        layout: ValveLayout::FOUR_VALVE,
+        rocker_ratio: 1.0,
+        cam_side_mass: 0.0,
+        rollers: false,
+        lift: 0.11,
+    };
+    /// One cam in the block, hydraulic roller lifters and long pushrods to 1.6:1 rockers
+    /// over two big valves.
+    const PUSHROD: Self = Self {
+        layout: ValveLayout::PUSHROD,
+        rocker_ratio: 1.6,
+        cam_side_mass: 0.2,
+        rollers: true,
+        lift: 0.125,
+    };
 }
 
 /// The hardware of a block: the 2-litre four's cylinder scaled to the bore (masses with
-/// its cube, forces with its square), the parts around the cylinders sized by the
-/// displacement, and springs and rods for the redline.
+/// its cube, forces with its square; a valve also with its diameter), the parts around
+/// the cylinders sized by the displacement, and springs and rods for the redline.
 fn block(b: Block) -> EngineHardware {
     let reference = EngineHardware::default();
     let (bore, stroke) = (b.bore / 1000.0, b.stroke / 1000.0);
     let scale = bore / reference.bore;
+    let head = b.head;
+    let valve = head.layout.intake_diameter / reference.valvetrain.intake_diameter;
     let cam = CamProfile {
         intake_duration: b.duration,
         exhaust_duration: b.duration,
         lobe_separation: b.separation,
-        lift: round_to(0.11 * bore, 1e-4),
+        lift: round_to(head.lift * bore, 1e-4),
     };
     let mut hardware = EngineHardware {
         name: String::new(),
@@ -67,12 +104,12 @@ fn block(b: Block) -> EngineHardware {
         valves: ValveTrain {
             seat_force: reference.valves.seat_force * scale * scale,
             rate: reference.valves.rate * scale,
-            mass: round_to(reference.valves.mass * scale.powi(3), 1e-3),
-            rocker_ratio: reference.valves.rocker_ratio,
-            cam_side_mass: round_to(reference.valves.cam_side_mass * scale.powi(3), 1e-3),
-            rollers: reference.valves.rollers,
+            mass: round_to(reference.valves.mass * scale.powi(3) * valve, 1e-3),
+            rocker_ratio: head.rocker_ratio,
+            cam_side_mass: head.cam_side_mass,
+            rollers: head.rollers,
         },
-        valvetrain: reference.valvetrain,
+        valvetrain: head.layout,
         port_flow: b.flow,
         intake: reference.intake,
         turbo: None,
@@ -142,57 +179,94 @@ fn version(
 fn none(_: &mut Preset) {}
 
 pub fn families() -> Vec<Family> {
-    vec![Family {
-        name: "B-series four".into(),
-        about: "A small four: light, simple and willing".into(),
-        layout: Layout::Inline4,
-        length: 0.58,
-        width: 0.58,
-        height: 0.63,
-        mass: 100.0,
-        versions: vec![
-            version(
-                "B16",
-                "1.6 four",
+    vec![
+        Family {
+            name: "B-series four".into(),
+            about: "A small four: light, simple and willing".into(),
+            layout: Layout::Inline4,
+            length: 0.58,
+            width: 0.58,
+            height: 0.63,
+            mass: 100.0,
+            versions: vec![
+                version(
+                    "B16",
+                    "1.6 four",
+                    || {
+                        block(Block {
+                            cylinders: 4,
+                            bore: 78.0,
+                            stroke: 83.6,
+                            compression: 10.5,
+                            duration: 240.0,
+                            separation: 110.0,
+                            redline: 6800.0,
+                            runner: 350.0,
+                            header: 700.0,
+                            inertia: 0.13,
+                            flow: 1.0,
+                            head: Head::TWIN_CAM,
+                        })
+                    },
+                    none,
+                ),
+                version(
+                    "B18",
+                    "1.8 four",
+                    || {
+                        block(Block {
+                            cylinders: 4,
+                            bore: 81.0,
+                            stroke: 87.2,
+                            compression: 10.0,
+                            duration: 244.0,
+                            separation: 110.0,
+                            redline: 6700.0,
+                            runner: 360.0,
+                            header: 700.0,
+                            inertia: 0.14,
+                            flow: 1.0,
+                            head: Head::TWIN_CAM,
+                        })
+                    },
+                    none,
+                ),
+            ],
+        },
+        Family {
+            name: "R-series V10".into(),
+            about: "Eight litres in a low, wide V10 with pushrods: torque everywhere".into(),
+            layout: Layout::V10,
+            length: 0.86,
+            width: 0.78,
+            height: 0.60,
+            mass: 300.0,
+            versions: vec![version(
+                "R80",
+                "8.0 V10",
                 || {
                     block(Block {
-                        cylinders: 4,
-                        bore: 78.0,
-                        stroke: 83.6,
-                        compression: 10.5,
-                        duration: 240.0,
-                        separation: 110.0,
-                        redline: 6800.0,
-                        runner: 350.0,
-                        header: 700.0,
-                        inertia: 0.13,
-                        flow: 1.0,
+                        cylinders: 10,
+                        bore: 101.6,
+                        stroke: 98.6,
+                        compression: 9.1,
+                        // A long duration on a wide lobe separation: the intake
+                        // closes late (the torque comes early and stays flat, as on
+                        // the big American V10s), with little overlap (it idles low).
+                        duration: 276.0,
+                        separation: 130.0,
+                        redline: 6000.0,
+                        runner: 400.0,
+                        header: 500.0,
+                        inertia: 0.35,
+                        flow: 0.95,
+                        head: Head::PUSHROD,
                     })
                 },
                 none,
-            ),
-            version(
-                "B18",
-                "1.8 four",
-                || {
-                    block(Block {
-                        cylinders: 4,
-                        bore: 81.0,
-                        stroke: 87.2,
-                        compression: 10.0,
-                        duration: 244.0,
-                        separation: 110.0,
-                        redline: 6700.0,
-                        runner: 360.0,
-                        header: 700.0,
-                        inertia: 0.14,
-                        flow: 1.0,
-                    })
-                },
-                none,
-            ),
-        ],
-    }]
+            )],
+        },
+    ]
 }
 
 #[cfg(test)]
