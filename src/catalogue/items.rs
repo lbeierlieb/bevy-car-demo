@@ -21,7 +21,7 @@ use crate::wheels::Wheel;
 /// in `slots`). The turbos' slot is none of them: turbos go on the manifold's mounts.
 pub const LONG_BLOCK_SLOTS: [usize; 5] = [0, 1, 2, 3, 4];
 pub const HEAD_SLOTS: [usize; 4] = [19, 5, 6, 7];
-pub const ENGINE_SLOTS: [usize; 5] = [8, 9, 10, 12, 18];
+pub const ENGINE_SLOTS: [usize; 6] = [8, 9, 10, 12, 18, 20];
 pub const CAR_SLOTS: [usize; 5] = [16, 14, 15, 17, 13];
 
 /// `catalogue` with its part definitions and trims.
@@ -266,6 +266,7 @@ fn engine_part_size(name: &str) -> ([f32; 3], f32) {
         "Radiator" => ([0.7, 0.1, 0.45], 6.0),
         "Flywheel" => ([0.3, 0.3, 0.05], 8.0),
         "Porting" => ([0.3, 0.2, 0.1], 0.5),
+        "Lambda sensor" => ([0.15, 0.05, 0.05], 0.1),
         _ => ([0.3, 0.3, 0.3], 3.0),
     }
 }

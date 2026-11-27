@@ -391,6 +391,7 @@ fields!(EngineHardware {
     turbos,
     supercharger,
     exhaust,
+    wideband,
     cooling,
     inertia
 } text { name });
@@ -523,6 +524,7 @@ impl Wire for Effect {
                 5u8.put(out);
                 kit.put(out);
             }
+            Effect::Wideband => 6u8.put(out),
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -541,6 +543,7 @@ impl Wire for Effect {
             },
             4 => Effect::Turbo(r.get()?),
             5 => Effect::Supercharger(r.get()?),
+            6 => Effect::Wideband,
             _ => return None,
         })
     }

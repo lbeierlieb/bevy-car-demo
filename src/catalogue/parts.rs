@@ -13,7 +13,7 @@ pub const SUPERCHARGER: usize = 12;
 /// The intercooler's slot: it only matters with a turbo.
 pub const INTERCOOLER: usize = 13;
 /// How many slots there are.
-pub const SLOTS: usize = 20;
+pub const SLOTS: usize = 21;
 
 pub fn compounds() -> Vec<TireCompound> {
     let compound = |rubber: usize, name: &str, about: &str| TireCompound {
@@ -419,6 +419,17 @@ pub fn slots() -> Vec<Slot> {
                 stock(),
                 part("Ported", &[times(PortFlow, 1.1, 0.01)]),
                 part("Race, big valves", &[times(PortFlow, 1.2, 0.01)]),
+            ],
+        ),
+        slot(
+            "Lambda sensor",
+            "What the ECU knows of the mixture: a narrowband sensor only says rich or lean \
+             of the ideal, which is enough to hold it there at part load; a wideband one \
+             reads it, so an ECU that can use it holds any target, full throttle too",
+            Readout::Nothing,
+            vec![
+                part("Narrowband", &[]),
+                part("Wideband", &[Effect::Wideband]),
             ],
         ),
     ];

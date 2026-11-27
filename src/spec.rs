@@ -213,6 +213,7 @@ impl Wire for Ecu {
         self.rev_limit.put(out);
         self.limiter_cut.put(out);
         self.limiter_fuel.put(out);
+        self.trim_limit.put(out);
         self.cams.switch_rpm.put(out);
         self.cams.switch_map.put(out);
         self.cams.intake_phase.put(out);
@@ -234,6 +235,7 @@ impl Wire for Ecu {
             rev_limit: r.get()?,
             limiter_cut: r.get()?,
             limiter_fuel: r.get()?,
+            trim_limit: r.get()?,
             cams: CamControl {
                 switch_rpm: r.get()?,
                 switch_map: r.get()?,
@@ -257,6 +259,7 @@ impl Wire for Ecu {
         ];
         let fine = tables.iter().all(|table| table.axes().len() <= 2)
             && ecu.displacement > 0.0
+            && (0.0..=0.5).contains(&ecu.trim_limit)
             && ecu.idle_rpm > 0.0
             && ecu.rev_limit > ecu.idle_rpm;
         fine.then_some(ecu)

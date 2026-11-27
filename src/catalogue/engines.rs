@@ -156,6 +156,7 @@ fn block(b: Block) -> EngineHardware {
         turbos: 0,
         supercharger: None,
         exhaust: reference.exhaust,
+        wideband: false,
         cooling: reference.cooling,
         inertia: b.inertia,
     };

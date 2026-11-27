@@ -34,6 +34,24 @@ const PHASE_FROM: f32 = 45e3;
 const PHASE_TO: f32 = 75e3;
 /// Manifold pressure above which the factory tune switches cams (Pa).
 const SWITCH_MAP: f32 = 60e3;
+/// How long the lambda sensor takes to follow the exhaust (s).
+const SENSOR_LAG: f32 = 0.08;
+/// A narrowband sensor's closed loop: the trim's jump each time the sensor switches
+/// between rich and lean, and its ramp in between (per second); target λ within
+/// `STOICHIOMETRIC_BAND` of 1 is where it runs.
+const NARROWBAND_JUMP: f32 = 0.02;
+const NARROWBAND_RAMP: f32 = 0.08;
+const STOICHIOMETRIC_BAND: f32 = 0.005;
+/// A wideband sensor's closed loop: trim per second per share the mixture is off.
+const WIDEBAND_GAIN: f32 = 1.5;
+/// Out of closed loop the trim lets go within about this long (s).
+const TRIM_RELEASE: f32 = 0.5;
+/// The most a factory tune lets the closed loop trim the fuel by (share).
+const TRIM_LIMIT: f32 = 0.25;
+/// A narrowband sensor's output (V): about 0.1 lean, 0.8 rich, switching at λ = 1.
+fn narrowband_volts(lambda: f32) -> f32 {
+    0.45 + 0.4 * ((1.0 - lambda) / 0.01).tanh()
+}
 
 /// What an ECU's hardware can do: how many cylinders it fires, whether it switches cams
 /// and drives phasers, reads a wideband lambda sensor, and whether its maps are locked
@@ -86,6 +104,10 @@ pub struct Sensors {
     pub throttle: f32,
     /// Air temperature in the intake manifold (K).
     pub intake_temperature: f32,
+    /// The exhaust's λ where the lambda sensor sits, and whether it's a wideband sensor
+    /// (which reads it; a narrowband one only says rich or lean).
+    pub lambda: f32,
+    pub wideband: bool,
 }
 
 /// What the ECU commands.
@@ -102,6 +124,10 @@ pub struct Actuators {
     pub cam_profile: usize,
     pub intake_phase: f32,
     pub exhaust_phase: f32,
+    /// What the lambda sensor reads (a narrowband's volts, a wideband's λ), and the closed
+    /// loop's fuel trim (share more fuel).
+    pub lambda_sensor: f32,
+    pub trim: f32,
 }
 
 /// An ECU: speed-density fuelling from rpm, manifold pressure and intake air temperature,
@@ -125,6 +151,8 @@ pub struct Ecu {
     pub rev_limit: f32,
     pub limiter_cut: f32,
     pub limiter_fuel: f32,
+    /// The most the closed loop trims the fuel by (share either way).
+    pub trim_limit: f32,
     /// Cam control, used if the model has it.
     pub cams: CamControl,
 }
@@ -163,7 +191,7 @@ pub struct CamControl {
 }
 
 /// The ECU's memory between steps.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct EcuState {
     /// Time left in the rev limiter's cycle: fuel cut, then fuel back on.
     limiter: f32,
@@ -173,6 +201,25 @@ pub struct EcuState {
     overrun: bool,
     /// On the second cam profile.
     high_cam: bool,
+    /// The λ the lambda sensor has caught up with, the closed loop's fuel trim, and which
+    /// side of λ = 1 a narrowband sensor last said.
+    sensed: f32,
+    trim: f32,
+    rich: bool,
+}
+
+impl Default for EcuState {
+    fn default() -> Self {
+        Self {
+            limiter: 0.0,
+            idle: 0.0,
+            overrun: false,
+            high_cam: false,
+            sensed: 1.0,
+            trim: 0.0,
+            rich: false,
+        }
+    }
 }
 
 impl Ecu {
@@ -191,6 +238,7 @@ impl Ecu {
             rev_limit: rev_limit(hardware, model),
             limiter_cut: 0.08,
             limiter_fuel: 0.04,
+            trim_limit: TRIM_LIMIT,
             cams: CamControl {
                 switch_rpm: f32::INFINITY,
                 switch_map: f32::INFINITY,
@@ -313,6 +361,7 @@ impl Ecu {
             rev_limit: rev_limit(hardware, model),
             limiter_cut: 0.08,
             limiter_fuel: 0.04,
+            trim_limit: TRIM_LIMIT,
         }
     }
 
@@ -331,6 +380,8 @@ impl Ecu {
             map,
             throttle,
             intake_temperature,
+            lambda: exhaust_lambda,
+            wideband,
         } = *sensors;
         // Rev limiter: a cut starts at the limit; after it the fuel comes back for a moment
         // even if the revs haven't dropped (in gear they barely do), unless the engine is
@@ -377,10 +428,52 @@ impl Ecu {
         let (ve, lambda, spark) = self.maps_on(cam_profile);
         let air = ve.get(&point) * map * self.displacement
             / (R_AIR * intake_temperature * self.cylinders as f32);
+        let target = lambda.get(&point);
+
+        // The lambda sensor follows the exhaust. With a wideband sensor (and an ECU that
+        // reads one) the loop closes to the target everywhere; with a narrowband one only
+        // where the target is λ = 1, the trim jumping at each switch and ramping between
+        // (so the mixture hunts round it); elsewhere the trim lets go.
+        let seen = if exhaust_lambda.is_finite() {
+            exhaust_lambda.clamp(0.5, 2.0)
+        } else {
+            2.0
+        };
+        state.sensed += (seen - state.sensed) * (dt / SENSOR_LAG).min(1.0);
+        let wideband = wideband && self.model.wideband;
+        let running = rpm > RUNNING_RPM && !cut;
+        let limit = self.trim_limit.max(0.0);
+        if running && wideband {
+            let lean = state.sensed / target - 1.0;
+            state.trim += WIDEBAND_GAIN * lean * dt;
+        } else if running && (target - 1.0).abs() < STOICHIOMETRIC_BAND {
+            let rich = state.sensed < 1.0;
+            if rich != state.rich {
+                state.trim += if rich {
+                    -NARROWBAND_JUMP
+                } else {
+                    NARROWBAND_JUMP
+                };
+                state.rich = rich;
+            }
+            state.trim += if rich {
+                -NARROWBAND_RAMP
+            } else {
+                NARROWBAND_RAMP
+            } * dt;
+        } else {
+            state.trim *= (1.0 - dt / TRIM_RELEASE).max(0.0);
+        }
+        state.trim = state.trim.clamp(-limit, limit);
         let fuel = if cut {
             0.0
         } else {
-            air / (STOICHIOMETRIC * lambda.get(&point))
+            air / (STOICHIOMETRIC * target) * (1.0 + state.trim)
+        };
+        let lambda_sensor = if wideband {
+            state.sensed
+        } else {
+            narrowband_volts(state.sensed)
         };
         Actuators {
             fuel,
@@ -389,6 +482,8 @@ impl Ecu {
             cam_profile,
             intake_phase,
             exhaust_phase,
+            lambda_sensor,
+            trim: state.trim,
         }
     }
 }
@@ -521,13 +616,14 @@ impl Ecu {
         origin
     }
 
-    fn settings(&self) -> [(&'static str, f32); 7] {
+    fn settings(&self) -> [(&'static str, f32); 8] {
         [
             ("displacement", self.displacement),
             ("idle_rpm", self.idle_rpm),
             ("rev_limit", self.rev_limit),
             ("limiter_cut", self.limiter_cut),
             ("limiter_fuel", self.limiter_fuel),
+            ("trim_limit", self.trim_limit),
             ("cam_switch_rpm", self.cams.switch_rpm),
             ("cam_switch_map", self.cams.switch_map),
         ]
@@ -540,6 +636,7 @@ impl Ecu {
             "rev_limit" => Some(&mut self.rev_limit),
             "limiter_cut" => Some(&mut self.limiter_cut),
             "limiter_fuel" => Some(&mut self.limiter_fuel),
+            "trim_limit" => Some(&mut self.trim_limit),
             "cam_switch_rpm" => Some(&mut self.cams.switch_rpm),
             "cam_switch_map" => Some(&mut self.cams.switch_map),
             _ => None,
@@ -578,7 +675,10 @@ crate::snapshot::snapshot!(EcuState {
     limiter,
     idle,
     overrun,
-    high_cam
+    high_cam,
+    sensed,
+    trim,
+    rich
 });
 crate::snapshot::snapshot!(Actuators {
     fuel,
@@ -587,6 +687,8 @@ crate::snapshot::snapshot!(Actuators {
     cam_profile,
     intake_phase,
     exhaust_phase,
+    lambda_sensor,
+    trim,
 });
 
 #[cfg(test)]
@@ -654,6 +756,8 @@ mod tests {
                 map,
                 throttle: 1.0,
                 intake_temperature: 300.0,
+                lambda: 1.0,
+                wideband: false,
             };
             ecu.step(&mut state, &sensors, 0.01)
         };

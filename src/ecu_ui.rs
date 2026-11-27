@@ -189,6 +189,7 @@ fn readings(ui: &mut egui::Ui, car: &Car) {
             engine.damage.worst(build.hardware.cylinders as usize) * 100.0,
         ),
     );
+    kit::info(ui, "Lambda sensor", &lambda_sensor(car));
     if build.ecu.model.cam_control() {
         let actuators = &engine.actuators;
         let profile = if actuators.cam_profile == 0 {
@@ -205,6 +206,21 @@ fn readings(ui: &mut egui::Ui, car: &Car) {
             ),
         );
     }
+}
+
+/// What the car's lambda sensor tells its ECU, and the closed loop's fuel trim: a
+/// narrowband's volts (rich or lean), a wideband's λ (if the ECU reads one).
+pub fn lambda_sensor(car: &Car) -> String {
+    let build = &car.setup.engine.build;
+    let actuators = &car.drivetrain.engine.actuators;
+    let reading = actuators.lambda_sensor;
+    let sensor = if build.hardware.wideband && build.ecu.model.wideband {
+        format!("wideband λ {reading:.2}")
+    } else {
+        let side = if reading > 0.45 { "rich" } else { "lean" };
+        format!("narrowband {reading:.2} V ({side})")
+    };
+    format!("{sensor}, trim {:+.0} %", actuators.trim * 100.0)
 }
 
 /// Rev limiter, idle speed, and going back to the factory tune.
@@ -238,6 +254,16 @@ fn settings(ui: &mut egui::Ui, car: &mut Car) {
         |v| format!("{v:.0} ms"),
     );
     ecu.limiter_fuel = fuel / 1000.0;
+    let mut trim = ecu.trim_limit * 100.0;
+    kit::slider(
+        ui,
+        "Closed loop trims up to",
+        &mut trim,
+        0.0..=50.0,
+        1.0,
+        |v| format!("±{v:.0} %"),
+    );
+    ecu.trim_limit = trim / 100.0;
     if ecu.model.cam_control() {
         let cams = &mut ecu.cams;
         kit::slider(

@@ -38,7 +38,7 @@ block should be the swap players want (a "Frankenstein" engine).
    B20's rods (made for its long stroke and 6000 rpm) cap the revs until forged rods go
    in, and it needs an ECU that switches cams and fuels a 2.0. Old saves: `b18` →
    `b20`, `vireo.1-8` → `vireo.2-0`.
-5. **Lambda sensors and closed loop**: a required engine slot "Lambda sensor"
+5. **Lambda sensors and closed loop** (done): a required engine slot "Lambda sensor"
    (narrowband stock, wideband at tuning shops). Narrowband: a steep switch at λ = 1
    with a short lag; closed loop only where the target is λ = 1 (not on the overrun cut
    or limiter), a short-term trim (a jump at each switch and a ramp, ±25 %), so it hunts

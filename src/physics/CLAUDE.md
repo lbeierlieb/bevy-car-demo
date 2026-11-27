@@ -408,5 +408,15 @@ phasing, VTEC-style cam switching).
   stock ECU they stay on the first profile, at rest. Phase axes have 3 points and the
   ratio axis is coarser with phasers (bake: intake phaser about 2 s, both 6 s, with the
   switching cam 13 s on 4 cores).
-- Next ideas: closed loop (wideband sensor), knock sensor/control, boost control,
+- **Lambda sensors and closed loop** (2026-11-27, `docs/vireo-lineup.md` step 5): the
+  engine slot "Lambda sensor" (narrowband stock, wideband: `EngineHardware::wideband`, live,
+  not in the maps' fingerprint). `Sensors::lambda` is the last step's exhaust λ
+  (`Engine::exhaust_lambda`); the ECU's sensor follows it (`SENSOR_LAG` 80 ms). Narrowband:
+  closed loop only where the target is λ = 1 (±0.005), the trim jumping 2 % at each switch
+  and ramping 8 %/s between, so λ hunts round 1 by a percent or two; wideband (and an ECU
+  model with `wideband`): integral to the target everywhere (`WIDEBAND_GAIN`); otherwise the
+  trim lets go (`TRIM_RELEASE`). `Ecu::trim_limit` (±25 % factory, a tune setting "Closed
+  loop trims up to"). No long-term trims. `Actuators::lambda_sensor` (volts or λ), `trim`; the
+  tuning shows them by the true λ (the dyno's analyser), the telemetry (2) only the sensor.
+- Next ideas: knock sensor/control, boost control,
   launch/anti-lag; damage to the clutch and gearbox; misfire sound for dead cylinders.

@@ -56,6 +56,9 @@ pub struct EngineHardware {
     /// `supercharger`).
     pub supercharger: Option<Supercharger>,
     pub exhaust: Exhaust,
+    /// The lambda sensor in the exhaust reads λ (wideband) rather than only rich or lean
+    /// (narrowband).
+    pub wideband: bool,
     pub cooling: Cooling,
     /// Flywheel and crank inertia (kg·m²).
     pub inertia: f32,
@@ -533,6 +536,7 @@ impl Default for EngineHardware {
                 cat_area: Some(2.0e-3),
                 silencer_area: Some(1.6e-3),
             },
+            wideband: false,
             cooling: Cooling::default(),
             inertia: 0.18,
         }

@@ -176,6 +176,8 @@ pub struct Engine {
     pub fuel_supply: f32,
     /// Fuel injected in the last step (kg/s).
     pub fuel_flow: f32,
+    /// The exhaust's λ in the last step (infinite without fuel), for the lambda sensor.
+    pub exhaust_lambda: f32,
 }
 
 /// One cycle (two revolutions) of all cylinders.
@@ -219,6 +221,7 @@ impl Default for Engine {
             peak_pressure: AMBIENT_PRESSURE,
             fuel_supply: 1.0,
             fuel_flow: 0.0,
+            exhaust_lambda: 1.0,
         }
     }
 }
@@ -243,6 +246,8 @@ impl Engine {
             map: self.intake_pressure,
             throttle,
             intake_temperature: self.charge_temperature,
+            lambda: self.exhaust_lambda,
+            wideband: hardware.wideband,
         };
         self.actuators = build.ecu.step(&mut self.ecu, &sensors, dt);
         self.firing = firing && !self.blown(hardware);
@@ -287,6 +292,7 @@ impl Engine {
         let cycle = self.cycle(build, rpm);
         let cycles = rpm.abs() / 120.0;
         self.fuel_flow = cycle.fuel * cycles;
+        self.exhaust_lambda = cycle.lambda;
         let flow = cycle.exhaust * cycles;
         let gas = cycle.exhaust_temperature;
         self.exhaust_pressure = exhaust_pressure(hardware, flow, gas, self.wastegate);
@@ -626,6 +632,7 @@ crate::snapshot::snapshot!(Engine {
     peak_pressure,
     fuel_supply,
     fuel_flow,
+    exhaust_lambda,
 });
 
 #[cfg(test)]
@@ -714,6 +721,63 @@ mod tests {
         let speed = engine.turbo_speed;
         assert!(run(&mut engine, 0.0, 0.5) < 0.15);
         assert!(engine.turbo_speed < speed * 0.8);
+    }
+
+    /// The ECU's fuel map `share` of what it should be, everywhere.
+    fn fuel_map_off(build: &mut EngineBuild, share: f32) {
+        let ve = &build.ecu.ve;
+        let values = ve.values().iter().map(|v| v * share).collect();
+        build.ecu.ve = table::Table::from_parts(ve.axes().to_vec(), values).unwrap();
+    }
+
+    /// λ and the fuel trim, settled at `rpm` and `throttle`, and λ's swing over the last
+    /// second.
+    fn settled_mixture(build: &EngineBuild, rpm: f32, throttle: f32) -> (f32, f32, f32) {
+        let mut engine = Engine::default();
+        let (mut low, mut high) = (f32::INFINITY, 0.0f32);
+        for i in 0..(6 * 120) {
+            engine.step(build, throttle, rpm, true, 1.0 / 120.0);
+            if i >= 5 * 120 {
+                low = low.min(engine.exhaust_lambda);
+                high = high.max(engine.exhaust_lambda);
+            }
+        }
+        (engine.exhaust_lambda, engine.actuators.trim, high - low)
+    }
+
+    /// A narrowband sensor holds λ = 1 at part load against a fuel map 10 % lean, hunting
+    /// round it; at full throttle (richer than 1) the loop is open and the map's error
+    /// stays. A wideband one, with an ECU that reads it, holds the target there too.
+    #[test]
+    fn the_lambda_sensor_closes_the_loop() {
+        let mut build = EngineBuild::default();
+        fuel_map_off(&mut build, 0.9);
+        let (lambda, trim, swing) = settled_mixture(&build, 3000.0, 0.15);
+        assert!((lambda - 1.0).abs() < 0.03, "λ {lambda}");
+        assert!((0.06..0.16).contains(&trim), "trim {trim}");
+        assert!((0.005..0.08).contains(&swing), "swing {swing}");
+        let target = build.ecu.lambda.get(&[5000.0, 100e3]);
+        let (open, trim, _) = settled_mixture(&build, 5000.0, 1.0);
+        assert!(open > target * 1.07, "λ {open} for {target}");
+        assert!(trim.abs() < 0.01, "trim {trim}");
+        // Wideband: closed at full throttle too.
+        build.hardware.wideband = true;
+        build.ecu.model = ecu::EcuModel::PROGRAMMABLE;
+        let (closed, trim, _) = settled_mixture(&build, 5000.0, 1.0);
+        assert!(
+            (closed / target - 1.0).abs() < 0.02,
+            "λ {closed} for {target}"
+        );
+        assert!((0.06..0.16).contains(&trim), "trim {trim}");
+        // A stock ECU reads a wideband sensor as a narrowband one.
+        build.ecu.model = ecu::EcuModel::STOCK;
+        assert!(settled_mixture(&build, 5000.0, 1.0).0 > target * 1.07);
+        // No further than its limit: 40 % lean stays lean.
+        let mut lean = EngineBuild::default();
+        fuel_map_off(&mut lean, 0.6);
+        let (lambda, trim, _) = settled_mixture(&lean, 3000.0, 0.15);
+        assert_eq!(trim, lean.ecu.trim_limit);
+        assert!(lambda > 1.15, "λ {lambda}");
     }
 
     #[test]

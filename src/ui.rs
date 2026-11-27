@@ -115,24 +115,25 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) 
     Ok(())
 }
 
-/// Manifold pressure, mixture, spark, torque and exhaust temperature.
+/// Manifold pressure, spark, torque, exhaust temperature and what the lambda sensor says.
 pub fn engine(ui: &mut egui::Ui, car: &Car) {
     let (drivetrain, build) = (&car.drivetrain, &car.setup.engine.build);
     let engine = &drivetrain.engine;
     let cycle = engine.cycle(build, drivetrain.rpm);
     // Without combustion (stalled, or fuel cut), the exhaust is just air.
-    let (lambda, exhaust) = if cycle.lambda.is_finite() {
-        let celsius = cycle.exhaust_temperature - 273.15;
-        (format!("{:.2}", cycle.lambda), format!("{celsius:.0} °C"))
+    let exhaust = if cycle.lambda.is_finite() {
+        format!("{:.0} °C", cycle.exhaust_temperature - 273.15)
     } else {
-        ("-".to_string(), "-".to_string())
+        "-".to_string()
     };
     ui.label(format!(
-        "{:.0} kPa    λ {lambda}    spark {:.0}°    {:.0} N·m    exhaust {exhaust}",
+        "{:.0} kPa    spark {:.0}°    {:.0} N·m    exhaust {exhaust}",
         engine.intake_pressure / 1000.0,
         engine.actuators.spark,
         engine.torque(build, drivetrain.rpm),
     ));
+    // What the lambda sensor says: on the road there's no exhaust analyser.
+    ui.label(format!("λ sensor: {}", crate::ecu_ui::lambda_sensor(car)));
     if let Some(turbo) = &build.hardware.turbo {
         // Twin turbos turn alike (one shaft state for them all).
         let turbos = match build.hardware.turbos {

@@ -521,6 +521,24 @@ fn mount_old_turbo(catalogue: &Catalogue, engine: &mut Item, turbo: &Item) -> bo
     true
 }
 
+/// Every engine part slot of `item`'s tree that must be filled and isn't (one added since
+/// the car was saved, like the lambda sensor's in version 5) filled with its first part.
+fn fill_new_slots(catalogue: &Catalogue, item: &mut Item) {
+    let slots = catalogue.defs[item.def].slots.clone();
+    for (slot, place) in slots.iter().zip(&mut item.slots) {
+        match (place.as_mut(), slot.kind) {
+            (Some(child), _) => fill_new_slots(catalogue, child),
+            (None, Kind::EnginePart(s)) if slot.required => {
+                let does = Does::EnginePart { slot: s, part: 0 };
+                if let Some(def) = catalogue.defs.iter().position(|def| def.does == does) {
+                    *place = Some(Item::new(catalogue, def, 0));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// What an ECU saved before version 5 (`ecu.stock`, `ecu.programmable`) is now, on a car
 /// whose engine is `engine`'s family and version (the first's if not known): the version's
 /// own stock ECU, or the programmable one for its cylinders.
@@ -703,11 +721,12 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
             _ => {}
         }
     }
-    let car = car_parts
+    let mut car = car_parts
         .finish(catalogue)
         .into_iter()
         .next()
         .ok_or("no chassis")?;
+    fill_new_slots(catalogue, &mut car);
     let cargo = cargo_parts.map_or_else(Vec::new, |parts| parts.finish(catalogue));
     let loose = |item: &Item| {
         item.def(catalogue).kind != crate::items::Kind::Chassis && item.fine(catalogue)
@@ -929,7 +948,8 @@ mod tests {
     }
 
     /// `text` as a game before version 5 wrote it: the cylinder head's parts in the long
-    /// block (its porting the old "Cylinder head" with the valves' wear), no head.
+    /// block (its porting the old "Cylinder head" with the valves' wear), no head, no
+    /// lambda sensor.
     fn before_heads(text: &str) -> String {
         let mut out = Vec::new();
         let mut wear = None;
@@ -937,6 +957,8 @@ mod tests {
             let fields: Vec<&str> = line.split('\t').collect();
             match fields.as_slice() {
                 ["version", ..] => out.push("version 4".to_string()),
+                // No lambda sensor before version 5.
+                ["part", _, "Lambda sensor", ..] => {}
                 ["part", "3", "Cylinder head", _, rest @ ..] => {
                     wear = rest.iter().find(|f| f.starts_with(WEAR)).copied();
                 }

@@ -58,6 +58,8 @@ pub enum Effect {
     Turbo(TurboKit),
     /// A supercharger kit (see `SuperchargerKit`).
     Supercharger(SuperchargerKit),
+    /// A wideband lambda sensor in place of the narrowband one.
+    Wideband,
 }
 
 /// A number in the hardware a part can change.
@@ -331,6 +333,7 @@ impl Effect {
             }
             Effect::Turbo(kit) => kit.fit(h),
             Effect::Supercharger(kit) => kit.fit(h),
+            Effect::Wideband => h.wideband = true,
         }
     }
 }

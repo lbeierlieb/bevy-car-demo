@@ -605,3 +605,8 @@ rods' 7300; it needs a programmable ECU (the B16R's runs 1.6-litre maps), and it
 the stock 5-speed's 200 N·m. Saved `b18`, `b18.head`, `ecu.b18` read as the B20's
 (`saved::RENAMED`). Tests that broke things with a turbo on the B16 use the B16R
 (`twin_cam_turbo`): the 8-valve head doesn't breathe enough to. Protocol 63.
+
+The engine slot "Lambda sensor" (place 20, on the engine: `ENGINE_SLOTS`; `lambda-sensor.narrowband`
+stock, `lambda-sensor.wideband` at the tuning shops, `Effect::Wideband`): saved cars from before
+get the narrowband one (`saved::fill_new_slots` fills any required engine part slot left empty
+with its first part). Protocol 64.
