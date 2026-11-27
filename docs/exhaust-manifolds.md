@@ -11,7 +11,9 @@ Sides may be required to match. The milestones go in order; each ends with clipp
 atomically (see CLAUDE.md, "Working conventions").
 
 The user's answers (2026-11-27): no inline-six test engine (the layout must allow
-one, but nothing is built for it until a real I6 family comes); the plan as below.
+one, but nothing is built for it until a real I6 family comes); the plan as below. All
+three milestones were built on 2026-11-27 (see the "Decided while building" sections at
+the end).
 
 ## What the model assumed before
 
@@ -146,7 +148,7 @@ N ways, at no extra cost: that's what's built.
    holds boost high up; the B-series turbo results unchanged within tolerance;
    `every_factory_engine_idles_and_pulls` passes.
 
-## Milestone 3: the game
+## Milestone 3: the game (built 2026-11-27)
 
 1. `garage/fit.rs`: the manifold's screen with its mounts; fitting a turbo fills all
    mounts; readouts (primary length, branches, mounts).
@@ -312,5 +314,63 @@ The B16T (medium turbo, 0.6 bar): 2000 rpm 0.10 bar 158 N·m, 3000 0.42/209, 400
 0.40/202, 4000 0.65/254, 5000 0.69/241, 5800 0.70/230 (within 6 %:
 `the_b_series_turbo_is_as_before`).
 
-Not done: the twin turbos' second whistle, telemetry and drawing (milestone 3); exhaust
-heat loss before the turbine; pulse interference within a collector.
+Not done: exhaust heat loss before the turbine; pulse interference within a collector
+(the twins' whistle, telemetry and drawing came with milestone 3).
+
+## Decided while building milestone 3
+
+Built 2026-11-27. Where the plan was silent:
+
+1. **The workshop** (`garage/fit.rs`): the exhaust manifold's slot screen and a new
+   manifold's screen show its readouts as info rows (not focusable, so the six buttons
+   pass over them): primaries (mm, "cast" or "tubes"), branches ("each bank's 5 into its
+   own", "all 10 cylinders into one"), what they end in (tuned collectors or turbine
+   inlets), turbo mounts, and on the fitted one the turbos ("2 × Medium (turbo)"). The
+   mounts are rows as before; a mount and a new turbo say how much engine a turbo there
+   is sized for ("4.0 l behind each mount"). Turbos come off all together: "Take the
+   turbos off" on the manifold, "Take it off every mount" on a mount (several
+   `Work::Remove` in one request). Turbos brought fit only as many alike as there are
+   mounts, as one request of a `Work::Fit` per mount (the highest places in the trunk
+   and held list taken first, so the others don't move); fewer say how many are needed.
+2. **Changing the manifold** (`fitting::Bench::fit`, a server rule): the turbos move to
+   the new manifold only when it has as many mounts as there are turbos; else they stay
+   on the old one, which comes off with them (before, one of a pair moved to the
+   10-into-1 and the pair went into the trunk with one mount filled, which the rules
+   refuse). A new manifold's screen says which will happen.
+3. **`ManifoldDef::cast`** (on the wire, protocol 55): how it's drawn. The stock and
+   turbo manifolds are cast; headers and the 10-into-1 (900 mm primaries, fabricated)
+   are tubes.
+4. **Drawing** (`mechanicals.rs`, `Headers`): cast manifolds are an iron log along the
+   head (each bank's on a V) with a stub from each port, its outlet down to the
+   collector or, on a turbo manifold, the turbine on its flange (on the R80 at the
+   bank's rear end, low and outboard; on the B series in the log's middle, towards the
+   bulkhead). Tubes go out and down to a collector behind the engine, lower and further
+   back the longer they are against the family's own manifold (short under 0.8, long
+   over 1.2); the B series' long tubes are drawn as a 4-2-1 (the outer and the inner
+   two paired). The 10-into-1: the right bank's primaries into a collector at its rear,
+   high, with the one turbo; the left bank's into one at its rear and a pipe from it
+   behind the engine, over the bell housing, across to the right (the plan's "far
+   bank's primaries cross the valley", drawn behind the engine rather than over it). A
+   turbo at each turbine inlet: an iron snail and an alloy compressor towards the
+   intake's end, its pipe to the throttle (the intercooler between isn't drawn), each
+   compressor's own pipe to the air filter (twin cones with the open filter). The snail's
+   radius is 62/75/88 mm for small/medium/large × the cube root of the displacement
+   behind the mount over 1.6 l (0.8 to 1.6), so the R80's pair is bigger than the B
+   series' and the 10-into-1's biggest. Each turbine's outlet starts an exhaust line (the
+   pair's two side pipes from their own turbo, the 10-into-1's one turbo feeding both).
+5. **Sound** (protocol 56): `ExhaustSound::turbos` (the hardware's `turbo_count`, a byte
+   on the wire with the engine's looks). Two or more turbos whistle as two bands, the
+   second `TWIN_DETUNE` (2 %) higher (no two shafts turn at quite the same speed: they
+   beat), together as loud as one turbo; on a V (dual exhaust) each side gets its own
+   bank's at one turbo's level. More than two turbos are still two bands. The pitch
+   still follows the one shaft state (smaller twins spin faster, so they whistle higher
+   by themselves). Never listened to.
+6. **Telemetry** (2): the boost line names the turbos ("twin turbos 98k rpm (60 % of the
+   limit)"); boost, shaft speed and wastegate were there already.
+7. **Shots**: `FITIDS` puts a turbo on every mount of the first manifold with mounts
+   (the manifold first in the list); `CARCAM` takes a fourth number, how far ahead of
+   the car's middle to look (1.0 at the engine bay).
+
+Not done: the turbos' second shaft (different turbos per side), an intercooler drawn in
+the pipes, the 10-into-1's crossover over the valley, turbos checked against the bay's
+room (the R80's large crossover turbo stays under the bonnet only by its placing).

@@ -274,7 +274,7 @@ A shot takes about 35 s.
 For looking at cars: `CAR="chassis[,engine]"` starts in that car (its place in the
 catalogue; bought from the server's showroom, `Buy`); `LINEUP="first,count"` parks that many cars one behind the other on an open,
 flat straight (the spawn is in a village, where walls and slopes block the view);
-`CARCAM="side,height,along"` looks at them from that far to their right (negative:
+`CARCAM="side,height,along[,ahead]"` looks at them (or `ahead` m ahead of their middle) from that far to their right (negative:
 left, the sunlit side), up, and ahead. Side views of five:
 `LINEUP=0,5 CARCAM="-21,2,0" bash tools/dev/shot.sh out.png 60 2`; one car close up:
 `LINEUP=3,1 CARCAM="-3.6,1.9,4.6"`; from the driver's seat: keys `2c`.
@@ -1279,7 +1279,7 @@ The game is about tuning every aspect of a car. Agreed so far (the user's answer
   corner. Doors are parts. Gearboxes (gear set, final drive, differential) are worked on
   by car and tuning shops, not the engine shop.
 
-## Exhaust manifolds (planned with the user, 2026-11-27; milestones 1–2 built)
+## Exhaust manifolds (planned with the user, 2026-11-27; built the same day)
 
 The plan, with milestones: `docs/exhaust-manifolds.md` (keep it up to date; its last
 section lists what was decided while building). **The manifold decides the layout,
@@ -1297,9 +1297,7 @@ every mount"). B series: `b.manifold.stock`, `b.headers.short`, `b.headers.long-
 `b.manifold.turbo` (1 mount); R80: `r.manifolds.stock`, `r.headers.long-tube`,
 `r.manifolds.turbo` (2), `r.manifold.turbo-crossover` (1). Saved cars format 4 (old ids
 converted, `saved::mount_old_turbo`). Protocol 53. Every factory engine and old part
-combination comes out the same hardware (no re-bake). Shots: `FITIDS` puts a turbo on
-the first mount only, so `FITIDS="b.manifold.turbo,turbocharger.medium"` (the manifold
-first); a pair can't be dressed that way. Milestone 2 (physics, protocol 54):
+combination comes out the same hardware (no re-bake). Milestone 2 (physics, protocol 54):
 `EngineHardware::turbos` alike (`turbo_count`), each turbine and wastegate passing its
 share (`exhaust_pressure`), compressors and diverters × turbos into the ducts
 (`tract_inflow`), one shaft state, one shared intercooler (sized for the whole engine);
@@ -1309,7 +1307,24 @@ quicker by their lighter shafts); `cycle.rs` reflects 0.8 of the header's wave o
 `Tuned` collector, `TURBINE_REFLECTION` 0.3 off a turbine's inlet; the fingerprint has
 the primaries and the collector, not the branches. The oil→coolant exchange grows with
 the engine (`thermal.rs`, by the oil's heat capacity). Numbers: the plan's "Decided
-while building milestone 2"; `turbo_layouts` (ignored) prints them.
+while building milestone 2"; `turbo_layouts` (ignored) prints them. Milestone 3 (the
+game, protocols 55–56): the workshop's manifold screen (readouts as info rows: primaries,
+cast or tubes, branches, collectors, mounts, the turbos; a row per mount; turbos go on and
+come off every mount at once, new or as many alike brought; another manifold takes the
+turbos over only onto as many mounts, else they stay on the old one); `mechanicals`
+draws it from the tree (`Headers`: `ManifoldDef::cast` logs with stubs or tubes, long
+ones low and far back, the B series' long tubes a 4-2-1, the 10-into-1's left bank piped
+behind the engine across to the right bank's turbo; a snail and compressor per filled
+turbine inlet, sized by the displacement behind the mount, each with its exhaust line and
+filter pipe); `ExhaustSound::turbos` in the looks (twins whistle as two bands
+`TWIN_DETUNE` apart, together as loud as one, a V's on its own side); telemetry names
+twin turbos. Shots: `FITIDS` fills every mount (manifold first), `CARCAM`'s fourth number
+looks that far ahead of the car's middle; the R80's bay from behind over the cockpit
+(`OFFLINE=1 TRIM=1,0 UNFIT=Bonnet FITIDS="r.manifolds.turbo,turbocharger.medium"
+CARCAM="0.4,2.6,-1.6,1.0"`), from the side (`UNFIT=Bonnet,Fender CARCAM="-1.6,0.8,-0.5,1.0"`),
+the Vireo's from above (`TRIM=0,0 UNFIT=Bonnet FITIDS="b.manifold.turbo,turbocharger.medium"
+CARCAM="0.5,2.5,0.1,1.3"`); the manifold screen at the tuning shop: `CAR=1
+PLACE="-1950,-3160,150" TAPS="Enter@200;ArrowDown*2@206;Enter@214;ArrowDown*2@222;Enter@230"`.
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 
