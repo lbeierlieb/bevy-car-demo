@@ -109,8 +109,9 @@ fn engine_bay(
             BLACK,
         );
     }
-    // A battery in the bay's front left corner.
-    let battery = frame.at(nose + 0.2, body.floor + 0.42, -0.36 * body.width);
+    // A battery in the bay's front left corner, its terminals under the bonnet.
+    let y = (body.floor + 0.42).min(body.deck_height(nose + 0.2) - 0.14);
+    let battery = frame.at(nose + 0.2, y, -0.36 * body.width);
     b.cuboid(battery, Vec3::new(0.18, 0.17, 0.14), BLACK);
     b.cuboid(
         battery + Vec3::new(0.05, 0.09, 0.0),
