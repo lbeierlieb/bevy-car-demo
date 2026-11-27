@@ -795,27 +795,19 @@ pub(crate) const SETTINGS: Folder = Folder {
     web_prefix: "car-sim-settings:",
 };
 
-/// The driver's choice of aids (traction control, ABS, the most throttle), the same for
-/// every car and kept between runs (`~/.config/car-sim/settings/aids.cfg`): `drive` hands
-/// it to the active car.
+/// The driver's choice of aids (traction control, ABS), the same for every car and kept between runs (`~/.config/car-sim/settings/aids.cfg`): `drive` hands it
+/// to the active car.
 #[derive(Resource, Clone, Copy, PartialEq, Debug)]
 pub struct DriverAids {
     pub traction_control: bool,
     pub abs: bool,
-    /// The most throttle a full press gives (1: no limit), for keys that know only full
-    /// or nothing. The full power button (`Action::FullThrottle`) lifts it while held.
-    pub max_throttle: f32,
 }
-
-/// The lowest the throttle can be limited to.
-pub const LEAST_MAX_THROTTLE: f32 = 0.3;
 
 impl Default for DriverAids {
     fn default() -> Self {
         Self {
             traction_control: true,
             abs: true,
-            max_throttle: 1.0,
         }
     }
 }
@@ -836,10 +828,8 @@ impl DriverAids {
 
     fn to_text(self) -> String {
         format!(
-            "traction_control {}\nabs {}\nmax_throttle {}\n",
-            self.traction_control,
-            self.abs,
-            (self.max_throttle * 100.0).round() / 100.0
+            "traction_control {}\nabs {}\n",
+            self.traction_control, self.abs
         )
     }
 
@@ -848,19 +838,12 @@ impl DriverAids {
         let mut aids = Self::default();
         for line in text.lines() {
             let mut words = line.split_whitespace();
-            let (Some(key), Some(value)) = (words.next(), words.next()) else {
+            let (Some(key), Some(Ok(on))) = (words.next(), words.next().map(str::parse)) else {
                 continue;
             };
             match key {
-                "traction_control" => aids.traction_control = value.parse().unwrap_or(true),
-                "abs" => aids.abs = value.parse().unwrap_or(true),
-                "max_throttle" => {
-                    if let Ok(most) = value.parse::<f32>()
-                        && most.is_finite()
-                    {
-                        aids.max_throttle = most.clamp(LEAST_MAX_THROTTLE, 1.0);
-                    }
-                }
+                "traction_control" => aids.traction_control = on,
+                "abs" => aids.abs = on,
                 _ => {}
             }
         }
@@ -1139,19 +1122,8 @@ pub fn take_input(
     taken.away = away.0;
     taken.traction_control = aids.traction_control;
     taken.abs = aids.abs;
-    taken.throttle = limit_throttle(taken.throttle, &aids, wheel.full_power);
     input.step = input.step.wrapping_add(1);
-    // Encoded again, so the car is driven with the limited throttle as the server gets it.
-    input.input = taken.sent();
-}
-
-/// The driver's throttle under the aids' limit, unless the full power button is held.
-fn limit_throttle(throttle: f32, aids: &DriverAids, full_power: bool) -> f32 {
-    if full_power {
-        throttle
-    } else {
-        throttle * aids.max_throttle
-    }
+    input.input = taken;
 }
 
 /// The step's input drives the active car; any other car holds all brakes. (R is for
@@ -1494,39 +1466,13 @@ mod tests {
         let aids = DriverAids {
             traction_control: false,
             abs: true,
-            max_throttle: 0.65,
         };
         assert_eq!(DriverAids::from_text(&aids.to_text()), aids);
-        // Broken and unknown lines (the gearbox mode there once was) keep the defaults; a
-        // file from before the limit has none.
+        // Broken and unknown lines (the gearbox mode there once was) keep the defaults.
         assert_eq!(
             DriverAids::from_text("abs maybe\ntraction_control false\nautomatic true\n"),
-            DriverAids {
-                max_throttle: 1.0,
-                ..aids
-            }
+            aids
         );
-        // Out of range, it's clamped; not a number, ignored.
-        assert_eq!(
-            DriverAids::from_text("max_throttle 0.1\n").max_throttle,
-            0.3
-        );
-        assert_eq!(
-            DriverAids::from_text("max_throttle NaN\n").max_throttle,
-            1.0
-        );
-    }
-
-    #[test]
-    fn the_throttle_is_limited_unless_full_power_is_held() {
-        let aids = DriverAids {
-            max_throttle: 0.6,
-            ..default()
-        };
-        assert_eq!(limit_throttle(1.0, &aids, false), 0.6);
-        assert_eq!(limit_throttle(0.5, &aids, false), 0.3);
-        assert_eq!(limit_throttle(1.0, &aids, true), 1.0);
-        assert_eq!(limit_throttle(1.0, &DriverAids::default(), false), 1.0);
     }
 }
 

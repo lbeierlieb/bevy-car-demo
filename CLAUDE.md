@@ -1741,13 +1741,14 @@ catalogue entries, and things like swap subframes are named so they can be price
   `car::DriverAids`, saved in `~/.config/car-sim/settings/aids.cfg`, handed to the
   active car by `drive`.
 - **Maximum throttle** (asked for by the user, 2026-11-27, for keyboard players: keys
-  know only full or nothing): `DriverAids::max_throttle` (30–100 %, 100 = off, the
-  default), a slider among the driving aids. `take_input` scales the pedal (after the
-  curve, before the linkage, so not exactly the torque share) and encodes the input
-  again: the server just gets a smaller throttle (no protocol or server change). Any
-  input is limited, pedals too. Held, `Action::FullThrottle` ("Full power", left Shift
-  in the keyboard profile; `wheel.cfg` `keys 3` binds it in an older file's first
-  profile if Shift is free) lifts the limit.
+  know only full or nothing; moved from the driving aids into the controls the same day):
+  `Profile::max_throttle` (per control profile, 30–100 %, 100 = off, the default;
+  `wheel.cfg` `max_throttle` after the profile's curves), a slider in Bindings under
+  the throttle's and full power's rows. `read_wheel` scales the throttle (after the
+  curve, before the linkage, so not exactly the torque share): the server just gets a
+  smaller throttle (no protocol or server change). Held, `Action::FullThrottle` ("Full
+  power", left Shift in the keyboard profile; `wheel.cfg` `keys 3` binds it in an older
+  file's first profile if Shift is free) lifts the limit.
 - **ABS** (asked for by the user, on by default, next to traction control): per wheel,
   eases the brake share to hold a slip ratio of 0.1, the same smooth way (`ABS_*` in
   `sim.rs`), off below 2 m/s. Without it, braking while steering locks the inside

@@ -457,11 +457,28 @@ impl Default for Curves {
 const KEYS_VERSION: u32 = 3;
 
 /// A set of bindings with a name.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Profile {
     pub name: String,
     pub bindings: Vec<(Action, Binding)>,
     pub curves: Curves,
+    /// The most throttle a full press gives (1: no limit), for keys that know only full
+    /// or nothing. The full power button (`Action::FullThrottle`) lifts it while held.
+    pub max_throttle: f32,
+}
+
+/// The lowest a profile's throttle can be limited to.
+pub const LEAST_MAX_THROTTLE: f32 = 0.3;
+
+impl Default for Profile {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            bindings: Vec::new(),
+            curves: Curves::default(),
+            max_throttle: 1.0,
+        }
+    }
 }
 
 impl Profile {
@@ -606,6 +623,8 @@ impl WheelConfig {
                 let curve = profile.curves.get(kind).to_text();
                 text += &format!("curve {} {curve}\n", kind.key());
             }
+            let most = (profile.max_throttle * 100.0).round() / 100.0;
+            text += &format!("max_throttle {most}\n");
             for (action, b) in &profile.bindings {
                 text += &format!(
                     "bind {} {} {} {} {}\n",
@@ -687,6 +706,13 @@ impl WheelConfig {
                             throttle: Curve::power(throttle),
                             brake: Curve::power(brake),
                         };
+                    }
+                }
+                "max_throttle" => {
+                    if let (Some(list), Ok(most)) = (&mut profiles, value.parse::<f32>())
+                        && most.is_finite()
+                    {
+                        list[current].max_throttle = most.clamp(LEAST_MAX_THROTTLE, 1.0);
                     }
                 }
                 "curve" => {
@@ -1013,8 +1039,6 @@ pub struct WheelInput {
     pub view: bool,
     /// The look-back button is held.
     pub look_back: bool,
-    /// The full power button is held: the throttle isn't limited.
-    pub full_power: bool,
     /// Looking around by a stick: x from -1 (right) to 1 (left), y from -1 (down) to 1
     /// (up); zero when let go or unbound.
     pub look: Vec2,
@@ -1175,6 +1199,15 @@ pub fn push_value(config: &WheelConfig, gamepads: &Gamepads, action: Action) -> 
         .reduce(|a, b| if b.abs() > a.abs() { b } else { a })
 }
 
+/// The throttle under the profile's limit, unless the full power button is held.
+fn limit_throttle(throttle: f32, most: f32, full_power: bool) -> f32 {
+    if full_power {
+        throttle
+    } else {
+        throttle * most
+    }
+}
+
 /// The part of a look stick's travel around its centre that does nothing.
 const LOOK_DEADZONE: f32 = 0.12;
 
@@ -1243,7 +1276,13 @@ fn read_wheel(
         steer: angle.map(|angle| (angle / (config.range / 2.0)).clamp(-1.0, 1.0)),
         steer_keys,
         angle,
-        throttle: value(Action::Throttle),
+        throttle: value(Action::Throttle).map(|throttle| {
+            limit_throttle(
+                throttle,
+                config.profile().max_throttle,
+                held.contains(&Action::FullThrottle),
+            )
+        }),
         brake: value(Action::Brake),
         clutch: value(Action::Clutch),
         handbrake: axis(Action::Handbrake),
@@ -1255,7 +1294,6 @@ fn read_wheel(
         reset: pressed(Action::Reset),
         view: pressed(Action::View),
         look_back: down(Action::LookBack),
-        full_power: down(Action::FullThrottle),
         look: Vec2::new(look(Action::LookSide), look(Action::LookUp)),
         ignition_held: down(Action::Ignition),
         map: pressed(Action::Map),
@@ -1838,6 +1876,26 @@ mod tests {
                 .next()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn the_throttle_is_limited_unless_full_power_is_held() {
+        assert_eq!(limit_throttle(1.0, 0.6, false), 0.6);
+        assert_eq!(limit_throttle(0.5, 0.6, false), 0.3);
+        assert_eq!(limit_throttle(1.0, 0.6, true), 1.0);
+        assert_eq!(Profile::keyboard().max_throttle, 1.0);
+        // Each profile keeps its own; out of range, it's clamped; a file from before has none.
+        let mut config = WheelConfig::default();
+        config.profiles[0].max_throttle = 0.65;
+        let read = WheelConfig::from_text(&config.to_text());
+        assert_eq!(read.profiles[0].max_throttle, 0.65);
+        assert_eq!(read.profiles[1].max_throttle, 1.0);
+        let text = config
+            .to_text()
+            .replace("max_throttle 0.65", "max_throttle 0.1");
+        assert_eq!(WheelConfig::from_text(&text).profiles[0].max_throttle, 0.3);
+        let text = config.to_text().replace("max_throttle 0.65\n", "");
+        assert_eq!(WheelConfig::from_text(&text).profiles[0].max_throttle, 1.0);
     }
 
     #[test]
