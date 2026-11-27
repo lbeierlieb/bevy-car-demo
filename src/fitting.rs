@@ -22,7 +22,8 @@
 //!   brought come from the trunk or what the shop holds for the player.
 //! - Turbos go on an exhaust manifold's mounts: on every mount the same turbo, or none
 //!   (`mounts` are the paths to fill at once); a turbo and a supercharger exclude each
-//!   other (`items::engine_misfit`).
+//!   other (`items::engine_misfit`). Another manifold takes the turbos over only onto as
+//!   many mounts; else they stay on the old one.
 //! - What comes off goes into the trunk while there's room, else the shop holds it (up to
 //!   `SHOP_HOLD`), else it's thrown away. A part standing for nothing (no turbo) is never
 //!   kept.
@@ -669,8 +670,17 @@ impl<'a> Bench<'a> {
         let old = place.take().map(|mut old| {
             let slots = &catalogue.defs[part.def].slots;
             let old_slots = &catalogue.defs[old.def].slots;
+            // Turbos move to another manifold only all together, onto as many mounts;
+            // else they stay on the old one.
+            let mounts = |slots: &[crate::items::SlotDef], items: &[Option<Item>]| {
+                (slots.iter().zip(items))
+                    .filter(|(slot, item)| slot.kind == Kind::Turbo && item.is_some())
+                    .count()
+            };
+            let all_mounts = slots.iter().filter(|s| s.kind == Kind::Turbo).count();
+            let turbos_move = mounts(old_slots, &old.slots) == all_mounts;
             for (slot, item) in slots.iter().zip(&mut part.slots) {
-                if item.is_some() {
+                if item.is_some() || slot.kind == Kind::Turbo && !turbos_move {
                     continue;
                 }
                 let moved = (old_slots.iter().zip(&mut old.slots))
@@ -1458,6 +1468,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(turbos(&catalogue, &done.spec), ["turbocharger.large"]);
+    }
+
+    #[test]
+    fn turbos_move_to_another_manifold_only_all_together() {
+        let catalogue = builtin();
+        let before = CarSpec::of(&CarSetup::factory(1, 0));
+        let tuning = shop(ShopKind::Tuning, TUNING);
+        let manifold = manifold_at(&catalogue, &before);
+        let fit = |id: &str, slots: Vec<Path>| Work::Fit {
+            slots,
+            supply: new(&catalogue, id),
+        };
+        let mut left = manifold.clone();
+        left.push(0);
+        let mut right = manifold.clone();
+        right.push(1);
+        let pair = [
+            fit("r.manifolds.turbo", vec![manifold.clone()]),
+            fit("turbocharger.small", vec![left, right]),
+        ];
+        // From the pair to the 10-into-1: its one mount stays empty, the turbos on the
+        // pair taken off.
+        let mut works = pair.to_vec();
+        works.push(fit("r.manifold.turbo-crossover", vec![manifold.clone()]));
+        let done = run(&catalogue, &tuning, &before, &works).unwrap();
+        assert_eq!(turbos(&catalogue, &done.spec), ["-"]);
+        let off = (done.spec.cargo.iter().chain(&done.held))
+            .find(|item| item.def(&catalogue).id == "r.manifolds.turbo")
+            .unwrap();
+        assert_eq!(off.fitted(&catalogue, Kind::Turbo).count(), 2);
+        // From one pair of turbo manifolds to another alike, they move over.
+        let mut works = pair.to_vec();
+        works.push(fit("r.manifolds.turbo", vec![manifold]));
+        let done = run(&catalogue, &tuning, &before, &works).unwrap();
+        assert_eq!(turbos(&catalogue, &done.spec), ["turbocharger.small"; 2]);
     }
 
     #[test]

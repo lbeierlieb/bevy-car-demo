@@ -3,8 +3,11 @@
 //! worn), taking it off, new parts the shop sells (in a size and paint), parts brought in
 //! the trunk or held here. Tire shops also make new wheels of a rim and a tire, make loose
 //! wheels and take them apart. Engine shops also work on an engine or long block brought
-//! (in the trunk or held there), and rebore blocks (with pistons of the new size). Every
-//! change is asked of the server (`fitting::Work`), which answers with the car.
+//! (in the trunk or held there), and rebore blocks (with pistons of the new size). An
+//! exhaust manifold's screen says what it is (primaries, branches, collectors, mounts) and
+//! lists its mounts; turbos go on, and come off, every mount at once (new ones, or as many
+//! alike brought). Every change is asked of the server (`fitting::Work`), which answers
+//! with the car.
 
 use bevy_egui::egui;
 
@@ -18,6 +21,7 @@ use crate::items::{Does, Item, Kind, OVERSIZES};
 use crate::menu::kit;
 use crate::net::Connection;
 use crate::owned::name;
+use crate::physics::engine::hardware::Collector;
 use crate::shops::{Shop, ShopKind};
 use crate::wheels::{self, Rim, TireSize, Wheel};
 
@@ -283,7 +287,7 @@ pub fn window(ui: &mut egui::Ui, fitter: &mut Fitter, bench: Bench) {
     let mut go = None;
     match &screen {
         Screen::Slot(path) if path.is_empty() => car_screen(ui, &bench, &mut ask, &mut go),
-        Screen::Slot(path) => slot_screen(ui, fitter, &bench, path, &mut ask, &mut go),
+        Screen::Slot(path) => slot_screen(ui, fitter, &bench, path, &mut ask, &mut asks, &mut go),
         Screen::Ware(path, n) => ware_screen(ui, fitter, &bench, path, *n, &mut ask),
         Screen::NewWheel(path) => new_wheel_screen(ui, fitter, &bench, path, &mut ask),
         Screen::MakeWheel => make_wheel_screen(ui, fitter, &bench, &mut ask),
@@ -470,18 +474,26 @@ fn slot_screen(
     bench: &Bench,
     path: &Path,
     ask: &mut Option<Work>,
+    asks: &mut Option<Vec<Work>>,
     go: &mut Option<Screen>,
 ) {
     let catalogue = bench.catalogue;
-    let (Some((kind, _)), Some(holder)) = (bench.kinds(path), bench.at(&path[..path.len() - 1]))
-    else {
+    let holder_path = &path[..path.len() - 1];
+    let (Some((kind, _)), Some(holder)) = (bench.kinds(path), bench.at(holder_path)) else {
         kit::note(ui, "That's gone.");
         return;
     };
     let slot = &holder.def(catalogue).slots[usize::from(path[path.len() - 1])];
     let fitted = bench.at(path);
+    // A turbo's mount: every mount of the manifold takes one alike.
+    let mounts = mounts(catalogue, bench.tree(), path);
     kit::section(ui, &slot.name);
     kit::info(ui, "Fitted", &fitted_name(catalogue, fitted));
+    if kind == Kind::Turbo
+        && let Some(litres) = behind_mount(bench, holder_path)
+    {
+        kit::info(ui, "A turbo here is sized for", &litres);
+    }
     if let Some(item) = fitted.filter(|item| !item.def(catalogue).absent) {
         kit::info(
             ui,
@@ -491,6 +503,14 @@ fn slot_screen(
         if item.def(catalogue).wear.is_some() {
             let wear = wear_note(item).unwrap_or_else(|| "as new".into());
             kit::info(ui, "Condition", &wear);
+        }
+        if kind == Kind::Manifold {
+            manifold_readouts(ui, catalogue, item.def(catalogue));
+            let all = mounts_of(catalogue, item, path);
+            if !all.is_empty() {
+                let on = turbos_on(catalogue, item).unwrap_or_else(|| "none".into());
+                kit::info(ui, "Turbos", &on);
+            }
         }
         rebore_row(ui, bench, path, item, go);
         // What's on it that this shop works on (an engine's bolt-ons, a wheel's rim and
@@ -524,9 +544,35 @@ fn slot_screen(
             );
         }
         let nothing = catalogue.defs.iter().any(|d| d.absent && d.kind == kind);
-        if (!slot.required || nothing || loose(path)) && kit::button(ui, "Take it off").clicked() {
+        let turbos = mounts_of(catalogue, item, path);
+        if kind == Kind::Manifold && item.fitted(catalogue, Kind::Turbo).next().is_some() {
+            // The turbos come off all together.
+            if kit::button(ui, "Take the turbos off").clicked() {
+                let on: Vec<Path> = turbos
+                    .into_iter()
+                    .filter(|p| bench.at(p).is_some())
+                    .collect();
+                *asks = Some(removes(&on));
+            }
+        }
+        if mounts.len() > 1 {
+            if kit::button(ui, "Take it off every mount").clicked() {
+                *asks = Some(removes(&mounts));
+            }
+        } else if (!slot.required || nothing || loose(path))
+            && kit::button(ui, "Take it off").clicked()
+        {
             *ask = Some(Work::Remove { slot: path.clone() });
         }
+    }
+    if mounts.len() > 1 {
+        kit::note(
+            ui,
+            &format!(
+                "A turbo goes on every mount at once ({}), the same on each.",
+                mounts.len()
+            ),
+        );
     }
     kit::section(ui, &format!("New from {}", bench.shop.name));
     let made = bench.wares_for(kind, path);
@@ -550,6 +596,43 @@ fn slot_screen(
         def.kind == kind && made_for(def, chassis) && made_for_engine(catalogue, def, engine)
     };
     let trunk = &bench.car.setup.cargo;
+    if mounts.len() > 1 {
+        // Turbos brought go on every mount at once: as many alike as there are mounts.
+        let brought: Vec<(u8, usize, &Item)> = (trunk.iter().enumerate())
+            .map(|(i, item)| (IN_TRUNK, i, item))
+            .chain((bench.held.iter().enumerate()).map(|(i, item)| (HELD, i, item)))
+            .filter(|(_, _, item)| fits(item))
+            .collect();
+        let mut defs: Vec<usize> = brought.iter().map(|(_, _, item)| item.def).collect();
+        defs.sort_unstable();
+        defs.dedup();
+        for def in defs {
+            let alike: Vec<(u8, usize)> = (brought.iter())
+                .filter(|(_, _, item)| item.def == def)
+                .map(|&(list, i, _)| (list, i))
+                .collect();
+            let name = &catalogue.defs[def].name;
+            if alike.len() >= mounts.len() {
+                let label = format!("Fit {} brought", mounts.len());
+                if kit::button_with(ui, &label, name).clicked() {
+                    *asks = Some(fit_brought(&mounts, &alike));
+                }
+            } else {
+                kit::note(
+                    ui,
+                    &format!(
+                        "{} {name} brought: {} needed alike.",
+                        alike.len(),
+                        mounts.len()
+                    ),
+                );
+            }
+        }
+        if brought.is_empty() {
+            kit::note(ui, "Nothing for this in the trunk or held here.");
+        }
+        return;
+    }
     let mut any = false;
     for (i, item) in trunk.iter().enumerate().filter(|(_, item)| fits(item)) {
         any = true;
@@ -734,6 +817,33 @@ fn ware_screen(
                 });
             }
             kit::info(ui, "Mass", &format!("{:.1} kg", made.mass));
+            if made.kind == Kind::Manifold {
+                manifold_readouts(ui, catalogue, made);
+                let mounts = (made.slots.iter())
+                    .filter(|s| s.kind == Kind::Turbo)
+                    .count();
+                if let Some(old) = bench.at(path)
+                    && let Some(on) = turbos_on(catalogue, old)
+                {
+                    let fitted = old.fitted(catalogue, Kind::Turbo).count();
+                    kit::note(
+                        ui,
+                        &if fitted == mounts {
+                            format!("The {on} on the one fitted move over onto it.")
+                        } else {
+                            format!(
+                                "The {on} on the one fitted come off with it: a turbo goes \
+                                 on every mount, and it has {mounts}."
+                            )
+                        },
+                    );
+                }
+            }
+            if made.kind == Kind::Turbo
+                && let Some(litres) = behind_mount(bench, &path[..path.len() - 1])
+            {
+                kit::info(ui, "Sized for", &format!("{litres} behind each mount"));
+            }
             Supply::Part {
                 def,
                 variant: fitter.variant as u16,
@@ -1071,4 +1181,132 @@ fn rebore_screen(
         "A bigger bore makes a bigger engine; the block takes only pistons of its size from \
          then on, and is never bored smaller again. The old pistons come out.",
     );
+}
+
+/// What an exhaust manifold is, from its definition: its primaries, how it gathers the
+/// cylinders, what they end in and its turbo mounts.
+fn manifold_readouts(ui: &mut egui::Ui, catalogue: &Catalogue, def: &crate::items::PartDef) {
+    let Does::Manifold { family, manifold } = def.does else {
+        return;
+    };
+    let Some(family) = catalogue.families.get(family) else {
+        return;
+    };
+    let Some(made) = family.manifolds.get(manifold) else {
+        return;
+    };
+    let vee = family.layout.is_vee();
+    let cylinders = family.versions.first().map_or(0, |v| v.block.cylinders);
+    let m = &made.manifold;
+    kit::info(
+        ui,
+        "Primaries",
+        &format!(
+            "{:.0} mm{}",
+            m.primary_length * 1000.0,
+            if made.cast { ", cast" } else { ", tubes" }
+        ),
+    );
+    let per = cylinders / m.branches.max(1);
+    let branches = match m.branches {
+        1 => format!("all {cylinders} cylinders into one"),
+        2 if vee => format!("each bank's {per} into its own"),
+        n => format!("{n} of {per} cylinders"),
+    };
+    kit::info(ui, "Branches", &branches);
+    let collector = match (m.collector, m.branches) {
+        (Collector::Tuned, 1) => "a tuned collector".to_string(),
+        (Collector::Tuned, n) => format!("{n} tuned collectors"),
+        (Collector::Turbine, 1) => "a turbine inlet".to_string(),
+        (Collector::Turbine, n) => format!("{n} turbine inlets"),
+    };
+    kit::info(ui, "Into", &collector);
+    let mounts = match made.mounts() {
+        0 => "none (no turbo goes on it)".to_string(),
+        2 if vee => "2, one on each bank".to_string(),
+        n => n.to_string(),
+    };
+    kit::info(ui, "Turbo mounts", &mounts);
+}
+
+/// How much engine a turbo on a mount of the manifold at `manifold` (a path) is sized for:
+/// the displacement behind the mount, "4.0 l".
+fn behind_mount(bench: &Bench, manifold: &[u8]) -> Option<String> {
+    let catalogue = bench.catalogue;
+    let (family, version) = engine_on(catalogue, bench.tree(), manifold)?;
+    let item = bench.at(manifold)?;
+    let Does::Manifold { manifold, .. } = item.def(catalogue).does else {
+        return None;
+    };
+    let family = catalogue.families.get(family)?;
+    let branches = family.manifolds.get(manifold)?.manifold.branches.max(1);
+    let litres = family.versions.get(version)?.block.displacement() * 1000.0 / branches as f32;
+    Some(format!("{litres:.1} l"))
+}
+
+/// The turbos on a manifold: "2 × Medium (turbo)", or none.
+fn turbos_on(catalogue: &Catalogue, manifold: &Item) -> Option<String> {
+    let turbos: Vec<&Item> = manifold.fitted(catalogue, Kind::Turbo).collect();
+    let first = turbos.first()?;
+    let name = worn_name(catalogue, first);
+    Some(match turbos.len() {
+        1 => name,
+        n => format!("{n} × {name}"),
+    })
+}
+
+/// Works putting turbos brought (alike, `picks` in the trunk and held here) on `mounts`:
+/// the highest places taken first, so the others stay where they are.
+fn fit_brought(mounts: &[Path], picks: &[(u8, usize)]) -> Vec<Work> {
+    let mut picks = picks.to_vec();
+    picks.sort_by_key(|&(list, i)| std::cmp::Reverse((list, i)));
+    (mounts.iter().zip(picks))
+        .map(|(mount, (list, i))| Work::Fit {
+            slots: vec![mount.clone()],
+            supply: if list == IN_TRUNK {
+                Supply::Trunk(i as u16)
+            } else {
+                Supply::Held(i as u16)
+            },
+        })
+        .collect()
+}
+
+/// The paths of the turbo mounts of `manifold`, at `path`.
+fn mounts_of(catalogue: &Catalogue, manifold: &Item, path: &[u8]) -> Vec<Path> {
+    (manifold.def(catalogue).slots.iter().enumerate())
+        .filter(|(_, slot)| slot.kind == Kind::Turbo)
+        .map(|(i, _)| {
+            let mut mount = path.to_vec();
+            mount.push(i as u8);
+            mount
+        })
+        .collect()
+}
+
+/// Works taking off what's in each of `slots`.
+fn removes(slots: &[Path]) -> Vec<Work> {
+    (slots.iter())
+        .map(|slot| Work::Remove { slot: slot.clone() })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turbos_brought_are_taken_from_the_end_of_their_lists_first() {
+        let mounts = [vec![3, 2, 0], vec![3, 2, 1]];
+        let works = fit_brought(&mounts, &[(IN_TRUNK, 1), (HELD, 0), (IN_TRUNK, 4)]);
+        let supplies: Vec<Supply> = (works.into_iter())
+            .map(|work| match work {
+                Work::Fit { supply, .. } => supply,
+                _ => panic!("not a fit"),
+            })
+            .collect();
+        // Two mounts, two turbos: what's held first (a list of its own), then the trunk's
+        // later one, so the places of the others don't move.
+        assert_eq!(supplies, [Supply::Held(0), Supply::Trunk(4)]);
+    }
 }
