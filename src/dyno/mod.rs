@@ -1067,27 +1067,45 @@ fn cams(ui: &mut egui::Ui, view: &mut DynoView) {
     };
     let fitted = &car.setup.engine.parts;
     let draft = view.draft.get_or_insert_with(|| fitted.clone());
-    kit::slider(
-        ui,
-        "Intake cam advance",
-        &mut draft.intake_timing,
-        -10.0..=10.0,
-        1.0,
-        |v| format!("{v:.0}°"),
-    );
-    kit::slider(
-        ui,
-        "Exhaust cam retard",
-        &mut draft.exhaust_timing,
-        -10.0..=10.0,
-        1.0,
-        |v| format!("{v:.0}°"),
-    );
-    kit::note(
-        ui,
-        "Adjustable cam gears: advancing the intake cam fills better low down, retarding it \
-         breathes better high up.",
-    );
+    if draft.one_cam() {
+        // One cam works both rows of valves: its gear moves them together.
+        kit::slider(
+            ui,
+            "Cam advance",
+            &mut draft.intake_timing,
+            -10.0..=10.0,
+            1.0,
+            |v| format!("{v:.0}°"),
+        );
+        kit::note(
+            ui,
+            "An adjustable cam gear: one cam works all the valves, so advancing it opens and \
+             closes the intakes and the exhausts earlier alike. Advanced, it fills better low \
+             down; retarded, it breathes better high up.",
+        );
+    } else {
+        kit::slider(
+            ui,
+            "Intake cam advance",
+            &mut draft.intake_timing,
+            -10.0..=10.0,
+            1.0,
+            |v| format!("{v:.0}°"),
+        );
+        kit::slider(
+            ui,
+            "Exhaust cam retard",
+            &mut draft.exhaust_timing,
+            -10.0..=10.0,
+            1.0,
+            |v| format!("{v:.0}°"),
+        );
+        kit::note(
+            ui,
+            "Adjustable cam gears: advancing the intake cam fills better low down, retarding \
+             it breathes better high up.",
+        );
+    }
     ui.add_enabled_ui(draft.has_turbo(), |ui| {
         kit::slider(
             ui,
