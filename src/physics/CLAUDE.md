@@ -111,7 +111,18 @@ catalogue entries, and things like swap subframes are named so they can be price
 - **The automatic clutch** (no clutch control bound; with one bound, none of this, asked
   for by the user, 2026-11-27): up a gear, the throttle stays shut after the gear goes in
   until the engine is down to the gear's speed (`CUT_RPM`), then fades back in
-  (`CUT_FADE`), so it doesn't flare against the slipping clutch.
+  (`CUT_FADE`), so it doesn't flare against the slipping clutch. Pulling away it bites
+  from idle + `BITE_ABOVE_IDLE` (150) to full `BITE_SPAN` (750) higher (was idle + 700
+  to + 2200, pulling away at 2500 rpm; now about 1450), and closes anyway over
+  `FEED_TIME` (0.8 s) on the gas (`feed`, a driver's foot coming up), so in too high a
+  gear it drags the engine down and stalls it: measured on flat ground, 1st and 2nd
+  always pull away, 3rd stalls the Vireos on light gas and bogs to 400–550 rpm floored,
+  4th always stalls. Under `FEED_GAS` (after traction control) `feed` goes back down
+  (`FEED_BACK`): without that, traction control cutting the gas against wheelspin
+  stalled every launch. Off the gas at a crawl it opens (braking to a stop in gear never
+  stalls). It stalls only with a gear in (not hunting at idle), and while shifting the
+  ECU's overrun cut does the firing cut, so a gear going in from idle doesn't stall it.
+  No automatic restart: the ignition (I), with a hint.
 - Gotchas met: engines much bigger than 2 litres on light flywheels hunt at idle (the
   V8/V10/V12 flywheels are heavier than realistic for that); wild cams idle faster
   (ECU idle speed follows the cam). With all-wheel drive, locked front wheels drag the
@@ -130,7 +141,7 @@ catalogue entries, and things like swap subframes are named so they can be price
   the tank plus 12 % per g (sideways and lengthwise, against the floor, so slopes
   count) to cover the pickup, sloshing over 0.4 s, the lines bridging 0.25 s. Nearly
   empty in a long corner it leans out until the car slows enough. Empty, the engine
-  stops; with the automatic clutch it restarts by itself once fuel comes back. Cars
+  stops; it needs the ignition (I) once fuel comes back. Cars
   start full. `consumption` (ignored) prints every car at 100 and 150 km/h; the coupé's
   2-litre does about 7 L/100 km at 100, idling 0.7 L/h.
 - **Collisions** (`physics/collision.rs`, `obstacles.rs`): a car's body is one box

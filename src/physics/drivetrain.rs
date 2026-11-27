@@ -4,9 +4,10 @@
 //! and final drive ratios): its torque goes to the wheels and its inertia is added to
 //! theirs, so the wheel-spin update in the corners stays implicit and stable. The clutch
 //! slips when pulling away, while shifting, and below idle speed. Then the engine spins
-//! freely and the clutch passes a torque that depends only on engine speed (like a
-//! centrifugal clutch), so it never couples the engine stiffly to the wheels at the 120 Hz
-//! chassis rate.
+//! freely and the clutch passes a torque that depends on engine speed (like a centrifugal
+//! clutch) and on how long the driver has been on the gas (like a foot coming up off the
+//! pedal), so it never couples the engine stiffly to the wheels at the 120 Hz chassis
+//! rate. Pulling away in too high a gear, it drags the engine down and stalls it.
 //!
 //! With a clutch pedal, the driver works the clutch instead: it passes up to its capacity
 //! (a share of it by the pedal's travel, `ENGAGEMENT`: free play at both ends, a biting
@@ -20,7 +21,7 @@ use super::engine::{Engine, EngineBuild};
 
 /// Engine speed to rpm.
 const RPM: f32 = 60.0 / (2.0 * PI);
-/// Below this, a running engine stalls (only with a clutch pedal).
+/// Below this, a running engine stalls.
 const STALL_RPM: f32 = 400.0;
 /// The starter motor: its torque at the crank standing (N·m) and the speed it can't turn
 /// the engine past (rpm), falling straight in between.
@@ -43,6 +44,18 @@ const BLIP_RPM: f32 = 400.0;
 const CUT_RPM: f32 = 50.0;
 const CUT_FADE: f32 = 0.1;
 const CUT_MOST: f32 = 0.6;
+/// The automatic clutch pulling away: it starts to bite this far above idle (rpm) and
+/// passes its full torque `BITE_SPAN` higher.
+const BITE_ABOVE_IDLE: f32 = 150.0;
+const BITE_SPAN: f32 = 750.0;
+/// On the gas, the automatic clutch closes fully within this (s) whatever the engine
+/// speed, as a driver lets the pedal up: in too high a gear the engine can't keep up.
+const FEED_TIME: f32 = 0.8;
+/// Throttle (as the engine gets it, after traction control) under which the automatic
+/// clutch opens again by time, over `FEED_BACK` (s): like a driver's foot going back down
+/// lifting off, and so traction control cutting the gas doesn't stall the engine.
+const FEED_GAS: f32 = 0.15;
+const FEED_BACK: f32 = 0.3;
 /// The clutch's engagement, pedal travel (0 released, 1 floored) to the share of its
 /// torque capacity it passes (linear in between). Like a real one, the pedal has free
 /// play at the top (fully engaged) and the bottom (fully apart), and the plates meet at
@@ -326,6 +339,9 @@ pub struct Drivetrain {
     /// Share of the driver's throttle let through after an upshift with the automatic
     /// clutch (0 cut until the engine has come down to the gear's speed, 1 all).
     cut: f32,
+    /// How far the automatic clutch has closed pulling away by time on the gas (0..1; 1
+    /// once locked), as a driver's foot coming up.
+    feed: f32,
     locked: bool,
     pub engine: Engine,
     /// How hard the engine fired in the last step (0 at idle or cut, 1 at full load).
@@ -386,6 +402,7 @@ impl Drivetrain {
             in_gear: AUTO_DWELL,
             engaged: 1.0,
             cut: 1.0,
+            feed: 0.0,
             locked: false,
             engine: Engine::default(),
             load: 0.0,
@@ -445,8 +462,8 @@ impl Drivetrain {
         self.cranking
     }
 
-    /// Starts a stalled engine at once (the automatic clutch's restart), unless it's
-    /// blown. The driver cranks it with `starter` instead.
+    /// Starts a stalled engine at once, unless it's blown (for tests). The driver cranks
+    /// it with `starter` instead.
     pub fn start(&mut self, engine: &EngineSetup) {
         if !self.running && !self.engine.blown(&engine.build.hardware) {
             self.running = true;
@@ -572,12 +589,6 @@ impl Drivetrain {
     ) -> WheelDrive {
         let clutch = clutch.filter(|_| !self.automatic);
         self.clutch_pedal = clutch;
-        // Without a pedal, the automatic clutch never lets the engine stall: it starts
-        // again by itself, as long as it gets fuel, unless the driver switched it off. A
-        // blown engine stays off.
-        if clutch.is_none() && self.engine.fuel_supply > 0.5 && !self.switched_off {
-            self.start(engine);
-        }
         let blown = self.engine.blown(&engine.build.hardware);
         if blown {
             self.running = false;
@@ -650,8 +661,10 @@ impl Drivetrain {
             (engine.ratio(self.gear), throttle * self.cut)
         };
         let build = &engine.build;
+        // While shifting it doesn't fire (with the automatic clutch the ECU's overrun cut
+        // does that above idle, so the engine idles on while a gear goes in from a stop).
         let firing = (self.running || (cranking && synced && !blown))
-            && (self.shift.is_none() || blip > 0.0);
+            && (self.shift.is_none() || blip > 0.0 || clutch.is_none());
         self.engine
             .step(build, throttle_plate(throttle), self.rpm, firing, dt);
         let cycle = self.engine.cycle(build, self.rpm);
@@ -680,10 +693,24 @@ impl Drivetrain {
             return drive;
         }
 
-        // Lock once the wheels have caught up with the engine; slip again below idle, or
-        // when the engine makes more torque than the clutch can pass.
+        // Off the gas at a crawl, or in neutral, the driver's foot is back on the pedal:
+        // closing starts over. On the gas it comes up, off it goes back down; locked,
+        // it's up.
+        let crawling = wheel_rpm < engine.idle_rpm() * 0.9;
+        if (self.gear == 0 && self.shift.is_none()) || (crawling && throttle < FEED_GAS) {
+            self.feed = 0.0;
+        } else if self.locked {
+            self.feed = 1.0;
+        } else if throttle >= FEED_GAS {
+            self.feed = (self.feed + dt / FEED_TIME).min(1.0);
+        } else {
+            self.feed = (self.feed - dt / FEED_BACK).max(0.0);
+        }
+        // Lock once the wheels have caught up with the engine; slip again below idle
+        // (unless the clutch is fully up: then it drags the engine down with the wheels),
+        // or when the engine makes more torque than the clutch can pass.
         let holds = engine_torque(wheel_rpm).abs() <= most;
-        if ratio == 0.0 || wheel_rpm < engine.idle_rpm() * 0.9 || !holds {
+        if ratio == 0.0 || (crawling && self.feed < 1.0) || !holds {
             self.locked = false;
         } else if wheel_rpm >= self.rpm - 50.0 {
             self.locked = true;
@@ -696,22 +723,34 @@ impl Drivetrain {
                 inertia: engine.build.hardware.inertia * ratio * ratio,
             }
         } else {
-            // Slipping clutch: it bites from 700 rpm above idle and passes its full torque
-            // 1500 rpm higher, so the engine pulls away at about 2500 rpm on full throttle.
-            // While shifting or in neutral it's open, and after a shift it closes gradually.
-            let bite = ((self.rpm - engine.idle_rpm() - 700.0) / 1500.0).clamp(0.0, 1.0);
-            let clutch = if ratio == 0.0 {
+            // Slipping clutch: it bites from `BITE_ABOVE_IDLE` and passes its full torque
+            // `BITE_SPAN` higher, so the engine pulls away at about 1500 rpm on full
+            // throttle; and it closes with time on the gas (`feed`) whatever the speed.
+            // While shifting or in neutral it's open, and after a shift it closes
+            // gradually. It passes up to that, as much as brings the engine to the
+            // wheels' speed within the step (so either way, and never past it).
+            let bite =
+                ((self.rpm - engine.idle_rpm() - BITE_ABOVE_IDLE) / BITE_SPAN).clamp(0.0, 1.0);
+            let share = (bite * bite * (3.0 - 2.0 * bite)).max(self.feed);
+            let capacity = if ratio == 0.0 {
                 0.0
             } else {
-                most * bite * bite * (3.0 - 2.0 * bite) * self.engaged
+                most * share * self.engaged
             };
-            let net = engine_torque(self.rpm) - clutch;
-            self.rpm = (self.rpm + net / engine.build.hardware.inertia * dt * RPM).max(0.0);
+            let inertia = engine.build.hardware.inertia;
+            let torque = engine_torque(self.rpm);
+            let matching = torque - (wheel_rpm - self.rpm) / RPM * inertia / dt;
+            let clutch = matching.clamp(-capacity, capacity);
+            self.rpm = (self.rpm + (torque - clutch) / inertia * dt * RPM).max(0.0);
             WheelDrive {
                 torque: clutch * ratio,
                 inertia: 0.0,
             }
         };
+        // Dragged down by the clutch, it stalls (not hunting at idle in neutral).
+        if self.running && self.rpm < STALL_RPM && ratio != 0.0 {
+            self.running = false;
+        }
         self.catch(cranking && !blown);
         self.wear(engine, &drive, ratio, wheel_rpm, wheel_omega, dt);
         drive
@@ -839,6 +878,7 @@ crate::snapshot::snapshot!(Drivetrain {
     in_gear,
     engaged,
     cut,
+    feed,
     locked,
     engine,
     load,
@@ -909,6 +949,106 @@ mod tests {
         let speed = drive(&mut drivetrain, &engine, 1.0, 3.0);
         assert!(speed > 8.0, "speed {speed}");
         assert!(drivetrain.locked);
+    }
+
+    /// Pulls away from a standstill in `gear` at `throttle` without a clutch control for
+    /// `seconds`: the speed reached (m/s) and the lowest and highest rpm on the way.
+    fn pull_away(gear: i8, throttle: f32, seconds: f32) -> (Drivetrain, f32, f32, f32) {
+        let engine = EngineSetup::default();
+        let (radius, mass, dt) = (0.33, 1260.0, 1.0 / 120.0);
+        let mut drivetrain = Drivetrain::new(&engine);
+        drivetrain.neutral();
+        drivetrain.shift_to(&engine, gear);
+        let mut omega = 0.0;
+        let (mut low, mut high) = (f32::INFINITY, 0.0f32);
+        for i in 0..(seconds / dt) as usize {
+            // Idling into gear first, then the gas.
+            let gas = if i < 60 { 0.0 } else { throttle };
+            let out = drivetrain.step(&engine, gas, None, omega, true, dt);
+            omega = (omega + out.torque / (mass * radius * radius + out.inertia) * dt).max(0.0);
+            if i >= 60 {
+                low = low.min(drivetrain.rpm);
+                high = high.max(drivetrain.rpm);
+            }
+        }
+        (drivetrain, omega * radius, low, high)
+    }
+
+    #[test]
+    fn the_automatic_clutch_pulls_away_low_in_first() {
+        for throttle in [0.3, 0.6, 1.0] {
+            let (drivetrain, speed, low, _) = pull_away(1, throttle, 4.0);
+            assert!(drivetrain.running && drivetrain.locked, "at {throttle}");
+            assert!(speed > 3.0, "{speed} m/s at {throttle}");
+            assert!(low > 700.0, "down to {low} rpm at {throttle}");
+        }
+        // Floored, it slips at well under 2000 rpm until the wheels catch up.
+        let (_, _, _, high) = pull_away(1, 1.0, 1.0);
+        assert!(high > 1000.0 && high < 1900.0, "{high} rpm");
+    }
+
+    #[test]
+    fn the_gas_cut_pulling_away_opens_the_automatic_clutch_again() {
+        // Traction control cutting the gas against wheelspin: the clutch lets go again
+        // instead of dragging the engine down.
+        let engine = EngineSetup::default();
+        let dt = 1.0 / 120.0;
+        let mut drivetrain = Drivetrain::new(&engine);
+        for i in 0..240 {
+            let gas = if i < 30 { 1.0 } else { 0.08 };
+            drivetrain.step(&engine, gas, None, 0.0, true, dt);
+        }
+        assert!(drivetrain.running);
+        assert!(drivetrain.rpm > 700.0, "rpm {}", drivetrain.rpm);
+    }
+
+    #[test]
+    fn the_automatic_clutch_stalls_pulling_away_in_third() {
+        for throttle in [0.3, 1.0] {
+            let (drivetrain, speed, ..) = pull_away(3, throttle, 4.0);
+            assert!(!drivetrain.running, "at {throttle}");
+            assert!(speed < 2.0, "{speed} m/s at {throttle}");
+        }
+        // Stalled, it stays off until started: no gas brings it back.
+        let engine = EngineSetup::default();
+        let (mut drivetrain, ..) = pull_away(3, 1.0, 4.0);
+        drivetrain.neutral();
+        for _ in 0..240 {
+            drivetrain.step(&engine, 1.0, None, 0.0, true, 1.0 / 120.0);
+        }
+        assert!(!drivetrain.running && drivetrain.rpm < 1.0);
+        drivetrain.starter = true;
+        for _ in 0..240 {
+            drivetrain.step(&engine, 0.0, None, 0.0, true, 1.0 / 120.0);
+        }
+        assert!(drivetrain.running);
+    }
+
+    #[test]
+    fn the_automatic_clutch_opens_braking_to_a_stop() {
+        let engine = EngineSetup::default();
+        let dt = 1.0 / 120.0;
+        let mut drivetrain = Drivetrain::new(&engine);
+        drivetrain.neutral();
+        drivetrain.shift_to(&engine, 4);
+        let mut omega = 2000.0 / engine.rpm_in(4, 1.0);
+        for _ in 0..120 {
+            drivetrain.step(&engine, 0.3, None, omega, true, dt);
+        }
+        assert!(drivetrain.locked);
+        while omega > 0.0 {
+            drivetrain.step(&engine, 0.0, None, omega, true, dt);
+            omega = (omega - 8.0 * dt).max(0.0);
+        }
+        for _ in 0..120 {
+            drivetrain.step(&engine, 0.0, None, 0.0, true, dt);
+        }
+        assert!(drivetrain.running);
+        assert!(
+            (drivetrain.rpm - engine.idle_rpm()).abs() < 100.0,
+            "rpm {}",
+            drivetrain.rpm
+        );
     }
 
     #[test]

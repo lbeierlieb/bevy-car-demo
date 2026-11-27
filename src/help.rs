@@ -291,12 +291,20 @@ fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (S
             "The tank is empty".into(),
             "Without fuel the engine stops.".into(),
         ),
-        Hint::Stalled => (
+        Hint::Stalled if pedal => (
             "The engine has stalled".into(),
             format!(
                 "The clutch dragged it below idle. Hold {} to start it again. To pull \
                  away, give a little gas and let the clutch out slowly; press the clutch \
                  whenever you stop.",
+                key("I", Action::Ignition)
+            ),
+        ),
+        Hint::Stalled => (
+            "The engine has stalled".into(),
+            format!(
+                "Pulling away in too high a gear, the clutch dragged it below idle. Hold \
+                 {} to start it again, and pull away in first or second.",
                 key("I", Action::Ignition)
             ),
         ),
