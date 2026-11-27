@@ -212,7 +212,7 @@ As built (`src/menu/`):
 apps load `assets/gerach.terrain` at startup, so they see a re-bake at once (tests use
 the embedded copy, `Terrain::baked`, the fallback otherwise); commit the re-baked file.
 - Engine maps of every factory engine of the built-in catalogue (B16 and B18 since
-  2026-11-26, see `catalogue/engines.rs`), plus two engines tests measure against (W20,
+  2026-11-26, R80 since 2026-11-27, see `catalogue/engines.rs`), plus two engines tests measure against (W20,
   `EngineHardware::default`; B16T, `EngineHardware::turbo`), are baked into
   `src/physics/engine/baked/<code>.maps` (listed in `engine/store.rs`'s `BAKED`). After changing `cycle.rs`, `maps.rs` (outside
   their tests; any edit counts, their text is in the fingerprint) or a factory engine's
@@ -996,7 +996,7 @@ Milestone 7, the engine shop (2026-11-27, built while the user slept; my decisio
 listed in the plan's "Decided while building milestone 7"). **Items carry their wear**:
 `PartDef::wear` (`items::Wear`: pistons, rods, valves (in the cylinder head), head gasket,
 bearings (the crankshaft), turbo, tread (tires)), `Item::wear` (a value per cylinder or
-rib, trailing zeros left out, at most `MOST_WEAR` 8; on the wire, protocol 40).
+rib, trailing zeros left out, at most `MOST_WEAR` 12 (8 before protocol 50); on the wire, protocol 40).
 `Condition::put_on` puts a car's live `Damage` and treads on its parts, `of_parts` reads
 them back; the server does that around every shop's work (`stash::try_work`), so a new
 part is new, one taken off keeps its wear, one brought brings it (`Fresh`/`renew` gone),
@@ -1584,7 +1584,8 @@ catalogue entries, and things like swap subframes are named so they can be price
   history before that; names are made up, no real cars), gearboxes (the two
   transverse ones), clutches, suspension kits and paints (the tire
   compounds' rubber is `physics/tire.rs`'s `COMPOUNDS`, named in `catalogue/parts.rs`).
-  `engines.rs` has the families (the B series, versions B16 and B18; `EngineHardware::default`
+  `engines.rs` has the families (the B series, versions B16 and B18; the R-series V10,
+  R80, which no chassis offers yet; `EngineHardware::default`
   is still the W20 2-litre four everything is scaled from). Tests needing another kind
   of car change the one: `catalogue::builtin_changed` (heavier, rear-wheel drive…).
 - **A car** is a `CarBuild` (chassis, paint, gearbox, clutch, final drive, limited-slip,
@@ -1912,8 +1913,22 @@ phasing, VTEC-style cam switching).
   retards the exhaust by minus the intake advance and the dyno shows one knob. The
   valvetrain friction is live (`spring_drag`: force × valves/4, rollers half), so the
   4-valve engines' maps stayed the same. Phasers and switching cams need
-  `items::OVERHEAD_CAMS`, provided by long blocks not `Ohv`. Every factory engine so far
-  is 4-valve DOHC.
+  `items::OVERHEAD_CAMS`, provided by long blocks not `Ohv`. A block's head is data
+  (`catalogue::engines::Head`: layout, rocker ratio, cam side mass, rollers, lift
+  relative to the bore; `TWIN_CAM` for the B series, `PUSHROD` 1.6:1, 0.2 kg, rollers,
+  0.125). The factory idle speed follows the cams' overlap (duration − 2 × separation,
+  past 20°: 12.5 rpm a degree), not the duration. Engine wear per cylinder covers 12
+  (`damage::MAX_CYLINDERS`, protocol 50).
+- **The R-series V10** (2026-11-27, milestone B): R80 "8.0 V10", 90°, two valves on
+  pushrods, 101.6 × 98.6, CR 9.1, runners 400 mm, headers 500, flow 0.95, a 276° cam on
+  a 130° lobe separation (the model's cams are abstract: a mild 250°/114° cam made ~760
+  N·m, 95 N·m/l; only a late intake closing brings the low end down, and the wide
+  separation keeps the overlap, so the idle, low), springs made for 6000 (398 N seat,
+  float 6380 rpm), flywheel 0.35; 545 N·m at 1500, ~637 N·m at 3900, 295 kW at 4500,
+  peak 305 kW at 5100, idle 850. 0.86 × 0.78 × 0.60 m, 300 kg (its long block item
+  `r80`, 210 kg, comes from the family like every version's; no `engine.r80` assembly
+  until a trim has it). `the_pushrod_v10_pulls_low_and_broad`. The NA torque range in
+  `every_factory_engine_idles_and_pulls` starts at 75 N·m/l for it.
 - ECUs are switchable (agreed with the user): `EcuModel` (Stock, Programmable) is chosen
   in the garage like a part; the stock one stays. One `Ecu` struct for all models, the
   model deciding which features it uses (cam control lives in every `Ecu` but only the

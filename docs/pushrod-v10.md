@@ -105,6 +105,39 @@ rarely.
 - Baked into `engine/baked/R80.maps`, a line in `BAKED`. Not yet in any chassis (it
   doesn't fit the Vireo); a test checks its curve against the targets.
 
+**Built** (2026-11-27). Decided while building it:
+- `catalogue::engines::Head` per `Block`: the valve layout, rocker ratio, cam side mass,
+  rollers and the lift relative to the bore (0.11 for the B series, as before: their maps
+  stayed the same). The valve's own mass scales with the intake valve's diameter too.
+  The R80's: `ValveLayout::PUSHROD`, 1.6:1, 0.2 kg lifter and pushrod, hydraulic rollers,
+  lift 0.125 × bore (12.7 mm). `made_for` gave 398 N seat force, 37.4 kN/m, float at
+  6380 rpm; rods 43.5 kN.
+- **The cam isn't the plan's.** With a mild 250° cam on 114° the model makes ~760 N·m
+  (95 N·m/l) and its power falls off early: port flow cuts the top, not the low end, and
+  a slower burn for two-valve heads (tried: 25 % longer) took only 2 %. Only a late intake
+  closing lowers the low end, so the R80 has a 276° cam on a 130° lobe separation (the
+  model's durations are abstract, at zero lift), runners 400 mm, headers 500, port flow
+  0.95. The curve: 545 N·m at 1500, 573 at 2100, 631 at 3500, ~637 at 3900, 625 at 4500
+  (295 kW), peak 305 kW at 5100, 473 N·m at 5900. Torque peaks at 3900, not 3600, and power
+  at 5100 (but 295–300 kW from 4500).
+- The factory idle speed followed the duration (850 + 12.5 per degree over 240), which
+  put this cam at 1300 rpm; it follows the overlap now (duration − 2 × separation, 12.5
+  rpm per degree over 20): the B16 and B18 idle as before, a regrind's idle rises a little
+  more (sport cam +250 instead of +200, race +550 instead of +450), the R80 idles at 850.
+- `every_factory_engine_idles_and_pulls` allows naturally aspirated engines from 75 N·m/l
+  (the R80 makes 80).
+- Engine wear was per cylinder for at most 8 cylinders (`damage::MAX_CYLINDERS`): now 12
+  (and `items::MOST_WEAR` 12), protocol 50.
+- The R80's long block item (`r80`, 210 kg) comes from the family like every version's;
+  a used parts shop selling `*` may offer it. It doesn't fit the Vireo (`install` refuses
+  the swap: too long across). No `engine.r80` assembly yet: assemblies come from trims,
+  so it appears with the Merrow's trim (milestone C).
+- For milestone C: the family is 0.86 long, 0.78 wide, 0.60 high, 300 kg, `Layout::V10`;
+  it needs a longitudinal bay at least that big, and a clutch and gearbox for ~640 N·m.
+  Its headers are 500 mm: the room `Chassis::fit` gives (the bay's `header_room` times the
+  share the bay's width beside the engine leaves, `HEADER_SLACK`) must be at least 0.5 m,
+  or the factory headers are cut and the test that factory offerings aren't capped fails.
+
 ## Milestone C: the Merrow
 
 - Chassis: front-mid longitudinal engine (behind the front axle), rear-wheel drive,
