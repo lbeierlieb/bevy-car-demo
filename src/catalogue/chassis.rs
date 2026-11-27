@@ -455,7 +455,7 @@ mod tests {
                 let hardware = parts.hardware();
                 let free = Parts::factory(code).unwrap().hardware();
                 assert_eq!(
-                    hardware.exhaust.header_length, free.exhaust.header_length,
+                    hardware.exhaust.manifold.primary_length, free.exhaust.manifold.primary_length,
                     "{} with the {code}",
                     made.name
                 );
@@ -508,7 +508,7 @@ mod tests {
         let mut parts = Parts::factory("B16").unwrap();
         parts.header_room = tight.header_room;
         let hardware = parts.hardware();
-        assert_eq!(hardware.exhaust.header_length, tight.header_room);
+        assert_eq!(hardware.exhaust.manifold.primary_length, tight.header_room);
         assert!(EngineMaps::stock(&hardware).is_none());
     }
 

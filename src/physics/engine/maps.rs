@@ -418,12 +418,14 @@ fn load_point(hardware: &EngineHardware, ve: &Table, point: &[f32]) -> [f32; 6] 
     .map(|value| value as f32)
 }
 
-/// A fingerprint of what the maps depend on: the cylinder side of the hardware, whether
-/// it has a turbo (for the exhaust pressures by load), and the code that bakes them.
+/// A fingerprint of what the maps depend on: the cylinder side of the hardware (the
+/// manifold's primaries and collector, not how many branches: one cylinder is simulated),
+/// whether it has a turbo (for the exhaust pressures by load), and the code that bakes
+/// them.
 pub fn fingerprint(hardware: &EngineHardware) -> u64 {
     let h = hardware;
     let key = format!(
-        "{} {} {} {} {} {:?} {} {} {} {} {} {} {} {} {:?}",
+        "{} {} {} {} {} {:?} {} {} {} {} {} {} {:?} {} {} {:?}",
         h.cylinders,
         h.bore,
         h.stroke,
@@ -435,7 +437,8 @@ pub fn fingerprint(hardware: &EngineHardware) -> u64 {
         h.intake_timing,
         h.exhaust_timing,
         h.intake.runner_length,
-        h.exhaust.header_length,
+        h.exhaust.manifold.primary_length,
+        h.exhaust.manifold.collector,
         h.turbo.is_some(),
         h.port_flow,
         h.valvetrain,

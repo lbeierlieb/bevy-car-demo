@@ -145,7 +145,7 @@ impl Field {
             Field::ThrottleDiameter => &mut h.intake.throttle_diameter,
             Field::RunnerLength => &mut h.intake.runner_length,
             Field::TractVolume => &mut h.intake.tract_volume,
-            Field::HeaderLength => &mut h.exhaust.header_length,
+            Field::HeaderLength => &mut h.exhaust.manifold.primary_length,
             Field::PipeArea => &mut h.exhaust.pipe_area,
             Field::CatArea => h.exhaust.cat_area.as_mut()?,
             Field::SilencerArea => h.exhaust.silencer_area.as_mut()?,
@@ -200,12 +200,17 @@ impl Regrind {
     }
 }
 
+/// What a turbo's compressor and turbine gain in efficiency per doubling of the
+/// displacement it's sized for.
+const TURBO_SCALE_EFFICIENCY: f32 = 0.02;
+
 /// A turbo kit: the turbo with compressor and turbine wheels of these diameters (m), the
 /// turbine's flow area (m²), the shaft's inertia (kg·m²) and the wastegate's flow area
 /// (m²; a small turbine needs a big one to let the excess exhaust past), a diverter valve,
 /// an intercooler, and the piping to it (more volume ahead of the throttle). The numbers
-/// are for a 2-litre engine: the kit is scaled to the engine's displacement (flow areas
-/// with it, so wheel diameters with its root).
+/// are for a 2-litre engine: a turbo goes on each of the exhaust manifold's branches, and
+/// is scaled to the displacement behind it (flow areas with it, so wheel diameters with
+/// its root); the intercooler, shared, to the whole engine's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TurboKit {
     pub compressor: f32,
@@ -217,20 +222,26 @@ pub struct TurboKit {
 
 impl TurboKit {
     fn fit(&self, hardware: &mut EngineHardware) {
-        let size = relative_size(hardware);
+        let whole = relative_size(hardware);
+        let turbos = hardware.exhaust.manifold.branches.max(1);
+        let size = whole / turbos as f32;
         let wheel = size.sqrt();
+        // Bigger wheels are a little more efficient (tip clearances and the blades' edges
+        // count less), smaller ones less.
+        let scale = (TURBO_SCALE_EFFICIENCY * size.log2()).clamp(-0.05, 0.05);
         hardware.intake.tract_volume *= 3.0;
+        hardware.turbos = turbos;
         hardware.turbo = Some(Turbo {
             compressor: Compressor {
                 diameter: self.compressor * wheel,
                 head: 0.7,
                 choke: 0.29,
-                efficiency: 0.75,
+                efficiency: 0.75 + scale,
             },
             turbine: Turbine {
                 diameter: self.turbine * wheel,
                 area: self.turbine_area * size,
-                efficiency: 0.7,
+                efficiency: 0.7 + scale,
             },
             inertia: self.inertia * wheel.powi(5),
             wastegate: Wastegate {
@@ -240,7 +251,7 @@ impl TurboKit {
             },
             intercooler: Intercooler {
                 effectiveness: 0.7,
-                area: 3e-3 * size,
+                area: 3e-3 * whole,
             },
             diverter: Some(Diverter {
                 area: 5e-4 * size,
@@ -393,7 +404,9 @@ impl Readout {
                 (intake, exhaust) => format!("{intake:.0}° / {exhaust:.0}°"),
             },
             Readout::Runners => format!("{:.0} mm runners", h.intake.runner_length * 1e3),
-            Readout::Headers => format!("{:.0} mm", h.exhaust.header_length * 1e3),
+            Readout::Headers => {
+                format!("{:.0} mm", h.exhaust.manifold.primary_length * 1e3)
+            }
             Readout::Throttle => format!("{:.0} mm", h.intake.throttle_diameter * 1e3),
             Readout::Pipe => {
                 let diameter = (h.exhaust.pipe_area * 4.0 / std::f32::consts::PI).sqrt();
@@ -561,6 +574,10 @@ impl Parts {
     pub fn hardware(&self) -> EngineHardware {
         let version = self.version();
         let mut hardware = version.block.clone();
+        // The manifold first: the turbos go on its branches, sized for them.
+        if let Some(manifold) = self.family().manifolds.get(self.manifold) {
+            hardware.exhaust.manifold = manifold.manifold;
+        }
         for part in self.fitted() {
             for effect in &part.effects {
                 effect.apply(&mut hardware);
@@ -573,12 +590,10 @@ impl Parts {
         {
             hardware.bore = round_to(hardware.bore + mm * 1e-3, 1e-5);
         }
-        // The manifold's primaries; where they don't fit, shorter ones are made.
-        if let Some(manifold) = self.family().manifolds.get(self.manifold) {
-            hardware.exhaust.header_length = manifold.manifold.primary_length;
-        }
+        // Where the manifold's primaries don't fit, shorter ones are made.
         let room = round_to(self.header_room, 0.01);
-        hardware.exhaust.header_length = hardware.exhaust.header_length.min(room);
+        let primaries = &mut hardware.exhaust.manifold.primary_length;
+        *primaries = primaries.min(room);
         hardware.intake_timing = self.intake_timing;
         hardware.exhaust_timing = self.exhaust_timing;
         // One cam in the block: its gear advances the exhaust lobes with the intake ones.
@@ -702,11 +717,11 @@ mod tests {
         let mut parts = Parts::stock();
         parts.header_room = 0.6;
         let hardware = parts.hardware();
-        assert_eq!(hardware.exhaust.header_length, 0.6);
+        assert_eq!(hardware.exhaust.manifold.primary_length, 0.6);
         // It's still the factory's engine, in a tight car.
         assert_eq!(hardware.name, "B16 1.6 four");
         parts.manifold = 1;
-        assert_eq!(parts.hardware().exhaust.header_length, 0.39);
+        assert_eq!(parts.hardware().exhaust.manifold.primary_length, 0.39);
     }
 
     /// The manifolds' primaries are what the header parts made of the blocks' headers
@@ -771,9 +786,9 @@ mod tests {
                     let mut parts = factory.clone();
                     parts.manifold = m;
                     let hardware = parts.hardware();
-                    // Until the turbine's inlet is simulated, a turbo manifold without
-                    // turbos is the cast one.
-                    if m != version.preset.manifold && !manifold.mounts {
+                    // Every manifold makes another engine (a turbo manifold without
+                    // turbos ends in the turbine flanges).
+                    if m != version.preset.manifold {
                         assert_ne!(hardware, stock, "{}: {}", version.code, manifold.name);
                     }
                     assert!(!parts.manifold_label(m).is_empty());

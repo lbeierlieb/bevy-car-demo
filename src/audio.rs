@@ -366,7 +366,7 @@ impl ExhaustSound {
         Self {
             muffle: 1.0 - (1.0 - silencer) * (1.0 - catalyst),
             bore: (exhaust.pipe_area / (stock.pipe_area * size)).sqrt(),
-            header: EXHAUST_SOUND_SPEED / (4.0 * exhaust.header_length.max(0.05)),
+            header: EXHAUST_SOUND_SPEED / (4.0 * exhaust.manifold.primary_length.max(0.05)),
             turbine: if hardware.turbo.is_some() { 1.0 } else { 0.0 },
         }
     }

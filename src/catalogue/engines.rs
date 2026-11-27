@@ -113,6 +113,7 @@ fn block(b: Block) -> EngineHardware {
         port_flow: b.flow,
         intake: reference.intake,
         turbo: None,
+        turbos: 0,
         supercharger: None,
         exhaust: reference.exhaust,
         cooling: reference.cooling,
@@ -129,7 +130,11 @@ fn block(b: Block) -> EngineHardware {
         tract_volume: intake.tract_volume * size,
     };
     hardware.exhaust = Exhaust {
-        header_length: b.header / 1000.0,
+        manifold: Manifold {
+            primary_length: b.header / 1000.0,
+            collector: Collector::Tuned,
+            branches: 1,
+        },
         pipe_area: exhaust.pipe_area * size,
         cat_area: exhaust.cat_area.map(|area| area * size),
         silencer_area: exhaust.silencer_area.map(|area| area * size),
@@ -395,7 +400,7 @@ mod tests {
                 let manifold = &family.manifolds[version.preset.manifold];
                 assert!(!manifold.mounts, "{}", version.code);
                 assert_eq!(
-                    manifold.manifold.primary_length, version.block.exhaust.header_length,
+                    manifold.manifold.primary_length, version.block.exhaust.manifold.primary_length,
                     "{}",
                     version.code
                 );

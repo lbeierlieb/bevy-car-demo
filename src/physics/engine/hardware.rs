@@ -47,8 +47,11 @@ pub struct EngineHardware {
     /// (for its bore): bigger valves and ported runners flow more.
     pub port_flow: f32,
     pub intake: Intake,
-    /// A turbocharger between the air filter and the throttle, and in the exhaust.
+    /// Turbochargers between the air filter and the throttle, and in the exhaust: `turbos`
+    /// alike (one on each of the manifold's branches; 0 without), each as `turbo` says,
+    /// sharing the intercooler.
     pub turbo: Option<Turbo>,
+    pub turbos: u32,
     /// A supercharger between the air filter and the throttle, driven by the crank (see
     /// `supercharger`).
     pub supercharger: Option<Supercharger>,
@@ -310,6 +313,13 @@ impl Collector {
     pub const ALL: [Collector; 2] = [Collector::Tuned, Collector::Turbine];
 }
 
+impl Manifold {
+    /// Cylinders on each branch, of an engine of `cylinders`.
+    pub fn per_branch(&self, cylinders: u32) -> f32 {
+        cylinders as f32 / self.branches.max(1) as f32
+    }
+}
+
 /// How an exhaust manifold gathers the cylinders' exhaust: primaries of a length (m) into
 /// `branches` collectors, each taking as many cylinders (a V engine's pair of manifolds:
 /// two, one per bank; a 10-into-1: one).
@@ -322,8 +332,9 @@ pub struct Manifold {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Exhaust {
-    /// Header primary length from valve to collector (m).
-    pub header_length: f32,
+    /// The manifold: its primaries from valve to collector, what they end in, and how the
+    /// cylinders are gathered.
+    pub manifold: Manifold,
     /// Effective flow areas of the pipe and, if fitted, the catalyst and silencer (m²).
     pub pipe_area: f32,
     pub cat_area: Option<f32>,
@@ -377,6 +388,16 @@ impl Exhaust {
 }
 
 impl EngineHardware {
+    /// How many turbos it has, alike (at least one with a turbo, none without), as a
+    /// factor for their flows.
+    pub fn turbo_count(&self) -> f32 {
+        if self.turbo.is_some() {
+            self.turbos.max(1) as f32
+        } else {
+            0.0
+        }
+    }
+
     /// It has parts only an ECU with cam control can use: a second cam profile, or
     /// phasers.
     pub fn has_cam_control(&self) -> bool {
@@ -500,9 +521,14 @@ impl Default for EngineHardware {
                 tract_volume: 2.0e-3,
             },
             turbo: None,
+            turbos: 0,
             supercharger: None,
             exhaust: Exhaust {
-                header_length: 0.8,
+                manifold: Manifold {
+                    primary_length: 0.8,
+                    collector: Collector::Tuned,
+                    branches: 1,
+                },
                 pipe_area: 1.9e-3,
                 cat_area: Some(2.0e-3),
                 silencer_area: Some(1.6e-3),

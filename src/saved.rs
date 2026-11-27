@@ -411,7 +411,13 @@ impl Parts {
             _ => (0, 0),
         };
         let made = catalogue.families.get(family)?;
-        let headers = made.versions.get(version)?.block.exhaust.header_length;
+        let headers = made
+            .versions
+            .get(version)?
+            .block
+            .exhaust
+            .manifold
+            .primary_length;
         let wanted = crate::physics::engine::parts::round_to(headers * times, 0.01);
         nearest_manifold(catalogue, family, wanted, false)
     }

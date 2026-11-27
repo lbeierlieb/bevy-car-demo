@@ -14,7 +14,7 @@
 
 use std::f64::consts::PI;
 
-use super::hardware::{CamProfile, EngineHardware};
+use super::hardware::{CamProfile, Collector, EngineHardware};
 
 const R: f64 = 287.0;
 const STOICHIOMETRIC: f64 = 14.7;
@@ -46,6 +46,10 @@ const GAMMA_UNBURNT: f64 = 1.35;
 /// Share of the waves' swing (around their mean) that comes back from the pipes' open ends.
 const INTAKE_REFLECTION: f64 = 0.85;
 const HEADER_REFLECTION: f64 = 0.8;
+/// What comes back from a turbine's inlet: its nozzle chokes the collector, which then
+/// acts less like an open end (and a turbo manifold's small, short collector less like a
+/// big volume), so little of the wave comes back inverted to scavenge.
+const TURBINE_REFLECTION: f64 = 0.3;
 /// Share of the exhaust's heat above the wall temperature lost in the exhaust port.
 const PORT_LOSS: f64 = 0.1;
 /// Share of the way from the intake air's temperature to the wall's that the fresh charge
@@ -72,6 +76,8 @@ pub struct Cylinder {
     exhaust: Valve,
     runner: Pipe,
     header: Pipe,
+    /// Share of the waves the header's collector sends back (see `HEADER_REFLECTION`).
+    header_reflection: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -163,7 +169,11 @@ impl Cylinder {
                 count: f64::from(layout.exhausts()) * flow,
             },
             runner: pipe(hardware.intake.runner_length, 0.45 * bore),
-            header: pipe(hardware.exhaust.header_length, 0.42 * bore),
+            header: pipe(hardware.exhaust.manifold.primary_length, 0.42 * bore),
+            header_reflection: match hardware.exhaust.manifold.collector {
+                Collector::Tuned => HEADER_REFLECTION,
+                Collector::Turbine => TURBINE_REFLECTION,
+            },
         }
     }
 
@@ -639,7 +649,7 @@ impl Cylinder {
             // With both valves closed, the waves reflect off them unchanged.
             for _ in 0..closed_steps {
                 intake.send(intake.arriving(delay_in, INTAKE_REFLECTION));
-                header.send(header.arriving(delay_ex, HEADER_REFLECTION));
+                header.send(header.arriving(delay_ex, self.header_reflection));
             }
 
             let mut charge = burn.end;
@@ -653,7 +663,7 @@ impl Cylinder {
                 let t = charge.temperature();
                 let p = charge.mass * R * t / v;
                 let wave_in = intake.arriving(delay_in, INTAKE_REFLECTION);
-                let wave_ex = header.arriving(delay_ex, HEADER_REFLECTION);
+                let wave_ex = header.arriving(delay_ex, self.header_reflection);
                 // Waves can't take the pipe below a vacuum.
                 let intake_port = Port {
                     area: self.intake.area(mid),

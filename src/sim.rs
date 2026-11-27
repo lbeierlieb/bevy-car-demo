@@ -548,9 +548,11 @@ mod tests {
             wheels < 1.25 * speed,
             "wheels at {wheels} m/s, car at {speed}"
         );
+        // Without it the wheels spin away (a little less since the turbine's inlet sends
+        // less of the header's wave back).
         let (spinning, wheels) = launch(false);
         assert!(
-            wheels > 1.5 * spinning,
+            wheels > 1.3 * spinning,
             "wheels at {wheels} m/s, car at {spinning}"
         );
         assert!(speed > spinning + 1.0, "{speed} against {spinning} m/s");

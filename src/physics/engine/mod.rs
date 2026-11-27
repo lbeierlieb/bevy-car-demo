@@ -338,6 +338,8 @@ impl Engine {
             let flow = orifice_flow(filter, AMBIENT_PRESSURE, pressure, AMBIENT_TEMPERATURE);
             return (flow, 0.0);
         };
+        // Every turbo (each with its diverter valve) alike, sharing the ducts.
+        let turbos = hardware.turbo_count();
         let (inlet, outlet) = self.compressor_pressures(hardware, turbo, pressure);
         let speed = self.turbo_speed;
         let compressor = &turbo.compressor;
@@ -347,7 +349,7 @@ impl Engine {
             let area = valve.area * open.clamp(0.0, 1.0);
             orifice_flow(area, pressure, inlet, self.charge_temperature)
         });
-        (flow, vented)
+        (flow * turbos, vented * turbos)
     }
 
     /// Pressure after the air filter, with the air through it as it was (Pa).
@@ -380,7 +382,9 @@ impl Engine {
     }
 
     /// The turbo shaft between turbine and compressor, the wastegate following the boost,
-    /// and the charge temperature following the intercooler (with some heat soak).
+    /// and the charge temperature following the intercooler (with some heat soak). With
+    /// several turbos alike, each takes its share of the exhaust and gives its share of the
+    /// air at the same pressures, so one shaft stands for them all.
     fn step_turbo(
         &mut self,
         turbo: &hardware::Turbo,
@@ -407,7 +411,8 @@ impl Engine {
             turbo::wastegate_opening(&turbo.wastegate, self.boost_pressure - AMBIENT_PRESSURE);
         self.wastegate += (target - self.wastegate) * (dt / WASTEGATE_LAG).min(1.0);
         let cooled = turbo::intercooled(turbo, compressor.temperature);
-        let rate = (compressor.flow / INTERCOOLER_FLOW).min(1.0) * dt / INTERCOOLER_LAG;
+        let flow = compressor.flow * hardware.turbo_count();
+        let rate = (flow / INTERCOOLER_FLOW).min(1.0) * dt / INTERCOOLER_LAG;
         self.charge_temperature += (cooled - self.charge_temperature) * rate.min(1.0);
     }
 
@@ -553,17 +558,19 @@ fn restricted(hardware: &EngineHardware, flow: f32, temperature: f32) -> f32 {
 }
 
 /// Exhaust manifold pressure (Pa) that pushes `flow` (kg/s) of gas at `temperature` (K)
-/// out: through the turbine and the wastegate (open by `wastegate`, 0..1), if there's a
-/// turbo, and then the restrictions.
+/// out: through the turbines and their wastegates (open by `wastegate`, 0..1), if there
+/// are turbos, each taking its share, and then the restrictions.
 fn exhaust_pressure(hardware: &EngineHardware, flow: f32, temperature: f32, wastegate: f32) -> f32 {
     let after = restricted(hardware, flow, temperature);
     let Some(turbo) = &hardware.turbo else {
         return after;
     };
     let gate = turbo.wastegate.area * wastegate;
+    let turbos = hardware.turbo_count();
     let passes = |p| {
-        orifice_flow(turbo.turbine.area, p, after, temperature)
-            + orifice_flow(gate, p, after, temperature)
+        turbos
+            * (orifice_flow(turbo.turbine.area, p, after, temperature)
+                + orifice_flow(gate, p, after, temperature))
     };
     let (mut low, mut high) = (after, after + 1e5);
     while passes(high) < flow && high < 1e7 {
@@ -1001,6 +1008,249 @@ mod tests {
         // It no longer boosts, but the engine runs on.
         assert!(engine.boost_pressure < AMBIENT_PRESSURE);
         assert!(engine.torque(&build, 6000.0) > 50.0);
+    }
+
+    /// The R80 on the family's manifold `id`, with turbo `turbo` (by its place in the
+    /// slot, 0 none) on every mount and low compression pistons with a turbo.
+    fn r80_on(id: &str, turbo: usize) -> EngineBuild {
+        r80_boosted(id, turbo, 0.6)
+    }
+
+    /// Likewise with the wastegate's spring at `boost` (bar).
+    fn r80_boosted(id: &str, turbo: usize, boost: f32) -> EngineBuild {
+        let mut parts = parts::Parts::factory("R80").unwrap();
+        parts.manifold = (parts.family().manifolds.iter())
+            .position(|m| m.id == id)
+            .unwrap();
+        if turbo > 0 {
+            parts.chosen[crate::catalogue::PISTONS] = 1;
+            parts.chosen[crate::catalogue::TURBO] = turbo;
+            parts.boost = boost;
+        }
+        EngineBuild::new(parts.hardware(), parts.ecu)
+    }
+
+    /// Boost (bar) and torque (N·m) flat out after `seconds` at each of `rpms`.
+    fn boost_curve(build: &EngineBuild, rpms: &[f32], seconds: f32) -> Vec<(f32, f32, f32)> {
+        (rpms.iter())
+            .map(|&rpm| {
+                let engine = run_flat_out(build, rpm, seconds);
+                let boost = (engine.boost_pressure - AMBIENT_PRESSURE) / 1e5;
+                let torque = engine.torque(build, rpm);
+                (rpm, (boost * 100.0).round() / 100.0, torque.round())
+            })
+            .collect()
+    }
+
+    /// Seconds from flooring it at `rpm` (after cruising at a light throttle) until the
+    /// boost reaches `bar` (10 if it never does).
+    fn spool_time(build: &EngineBuild, rpm: f32, bar: f32) -> f32 {
+        let mut engine = Engine::default();
+        for _ in 0..600 {
+            engine.step(build, 0.15, rpm, true, 1.0 / 120.0);
+        }
+        for step in 0..1200 {
+            engine.step(build, 1.0, rpm, true, 1.0 / 120.0);
+            if engine.boost_pressure - AMBIENT_PRESSURE >= bar * 1e5 {
+                return step as f32 / 120.0;
+            }
+        }
+        10.0
+    }
+
+    /// Mean boost (bar) over the last second of `seconds` flat out at `rpm`.
+    fn mean_boost(build: &EngineBuild, rpm: f32, seconds: f32) -> f32 {
+        let mut engine = run_flat_out(build, rpm, seconds - 1.0);
+        let mut sum = 0.0;
+        for _ in 0..120 {
+            engine.step(build, 1.0, rpm, true, 1.0 / 120.0);
+            sum += engine.boost_pressure - AMBIENT_PRESSURE;
+        }
+        sum / 120.0 / 1e5
+    }
+
+    /// The R80 naturally aspirated: its stock cast manifolds end in tuned collectors, the
+    /// turbo manifolds without turbos in the turbines' flanges, which send less of the
+    /// wave back (less scavenging); long tubes tune lower in the band than the short cast
+    /// primaries.
+    #[test]
+    fn the_r80s_manifolds_tune_it_without_turbos() {
+        let rpms = [3500.0, 4000.0, 4500.0, 5000.0, 5500.0];
+        let torques = |id: &str| {
+            let build = r80_on(id, 0);
+            assert!(build.hardware.turbo.is_none() && build.hardware.turbos == 0);
+            rpms.map(|rpm| run_flat_out(&build, rpm, 3.0).torque(&build, rpm))
+        };
+        let (cast, empty, long) = (
+            torques("r.manifolds.stock"),
+            torques("r.manifolds.turbo"),
+            torques("r.headers.long-tube"),
+        );
+        println!("cast {cast:?}\nempty turbo manifolds {empty:?}\nlong tubes {long:?}");
+        let mean = |t: &[f32; 5]| t.iter().sum::<f32>() / 5.0;
+        assert!(mean(&cast) > mean(&empty), "{cast:?} vs {empty:?}");
+        // Long tubes ahead of the turbo manifolds low in the band, behind high up.
+        assert!(
+            long[0] > empty[0] && long[1] > empty[1],
+            "{long:?} vs {empty:?}"
+        );
+        assert!(
+            long[3] < empty[3] && long[4] < empty[4],
+            "{long:?} vs {empty:?}"
+        );
+    }
+
+    /// The same turbo kit on the R80's pair of turbo manifolds (a turbo per bank, each
+    /// sized for 4 litres) and on the 10-into-1 (one sized for 8): the pair's smaller
+    /// shafts spool quicker; the big one, a little more efficient, holds more boost high
+    /// up where the small ones run out of breath.
+    #[test]
+    fn twin_turbos_spool_quicker_and_a_big_one_holds_boost_high() {
+        let (pair, single) = (
+            r80_on("r.manifolds.turbo", 2),
+            r80_on("r.manifold.turbo-crossover", 2),
+        );
+        assert_eq!((pair.hardware.turbos, single.hardware.turbos), (2, 1));
+        let (small, big) = (pair.hardware.turbo.unwrap(), single.hardware.turbo.unwrap());
+        let ratio = big.compressor.diameter / small.compressor.diameter;
+        assert!((ratio - 2f32.sqrt()).abs() < 1e-3, "{ratio}");
+        for rpm in [3500.0, 4000.0] {
+            let (quick, slow) = (spool_time(&pair, rpm, 0.4), spool_time(&single, rpm, 0.4));
+            assert!(quick < 0.85 * slow, "{quick} s vs {slow} s at {rpm} rpm");
+        }
+        // On their springs both hold the wastegate's boost.
+        for build in [&pair, &single] {
+            let boost = mean_boost(build, 5000.0, 4.0);
+            assert!((0.62..0.76).contains(&boost), "{boost} bar");
+        }
+        // The small turbo held to 1.5 bar at the top: the pair's spin nearer their limit,
+        // and held to 1.8 bar they burst where the big one still holds.
+        let share = |build: &EngineBuild, rpm| {
+            let engine = run_flat_out(build, rpm, 5.0);
+            engine.turbo_speed / build.hardware.turbo.unwrap().max_speed()
+        };
+        let (pair, single) = (
+            r80_boosted("r.manifolds.turbo", 1, 1.5),
+            r80_boosted("r.manifold.turbo-crossover", 1, 1.5),
+        );
+        let (twins, one) = (share(&pair, 5800.0), share(&single, 5800.0));
+        println!("shaft speed at 1.5 bar, 5800 rpm: pair {twins}, crossover {one} of the limit");
+        assert!(twins > one + 0.02, "{twins} vs {one}");
+        let (pair, single) = (
+            r80_boosted("r.manifolds.turbo", 1, 1.8),
+            r80_boosted("r.manifold.turbo-crossover", 1, 1.8),
+        );
+        let (burst, held) = (
+            run_flat_out(&pair, 5000.0, 5.0),
+            run_flat_out(&single, 5000.0, 5.0),
+        );
+        assert!(burst.damage.turbo_failed(), "{:?}", burst.damage);
+        assert!(!held.damage.turbo_failed(), "{:?}", held.damage);
+        let boost = (held.boost_pressure - AMBIENT_PRESSURE) / 1e5;
+        assert!(boost > 1.7, "{boost} bar");
+    }
+
+    /// Twin turbos on the V10 flat out for a minute: the factory tune keeps the turbine
+    /// inlets clear of their limit and the cylinders clear of knock, and the oil (cooled
+    /// by the coolant as a big engine's is) holds.
+    #[test]
+    fn twin_turbos_last_on_the_factory_tune() {
+        let build = r80_on("r.manifolds.turbo", 2);
+        let mut engine = Engine {
+            airspeed: 40.0,
+            ..Engine::default()
+        };
+        for _ in 0..60 * 120 {
+            engine.step(&build, 1.0, 5500.0, true, 1.0 / 120.0);
+        }
+        let cycle = engine.cycle(&build, 5500.0);
+        assert_eq!(cycle.knock, 0.0);
+        assert!(engine.damage.turbo < 1e-3, "{:?}", engine.damage);
+        let wear = engine.damage.worst(10);
+        assert!(
+            wear < 1e-3,
+            "wear {wear}: {:?} {:?}",
+            engine.damage,
+            engine.thermal
+        );
+    }
+
+    /// The B series' turbo manifold has one branch: its turbo is sized for the whole
+    /// engine, as before the manifolds, and only the turbine inlet's weaker reflection
+    /// changed it (less scavenging at the bottom, more at the top). Before: 202 N·m and
+    /// 0.40 bar at 3000 rpm, 254 at 4000, 241 and 0.69 bar at 5000.
+    #[test]
+    fn the_b_series_turbo_is_as_before() {
+        let build = EngineBuild::new(EngineHardware::turbo(), ecu::EcuModel::Stock);
+        assert_eq!(build.hardware.turbos, 1);
+        for (rpm, torque, boost) in [
+            (3000.0, 202.0, 0.4),
+            (4000.0, 254.0, 0.65),
+            (5000.0, 241.0, 0.69),
+        ] {
+            let engine = run_flat_out(&build, rpm, 4.0);
+            let at = engine.torque(&build, rpm);
+            let bar = (engine.boost_pressure - AMBIENT_PRESSURE) / 1e5;
+            assert!((at / torque - 1.0).abs() < 0.06, "{at} N·m at {rpm} rpm");
+            assert!((bar - boost).abs() < 0.04, "{bar} bar at {rpm} rpm");
+        }
+    }
+
+    /// Prints the R80's turbo layouts and the B series' turbo engine.
+    #[test]
+    #[ignore]
+    fn turbo_layouts() {
+        let rpms: Vec<f32> = [
+            1500.0, 2000.0, 2500.0, 3000.0, 3500.0, 4000.0, 4500.0, 5000.0, 5500.0, 5800.0,
+        ]
+        .to_vec();
+        let b = EngineBuild::new(EngineHardware::turbo(), ecu::EcuModel::Stock);
+        println!("B16T medium: {:?}", boost_curve(&b, &rpms, 4.0));
+        for turbo in [1, 2, 3] {
+            for id in ["r.manifolds.turbo", "r.manifold.turbo-crossover"] {
+                let build = r80_on(id, turbo);
+                let t = build.hardware.turbo.unwrap();
+                println!(
+                    "{id} turbo {turbo} x{}: compressor {:.0} mm, rev limit {}: {:?}",
+                    build.hardware.turbos,
+                    t.compressor.diameter * 1e3,
+                    build.ecu.rev_limit,
+                    boost_curve(&build, &rpms, 4.0)
+                );
+            }
+        }
+        for id in ["r.manifolds.turbo", "r.manifold.turbo-crossover"] {
+            let build = r80_boosted(id, 1, 1.2);
+            println!(
+                "{id} small at 1.2 bar: {:?}",
+                boost_curve(&build, &rpms, 4.0)
+            );
+            for bar in [1.2, 1.5, 1.8] {
+                for turbo in [1, 2] {
+                    let build = r80_boosted(id, turbo, bar);
+                    let means: Vec<_> = [4000.0, 5000.0, 5800.0]
+                        .map(|rpm| (rpm, (mean_boost(&build, rpm, 5.0) * 100.0).round() / 100.0))
+                        .to_vec();
+                    println!("{id} turbo {turbo} at {bar} bar: mean boost {means:?}");
+                }
+            }
+        }
+        for turbo in [1, 2, 3] {
+            for id in ["r.manifolds.turbo", "r.manifold.turbo-crossover"] {
+                let build = r80_on(id, turbo);
+                let spool: Vec<_> = [2500.0, 3000.0, 3500.0, 4000.0]
+                    .map(|rpm| (rpm, spool_time(&build, rpm, 0.4)))
+                    .to_vec();
+                println!("{id} turbo {turbo}: time to 0.4 bar {spool:?}");
+            }
+        }
+        for id in [
+            "r.manifolds.stock",
+            "r.headers.long-tube",
+            "r.manifolds.turbo",
+        ] {
+            println!("{id}: {:?}", boost_curve(&r80_on(id, 0), &rpms, 3.0));
+        }
     }
 
     #[test]

@@ -138,11 +138,12 @@ pub struct Version {
 }
 
 impl Family {
-    /// Mass of an engine of this family as built (kg): a turbo with its plumbing and
-    /// intercooler adds to it.
+    /// Mass of an engine of this family as built (kg): turbos with their plumbing and
+    /// intercooler add to it (each sized for its share of the engine).
     pub fn built_mass(&self, hardware: &EngineHardware) -> f32 {
         let turbo = if hardware.turbo.is_some() {
-            12.0 + 6.0 * relative_size(hardware)
+            let turbos = hardware.turbos.max(1) as f32;
+            turbos * (12.0 + 6.0 * relative_size(hardware) / turbos)
         } else {
             0.0
         };

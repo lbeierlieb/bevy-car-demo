@@ -354,7 +354,7 @@ fields!(Supercharger {
     bypass
 });
 fields!(Exhaust {
-    header_length,
+    manifold,
     pipe_area,
     cat_area,
     silencer_area
@@ -388,6 +388,7 @@ fields!(EngineHardware {
     port_flow,
     intake,
     turbo,
+    turbos,
     supercharger,
     exhaust,
     cooling,
