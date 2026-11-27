@@ -583,7 +583,7 @@ fn receive(
                         shops: &server.shops,
                         stocks: &mut server.stocks,
                         accounts: server.accounts.as_ref(),
-                        catalogue: &catalogue,
+                        catalogue: &catalogue.0,
                         baked: &mut baked,
                         now,
                     };

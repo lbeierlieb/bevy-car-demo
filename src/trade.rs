@@ -9,6 +9,11 @@
 //! `STOCK_PERIOD`, each with random wear, priced by what it's worth new and how worn it is
 //! (`selling_price`). While every price in the catalogue is 0, what a part is worth new is a
 //! guess by its kind (`new_value`).
+//!
+//! **Used car dealers** sell worn stock cars (`used_cars`): trims from their `sells` lines
+//! with a mileage, their parts worn by it (tires and pads anyhow), in a paint of any kind,
+//! priced by what they're worth as worn (`car_price`). Buying one works as at a car dealer
+//! (the old car into the garage, or traded in: here it's worth `trade_in_price`).
 
 use crate::catalogue::Catalogue;
 use crate::items::{Item, Kind, Panel, Wear};
@@ -24,10 +29,21 @@ pub const STOCK_PERIOD: f64 = 1800.0;
 /// How many things a used parts shop has at a time (fewer if it sells fewer kinds).
 pub const USED_PARTS: usize = 12;
 
-/// What a used parts shop asks for a part, and pays for one, as shares of what it's worth
-/// (new, less its wear).
+/// How many cars a used car dealer has at a time (none if it sells no trims).
+pub const USED_CARS: usize = 4;
+/// The mileage of a used car (km).
+pub const MILEAGE: std::ops::Range<f32> = 25_000.0..240_000.0;
+
+/// What a used parts shop asks for a part, and pays for one, and what a used car dealer
+/// asks for a car and pays for one traded in, as shares of what it's worth (new, less its
+/// wear).
 const SELLS_AT: f64 = 0.5;
 const BUYS_AT: f64 = 0.15;
+const CARS_AT: f64 = 0.4;
+const TRADES_IN_AT: f64 = 0.15;
+/// What a used car loses of its price by its mileage, per 250 000 km (most of its parts
+/// don't wear, so its wear alone would hardly show).
+const MILEAGE_LOSS: f64 = 0.45;
 
 /// An amount for people: "5 000 €", "12.50 €", "−300 €".
 pub fn euros(cents: i64) -> String {
@@ -168,6 +184,24 @@ pub fn selling_price(catalogue: &Catalogue, item: &Item) -> i64 {
 /// What a used parts shop pays for `item`: a little (at least 1 €).
 pub fn buying_price(catalogue: &Catalogue, item: &Item) -> i64 {
     whole_euros(worn_value(catalogue, item) as f64 * BUYS_AT).max(100)
+}
+
+/// What a used car dealer asks for `car` (a car's tree, as worn as it is) with `km` on
+/// the clock, in fifties.
+pub fn car_price(catalogue: &Catalogue, car: &Item, km: f32) -> i64 {
+    let age = 1.0 - MILEAGE_LOSS * f64::from(km / 250_000.0).clamp(0.0, 1.0);
+    let cents = worn_value(catalogue, car) as f64 * CARS_AT * age;
+    ((cents / 5000.0).round() as i64 * 5000).max(5000)
+}
+
+/// What a used car dealer pays for `car` traded in (as worn as it is) with what's in its
+/// trunk (`cargo`), in fifties.
+pub fn trade_in_price(catalogue: &Catalogue, car: &Item, cargo: &[Item]) -> i64 {
+    let cents = (std::iter::once(car).chain(cargo))
+        .map(|item| worn_value(catalogue, item) as f64)
+        .sum::<f64>()
+        * TRADES_IN_AT;
+    (cents / 5000.0).round() as i64 * 5000
 }
 
 /// Random numbers for making up wares (splitmix64): the same seed, the same wares.
@@ -337,6 +371,85 @@ pub fn used_parts(catalogue: &Catalogue, shop: &Shop, seed: u64, first_id: u32) 
         .collect()
 }
 
+/// Wears a car's parts as `km` would: tires and pads anyhow (they're changed now and
+/// then), the clutch, gears and engine by the mileage, nothing failed.
+pub fn wear_by_mileage(catalogue: &Catalogue, car: &mut Item, km: f32, dice: &mut Dice) {
+    let miles = (km / 250_000.0).clamp(0.0, 1.0);
+    if let Some(wear) = car.def(catalogue).wear {
+        let (level, most) = match wear {
+            Wear::Tread | Wear::Pads => (dice.within(0.1, 0.8), 0.85),
+            Wear::Clutch => (miles * dice.within(0.6, 1.2), 0.85),
+            Wear::Gears => (miles * 0.5, 0.6),
+            Wear::Pistons | Wear::Rods | Wear::HeadGasket | Wear::Bearings => (miles * 0.4, 0.5),
+            Wear::Valves => (miles * 0.05, 0.1),
+            Wear::Turbo => (miles * 0.5, 0.6),
+        };
+        let values = (0..wear_values(wear))
+            .map(|_| match wear {
+                // A tire's ribs alike, more or less.
+                Wear::Tread => (level * dice.within(0.9, 1.1)).clamp(0.0, most),
+                _ => (level * dice.within(0.6, 1.4)).clamp(0.0, most),
+            })
+            .collect();
+        car.wear = crate::saved::trimmed(values);
+    }
+    for child in car.slots.iter_mut().flatten() {
+        wear_by_mileage(catalogue, child, km, dice);
+    }
+}
+
+/// A used car on sale, numbered by the server: a stock car (the catalogue's trim `trim`),
+/// worn, in its paint.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CarWare {
+    pub id: u32,
+    pub trim: u16,
+    pub car: Item,
+    /// Its mileage (km).
+    pub km: u32,
+    pub price: i64,
+}
+
+/// What a used car dealer has (made up from its `sells` lines' trims; the same for the same
+/// `seed`, its numbers starting at `first_id`).
+pub fn used_cars(catalogue: &Catalogue, shop: &Shop, seed: u64, first_id: u32) -> Vec<CarWare> {
+    let mut dice = Dice::new(seed);
+    let trims: Vec<usize> = (catalogue.trims.iter().enumerate())
+        .filter(|(_, trim)| shop.sells(&trim.id))
+        .map(|(t, _)| t)
+        .collect();
+    if trims.is_empty() {
+        return Vec::new();
+    }
+    (0..USED_CARS)
+        .map(|i| {
+            let trim = trims[dice.below(trims.len())];
+            let mut car = catalogue.trims[trim].car.clone();
+            let paint = dice.below(catalogue.paints.len());
+            paint_all(catalogue, &mut car, paint);
+            let km = (dice.within(MILEAGE.start, MILEAGE.end) / 1000.0).round() * 1000.0;
+            wear_by_mileage(catalogue, &mut car, km, &mut dice);
+            CarWare {
+                id: first_id.wrapping_add(500 + i as u32),
+                trim: trim as u16,
+                price: car_price(catalogue, &car, km),
+                car,
+                km: km as u32,
+            }
+        })
+        .collect()
+}
+
+/// Every painted part of `item` (and what's fitted into it) in `paint`.
+fn paint_all(catalogue: &Catalogue, item: &mut Item, paint: usize) {
+    if item.def(catalogue).painted {
+        item.paint = Some(paint);
+    }
+    for child in item.slots.iter_mut().flatten() {
+        paint_all(catalogue, child, paint);
+    }
+}
+
 /// What a shop that trades has, as a player at it is told.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Stock {
@@ -344,6 +457,8 @@ pub struct Stock {
     pub shop: u16,
     /// A used parts shop's wares.
     pub parts: Vec<Ware>,
+    /// A used car dealer's.
+    pub cars: Vec<CarWare>,
 }
 
 /// What a player asks of a shop that trades, at it.
@@ -355,6 +470,8 @@ pub enum Trade {
     BuyPart { ware: u32 },
     /// A part sold to the used parts shop: from the trunk, or what it holds for them.
     Sell { from: Source, item: u16 },
+    /// A used car, by its number: the car driven goes into the garage, or is traded in.
+    BuyCar { ware: u32, trade_in: bool },
 }
 
 impl Wire for Ware {
@@ -372,15 +489,40 @@ impl Wire for Ware {
     }
 }
 
+impl Wire for CarWare {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.id.put(out);
+        self.trim.put(out);
+        self.car.put(out);
+        self.km.put(out);
+        self.price.put(out);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        let ware = Self {
+            id: r.get()?,
+            trim: r.get()?,
+            car: r.get()?,
+            km: r.get()?,
+            price: r.get()?,
+        };
+        let catalogue = r.catalogue()?;
+        (usize::from(ware.trim) < catalogue.trims.len()
+            && ware.car.def(catalogue).kind == Kind::Chassis)
+            .then_some(ware)
+    }
+}
+
 impl Wire for Stock {
     fn put(&self, out: &mut Vec<u8>) {
         self.shop.put(out);
         self.parts.put(out);
+        self.cars.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         Some(Self {
             shop: r.get()?,
             parts: r.get()?,
+            cars: r.get()?,
         })
     }
 }
@@ -395,6 +537,11 @@ impl Wire for Trade {
                 from.put(out);
                 item.put(out);
             }
+            Trade::BuyCar { ware, trade_in } => {
+                3u8.put(out);
+                ware.put(out);
+                trade_in.put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -404,6 +551,10 @@ impl Wire for Trade {
             2 => Trade::Sell {
                 from: r.get()?,
                 item: r.get()?,
+            },
+            3 => Trade::BuyCar {
+                ware: r.get()?,
+                trade_in: r.get()?,
             },
             _ => return None,
         })
@@ -484,6 +635,7 @@ mod tests {
         let stock = Stock {
             shop: 2,
             parts: wares,
+            cars: Vec::new(),
         };
         let read: Stock = decode_with(&encode(&stock), Some(&catalogue)).unwrap();
         assert_eq!(read, stock);
@@ -494,8 +646,57 @@ mod tests {
                 from: Source::Trunk,
                 item: 3,
             },
+            Trade::BuyCar {
+                ware: 9,
+                trade_in: true,
+            },
         ] {
             assert_eq!(decode_with(&encode(&trade), None), Some(trade));
         }
+    }
+
+    /// A used car dealer's cars: stock cars it sells, worn by their mileage (the more, the
+    /// cheaper), each a car the catalogue allows; worth less traded in than sold.
+    #[test]
+    fn used_cars_are_worn_by_their_mileage() {
+        let catalogue = builtin();
+        let shop = Shop {
+            kind: crate::shops::ShopKind::UsedCars,
+            name: "Wagen".into(),
+            at: Default::default(),
+            sells: vec!["vireo.*".into()],
+        };
+        let cars = used_cars(&catalogue, &shop, 7, 0);
+        assert_eq!(cars.len(), USED_CARS);
+        for ware in &cars {
+            assert!(ware.car.fine(&catalogue));
+            assert!(ware.car.resolve(&catalogue).is_ok());
+            assert!(MILEAGE.contains(&(ware.km as f32)));
+            assert!(wear_share(&catalogue, &ware.car) > 0.01);
+            let new = new_value(&catalogue, &ware.car);
+            assert!(ware.price < new / 2, "{} of {}", ware.price, new);
+            assert!(trade_in_price(&catalogue, &ware.car, &[]) < ware.price);
+        }
+        // Afforded with what a new player has.
+        assert!(cars.iter().all(|ware| ware.price <= START_MONEY));
+        let mut dice = Dice::new(1);
+        let trim = &catalogue.trims[0].car;
+        let (mut low, mut high) = (trim.clone(), trim.clone());
+        wear_by_mileage(&catalogue, &mut low, 30_000.0, &mut dice);
+        let mut dice = Dice::new(1);
+        wear_by_mileage(&catalogue, &mut high, 230_000.0, &mut dice);
+        assert!(car_price(&catalogue, &high, 230_000.0) < car_price(&catalogue, &low, 30_000.0));
+        let none = Shop {
+            sells: Vec::new(),
+            ..shop
+        };
+        assert!(used_cars(&catalogue, &none, 7, 0).is_empty());
+        let stock = Stock {
+            shop: 0,
+            parts: Vec::new(),
+            cars,
+        };
+        let read: Stock = decode_with(&encode(&stock), Some(&catalogue)).unwrap();
+        assert_eq!(read, stock);
     }
 }

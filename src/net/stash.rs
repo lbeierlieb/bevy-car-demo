@@ -365,15 +365,31 @@ pub fn buy(
         .find(|&option| trim_of(catalogue, chassis, option).is_some_and(|t| t.id == made.id))
         .ok_or("No such car")?;
     let spec = CarSpec::of(&CarSetup::factory_in(catalogue, chassis, option));
-    bought(peer, spec, catalogue, baked, trade_in)?;
+    bought(peer, (spec, None), catalogue, baked, trade_in)?;
     Ok(made.name.clone())
 }
 
-/// A player bought a car (`spec`): the one they drove goes into their garage, with what's
-/// in its trunk (refused if the garage is full), unless it's traded in.
-fn bought(
+/// The car a catalogue's trim makes (`trim`, by its place), but its tree as `car` (worn,
+/// another paint): a used car's.
+pub(super) fn spec_of_trim(catalogue: &Shared, trim: usize, car: &Item) -> Option<CarSpec> {
+    let made = catalogue.trims.get(trim)?;
+    let Does::Chassis(chassis) = made.car.def(catalogue).does else {
+        return None;
+    };
+    let option = (0..catalogue.chassis[chassis].engines.len())
+        .find(|&option| trim_of(catalogue, chassis, option).is_some_and(|t| t.id == made.id))?;
+    let mut spec = CarSpec::of(&CarSetup::factory_in(catalogue, chassis, option));
+    let (build, parts) = car.resolve(catalogue).ok()?;
+    (spec.car, spec.build, spec.parts) = (car.clone(), build, parts);
+    Some(spec)
+}
+
+/// A player bought a car (`spec`, in a condition if it's not new): the one they drove goes
+/// into their garage, with what's in its trunk (refused if the garage is full), unless it's
+/// traded in.
+pub(super) fn bought(
     peer: &mut Peer,
-    spec: CarSpec,
+    (spec, condition): (CarSpec, Option<Condition>),
     catalogue: &Catalogue,
     baked: &mut BakedMaps,
     trade_in: bool,
@@ -392,6 +408,9 @@ fn bought(
         parked.condition.put_on(catalogue, &mut parked.spec.car);
         peer.owned.cars.push(parked);
         peer.owned.touch();
+    }
+    if let Some(condition) = condition {
+        peer.shadow.set_condition(condition);
     }
     drive(peer, spec, baked);
     Ok(())

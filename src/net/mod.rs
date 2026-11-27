@@ -1421,6 +1421,83 @@ mod tests {
         let _ = std::fs::remove_file(file);
     }
 
+    /// A player at a used car dealer: a worn car bought with the new one traded in (worth
+    /// something there; driven, worn as it was sold; nothing parked), then another without
+    /// (the old one into the garage), if there's money enough, else not.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_used_car_dealer_sells_worn_cars() {
+        use crate::shops::{Shop, ShopKind};
+        use crate::trade::{START_MONEY, Trade, trade_in_price};
+        let listener = LoopbackListener::default();
+        let (file, mut server) = server_with_accounts(&listener, false);
+        let shop = Shop {
+            kind: ShopKind::UsedCars,
+            name: "Gebrauchte".into(),
+            at: Vec2::ZERO,
+            sells: vec!["vireo.*".into()],
+        };
+        let with = server.world_mut().remove_resource::<Server>().unwrap();
+        server.insert_resource(with.with_shops(vec![shop]));
+        let mut anna = account_driver(&listener, "Anna", "secret");
+        assert!(matches!(
+            log_in(&mut server, &mut anna),
+            Status::Joined { .. }
+        ));
+        let ask = |anna: &mut App, trade: Trade| {
+            anna.world_mut()
+                .resource_mut::<Connection>()
+                .say(&protocol::ToServer::Trade(trade));
+        };
+        ask(&mut anna, Trade::Look);
+        run(&mut [&mut server, &mut anna], 30);
+        let mut cars = connection(&anna).stock.clone().expect("the cars").cars;
+        assert_eq!(cars.len(), crate::trade::USED_CARS);
+        cars.sort_by_key(|w| w.price);
+        let (first, second) = (cars[0].clone(), cars[1].clone());
+        assert!(first.price <= START_MONEY);
+        // The new car traded in.
+        let catalogue = car(&mut anna).setup.build.catalogue.clone();
+        let credit = trade_in_price(&catalogue, &car(&mut anna).setup.car, &[]);
+        assert!(credit > 0);
+        ask(
+            &mut anna,
+            Trade::BuyCar {
+                ware: first.id,
+                trade_in: true,
+            },
+        );
+        run(&mut [&mut server, &mut anna], 60);
+        let money = START_MONEY - first.price + credit;
+        assert_eq!(connection(&anna).owned.money, money);
+        assert!(connection(&anna).owned.cars.is_empty(), "traded in");
+        assert_eq!(car(&mut anna).setup.car.paint, first.car.paint);
+        let worn = car(&mut anna).corners[0].tread.wear[2];
+        assert!(worn > 0.05, "worn tires: {worn}");
+        // Another, the first parked (if there's money enough).
+        ask(
+            &mut anna,
+            Trade::BuyCar {
+                ware: second.id,
+                trade_in: false,
+            },
+        );
+        run(&mut [&mut server, &mut anna], 60);
+        if money >= second.price {
+            assert_eq!(connection(&anna).owned.money, money - second.price);
+            assert_eq!(connection(&anna).owned.cars.len(), 1, "the old one parked");
+            assert_eq!(car(&mut anna).setup.car.paint, second.car.paint);
+        } else {
+            assert!(connection(&anna).refused.is_some());
+            assert_eq!(connection(&anna).owned.money, money);
+            assert!(connection(&anna).owned.cars.is_empty());
+        }
+        // Gone from the dealer's (what was bought).
+        let cars = connection(&anna).stock.clone().unwrap().cars;
+        assert!(cars.iter().all(|w| w.id != first.id));
+        let _ = std::fs::remove_file(file);
+    }
+
     #[test]
     fn a_player_who_leaves_is_gone_for_the_others() {
         let listener = LoopbackListener::default();

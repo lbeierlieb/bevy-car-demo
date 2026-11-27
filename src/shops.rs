@@ -62,10 +62,12 @@ pub enum ShopKind {
     Engine,
     /// Buys anything brought, sells worn parts (see `trade`).
     Used,
+    /// Sells worn stock cars (see `trade`).
+    UsedCars,
 }
 
 impl ShopKind {
-    pub const ALL: [ShopKind; 11] = [
+    pub const ALL: [ShopKind; 12] = [
         Self::Showroom,
         Self::Car,
         Self::Tuning,
@@ -77,6 +79,7 @@ impl ShopKind {
         Self::Garage,
         Self::Engine,
         Self::Used,
+        Self::UsedCars,
     ];
 
     /// Its word in a list of shops.
@@ -93,6 +96,7 @@ impl ShopKind {
             Self::Garage => "garage",
             Self::Engine => "engine",
             Self::Used => "used",
+            Self::UsedCars => "usedcars",
         }
     }
 
@@ -110,6 +114,7 @@ impl ShopKind {
             Self::Garage => "Garage park",
             Self::Engine => "Engine shop",
             Self::Used => "Used parts shop",
+            Self::UsedCars => "Used car dealer",
         }
     }
 
@@ -132,6 +137,7 @@ impl ShopKind {
             Self::Garage => [230, 230, 230],
             Self::Engine => [190, 160, 90],
             Self::Used => [140, 200, 90],
+            Self::UsedCars => [40, 160, 100],
         }
     }
 }
@@ -611,7 +617,7 @@ mod tests {
         assert_eq!(
             parse("gas 1 2 Pumps\n# a comment\n\nbakery 3 4 Bread").unwrap_err(),
             "line 4: not a kind of shop (showroom, car, tuning, tire, alignment, paint, gas, \
-             dyno, garage, engine, used): bakery 3 4 Bread"
+             dyno, garage, engine, used, usedcars): bakery 3 4 Bread"
         );
         assert!(parse("gas 1 Pumps").is_err());
         assert!(parse("gas 1 2").is_err());
@@ -651,6 +657,7 @@ mod tests {
                         | ShopKind::Tire
                         | ShopKind::Engine
                         | ShopKind::Used
+                        | ShopKind::UsedCars
                 ),
                 "{}",
                 shop.name

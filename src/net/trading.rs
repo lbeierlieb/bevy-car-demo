@@ -1,6 +1,6 @@
-//! The server's side of trading (see `trade`): what the used parts shops have (made up anew
-//! every `trade::STOCK_PERIOD`), buying from them and selling to them. Money changes with
-//! what it pays for, in one go (`Peer::pay`).
+//! The server's side of trading (see `trade`): what the used parts shops and used car
+//! dealers have (made up anew every `trade::STOCK_PERIOD`), buying from them and selling to
+//! them. Money changes with what it pays for, in one go (`Peer::pay`).
 
 use std::collections::HashMap;
 
@@ -10,12 +10,16 @@ use super::accounts::Accounts;
 use super::protocol::ToClient;
 use super::server::Peer;
 use super::shadow::BakedMaps;
-use super::stash::{drive, tell};
+use super::stash::{bought, drive, spec_of_trim, tell};
 use crate::cargo;
-use crate::catalogue::Catalogue;
+use crate::catalogue::{Catalogue, Shared};
 use crate::owned::{SHOP_HOLD, Source, name};
+use crate::saved::Condition;
 use crate::shops::{Shop, ShopKind};
-use crate::trade::{self, Stock, Trade, Ware};
+use crate::trade::{self, CarWare, Stock, Trade, Ware};
+
+/// How full a used car's tank is (a share).
+const USED_TANK: f32 = 0.3;
 
 /// What the shops that trade have now, by their places in the server's list.
 #[derive(Default)]
@@ -29,6 +33,7 @@ pub struct Stocks {
 struct Wares {
     period: u64,
     parts: Vec<Ware>,
+    cars: Vec<CarWare>,
 }
 
 impl Stocks {
@@ -47,6 +52,7 @@ impl Stocks {
         let wares = self.shops.entry(at).or_insert_with(|| Wares {
             period: u64::MAX,
             parts: Vec::new(),
+            cars: Vec::new(),
         });
         if wares.period != period {
             // Numbered by the period, so a number never means another ware.
@@ -55,6 +61,10 @@ impl Stocks {
                 period,
                 parts: match shop.kind {
                     ShopKind::Used => trade::used_parts(catalogue, shop, seed, first),
+                    _ => Vec::new(),
+                },
+                cars: match shop.kind {
+                    ShopKind::UsedCars => trade::used_cars(catalogue, shop, seed, first),
                     _ => Vec::new(),
                 },
             };
@@ -68,7 +78,7 @@ pub struct Desk<'a> {
     pub shops: &'a [Shop],
     pub stocks: &'a mut Stocks,
     pub accounts: Option<&'a Accounts>,
-    pub catalogue: &'a Catalogue,
+    pub catalogue: &'a Shared,
     pub baked: &'a mut BakedMaps,
     /// The server's clock (s).
     pub now: f64,
@@ -91,13 +101,14 @@ fn tell_stock(peer: &mut Peer, desk: &mut Desk) {
     let Some((at, shop)) = (peer.at_shop()).and_then(|i| Some((i, desk.shops.get(i)?))) else {
         return;
     };
-    if shop.kind != ShopKind::Used {
+    if !matches!(shop.kind, ShopKind::Used | ShopKind::UsedCars) {
         return;
     }
     let wares = desk.stocks.of(at, shop, desk.catalogue, desk.now);
     let stock = Stock {
         shop: at as u16,
         parts: wares.parts.clone(),
+        cars: wares.cars.clone(),
     };
     peer.tell(&ToClient::Stock(Box::new(stock)));
 }
@@ -106,7 +117,7 @@ fn try_trade(peer: &mut Peer, asked: Trade, desk: &mut Desk) -> Result<(), Strin
     let (at, shop) = (peer.at_shop())
         .and_then(|i| Some((i, desk.shops.get(i)?)))
         .ok_or("Stop at a shop for that")?;
-    let catalogue = desk.catalogue;
+    let catalogue: &Shared = desk.catalogue;
     let used = || {
         (shop.kind == ShopKind::Used)
             .then_some(())
@@ -179,6 +190,53 @@ fn try_trade(peer: &mut Peer, asked: Trade, desk: &mut Desk) -> Result<(), Strin
                 }
             };
             peer.pay(price, desk.accounts, catalogue);
+            Ok(())
+        }
+        Trade::BuyCar { ware, trade_in } => {
+            if shop.kind != ShopKind::UsedCars {
+                return Err(format!("{} doesn't sell used cars", shop.name));
+            }
+            let wares = desk.stocks.of(at, shop, catalogue, desk.now);
+            let place = (wares.cars.iter())
+                .position(|w| w.id == ware)
+                .ok_or("Someone bought that just before you")?;
+            let ware = wares.cars[place].clone();
+            // What the dealer pays for the car traded in.
+            let credit = match peer.shadow.kept().filter(|_| trade_in) {
+                Some((spec, car)) => {
+                    let mut tree = spec.car.clone();
+                    Condition::of(car).put_on(catalogue, &mut tree);
+                    trade::trade_in_price(catalogue, &tree, &spec.cargo)
+                }
+                None if trade_in => return Err("Your car isn't there yet".into()),
+                None => 0,
+            };
+            let price = ware.price - credit;
+            if peer.money < price {
+                return Err(format!(
+                    "Not enough money: it's {}, you have {}",
+                    trade::euros(price),
+                    trade::euros(peer.money)
+                ));
+            }
+            let spec = spec_of_trim(catalogue, usize::from(ware.trim), &ware.car)
+                .ok_or("That car can't be built")?;
+            let tank = spec.build.chassis().tank.litres * USED_TANK;
+            let octane = crate::physics::fuel::PUMP_OCTANE;
+            let condition = Condition::of_parts(catalogue, &spec.car, tank, octane);
+            bought(
+                peer,
+                (spec, Some(condition)),
+                catalogue,
+                desk.baked,
+                trade_in,
+            )?;
+            desk.stocks
+                .of(at, shop, catalogue, desk.now)
+                .cars
+                .remove(place);
+            peer.pay(-price, desk.accounts, catalogue);
+            info!("Player {} bought a used car", peer.id);
             Ok(())
         }
     }

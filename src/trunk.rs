@@ -276,6 +276,10 @@ fn window(
                         return;
                     };
                     kit::info(ui, "Car", &car_name(catalogue, &parked.car));
+                    let look = crate::dealers::Screen::Inspect(crate::dealers::Look::Garage(i));
+                    if kit::submenu(ui, look.title()).clicked() {
+                        go = Some(Screen::Deal(look));
+                    }
                     for item in &parked.cargo {
                         kit::info(ui, "In the trunk", &name(catalogue, item));
                     }
