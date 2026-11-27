@@ -7,6 +7,11 @@
 //! - Car workshops and tuning shops fit any part but a long block's insides (the engine
 //!   shop's) and a wheel's rim and tire (the tire shop's); engines come out whole, and
 //!   only for another. They set the final drive's ratio.
+//! - Engine shops work only on long blocks: a long block into an engine, what goes inside
+//!   one, rebores (a block bored over takes pistons of its size), and whole engines swapped
+//!   (one kept there for the player). They work on the car's and on an engine or long
+//!   block brought in the trunk or held there (a path starting `IN_TRUNK` or `HELD`); they
+//!   hold one engine and one long block for a player at most.
 //! - Tire shops fit wheels, and rims and tires on the car's wheels; they make loose wheels
 //!   of a rim and a tire, and take them apart.
 //! - Alignment shops set the chassis', dampers' and tires' knobs (brakes, camber and toe,
@@ -27,8 +32,17 @@ use crate::shops::{Shop, ShopKind};
 use crate::spec::CarSpec;
 use crate::wheels::{Rim, TireSize, Wheel};
 
-/// Where a slot is: the places of the slots from the car down (the car itself: none).
+/// Where a slot is: the places of the slots from the car down (the car itself: none), or
+/// from a loose part: `[IN_TRUNK, i, …]` from the trunk's part `i`, `[HELD, i, …]` from the
+/// part `i` the shop holds for the player.
 pub type Path = Vec<u8>;
+
+/// A path's first place for a loose part in the trunk, and one held at the shop.
+pub const IN_TRUNK: u8 = 0xfe;
+pub const HELD: u8 = 0xff;
+
+/// The longest path (a loose part's two places, then the slots down).
+const LONGEST_PATH: usize = 10;
 
 /// The most works in one request, and slots in one fit.
 const MOST_WORKS: usize = 64;
@@ -70,10 +84,13 @@ pub enum Work {
     MakeWheel(Supply),
     /// A loose wheel in the trunk taken apart into its rim and tire.
     Split { item: u16 },
+    /// The block at `at` bored over to oversize `size` (`items::OVERSIZES`): it needs
+    /// pistons of that size then (fitted in the same request).
+    Rebore { at: Path, size: u8 },
 }
 
-/// The kind of slot at `path` in `car`, and the kind of what holds it (none: it's the
-/// car's own).
+/// The kind of slot at `path` in `car` (or a loose part), and the kind of what holds it
+/// (none: it's a car's own).
 pub fn slot_kinds(catalogue: &Catalogue, car: &Item, path: &[u8]) -> Option<(Kind, Option<Kind>)> {
     let (&last, rest) = path.split_last()?;
     let mut holder = car;
@@ -81,8 +98,92 @@ pub fn slot_kinds(catalogue: &Catalogue, car: &Item, path: &[u8]) -> Option<(Kin
         holder = holder.slots.get(usize::from(place))?.as_ref()?;
     }
     let slot = holder.def(catalogue).slots.get(usize::from(last))?;
-    let holder_kind = (!rest.is_empty()).then(|| holder.def(catalogue).kind);
+    let holder_kind = Some(holder.def(catalogue).kind).filter(|&kind| kind != Kind::Chassis);
     Some((slot.kind, holder_kind))
+}
+
+/// The tree `path` is in (the car, or a loose part in the trunk or held at the shop) and
+/// the rest of the path, from that tree down.
+pub fn root_of<'a, 'p>(
+    car: &'a Item,
+    cargo: &'a [Item],
+    held: &'a [Item],
+    path: &'p [u8],
+) -> Option<(&'a Item, &'p [u8])> {
+    match path {
+        [IN_TRUNK, i, rest @ ..] => Some((cargo.get(usize::from(*i))?, rest)),
+        [HELD, i, rest @ ..] => Some((held.get(usize::from(*i))?, rest)),
+        _ => Some((car, path)),
+    }
+}
+
+/// Whether `path` is in a loose part.
+pub fn loose(path: &[u8]) -> bool {
+    matches!(path.first(), Some(&IN_TRUNK | &HELD))
+}
+
+/// `slot_kinds` and `item_at` for a path that may be in a loose part.
+pub fn slot_kinds_in(
+    catalogue: &Catalogue,
+    (car, cargo, held): (&Item, &[Item], &[Item]),
+    path: &[u8],
+) -> Option<(Kind, Option<Kind>)> {
+    let (root, rest) = root_of(car, cargo, held, path)?;
+    slot_kinds(catalogue, root, rest)
+}
+
+pub fn item_in<'a>(
+    (car, cargo, held): (&'a Item, &'a [Item], &'a [Item]),
+    path: &[u8],
+) -> Option<&'a Item> {
+    let (root, rest) = root_of(car, cargo, held, path)?;
+    item_at(root, rest)
+}
+
+/// Why a block in `item`'s tree has pistons of another size than its bore, if one has.
+pub fn bores_mismatch(catalogue: &Catalogue, item: &Item) -> Option<String> {
+    let def = item.def(catalogue);
+    if def.kind == Kind::LongBlock && def.bores {
+        for part in item.slots.iter().flatten() {
+            let made = part.def(catalogue);
+            if made.bores && part.variant != item.variant {
+                return Some(format!(
+                    "The {} are for a {}; the block has a {}",
+                    made.name.to_lowercase(),
+                    bore_name(part.variant),
+                    bore_name(item.variant),
+                ));
+            }
+        }
+    }
+    (item.slots.iter().flatten()).find_map(|part| bores_mismatch(catalogue, part))
+}
+
+/// A bore size, for people: "stock bore", "bore +0.50 mm".
+pub fn bore_name(size: usize) -> String {
+    match crate::items::OVERSIZES.get(size) {
+        Some(&mm) if mm > 0.0 => format!("bore +{mm:.2} mm"),
+        _ => "stock bore".into(),
+    }
+}
+
+/// Whether a shop holding `held` for a player has more engines or long blocks than an
+/// engine shop keeps (one of each).
+fn engines_over(catalogue: &Catalogue, held: &[Item]) -> bool {
+    [Kind::Engine, Kind::LongBlock].into_iter().any(|kind| {
+        (held.iter())
+            .filter(|item| item.def(catalogue).kind == kind)
+            .count()
+            > 1
+    })
+}
+
+/// Whether an engine shop holding `held` for a player has room for `part` too (one engine
+/// and one long block each at most).
+pub fn engine_shop_takes(catalogue: &Catalogue, held: &[Item], part: &Item) -> bool {
+    let mut all = held.to_vec();
+    all.push(part.clone());
+    !engines_over(catalogue, &all)
 }
 
 /// The part at `path` (the car itself at none).
@@ -124,6 +225,11 @@ pub fn fits_into(kind: ShopKind, slot: Kind, holder: Option<Kind>) -> bool {
         ShopKind::Tire => {
             slot == Kind::Wheel && holder.is_none()
                 || matches!(slot, Kind::Rim | Kind::Tire) && holder == Some(Kind::Wheel)
+        }
+        ShopKind::Engine => {
+            slot == Kind::LongBlock
+                || holder == Some(Kind::LongBlock)
+                || slot == Kind::Engine && holder.is_none()
         }
         _ => false,
     }
@@ -242,21 +348,28 @@ impl<'a> Bench<'a> {
                 if slots.len() > 1 && !new {
                     return Err("A part brought goes into one place".into());
                 }
+                // A part brought from where the part fitted into lies: the places after
+                // it move up.
+                let slots = (slots.iter())
+                    .map(|path| shifted(path, supply))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let part = self.take(supply)?;
-                for path in slots {
+                for path in &slots {
                     self.fit(path, part.clone())?;
                 }
             }
             Work::Remove { slot } => {
-                let (slot_kind, holder) =
-                    slot_kinds(catalogue, &self.car, slot).ok_or("No such place on the car")?;
+                let (slot_kind, holder) = self.kinds(slot).ok_or("No such place on the car")?;
                 if !fits_into(kind, slot_kind, holder) {
                     return Err(format!("A {} doesn't do that", kind.title().to_lowercase()));
                 }
-                let required = self.slot_def(slot).is_some_and(|slot| slot.required);
+                // A loose part may lack what it needs to run.
+                let required =
+                    !loose(slot) && self.slot_def(slot).is_some_and(|slot| slot.required);
                 let nothing =
                     (catalogue.defs.iter()).position(|def| def.absent && def.kind == slot_kind);
-                let place = slot_mut(&mut self.car, slot).ok_or("No such place on the car")?;
+                let (tree, rest) = self.tree_mut(slot).ok_or("No such place on the car")?;
+                let place = slot_mut(tree, rest).ok_or("No such place on the car")?;
                 let old = place.take().ok_or("Nothing's fitted there")?;
                 if required {
                     let Some(nothing) = nothing else {
@@ -328,13 +441,46 @@ impl<'a> Bench<'a> {
                 let wheel = self.cargo.remove(i);
                 self.off.extend(wheel.slots.into_iter().flatten());
             }
+            Work::Rebore { at, size } => {
+                if kind != ShopKind::Engine {
+                    return Err("Blocks are bored at engine shops".into());
+                }
+                let size = usize::from(*size);
+                let (tree, rest) = self.tree_mut(at).ok_or("Nothing's there")?;
+                let block = item_mut(tree, rest).ok_or("Nothing's there")?;
+                let def = &catalogue.defs[block.def];
+                if def.kind != Kind::LongBlock || !def.bores {
+                    return Err("That isn't a block to bore".into());
+                }
+                if size >= crate::items::OVERSIZES.len() {
+                    return Err("No such bore".into());
+                }
+                if size <= block.variant {
+                    return Err("A block is only ever bored bigger".into());
+                }
+                block.variant = size;
+            }
         }
         Ok(())
     }
 
+    /// The tree `path` is in (the car, or a loose part) and the rest of the path from it.
+    fn tree_mut<'p>(&mut self, path: &'p [u8]) -> Option<(&mut Item, &'p [u8])> {
+        match path {
+            [IN_TRUNK, i, rest @ ..] => Some((self.cargo.get_mut(usize::from(*i))?, rest)),
+            [HELD, i, rest @ ..] => Some((self.held.get_mut(usize::from(*i))?, rest)),
+            _ => Some((&mut self.car, path)),
+        }
+    }
+
+    fn kinds(&self, path: &[u8]) -> Option<(Kind, Option<Kind>)> {
+        slot_kinds_in(self.catalogue, (&self.car, &self.cargo, &self.held), path)
+    }
+
     fn slot_def(&self, path: &[u8]) -> Option<&crate::items::SlotDef> {
+        let (root, path) = root_of(&self.car, &self.cargo, &self.held, path)?;
         let (&last, rest) = path.split_last()?;
-        let holder = item_at(&self.car, rest)?;
+        let holder = item_at(root, rest)?;
         holder.def(self.catalogue).slots.get(usize::from(last))
     }
 
@@ -426,8 +572,7 @@ impl<'a> Bench<'a> {
     /// the new part's empty slots (a gearbox's final drive and differential).
     fn fit(&mut self, path: &[u8], mut part: Item) -> Result<(), String> {
         let catalogue: &'a Catalogue = self.catalogue;
-        let (slot_kind, holder) =
-            slot_kinds(catalogue, &self.car, path).ok_or("No such place on the car")?;
+        let (slot_kind, holder) = self.kinds(path).ok_or("No such place on the car")?;
         let kind = self.shop.kind;
         if !fits_into(kind, slot_kind, holder) {
             return Err(match slot_kind {
@@ -450,8 +595,9 @@ impl<'a> Bench<'a> {
         if !made_for(def, chassis) {
             return Err(format!("The {} isn't made for the {chassis}", def.name));
         }
-        let place = slot_mut(&mut self.car, path).ok_or("No such place on the car")?;
-        if let Some(mut old) = place.take() {
+        let (tree, rest) = self.tree_mut(path).ok_or("No such place on the car")?;
+        let place = slot_mut(tree, rest).ok_or("No such place on the car")?;
+        let old = place.take().map(|mut old| {
             let slots = &catalogue.defs[part.def].slots;
             let old_slots = &catalogue.defs[old.def].slots;
             for (slot, item) in slots.iter().zip(&mut part.slots) {
@@ -463,9 +609,10 @@ impl<'a> Bench<'a> {
                     .and_then(|(_, i)| i.take());
                 *item = moved;
             }
-            self.off.push(old);
-        }
+            old
+        });
         *place = Some(part);
+        self.off.extend(old);
         Ok(())
     }
 
@@ -478,6 +625,15 @@ impl<'a> Bench<'a> {
         }
         if !self.car.fine(catalogue) {
             return Err("That doesn't make a car".into());
+        }
+        let trees = std::iter::once(&self.car)
+            .chain(&self.cargo)
+            .chain(&self.held);
+        if let Some(why) = trees
+            .clone()
+            .find_map(|item| bores_mismatch(catalogue, item))
+        {
+            return Err(why);
         }
         let (build, parts) = self.car.resolve(catalogue).map_err(|e| e.0)?;
         // Every wheel, not just the left ones the simulation goes by.
@@ -507,6 +663,13 @@ impl<'a> Bench<'a> {
                 thrown.push(name(catalogue, &part));
             }
         }
+        if self.shop.kind == ShopKind::Engine && engines_over(catalogue, &self.held) {
+            return Err(format!(
+                "{} keeps one engine and one long block for you at most: take the other \
+                 along, or ship it home first",
+                self.shop.name
+            ));
+        }
         // The trunk may have shrunk (a seat fitted where things lay).
         let fitting = crate::cargo::fitting(catalogue, &self.car, cargo.clone());
         if fitting.len() < cargo.len() {
@@ -529,6 +692,27 @@ impl<'a> Bench<'a> {
             thrown,
         })
     }
+}
+
+/// `path` as it is once the part `supply` says is taken from where it lies (the places
+/// after it in the trunk or what's held move up).
+fn shifted(path: &[u8], supply: &Supply) -> Result<Path, String> {
+    let mut path = path.to_vec();
+    let from = match supply {
+        Supply::Trunk(j) => Some((IN_TRUNK, *j)),
+        Supply::Held(j) => Some((HELD, *j)),
+        _ => None,
+    };
+    if let (Some((list, j)), [first, i, ..]) = (from, path.as_mut_slice())
+        && *first == list
+    {
+        match u16::from(*i).cmp(&j) {
+            std::cmp::Ordering::Equal => return Err("A part doesn't go into itself".into()),
+            std::cmp::Ordering::Greater => *i -= 1,
+            std::cmp::Ordering::Less => {}
+        }
+    }
+    Ok(path)
 }
 
 /// Why `car` lacks a part one of its parts needs, if it does.
@@ -688,12 +872,17 @@ impl Wire for Work {
                 supply.put(out);
             }
             Work::Split { item } => (6u8, *item).put(out),
+            Work::Rebore { at, size } => {
+                7u8.put(out);
+                at.put(out);
+                size.put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
         let path = |r: &mut Reader| -> Option<Path> {
             let path: Path = r.get()?;
-            (path.len() <= 8).then_some(path)
+            (path.len() <= LONGEST_PATH).then_some(path)
         };
         Some(match r.get::<u8>()? {
             0 => {
@@ -718,6 +907,10 @@ impl Wire for Work {
             4 => Work::Tune(Box::new(r.get()?)),
             5 => Work::MakeWheel(r.get()?),
             6 => Work::Split { item: r.get()? },
+            7 => Work::Rebore {
+                at: path(r)?,
+                size: r.get()?,
+            },
             _ => return None,
         })
     }
@@ -855,6 +1048,184 @@ mod tests {
         assert_eq!(done.spec.parts.hardware().name, "B18 1.8 four");
         let out = Work::Remove { slot: vec![engine] };
         assert!(run(&catalogue, &workshop, &before, &[out]).is_err());
+    }
+
+    /// The path of the car's long block's slot holding `id`'s kind of part (from the
+    /// engine's slot down), and the long block's.
+    fn in_block(catalogue: &Catalogue, car: &Item, id: &str) -> (Path, Path) {
+        let engine = slots_of(catalogue, car, Kind::Engine)[0];
+        let kind = catalogue.defs[usize::from(def(catalogue, id))].kind;
+        let block = vec![engine, 0];
+        let long = item_at(car, &block).unwrap();
+        let slot = (long.def(catalogue).slots.iter())
+            .position(|slot| slot.kind == kind)
+            .unwrap();
+        let mut path = block.clone();
+        path.push(slot as u8);
+        (path, block)
+    }
+
+    const ENGINE_SHOP: &[&str] = &["pistons.*", "connecting-rods.*", "b18", "camshafts.*"];
+
+    #[test]
+    fn an_engine_shop_works_on_long_blocks_only() {
+        let catalogue = builtin();
+        let mut before = spec(0);
+        // Worn pistons, as the car was.
+        let mut condition = crate::saved::Condition::of_parts(&catalogue, &before.car, 30.0, 95.0);
+        condition.damage.cylinders[2].piston = 0.6;
+        condition.damage.cylinders[0].rod = 0.2;
+        condition.put_on(&catalogue, &mut before.car);
+        let engines = shop(ShopKind::Engine, ENGINE_SHOP);
+        let (pistons, _) = in_block(&catalogue, &before.car, "pistons.race");
+        let fit = Work::Fit {
+            slots: vec![pistons.clone()],
+            supply: new(&catalogue, "pistons.race"),
+        };
+        let done = run(&catalogue, &engines, &before, std::slice::from_ref(&fit)).unwrap();
+        assert!(
+            done.spec.parts.hardware().compression_ratio
+                > before.parts.hardware().compression_ratio
+        );
+        // The new pistons are new, the rods as worn as they were; the old pistons kept their
+        // wear, in the trunk or held.
+        let now = crate::saved::Condition::of_parts(&catalogue, &done.spec.car, 30.0, 95.0);
+        assert_eq!(now.damage.cylinders[2].piston, 0.0);
+        assert_eq!(now.damage.cylinders[0].rod, 0.2);
+        let old: Vec<&Item> = done.spec.cargo.iter().chain(&done.held).collect();
+        assert_eq!(old.len(), 1);
+        assert_eq!(old[0].wear, [0.0, 0.0, 0.6]);
+        // Nothing but long blocks: no clutch, no bolt-ons.
+        let clutch = Work::Fit {
+            slots: vec![slots_of(&catalogue, &before.car, Kind::Clutch)],
+            supply: new(&catalogue, "clutch.race"),
+        };
+        let all = shop(ShopKind::Engine, &["*"]);
+        assert!(run(&catalogue, &all, &before, &[clutch]).is_err());
+        let engine = slots_of(&catalogue, &before.car, Kind::Engine)[0];
+        let intake = Work::Fit {
+            slots: vec![vec![engine, 1]],
+            supply: new(&catalogue, "intake-manifold.long-runners"),
+        };
+        assert!(run(&catalogue, &all, &before, &[intake]).is_err());
+        // A long block brought in whole goes in, with the old one's insides moved over where
+        // it has none.
+        let (_, block) = in_block(&catalogue, &before.car, "pistons.race");
+        let swap = Work::Fit {
+            slots: vec![block],
+            supply: new(&catalogue, "b18"),
+        };
+        let done = run(&catalogue, &engines, &before, &[swap]).unwrap();
+        assert_eq!(done.spec.parts.version, 1);
+        let swapped = crate::saved::Condition::of_parts(&catalogue, &done.spec.car, 30.0, 95.0);
+        assert_eq!(swapped.damage.cylinders[0].rod, 0.2);
+    }
+
+    #[test]
+    fn a_rebored_block_takes_pistons_of_its_size() {
+        let catalogue = builtin();
+        let before = spec(0);
+        let engines = shop(ShopKind::Engine, ENGINE_SHOP);
+        let (pistons, block) = in_block(&catalogue, &before.car, "pistons.stock");
+        let rebore = Work::Rebore {
+            at: block.clone(),
+            size: 2,
+        };
+        // Bored alone, the stock pistons don't fit any more.
+        let err = run(&catalogue, &engines, &before, std::slice::from_ref(&rebore)).unwrap_err();
+        assert!(err.contains("+0.50 mm"), "{err}");
+        let oversize = Work::Fit {
+            slots: vec![pistons.clone()],
+            supply: Supply::Part {
+                def: def(&catalogue, "pistons.stock"),
+                variant: 2,
+                paint: 0,
+            },
+        };
+        let done = run(&catalogue, &engines, &before, &[rebore.clone(), oversize]).unwrap();
+        let (was, now) = (before.parts.hardware(), done.spec.parts.hardware());
+        assert!((now.bore - was.bore - 0.5e-3).abs() < 1e-6);
+        assert!(now.displacement() > was.displacement());
+        assert_eq!(done.spec.parts.bore, 2);
+        assert_ne!(
+            crate::physics::engine::maps::fingerprint(&now),
+            crate::physics::engine::maps::fingerprint(&was)
+        );
+        // Never smaller again, nor anywhere but an engine shop.
+        let back = Work::Rebore { at: block, size: 1 };
+        assert!(run(&catalogue, &engines, &done.spec, &[back]).is_err());
+        let workshop = shop(ShopKind::Car, &["*"]);
+        assert!(run(&catalogue, &workshop, &before, &[rebore]).is_err());
+        // Rebores go over the wire.
+        let work = Work::Rebore {
+            at: vec![HELD, 0, 0],
+            size: 3,
+        };
+        assert_eq!(decode::<Work>(&encode(&work)), Some(work));
+    }
+
+    #[test]
+    fn an_engine_kept_at_the_engine_shop_is_worked_on_and_swapped_in() {
+        let catalogue = builtin();
+        let before = spec(0);
+        let engines = shop(ShopKind::Engine, ENGINE_SHOP);
+        // The B18 engine kept there, its rods worn.
+        let mut kept = catalogue.assemblies[1].item.clone();
+        let rods = (kept.slots[0].as_mut().unwrap().slots.iter_mut().flatten())
+            .find(|item| catalogue.defs[item.def].wear == Some(crate::items::Wear::Rods))
+            .unwrap();
+        rods.wear = vec![0.5; 4];
+        let (pistons, _) = in_block(&catalogue, &before.car, "pistons.race");
+        let at_held = |path: &Path| {
+            let mut held = vec![HELD, 0];
+            held.extend_from_slice(&path[1..]);
+            held
+        };
+        // Race cams into it, as it lies there.
+        let (cams, _) = in_block(&catalogue, &before.car, "camshafts.race");
+        let mut bench = Bench::new(&catalogue, &engines, &before, std::slice::from_ref(&kept));
+        bench
+            .work(&Work::Fit {
+                slots: vec![at_held(&cams)],
+                supply: new(&catalogue, "camshafts.race"),
+            })
+            .unwrap();
+        // Its pistons can come out (a loose engine may lack them).
+        bench
+            .work(&Work::Remove {
+                slot: at_held(&pistons),
+            })
+            .unwrap();
+        bench
+            .work(&Work::Fit {
+                slots: vec![at_held(&pistons)],
+                supply: new(&catalogue, "pistons.high-compression"),
+            })
+            .unwrap();
+        // Then swapped in: the car's engine is kept here instead.
+        let engine = slots_of(&catalogue, &before.car, Kind::Engine);
+        bench
+            .work(&Work::Fit {
+                slots: vec![engine],
+                supply: Supply::Held(0),
+            })
+            .unwrap();
+        let done = bench.finish().unwrap();
+        assert_eq!(done.spec.parts.version, 1);
+        let held: Vec<Kind> = done.held.iter().map(|i| i.def(&catalogue).kind).collect();
+        assert!(held.contains(&Kind::Engine), "{held:?}");
+        let now = crate::saved::Condition::of_parts(&catalogue, &done.spec.car, 30.0, 95.0);
+        assert_eq!(now.damage.cylinders[3].rod, 0.5);
+        // A second engine isn't kept there.
+        let two = [kept.clone(), kept];
+        let mut bench = Bench::new(&catalogue, &engines, &before, &two);
+        bench
+            .work(&Work::Fit {
+                slots: vec![at_held(&cams)],
+                supply: new(&catalogue, "camshafts.race"),
+            })
+            .unwrap();
+        assert!(bench.finish().is_err());
     }
 
     #[test]

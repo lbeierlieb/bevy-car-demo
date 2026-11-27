@@ -330,6 +330,74 @@ mod tests {
     }
 
     #[test]
+    fn the_engine_shop_bakes_a_rebored_engine_while_the_old_one_runs() {
+        let listener = LoopbackListener::default();
+        let mut server = server(&listener);
+        let shop = crate::shops::Shop {
+            kind: crate::shops::ShopKind::Engine,
+            name: "Engines".to_string(),
+            at: Vec2::ZERO,
+            sells: vec!["pistons.*".into()],
+        };
+        let with = server.world_mut().remove_resource::<Server>().unwrap();
+        server.insert_resource(with.with_shops(vec![shop]));
+        let mut anna = driver(&listener, "Anna");
+        run(&mut [&mut server, &mut anna], 60);
+        let was = car(&mut anna).setup.engine.parts.hardware();
+        // Bored 0.75 mm over, with pistons to match.
+        let catalogue = car(&mut anna).setup.build.catalogue.clone();
+        let tree = car(&mut anna).setup.car.clone();
+        let engine = (tree.def(&catalogue).slots.iter())
+            .position(|slot| slot.kind == crate::items::Kind::Engine)
+            .unwrap() as u8;
+        let pistons = (catalogue.defs.iter())
+            .position(|def| def.id == "pistons.stock")
+            .unwrap() as u16;
+        anna.world_mut().resource_mut::<Connection>().work(vec![
+            crate::fitting::Work::Rebore {
+                at: vec![engine, 0],
+                size: 3,
+            },
+            crate::fitting::Work::Fit {
+                slots: vec![vec![engine, 0, 0]],
+                supply: crate::fitting::Supply::Part {
+                    def: pistons,
+                    variant: 3,
+                    paint: 0,
+                },
+            },
+        ]);
+        run(&mut [&mut server, &mut anna], 10);
+        // The car runs on as it was while the server bakes the new engine's maps.
+        let pending = |server: &mut App| {
+            let mut peers = server.world_mut().query::<&super::server::Peer>();
+            peers.single(server.world()).unwrap().shadow.pending()
+        };
+        assert!(pending(&mut server));
+        assert_eq!(car(&mut anna).setup.engine.parts.hardware(), was);
+        assert!(connection(&anna).refused.is_some());
+        let started = std::time::Instant::now();
+        while car(&mut anna).setup.engine.parts.bore != 3 {
+            assert!(started.elapsed().as_secs() < 300, "never baked");
+            std::thread::sleep(Duration::from_millis(50));
+            run(&mut [&mut server, &mut anna], 2);
+        }
+        assert!(!pending(&mut server));
+        let now = car(&mut anna).setup.engine.parts.hardware();
+        assert!(now.displacement() > was.displacement());
+        // The maps came from the server: the game didn't bake them.
+        let print = crate::physics::engine::maps::fingerprint(&now);
+        assert!(
+            server
+                .world()
+                .resource::<super::shadow::BakedMaps>()
+                .packed(print)
+                .is_some()
+        );
+        assert!(!connection(&anna).lacks_maps(print));
+    }
+
+    #[test]
     fn the_server_drives_a_players_car_as_they_do() {
         let listener = LoopbackListener::default();
         let mut server = server(&listener);

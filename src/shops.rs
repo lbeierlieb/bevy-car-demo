@@ -58,10 +58,12 @@ pub enum ShopKind {
     Dyno,
     /// The garage park: everyone's own garage, for cars and parts.
     Garage,
+    /// Long blocks: what's inside them, rebores, engines swapped (one kept for you).
+    Engine,
 }
 
 impl ShopKind {
-    pub const ALL: [ShopKind; 9] = [
+    pub const ALL: [ShopKind; 10] = [
         Self::Showroom,
         Self::Car,
         Self::Tuning,
@@ -71,6 +73,7 @@ impl ShopKind {
         Self::Gas,
         Self::Dyno,
         Self::Garage,
+        Self::Engine,
     ];
 
     /// Its word in a list of shops.
@@ -85,6 +88,7 @@ impl ShopKind {
             Self::Gas => "gas",
             Self::Dyno => "dyno",
             Self::Garage => "garage",
+            Self::Engine => "engine",
         }
     }
 
@@ -100,13 +104,14 @@ impl ShopKind {
             Self::Gas => "Gas station",
             Self::Dyno => "Dyno",
             Self::Garage => "Garage park",
+            Self::Engine => "Engine shop",
         }
     }
 
     /// Whether it fits parts to cars (with its own window of the car's slots, see
     /// `fitting`).
     pub fn fits_parts(self) -> bool {
-        matches!(self, Self::Car | Self::Tuning | Self::Tire)
+        matches!(self, Self::Car | Self::Tuning | Self::Tire | Self::Engine)
     }
 
     pub fn color(self) -> [u8; 3] {
@@ -120,6 +125,7 @@ impl ShopKind {
             Self::Gas => [255, 200, 40],
             Self::Dyno => [255, 120, 30],
             Self::Garage => [230, 230, 230],
+            Self::Engine => [190, 160, 90],
         }
     }
 }
@@ -592,7 +598,7 @@ mod tests {
         assert_eq!(
             parse("gas 1 2 Pumps\n# a comment\n\nbakery 3 4 Bread").unwrap_err(),
             "line 4: not a kind of shop (showroom, car, tuning, tire, alignment, paint, gas, \
-             dyno, garage): bakery 3 4 Bread"
+             dyno, garage, engine): bakery 3 4 Bread"
         );
         assert!(parse("gas 1 Pumps").is_err());
         assert!(parse("gas 1 2").is_err());
@@ -626,7 +632,11 @@ mod tests {
                 shop.sells.is_empty(),
                 !matches!(
                     shop.kind,
-                    ShopKind::Showroom | ShopKind::Car | ShopKind::Tuning | ShopKind::Tire
+                    ShopKind::Showroom
+                        | ShopKind::Car
+                        | ShopKind::Tuning
+                        | ShopKind::Tire
+                        | ShopKind::Engine
                 ),
                 "{}",
                 shop.name

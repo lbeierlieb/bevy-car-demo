@@ -10,7 +10,7 @@ use super::shadow::BakedMaps;
 use crate::car::CarSetup;
 use crate::cargo;
 use crate::catalogue::{Catalogue, Shared};
-use crate::fitting::{Bench, Work};
+use crate::fitting::{Bench, Work, engine_shop_takes};
 use crate::items::Item;
 use crate::items::{Does, trim_of};
 use crate::owned::{GARAGE_CARS, GARAGE_PARTS, Owned, Parked, SHOP_HOLD, Source, Stash, name};
@@ -137,6 +137,9 @@ fn try_act(
                         shop.name
                     ));
                 }
+                if shop.kind == ShopKind::Engine && !engine_shop_takes(catalogue, held, part) {
+                    return Err(format!("{} keeps one of those for you at most", shop.name));
+                }
                 held.push(part.clone());
             }
             spec.cargo.remove(usize::from(item));
@@ -192,6 +195,12 @@ fn try_act(
                     "{} holds {SHOP_HOLD} parts for you at most",
                     to.name
                 ));
+            }
+            let part = &owned.parts[usize::from(item)];
+            if to.kind == ShopKind::Engine
+                && !engine_shop_takes(catalogue, owned.held_at(&to.name), part)
+            {
+                return Err(format!("{} keeps one of those for you at most", to.name));
             }
             let part = owned.parts.remove(usize::from(item));
             owned.held_at_mut(&to.name).push(part);

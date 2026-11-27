@@ -286,7 +286,12 @@ fn shop(
     let marker = at.shop.and_then(|i| shops.list.get(i)).map(|p| p.marker);
     let mut enter = false;
     let ctx = contexts.ctx_mut()?;
-    for kind in [ShopKind::Car, ShopKind::Tuning, ShopKind::Tire] {
+    for kind in [
+        ShopKind::Car,
+        ShopKind::Tuning,
+        ShopKind::Tire,
+        ShopKind::Engine,
+    ] {
         shop_window(ctx, &shops, &mut at, kind, |ui, _| {
             enter = kit::button(ui, "Onto the lift").clicked();
             kit::note(
@@ -295,6 +300,10 @@ fn shop(
                     ShopKind::Tire => {
                         "Rims and tires: new wheels, new tires, and wheels \
                          made and taken apart."
+                    }
+                    ShopKind::Engine => {
+                        "Long blocks: pistons, rods, cams, heads and the rest inside, \
+                         rebores, and engines swapped (one kept here for you)."
                     }
                     ShopKind::Tuning => {
                         "Tuning parts fitted: engine bolt-ons, exhausts, \
