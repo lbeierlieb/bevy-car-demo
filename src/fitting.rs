@@ -1319,9 +1319,19 @@ mod tests {
             )],
             supply: new(&catalogue, "vireo.bonnet.cut-out"),
         };
-        let done = run(&catalogue, &workshop, &before, &[bonnet, blower]).unwrap();
+        let done = run(&catalogue, &workshop, &before, &[bonnet, blower.clone()]).unwrap();
         let hardware = done.spec.parts.hardware();
         assert!(hardware.supercharger.is_some_and(|s| s.roots));
+        // Without a bonnet it sticks out into the open air.
+        let off = Work::Remove {
+            slot: slots_of(
+                &catalogue,
+                &before.car,
+                Kind::Body(crate::items::Panel::Bonnet),
+            ),
+        };
+        let done = run(&catalogue, &workshop, &before, &[off, blower]).unwrap();
+        assert!(done.spec.parts.hardware().supercharger.is_some());
         // The centrifugal one goes under the plain bonnet.
         let centrifugal = Work::Fit {
             slots: vec![vec![engine, turbo]],

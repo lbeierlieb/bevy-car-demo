@@ -356,7 +356,8 @@ compression). Maps unchanged (not in the fingerprint: no bake); `Ecu::calibrated
 (`expected_charge`). **Needs/provides**: `PartDef::needs`/`provides` (tags), checked in
 `Item::fine` for whole cars (`items::unmet_need`) and `fitting::needs_missing`: the Roots
 blower needs `BONNET_CUT_OUT`, which "Bonnet with a blower cut-out" (`vireo.bonnet.cut-out`)
-provides. Drawn in `mechanicals.rs` (the blower sticking up through the bonnet with the
+provides, and so does no bonnet at all (`unmet_need`; the user, 2026-11-27; protocol 59, as
+whole cars an older client would refuse can come). Drawn in `mechanicals.rs` (the blower sticking up through the bonnet with the
 cut-out's frame in the bonnet's paint, the centrifugal snail at the belt end); a whine in
 the engine sound (`EngineCharacter::whine`, orders of the crank: Roots 6 × ratio,
 centrifugal the impeller's; `WHINE*`). Telemetry (2) shows clutch and gear wear, downforce,

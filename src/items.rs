@@ -615,7 +615,7 @@ pub fn engine_misfit(catalogue: &Catalogue, item: &Item) -> Option<String> {
     (item.slots.iter().flatten()).find_map(|child| engine_misfit(catalogue, child))
 }
 
-/// What a Roots blower needs (and a bonnet with a cut-out provides).
+/// What a Roots blower needs (and a bonnet with a cut-out provides, or no bonnet at all).
 pub const BONNET_CUT_OUT: &str = "bonnet with a cut-out";
 
 /// What cam phasers and a switching cam need (and a long block with its cams in the head
@@ -623,11 +623,14 @@ pub const BONNET_CUT_OUT: &str = "bonnet with a cut-out";
 pub const OVERHEAD_CAMS: &str = "head with overhead cams";
 
 /// A part of `car` (a car's tree) that needs what no part of it provides: the part's name
-/// and what it needs.
+/// and what it needs. A car without a bonnet has room for whatever sticks through one.
 pub fn unmet_need<'a>(catalogue: &'a Catalogue, car: &Item) -> Option<(&'a str, &'a str)> {
     let all = car.all();
     let defs = || all.iter().filter_map(|item| catalogue.defs.get(item.def));
-    let provided = |need: &String| defs().any(|def| def.provides.contains(need));
+    let no_bonnet = (car.fitted(catalogue, Kind::Body(Panel::Bonnet)).next()).is_none();
+    let provided = |need: &String| {
+        (no_bonnet && need == BONNET_CUT_OUT) || defs().any(|def| def.provides.contains(need))
+    };
     defs().find_map(|def| {
         let need = def.needs.iter().find(|need| !provided(need))?;
         Some((def.name.as_str(), need.as_str()))
