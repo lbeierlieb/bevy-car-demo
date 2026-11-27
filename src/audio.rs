@@ -2,7 +2,8 @@
 //! Each firing sends a pulse down its bank's exhaust; the engine's layout says how many
 //! there are in a cycle and which bank each goes down. A cross-plane V8 fires each bank at
 //! uneven intervals (the burble), a flat four's unequal headers bunch its pulses up in
-//! pairs (the boxer rumble), and the others fire evenly, the more cylinders the smoother.
+//! pairs (the boxer rumble), an odd-fire V10 fires 54° and 90° apart in turn (each bank
+//! evenly, the two out of step), and the others fire evenly, the more cylinders the smoother.
 //! The pulses run through the header, the front pipe and the tailpipe, each a delay line
 //! ringing a series of resonances (a wave to the far end and back, partly reflected), which
 //! the engine's orders sweep through as it revs, so its harmonics swell and fade; then
@@ -53,7 +54,7 @@ const ALTERNATING: [u8; 12] = [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
 const BOXER: [u8; 4] = [0, 0, 1, 1];
 const ONE_BANK: [u8; 6] = [0; 6];
 /// The layouts by the number the game publishes.
-const LAYOUTS: [Layout; 10] = [
+const LAYOUTS: [Layout; 11] = [
     Layout::Inline3,
     Layout::Inline4,
     Layout::Flat4,
@@ -64,12 +65,21 @@ const LAYOUTS: [Layout; 10] = [
     Layout::FlatPlaneV8,
     Layout::V10,
     Layout::V12,
+    Layout::OddFireV10,
 ];
+/// How late each firing comes after its even place, in firing intervals: an odd-fire
+/// V10's right bank fires 90° of crank after the left and the left 54° after the right
+/// (1.25 and 0.75 of the even 72°).
+const ODD_FIRE_V10: [f32; 10] = [0.0, 0.25, 0.0, 0.25, 0.0, 0.25, 0.0, 0.25, 0.0, 0.25];
+const EVEN: [f32; 12] = [0.0; 12];
 
 /// How a layout sounds.
 struct Sound {
-    /// The bank each firing of a cycle (two revolutions) goes down, evenly spaced.
+    /// The bank each firing of a cycle (two revolutions) goes down, evenly spaced but for
+    /// `late`.
     banks: &'static [u8],
+    /// How late each firing comes after its even place, in firing intervals (0 to 1).
+    late: &'static [f32],
     /// The banks have an exhaust each (panned apart), rather than joining into one.
     dual: bool,
     /// The exhaust's resonances relative to the big V8's: smaller, shorter pipes ring
@@ -92,9 +102,15 @@ fn sound(layout: Layout) -> Sound {
         Layout::FlatPlaneV8 => (&ALTERNATING[..8], true, 1.4, RIGHT_DELAY),
         Layout::V10 => (&ALTERNATING[..10], true, 1.5, RIGHT_DELAY),
         Layout::V12 => (&ALTERNATING, true, 1.55, RIGHT_DELAY),
+        Layout::OddFireV10 => (&ALTERNATING[..10], true, 1.3, RIGHT_DELAY),
+    };
+    let late: &[f32] = match layout {
+        Layout::OddFireV10 => &ODD_FIRE_V10,
+        _ => &EVEN[..banks.len()],
     };
     Sound {
         banks,
+        late,
         dual,
         pipes,
         delay,
@@ -939,7 +955,7 @@ impl EngineVoice {
                 * (1.0 + jitter * self.noise());
             // Seconds of the engine's time between firings.
             let interval = 120.0 / (self.rpm.max(100.0) * firings as f32);
-            let late = CYLINDER_LATE * (own_late + 1.0) * interval;
+            let late = (CYLINDER_LATE * (own_late + 1.0) + self.sound.late[firing]) * interval;
             let bank = &mut self.banks[usize::from(self.sound.banks[firing])];
             bank.since = -bank.delay - late;
             bank.strength = strength;
@@ -1498,12 +1514,35 @@ mod tests {
     }
 
     #[test]
+    fn an_odd_fire_v10_fires_54_and_90_degrees_apart_each_bank_evenly() {
+        let sound = sound(Layout::OddFireV10);
+        // Crank degrees of each firing in the 720° cycle.
+        let at: Vec<f32> = (0..10).map(|i| (i as f32 + sound.late[i]) * 72.0).collect();
+        for i in 0..10 {
+            let gap = (at[(i + 1) % 10] - at[i]).rem_euclid(720.0);
+            let want = if i % 2 == 0 { 90.0 } else { 54.0 };
+            assert!((gap - want).abs() < 1e-3, "firing {i}: {gap}°");
+        }
+        for bank in [0, 1] {
+            let own: Vec<f32> = (0..10)
+                .filter(|&i| sound.banks[i] == bank)
+                .map(|i| at[i])
+                .collect();
+            for i in 0..5 {
+                let gap = (own[(i + 1) % 5] - own[i]).rem_euclid(720.0);
+                assert!((gap - 144.0).abs() < 1e-3, "bank {bank}: {gap}°");
+            }
+        }
+    }
+
+    #[test]
     fn every_layout_fires_each_cylinder_once_a_cycle() {
         let catalogue = crate::catalogue::builtin();
         for family in &catalogue.families {
             let sound = sound(family.layout);
             let cylinders = family.versions[0].block.cylinders as usize;
             assert_eq!(sound.banks.len(), cylinders, "{}", family.name);
+            assert_eq!(sound.late.len(), cylinders, "{}", family.name);
             assert!(LAYOUTS.contains(&family.layout));
             // Two exhausts need two banks, each with half the cylinders.
             let second = sound.banks.iter().filter(|&&bank| bank == 1).count();

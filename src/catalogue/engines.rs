@@ -236,7 +236,7 @@ pub fn families() -> Vec<Family> {
         Family {
             name: "R-series V10".into(),
             about: "Eight litres in a low, wide V10 with pushrods: torque everywhere".into(),
-            layout: Layout::V10,
+            layout: Layout::OddFireV10,
             length: 0.86,
             width: 0.78,
             height: 0.60,

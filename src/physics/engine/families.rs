@@ -23,11 +23,15 @@ pub enum Layout {
     FlatPlaneV8,
     V10,
     V12,
+    /// A 90° V10 with a common pin for each pair of cylinders: firings 54° and 90° of
+    /// crank apart in turn, the banks in turn (each bank fires evenly, the two out of
+    /// step).
+    OddFireV10,
 }
 
 impl Layout {
     /// Every layout (the order is their number on the network).
-    pub const ALL: [Layout; 10] = [
+    pub const ALL: [Layout; 11] = [
         Layout::Inline3,
         Layout::Inline4,
         Layout::Flat4,
@@ -38,6 +42,7 @@ impl Layout {
         Layout::FlatPlaneV8,
         Layout::V10,
         Layout::V12,
+        Layout::OddFireV10,
     ];
 
     #[cfg(test)]
@@ -47,7 +52,7 @@ impl Layout {
             Layout::Inline4 | Layout::Flat4 => 4,
             Layout::Inline6 | Layout::Flat6 | Layout::V6 => 6,
             Layout::V8 | Layout::FlatPlaneV8 => 8,
-            Layout::V10 => 10,
+            Layout::V10 | Layout::OddFireV10 => 10,
             Layout::V12 => 12,
         }
     }
@@ -56,7 +61,12 @@ impl Layout {
     pub fn is_vee(self) -> bool {
         matches!(
             self,
-            Layout::V6 | Layout::V8 | Layout::FlatPlaneV8 | Layout::V10 | Layout::V12
+            Layout::V6
+                | Layout::V8
+                | Layout::FlatPlaneV8
+                | Layout::V10
+                | Layout::V12
+                | Layout::OddFireV10
         )
     }
 
@@ -72,6 +82,7 @@ impl Layout {
             Layout::FlatPlaneV8 => "flat-plane V8",
             Layout::V10 => "V10",
             Layout::V12 => "V12",
+            Layout::OddFireV10 => "odd-fire V10",
         }
     }
 }
