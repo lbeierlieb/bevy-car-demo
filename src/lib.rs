@@ -33,6 +33,7 @@ pub mod graphics;
 pub mod heli;
 pub mod help;
 pub mod hud;
+pub mod icon;
 pub mod input;
 pub mod items;
 pub mod looks;
@@ -75,7 +76,7 @@ pub mod workshop;
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 
-/// The engine's own plugins, with the game's window titled `title`, and F11 for
+/// The engine's own plugins, with the game's window titled `title` (with the icon), and F11 for
 /// fullscreen.
 pub fn default_plugins(title: &str) -> impl PluginGroup {
     DefaultPlugins
@@ -89,6 +90,7 @@ pub fn default_plugins(title: &str) -> impl PluginGroup {
             ..default()
         })
         .add(FullscreenPlugin)
+        .add(icon::WindowIconPlugin)
 }
 
 /// F11 switches the window between windowed and borderless fullscreen. On the web the

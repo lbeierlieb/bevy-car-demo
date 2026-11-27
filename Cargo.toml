@@ -81,6 +81,8 @@ sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio",
 argon2 = "0.6"
 # The server's `user` commands ask for passwords without showing them.
 rpassword = "7"
+# The window's icon (`icon.rs`): bevy doesn't set one, so through winit (bevy's own).
+winit = { version = "0.30", default-features = false }
 
 # Fast-ish debug builds: optimize dependencies, keep our own crate quick to compile.
 [profile.dev]
