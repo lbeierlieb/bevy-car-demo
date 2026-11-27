@@ -1,6 +1,6 @@
 //! Text files kept between runs, by name: in a folder under the config or cache directory
-//! (`~/.config/car-sim/…`, `~/.cache/car-sim/…`), or the browser's local storage on the
-//! web.
+//! (`~/.config/car-sim/…`, `~/.cache/car-sim/…`; on Windows `%APPDATA%\car-sim\…` and
+//! `%LOCALAPPDATA%\car-sim\…`), or the browser's local storage on the web.
 
 /// A folder of text files with one extension, or on the web the local storage keys with
 /// one prefix.
@@ -16,30 +16,61 @@ pub struct Folder {
     pub web_prefix: &'static str,
 }
 
+/// What a folder of the game's holds, which decides where it is.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+pub enum Kind {
+    /// Settings, tunes (`~/.config`).
+    Config,
+    /// What can be worked out again: engine maps (`~/.cache`).
+    Cache,
+    /// Playing alone's database (`~/.local/share`).
+    Data,
+}
+
+/// The game's folder of a kind: `car-sim` under the XDG directory (or its default under
+/// `HOME`); on Windows under `%APPDATA%` (config and data) or `%LOCALAPPDATA%` (cache).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn game_dir(kind: Kind) -> Option<std::path::PathBuf> {
+    use std::path::{Path, PathBuf};
+    let (variable, fallback) = match kind {
+        Kind::Config => ("XDG_CONFIG_HOME", ".config"),
+        Kind::Cache => ("XDG_CACHE_HOME", ".cache"),
+        Kind::Data => ("XDG_DATA_HOME", ".local/share"),
+    };
+    let xdg = || {
+        std::env::var_os(variable)
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(fallback)))
+    };
+    let base = if cfg!(windows) {
+        let windows = match kind {
+            Kind::Cache => "LOCALAPPDATA",
+            Kind::Config | Kind::Data => "APPDATA",
+        };
+        std::env::var_os(windows).map(PathBuf::from).or_else(xdg)
+    } else {
+        xdg()
+    }?;
+    Some(base.join("car-sim"))
+}
+
 /// The folder for the game's data (`~/.local/share/car-sim`, or under `XDG_DATA_HOME`):
 /// playing alone's database.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn data_dir() -> Option<std::path::PathBuf> {
-    use std::path::{Path, PathBuf};
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".local/share")))?;
-    Some(base.join("car-sim"))
+    game_dir(Kind::Data)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Folder {
     fn dir(&self) -> Option<std::path::PathBuf> {
-        use std::path::{Path, PathBuf};
-        let (variable, fallback) = if self.cache {
-            ("XDG_CACHE_HOME", ".cache")
+        let kind = if self.cache {
+            Kind::Cache
         } else {
-            ("XDG_CONFIG_HOME", ".config")
+            Kind::Config
         };
-        let base = std::env::var_os(variable)
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(fallback)))?;
-        Some(base.join("car-sim").join(self.name))
+        Some(game_dir(kind)?.join(self.name))
     }
 
     pub fn list(&self) -> Vec<String> {

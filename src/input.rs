@@ -790,12 +790,7 @@ impl WheelConfig {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn path() -> Option<std::path::PathBuf> {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".config"))
-            })?;
-        Some(base.join("car-sim").join("wheel.cfg"))
+        Some(crate::storage::game_dir(crate::storage::Kind::Config)?.join("wheel.cfg"))
     }
 
     /// The saved settings, or the defaults if there are none.
