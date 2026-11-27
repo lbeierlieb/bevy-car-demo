@@ -557,6 +557,45 @@ mod tests {
     }
 
     #[test]
+    fn traction_control_launches_the_roadster() {
+        let terrain = Terrain::flat();
+        let merrow = crate::catalogue::builtin()
+            .find_chassis("Merrow")
+            .expect("the roadster");
+        // The V10 floored in first from standing.
+        let launch = |traction_control: bool| {
+            let setup = CarSetup::factory(merrow, 0);
+            let mut car = Car::spawn_at(0, setup, &terrain, 0.0, 400.0, 0.0);
+            car.warm_tires();
+            car.parking_brake = false;
+            car.traction_control = traction_control;
+            car.drivetrain.shift_to(&car.setup.engine, 1);
+            run(&mut car, &terrain, 1.0);
+            car.controls = Controls {
+                throttle: 1.0,
+                ..default()
+            };
+            run(&mut car, &terrain, 1.5);
+            let radius = car.setup.rear.tire.radius;
+            let wheels = (car.corners[2].omega + car.corners[3].omega) / 2.0 * radius;
+            (car.forward_speed(), wheels)
+        };
+        let (speed, wheels) = launch(true);
+        println!("with traction control: {speed:.1} m/s, rear wheels {wheels:.1} m/s");
+        assert!(
+            speed > 5.0 && wheels < 1.25 * speed,
+            "wheels at {wheels} m/s, car at {speed}"
+        );
+        let (spinning, wheels) = launch(false);
+        println!("without: {spinning:.1} m/s, rear wheels {wheels:.1} m/s");
+        assert!(
+            wheels > 1.5 * spinning,
+            "wheels at {wheels} m/s, car at {spinning}"
+        );
+        assert!(speed > spinning, "{speed} against {spinning} m/s");
+    }
+
+    #[test]
     fn traction_control_works_in_reverse() {
         let terrain = Terrain::flat();
         // The strong hatch made to drive its rear wheels (weight going onto them in

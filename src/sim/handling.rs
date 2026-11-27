@@ -49,17 +49,17 @@ impl Slide {
     }
 }
 
-/// A driver going round a left-hand circle in second gear on warm tires, then flooring it
+/// A driver going round a left-hand circle in `gear` on warm tires, then flooring it
 /// until the rear steps out, and catching the slide a human's reaction time later by
 /// pointing the front wheels where the front axle goes, at a human's steering speed,
 /// easing the throttle.
-fn power_slide(setup: CarSetup, traction_control: bool) -> Slide {
+fn power_slide(setup: CarSetup, traction_control: bool, gear: i8) -> Slide {
     let terrain = Terrain::flat();
     let mut car = Car::spawn_at(0, setup, &terrain, 0.0, 0.0, 0.0);
     car.warm_tires();
     // Getting up to speed with traction control, so the strong ones don't do a burnout.
     car.traction_control = true;
-    car.drivetrain.gear = 2;
+    car.drivetrain.gear = gear;
     let dt = 1.0 / CHASSIS_HZ as f32;
     let max_steer = car.setup.max_steer;
     // Seconds before the driver notices, and how fast the wheel turns (fraction of lock
@@ -162,6 +162,30 @@ fn print_state(car: &Car, t: f32) {
     );
 }
 
+/// The Merrow's V10 (630 N·m at the rear) floored round the circle in second and in third
+/// with traction control: the rear steps out a few degrees and the driver catches it.
+/// Without traction control this driver spins it in both gears (the rear
+/// is at 40° before full opposite lock), and in fourth it doesn't slide at all; see
+/// `power_slides`.
+#[test]
+fn a_power_slide_can_be_caught() {
+    let merrow = crate::catalogue::builtin()
+        .find_chassis("Merrow")
+        .expect("the roadster");
+    for gear in [2, 3] {
+        let slide = power_slide(CarSetup::factory(merrow, 0), true, gear);
+        assert!(slide.deepest > 3.0, "gear {gear}: no slide: {slide:?}");
+        assert!(
+            !slide.spun() && slide.snap_back < 15.0,
+            "gear {gear}: {slide:?}"
+        );
+        assert!(
+            slide.end_slip.abs() < 2.0 && slide.end_yaw.abs() < 3.0,
+            "gear {gear}: {slide:?}"
+        );
+    }
+}
+
 /// Prints how each car's power slide goes, without and with traction control, for tuning
 /// the tires: `cargo test --profile release-dev power_slides -- --ignored --nocapture`.
 #[test]
@@ -169,10 +193,11 @@ fn print_state(car: &Car, t: f32) {
 fn power_slides() {
     for (chassis, made) in crate::catalogue::builtin().chassis.iter().enumerate() {
         for option in 0..made.engines.len() {
-            for traction_control in [false, true] {
-                let slide = power_slide(CarSetup::factory(chassis, option), traction_control);
+            for (gear, traction_control) in [(2, false), (2, true), (3, false), (3, true)] {
+                let setup = CarSetup::factory(chassis, option);
+                let slide = power_slide(setup, traction_control, gear);
                 println!(
-                    "{:<10} {:<6} {} deepest {:5.1}°  snap back {:5.1}°  end {:5.1}° {:6.1}°/s  \
+                    "{:<10} {:<6} gear {gear} {} deepest {:5.1}°  snap back {:5.1}°  end {:5.1}° {:6.1}°/s  \
                      TC travel {:5.2}{}",
                     made.name,
                     made.engines[option],
@@ -196,10 +221,10 @@ fn power_slides() {
 fn trace_power_slide() {
     let spec = std::env::var("SLIDE_CAR").unwrap_or("0,0".into());
     let [chassis, option] = [0, 1].map(|i| spec.split(',').nth(i).unwrap().parse().unwrap());
-    println!(
-        "{:?}",
-        power_slide(CarSetup::factory(chassis, option), false)
-    );
+    let gear = std::env::var("SLIDE_GEAR").map_or(2, |gear| gear.parse().unwrap());
+    let traction_control = std::env::var("SLIDE_TC").is_ok();
+    let setup = CarSetup::factory(chassis, option);
+    println!("{:?}", power_slide(setup, traction_control, gear));
 }
 
 /// A car going round the left-hand circle at `speed` (m/s) for `seconds`, calling `each`
