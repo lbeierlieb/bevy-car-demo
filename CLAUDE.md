@@ -239,7 +239,7 @@ would move the car). `PLACE` works because `shot.sh` sets `CAR_SIM_TRUST_PLACEME
 Shops need `PLACE` at the building's point
 (the car lands on the marker and goes in): gas `-2603,-1736`, car dealer
 `-1476,-1213`, alignment `-1480,-1305`, paint `3500,-63`, car workshop `-1566,-1329`,
-tuning shop `-1950,-3160`, tire shop `-2502,-1763`, dyno
+tuning shop `-1950,-3160`, tire shop `-2502,-1763`, engine shop `120,2700`, dyno
 `-2601,-3784`, garage park `-2680,-1793` (the shop's window takes the focus on its first row, so
 `TAPS="Enter@200"` goes into the scene: onto the rollers, up to the pump…; older click
 coordinates in these notes are from before the menus, 2026-11-23, and are wrong now;
@@ -818,11 +818,11 @@ As built:
   only gives the stock engines' maps (not ones it baked); the race editor uses the
   built-in catalogue (biggest car box); a catalogue file.
 
-## Owning cars and parts (planned with the user, 2026-11-26; milestones 1–6 built)
+## Owning cars and parts (planned with the user, 2026-11-26; milestones 1–7 built)
 
 The whole plan, with milestones: `docs/cars-and-parts.md` (keep it up to date).
 
-**Built so far** (2026-11-26): milestone 1, parts as data (`src/items.rs`, the hatch's
+**Built so far** (2026-11-26, milestone 7 on 2026-11-27): milestone 1, parts as data (`src/items.rs`, the hatch's
 definitions in `catalogue/items.rs`). `PartDef` (string `id`, `Kind` of slot it goes in,
 `Does` what the game's code does with it, `fits` chassis names, size box, mass, price
 in cents, painted, `Knob`s, `SlotDef`s), `Item` (definition by place in
@@ -989,9 +989,57 @@ parts. Paint shop: "What" picks the whole car or one fitted body part. Showroom:
 (those not sold there only to look at), "Trade in the car I drive". Tests:
 `fitting::tests`, `the_server_takes_a_car_changed_in_a_shop` (refused away from a paint
 shop), the garage test (a clutch at a tuning shop, a trade-in). Not done: prices and money
-(all free), items' own condition (a part taken off loses its wear; one brought counts as
-new), the rack and engine stand showing what's picked, removing "None" parts from the
+(all free), the rack and engine stand showing what's picked, removing "None" parts from the
 catalogue for empty slots, intercooler needing a bumper opening.
+
+Milestone 7, the engine shop (2026-11-27, built while the user slept; my decisions are
+listed in the plan's "Decided while building milestone 7"). **Items carry their wear**:
+`PartDef::wear` (`items::Wear`: pistons, rods, valves (in the cylinder head), head gasket,
+bearings (the crankshaft), turbo, tread (tires)), `Item::wear` (a value per cylinder or
+rib, trailing zeros left out, at most `MOST_WEAR` 8; on the wire, protocol 40).
+`Condition::put_on` puts a car's live `Damage` and treads on its parts, `of_parts` reads
+them back; the server does that around every shop's work (`stash::try_work`), so a new
+part is new, one taken off keeps its wear, one brought brings it (`Fresh`/`renew` gone),
+and parked cars' trees carry it. Saved cars: format 3, a `wear=a,b,…` field after the
+knobs (older files' `tread`/`engine`/`cylinder` lines go onto the parts). The "Internals"
+slot (forged rods/pistons) carries no wear. **Bores**: `items::OVERSIZES` (0, +0.25,
++0.5, +0.75, +1.0 mm), `PartDef::bores` (long blocks and the Pistons slot's parts: their
+`variant` is the oversize step), `Parts::bore` (resolved from the block's variant; adds to
+the hardware's bore, so the maps change). **Engine shop** (`ShopKind::Engine`, word
+`engine`, `fits_parts`): `fits_into` a long block into an engine, anything inside one, and
+a whole engine into the car (the kept one swapped in); car and tuning shops still never
+touch long blocks. Paths may start in a loose part: `fitting::IN_TRUNK`/`HELD`, then its
+place in the trunk or what's held (`root_of`, `item_in`, `slot_kinds_in`; a loose part may
+lack required parts, `Remove` allows it; `shifted` moves a path's place when the part
+fitted comes from the same list). `Work::Rebore { at, size }` (engine shop, a block, only
+bigger); `finish` refuses pistons not the block's size anywhere (`bores_mismatch`), new
+blocks come only with the stock bore, and an engine shop holds one engine and one long
+block per player (`engine_shop_takes`, also for unloading and shipping there). The repo's:
+"Motorenbau Mühlbach", Baunach (120, 2700), selling the internals and the B16/B18 long
+blocks. **The server bakes** (`shadow.rs`): maps neither stock nor in `BakedMaps` bake on
+a thread at the lowest priority (`setpriority(PRIO_PROCESS, 0, 19)`, Linux; the scoped
+worker threads inherit it); a car already driving goes on as it was (`Shadow::pending`;
+`spec()` is the pending one, what further changes build on, `driven()` what the game is to
+build), then is built anew (its condition's fuel as now) and the player told
+(`take_switched` → `YourCar`); the work's answer says the maps are being worked out.
+`BakedMaps` keeps the packed text too, and `ToServer::Maps` is answered from it
+(`store::pack`). **Game**: the workshop scene (`bay`) takes engine shops; `fit.rs`: the
+car's Engine slot, its long block with a "Rebore" row and the internals, "Brought" (the
+trunk's and held engines and long blocks, `Screen::Loose`), the rebore screen (oversize,
+then "Rebore, new X pistons" or pistons brought of that size: one request of two works),
+pistons only in the block's size; every workshop shows a part's wear ("worn 40 %", from
+`fit::Bench::worn`, the tree with the car's condition now). Shots: the engine shop
+`PLACE="120,2700,150"`, `TAPS="Enter@200"` onto the lift, then `ArrowDown@210;Enter@214`
+the engine, `ArrowDown@222;Enter@226` the long block, `Enter@234` the rebore. Tests:
+`fitting::tests` (`an_engine_shop_works_on_long_blocks_only`,
+`a_rebored_block_takes_pistons_of_its_size`,
+`an_engine_kept_at_the_engine_shop_is_worked_on_and_swapped_in`, the tire test's wear),
+`saved::tests::the_wear_goes_onto_the_parts_it_is_in`,
+`the_engine_shop_bakes_a_rebored_engine_while_the_old_one_runs`. Not done: bore wear (a
+rebore repairs nothing by itself: the pistons carry the knock wear), selling the long
+blocks' insides loose (they're only fitted), the engine stand showing the engine worked
+on, a priority below normal for the bake on other systems than Linux, the dyno's own bakes
+going to the server.
 
 The game is about tuning every aspect of a car. Agreed so far (the user's answers):
 - **Parts are items** you own (a definition from the server's catalogue + condition),

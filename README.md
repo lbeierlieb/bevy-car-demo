@@ -35,8 +35,9 @@ A small Bevy demo of car simulation techniques:
   car dealers (on a server) sell trims, and car workshops, tuning shops and tire shops
   fit parts (each shop what the server's list says it sells, or what you bring in the
   trunk): engines, gearboxes, clutches, differentials, suspension, brakes, body parts,
-  the engine's bolt-ons, rims and tires. Weight and balance follow from what's fitted
-  where.
+  the engine's bolt-ons, rims and tires; engine shops work inside long blocks
+  (pistons, rods, cams, heads…, rebores) and keep an engine for you. Parts wear and keep
+  their wear when taken off. Weight and balance follow from what's fitted where.
 - **Synthesised engine sound** that follows the cylinder layout: each firing sends a
   pulse through its bank's exhaust resonances. A cross-plane V8's banks fire at
   uneven intervals, which gives the burble; a flat four's unequal headers give its
@@ -118,7 +119,8 @@ aligner's screen;
 paint shops put the car in a spray booth and spray it, or any one body part, in a new paint;
 car dealers sell trims (the old car goes into your garage or is traded in); car workshops,
 tuning shops and tire shops put the car up on a lift in their workshop and fit what they
-sell or what you bring (the old part goes into the trunk); and dyno shops put the car on a chassis dyno
+sell or what you bring (the old part goes into the trunk); engine shops do the same for
+what's inside long blocks, rebore blocks, and swap in an engine they keep for you; and dyno shops put the car on a chassis dyno
 in a room under the shop, for power runs, holding it at an rpm and throttle, ECU tuning,
 cam timing and the wastegate. A car at a shop is a ghost: other cars drive through it.
 

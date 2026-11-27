@@ -1,7 +1,7 @@
 # Owning cars and parts: the plan
 
 Agreed with the user in rounds of questions on 2026-11-26 (the decisions are also short
-in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–6 are built. The milestones are
+in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–7 are built. The milestones are
 in the order they're meant to be built; each ends with clippy and tests passing and the
 game playable.
 
@@ -229,11 +229,20 @@ part taken off isn't kept), the intercooler's bumper opening.
 - Alignment (knobs of fitted parts), paint (per body part) and dyno moved onto it; the
   showroom sells trims (old car to the garage or traded in).
 
-### 7. Engine shop
+### 7. Engine shop (done 2026-11-27)
+
+Built as below while the user slept (see `CLAUDE.md`, "Owning cars and parts"; the
+decisions I made are under "Decided while building milestone 7" at the end). Not done:
+bore wear (the pistons carry the knock wear, so new pistons repair it; a rebore repairs
+nothing by itself), loose internals for sale (only fitted), the engine stand in the
+workshop showing the engine worked on, a lowered bake priority on servers other than
+Linux, the dyno's cam changes still baking in the game rather than asking the server.
 
 - Long block work in the car or on an engine from the trunk; rebores with oversize
   pistons; one engine kept per player; the server bakes maps for changed long blocks
   (cached by fingerprint, sent to the client; the old engine runs meanwhile).
+- Items' own condition: the engine's damage on the long block's parts and the turbo
+  (tires' treads on the tires too), kept by a part taken off; saved and sent.
 
 ### 8. New parts and physics
 
@@ -288,3 +297,32 @@ Decided by me (the user asleep; to look over):
   engine until they're done.
 - New shops (engine shop, used parts shop, used car dealer, marketplace) get places
   and made-up names near the existing towns.
+
+## Decided while building milestone 7 (2026-11-27, the user asleep; to look over)
+
+- **Where the wear sits**: pistons (each cylinder's knock wear), connecting rods (fatigue),
+  the cylinder head (the valves bent when they float), the head gasket, the crankshaft (the
+  bearings), the turbo; and each tire's tread on the tire (the same mechanism, so tires
+  taken off keep their wear too). The "Internals" slot (forged rods and pistons, an
+  upgrade on top of the rods and pistons) carries none. Crashes still damage nothing.
+- **Bore sizes**: stock, +0.25, +0.50, +0.75 and +1.00 mm. A block is only ever bored
+  bigger; afterwards it takes only pistons of its size, which the engine shop sells in
+  every size (the same parts, a size each). The rebore and the new pistons are one request.
+  A new long block from a shop comes with the stock bore. Bore wear isn't modelled: new
+  pistons repair the knock wear without a rebore.
+- **What the engine shop does**: a long block into an engine, anything inside a long block,
+  a rebore, and whole engines swapped into the car (that's how the engine kept there goes
+  in). It works on the car's engine and on an engine or long block brought in the trunk or
+  kept there. It keeps **one engine and one long block** per player (a long block swapped
+  into the kept engine has to go somewhere); other shops hold up to 20 parts as before. It
+  sells what its shops file says; the repo's sells the internals and the B16 and B18 long
+  blocks (a B18 block in a B16 engine is a classic swap).
+- **The engine shop** is "Motorenbau Mühlbach" in Baunach (120, 2700), near the tire
+  shop and the dyno there; it uses the workshop scene (the car on the lift).
+- **Bakes on the server**: at nice 19 on Linux (the thread and its workers); the car
+  drives on as it was until the maps are done, then the player gets the new car. The work's
+  answer tells them the maps are being worked out (in the window's warning colour, for
+  now). A change made meanwhile builds on the waiting one. Maps baked are kept for the
+  server's lifetime (not on disk) and given to games that ask.
+- **Saved cars** (format 3) write the wear on the parts; older saves' wear goes onto the
+  parts when read. Protocol 40.
