@@ -1178,6 +1178,9 @@ fn window(
         .filter(|(_, at)| time.elapsed_secs_f64() - at < REFUSAL)
         .map(|(why, _)| why.clone());
     let held = connection.owned.held_at(here).to_vec();
+    // The parts as worn as the car is now.
+    let mut worn = car.setup.car.clone();
+    crate::saved::Condition::of(car).put_on(&catalogue.0, &mut worn);
     let ctx = contexts.ctx_mut()?;
     Panel::new("fitting", shop.kind.title())
         .place(Place::Right)
@@ -1194,6 +1197,7 @@ fn window(
                 catalogue: &catalogue.0,
                 shop,
                 car,
+                worn: &worn,
                 held: &held,
                 connection: &mut connection,
             };

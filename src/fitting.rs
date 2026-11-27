@@ -510,6 +510,9 @@ impl<'a> Bench<'a> {
                 if variant >= made.variants(catalogue, chassis_place).max(1) {
                     return Err("No such size".into());
                 }
+                if made.kind == Kind::LongBlock && variant != 0 {
+                    return Err("A new block comes with the stock bore".into());
+                }
                 let paint = usize::from(*paint);
                 if made.painted && !new_paints(catalogue, &self.car).contains(&paint) {
                     return Err("Not in that paint".into());

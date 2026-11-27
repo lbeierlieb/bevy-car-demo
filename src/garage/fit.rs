@@ -1,7 +1,9 @@
-//! The window of car workshops, tuning shops and tire shops (in the workshop, `bay`): the
-//! car's slots the shop works on, and for each what's fitted, taking it off, new parts the
-//! shop sells (in a size and paint), parts brought in the trunk or held here. Tire shops
-//! also make new wheels of a rim and a tire, make loose wheels and take them apart. Every
+//! The window of car workshops, tuning shops, tire shops and engine shops (in the
+//! workshop, `bay`): the car's slots the shop works on, and for each what's fitted (and how
+//! worn), taking it off, new parts the shop sells (in a size and paint), parts brought in
+//! the trunk or held here. Tire shops also make new wheels of a rim and a tire, make loose
+//! wheels and take them apart. Engine shops also work on an engine or long block brought
+//! (in the trunk or held there), and rebore blocks (with pistons of the new size). Every
 //! change is asked of the server (`fitting::Work`), which answers with the car.
 
 use bevy_egui::egui;
@@ -9,9 +11,10 @@ use bevy_egui::egui;
 use crate::car::Car;
 use crate::catalogue::Catalogue;
 use crate::fitting::{
-    Path, Supply, Work, fits_into, item_at, made_for, new_paints, slot_kinds, wares, wheel_of,
+    HELD, IN_TRUNK, Path, Supply, Work, bore_name, fits_into, item_in, loose, made_for, new_paints,
+    slot_kinds_in, wares, wheel_of,
 };
-use crate::items::{Does, Item, Kind};
+use crate::items::{Does, Item, Kind, OVERSIZES};
 use crate::menu::kit;
 use crate::net::Connection;
 use crate::owned::name;
@@ -29,6 +32,11 @@ pub enum Screen {
     NewWheel(Path),
     /// A loose wheel of a rim brought (tire shops).
     MakeWheel,
+    /// A loose part (`[IN_TRUNK, i]` or `[HELD, i]`): its slots the shop works on (engine
+    /// shops: an engine or long block brought).
+    Loose(Path),
+    /// The block at a path bored over (engine shops).
+    Rebore(Path),
 }
 
 /// The screens open, and what's picked on them.
@@ -46,6 +54,8 @@ pub struct Fitter {
     brought_rim: usize,
     /// The final drive's ratio as set here (asked for as it's moved).
     ratio: Option<f32>,
+    /// The oversize a block is to be bored to.
+    bore: usize,
 }
 
 impl Default for Fitter {
@@ -70,6 +80,7 @@ impl Default for Fitter {
             tire: (0, tire),
             brought_rim: 0,
             ratio: None,
+            bore: 1,
         }
     }
 }
@@ -91,9 +102,48 @@ pub struct Bench<'a> {
     pub catalogue: &'a Catalogue,
     pub shop: &'a Shop,
     pub car: &'a Car,
+    /// The car's tree with its parts as worn as the car is now (`Condition::put_on`).
+    pub worn: &'a Item,
     /// What the shop holds for the player.
     pub held: &'a [Item],
     pub connection: &'a mut Connection,
+}
+
+impl<'a> Bench<'a> {
+    /// The car's tree, the trunk and what's held: where paths go.
+    fn tree(&self) -> (&'a Item, &'a [Item], &'a [Item]) {
+        (self.worn, &self.car.setup.cargo, self.held)
+    }
+
+    fn at(&self, path: &[u8]) -> Option<&'a Item> {
+        item_in(self.tree(), path)
+    }
+
+    fn kinds(&self, path: &[u8]) -> Option<(Kind, Option<Kind>)> {
+        slot_kinds_in(self.catalogue, self.tree(), path)
+    }
+}
+
+/// How worn a part is, if it carries wear and has any: "worn 40 %" (its worst cylinder's
+/// or rib's), "failed".
+pub fn wear_note(item: &Item) -> Option<String> {
+    let worst = item.wear.iter().copied().fold(0.0, f32::max);
+    if worst >= 1.0 {
+        Some("failed".into())
+    } else if worst >= 0.005 {
+        Some(format!("worn {:.0} %", 100.0 * worst))
+    } else {
+        None
+    }
+}
+
+/// A part's name with how worn it is, if it is.
+fn worn_name(catalogue: &Catalogue, item: &Item) -> String {
+    let name = name(catalogue, item);
+    match wear_note(item) {
+        Some(wear) => format!("{name} ({wear})"),
+        None => name,
+    }
 }
 
 /// Where slots of each kind are listed on the car's screen.
@@ -142,7 +192,7 @@ fn fitted_name(catalogue: &Catalogue, item: Option<&Item>) -> String {
                 _ => "incomplete".into(),
             }
         }
-        _ => name(catalogue, item),
+        _ => worn_name(catalogue, item),
     }
 }
 
@@ -212,6 +262,7 @@ pub fn window(ui: &mut egui::Ui, fitter: &mut Fitter, bench: Bench) {
         fitter.picks_for = Some(screen.clone());
     }
     let mut ask = None;
+    let mut asks = None;
     let mut go = None;
     match &screen {
         Screen::Slot(path) if path.is_empty() => car_screen(ui, &bench, &mut ask, &mut go),
@@ -219,13 +270,26 @@ pub fn window(ui: &mut egui::Ui, fitter: &mut Fitter, bench: Bench) {
         Screen::Ware(path, n) => ware_screen(ui, fitter, &bench, path, *n, &mut ask),
         Screen::NewWheel(path) => new_wheel_screen(ui, fitter, &bench, path, &mut ask),
         Screen::MakeWheel => make_wheel_screen(ui, fitter, &bench, &mut ask),
+        Screen::Loose(path) => loose_screen(ui, &bench, path, &mut go),
+        Screen::Rebore(path) => rebore_screen(ui, fitter, &bench, path, &mut asks),
     }
-    if let Some(work) = ask {
-        let done_with = matches!(screen, Screen::Ware(..) | Screen::NewWheel(_));
+    let works = ask.map(|work| vec![work]).or(asks);
+    if let Some(works) = works {
+        let done_with = matches!(
+            screen,
+            Screen::Ware(..) | Screen::NewWheel(_) | Screen::Rebore(_)
+        );
         bench.connection.refused = None;
-        bench.connection.work(vec![work]);
-        // Back to the slot (or to the car from making a wheel): places in lists change.
-        if done_with || screen == Screen::MakeWheel {
+        bench.connection.work(works);
+        let in_loose = (fitter.screens.iter()).any(|screen| match screen {
+            Screen::Slot(path) | Screen::Ware(path, _) | Screen::Loose(path) => loose(path),
+            _ => false,
+        });
+        if in_loose {
+            // Places in the trunk and what's held may change: back to the car.
+            fitter.screens.truncate(1);
+        } else if done_with || screen == Screen::MakeWheel {
+            // Back to the slot (or to the car from making a wheel): places in lists change.
             fitter.screens.pop();
         }
     } else if let Some(screen) = go {
@@ -243,13 +307,17 @@ fn pick_for(fitter: &mut Fitter, bench: &Bench, screen: &Screen) {
     fitter.ratio = None;
     match screen {
         Screen::Ware(path, _) => {
-            if let Some(item) = item_at(car, path) {
+            if let Some(item) = bench.at(path) {
                 fitter.variant = item.variant;
                 fitter.paint = item.paint.unwrap_or(fitter.paint);
             }
         }
+        Screen::Rebore(path) => {
+            let now = bench.at(path).map_or(0, |block| block.variant);
+            fitter.bore = (now + 1).min(OVERSIZES.len() - 1);
+        }
         Screen::NewWheel(path) => {
-            let fitted = item_at(car, path);
+            let fitted = bench.at(path);
             let wheel = fitted.and_then(|wheel| wheel_of(catalogue, wheel));
             let wheel = wheel.unwrap_or(bench.car.setup.build.wheels[0]);
             // What's on the wheel now if the shop sells it, else the first it has.
@@ -307,6 +375,34 @@ fn car_screen(ui: &mut egui::Ui, bench: &Bench, ask: &mut Option<Work>, go: &mut
             }
         }
     }
+    // Parts brought with slots this shop works on (an engine or long block at an engine
+    // shop).
+    let works_on = |item: &Item| {
+        let def = item.def(catalogue);
+        (def.slots.iter()).any(|slot| fits_into(bench.shop.kind, slot.kind, Some(def.kind)))
+    };
+    let trunk = (bench.car.setup.cargo.iter().enumerate()).map(|(i, item)| (IN_TRUNK, i, item));
+    let held = (bench.held.iter().enumerate()).map(|(i, item)| (HELD, i, item));
+    let brought: Vec<_> = trunk
+        .chain(held)
+        .filter(|(_, _, item)| works_on(item) && bench.shop.kind == ShopKind::Engine)
+        .collect();
+    if bench.shop.kind == ShopKind::Engine {
+        kit::section(ui, "Brought");
+        if brought.is_empty() {
+            kit::note(ui, "No engine or long block in the trunk or kept here.");
+        }
+        for (list, i, item) in brought {
+            let place = if list == IN_TRUNK {
+                "In the trunk"
+            } else {
+                "Kept here"
+            };
+            if kit::submenu_with(ui, place, &worn_name(catalogue, item)).clicked() {
+                *go = Some(Screen::Loose(vec![list, i as u8]));
+            }
+        }
+    }
     if bench.shop.kind == ShopKind::Tire {
         kit::section(ui, "Loose wheels");
         let trunk = &bench.car.setup.cargo;
@@ -334,6 +430,12 @@ fn car_screen(ui: &mut egui::Ui, bench: &Bench, ask: &mut Option<Work>, go: &mut
                 "Tires go onto rims and off them only here. What comes off goes into the \
                  trunk while there's room, else the shop holds it."
             }
+            ShopKind::Engine => {
+                "Only long blocks: what's inside them, rebores, and engines swapped. What \
+                 comes off goes into the trunk while there's room, else the shop keeps it \
+                 (one engine and one long block for you at most). A changed engine runs as \
+                 it was until its maps are worked out."
+            }
             _ => {
                 "What comes off goes into the trunk while there's room, else the shop holds it \
                  for you. Long blocks are the engine shop's work, rims and tires a tire \
@@ -354,16 +456,13 @@ fn slot_screen(
     go: &mut Option<Screen>,
 ) {
     let catalogue = bench.catalogue;
-    let car = &bench.car.setup.car;
-    let (Some((kind, _)), Some(holder)) = (
-        slot_kinds(catalogue, car, path),
-        item_at(car, &path[..path.len() - 1]),
-    ) else {
+    let (Some((kind, _)), Some(holder)) = (bench.kinds(path), bench.at(&path[..path.len() - 1]))
+    else {
         kit::note(ui, "That's gone.");
         return;
     };
     let slot = &holder.def(catalogue).slots[usize::from(path[path.len() - 1])];
-    let fitted = item_at(car, path);
+    let fitted = bench.at(path);
     kit::section(ui, &slot.name);
     kit::info(ui, "Fitted", &fitted_name(catalogue, fitted));
     if let Some(item) = fitted.filter(|item| !item.def(catalogue).absent) {
@@ -372,6 +471,11 @@ fn slot_screen(
             "Mass",
             &format!("{:.1} kg", crate::cargo::mass(catalogue, item)),
         );
+        if item.def(catalogue).wear.is_some() {
+            let wear = wear_note(item).unwrap_or_else(|| "as new".into());
+            kit::info(ui, "Condition", &wear);
+        }
+        rebore_row(ui, bench, path, item, go);
         // What's on it that this shop works on (an engine's bolt-ons, a wheel's rim and
         // tire).
         let inner = &item.def(catalogue).slots;
@@ -403,7 +507,7 @@ fn slot_screen(
             );
         }
         let nothing = catalogue.defs.iter().any(|d| d.absent && d.kind == kind);
-        if (!slot.required || nothing) && kit::button(ui, "Take it off").clicked() {
+        if (!slot.required || nothing || loose(path)) && kit::button(ui, "Take it off").clicked() {
             *ask = Some(Work::Remove { slot: path.clone() });
         }
     }
@@ -431,7 +535,8 @@ fn slot_screen(
     let mut any = false;
     for (i, item) in trunk.iter().enumerate().filter(|(_, item)| fits(item)) {
         any = true;
-        if kit::button_with(ui, "Fit it, from the trunk", &name(catalogue, item)).clicked() {
+        let label = worn_name(catalogue, item);
+        if kit::button_with(ui, "Fit it, from the trunk", &label).clicked() {
             *ask = Some(Work::Fit {
                 slots: vec![path.clone()],
                 supply: Supply::Trunk(i as u16),
@@ -440,7 +545,7 @@ fn slot_screen(
     }
     for (i, item) in bench.held.iter().enumerate().filter(|(_, item)| fits(item)) {
         any = true;
-        if kit::button_with(ui, "Fit it, held here", &name(catalogue, item)).clicked() {
+        if kit::button_with(ui, "Fit it, held here", &worn_name(catalogue, item)).clicked() {
             *ask = Some(Work::Fit {
                 slots: vec![path.clone()],
                 supply: Supply::Held(i as u16),
@@ -458,9 +563,17 @@ fn sizes(bench: &Bench, path: &Path, def: usize) -> Vec<usize> {
     let catalogue = bench.catalogue;
     let car = &bench.car.setup.car;
     let made = &catalogue.defs[def];
-    let wheel = (path.len() >= 2)
-        .then(|| item_at(car, &path[..path.len() - 1]))
+    let holder = (path.len() >= 2)
+        .then(|| bench.at(&path[..path.len() - 1]))
         .flatten();
+    if made.bores {
+        // Pistons the size the block is bored to; a new block comes with the stock bore.
+        return match holder.filter(|block| block.def(catalogue).kind == Kind::LongBlock) {
+            Some(block) if made.kind != Kind::LongBlock => vec![block.variant],
+            _ => vec![0],
+        };
+    }
+    let wheel = holder;
     let axle = axle_of(catalogue, car, path);
     let room = &bench.car.setup.build.chassis().room[axle];
     match made.does {
@@ -500,6 +613,9 @@ fn sizes(bench: &Bench, path: &Path, def: usize) -> Vec<usize> {
 /// A size's name.
 fn size_name(bench: &Bench, def: usize, variant: usize) -> String {
     let catalogue = bench.catalogue;
+    if catalogue.defs[def].bores {
+        return bore_name(variant);
+    }
     match catalogue.defs[def].does {
         Does::Rim => Rim::all()
             .nth(variant)
@@ -551,7 +667,7 @@ fn ware_screen(
 ) {
     let catalogue = bench.catalogue;
     let car = &bench.car.setup.car;
-    let Some((kind, _)) = slot_kinds(catalogue, car, path) else {
+    let Some((kind, _)) = bench.kinds(path) else {
         return;
     };
     let made = wares(catalogue, bench.shop, kind, chassis_name(bench));
@@ -564,7 +680,11 @@ fn ware_screen(
             let d = usize::from(def);
             let made = &catalogue.defs[d];
             let options = sizes(bench, path, d);
-            if options.len() > 1 || options.first().is_some_and(|&v| v != 0) {
+            if made.bores {
+                // Only the one size that goes here.
+                fitter.variant = options.first().copied().unwrap_or(0);
+                kit::info(ui, "Size", &size_name(bench, d, fitter.variant));
+            } else if options.len() > 1 || options.first().is_some_and(|&v| v != 0) {
                 if !options.contains(&fitter.variant) {
                     fitter.variant = options[0];
                 }
@@ -788,4 +908,138 @@ fn make_wheel_screen(
         )));
     }
     kit::note(ui, "The wheel goes into the trunk.");
+}
+
+/// A part brought (an engine or long block at an engine shop): its slots the shop works
+/// on, and a rebore if it's a block.
+fn loose_screen(ui: &mut egui::Ui, bench: &Bench, path: &Path, go: &mut Option<Screen>) {
+    let catalogue = bench.catalogue;
+    let Some(item) = bench.at(path) else {
+        kit::note(ui, "That's gone.");
+        return;
+    };
+    let def = item.def(catalogue);
+    kit::section(ui, &worn_name(catalogue, item));
+    kit::info(
+        ui,
+        "Where",
+        if path.first() == Some(&IN_TRUNK) {
+            "In the trunk"
+        } else {
+            "Kept here"
+        },
+    );
+    rebore_row(ui, bench, path, item, go);
+    for (i, slot) in def.slots.iter().enumerate() {
+        if fits_into(bench.shop.kind, slot.kind, Some(def.kind)) {
+            let mut deeper = path.clone();
+            deeper.push(i as u8);
+            let on = fitted_name(catalogue, item.slots[i].as_ref());
+            if kit::submenu_with(ui, &slot.name, &on).clicked() {
+                *go = Some(Screen::Slot(deeper));
+            }
+        }
+    }
+    kit::note(
+        ui,
+        "A loose engine may lack what it needs to run: fit it all before it goes in.",
+    );
+}
+
+/// For a block at an engine shop: its bore, and a rebore.
+fn rebore_row(ui: &mut egui::Ui, bench: &Bench, path: &Path, item: &Item, go: &mut Option<Screen>) {
+    let def = item.def(bench.catalogue);
+    if def.kind != Kind::LongBlock || !def.bores || bench.shop.kind != ShopKind::Engine {
+        return;
+    }
+    let bore = bore_name(item.variant);
+    if item.variant + 1 < OVERSIZES.len() {
+        if kit::submenu_with(ui, "Rebore", &bore).clicked() {
+            *go = Some(Screen::Rebore(path.clone()));
+        }
+    } else {
+        kit::info(ui, "Bore", &format!("{bore} (as far as it goes)"));
+    }
+}
+
+/// The slot of a block's pistons (the parts that come in its bore sizes).
+fn pistons_slot(catalogue: &Catalogue, block: &Item) -> Option<usize> {
+    (block.def(catalogue).slots.iter())
+        .position(|slot| (catalogue.defs.iter()).any(|def| def.kind == slot.kind && def.bores))
+}
+
+/// A block bored over: the oversize, then pistons of it (new from the shop, or brought).
+fn rebore_screen(
+    ui: &mut egui::Ui,
+    fitter: &mut Fitter,
+    bench: &Bench,
+    path: &Path,
+    asks: &mut Option<Vec<Work>>,
+) {
+    let catalogue = bench.catalogue;
+    let Some(block) = bench.at(path) else {
+        kit::note(ui, "That's gone.");
+        return;
+    };
+    let Some(slot) = pistons_slot(catalogue, block) else {
+        return;
+    };
+    kit::section(ui, "Rebore");
+    kit::info(ui, "Now", &bore_name(block.variant));
+    let sizes: Vec<usize> = (block.variant + 1..OVERSIZES.len()).collect();
+    if sizes.is_empty() {
+        kit::note(ui, "It's bored as far as it goes.");
+        return;
+    }
+    if !sizes.contains(&fitter.bore) {
+        fitter.bore = sizes[0];
+    }
+    kit::pick(ui, "Bored to", &mut fitter.bore, &sizes, bore_name);
+    let size = fitter.bore;
+    let pistons = (block.def(catalogue).slots.get(slot)).map(|s| s.kind);
+    let Some(pistons) = pistons else {
+        return;
+    };
+    let mut pistons_path = path.clone();
+    pistons_path.push(slot as u8);
+    let rebore = Work::Rebore {
+        at: path.clone(),
+        size: size as u8,
+    };
+    let fit = |supply: Supply| Work::Fit {
+        slots: vec![pistons_path.clone()],
+        supply,
+    };
+    kit::section(ui, "With pistons of that size");
+    for ware in wares(catalogue, bench.shop, pistons, chassis_name(bench)) {
+        let Supply::Part { def, .. } = ware else {
+            continue;
+        };
+        let label = format!("Rebore, new {}", catalogue.defs[usize::from(def)].name);
+        if kit::button(ui, &label).clicked() {
+            let supply = Supply::Part {
+                def,
+                variant: size as u16,
+                paint: 0,
+            };
+            *asks = Some(vec![rebore.clone(), fit(supply)]);
+        }
+    }
+    let brought = (bench.car.setup.cargo.iter().enumerate())
+        .map(|(i, item)| (Supply::Trunk(i as u16), item))
+        .chain((bench.held.iter().enumerate()).map(|(i, item)| (Supply::Held(i as u16), item)));
+    for (supply, item) in brought {
+        let def = item.def(catalogue);
+        if def.kind == pistons && def.bores && item.variant == size {
+            let label = format!("Rebore, fit {}", worn_name(catalogue, item));
+            if kit::button(ui, &label).clicked() {
+                *asks = Some(vec![rebore.clone(), fit(supply)]);
+            }
+        }
+    }
+    kit::note(
+        ui,
+        "A bigger bore makes a bigger engine; the block takes only pistons of its size from \
+         then on, and is never bored smaller again. The old pistons come out.",
+    );
 }
