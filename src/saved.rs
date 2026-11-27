@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! # car-sim car
-//! version 3
+//! version 4
 //! fuel 31.5 96.2
 //! part 0 -  vireo  putty  0  Brake force=1 …  (tab-separated: depth, slot, id, paint,
 //! part 1 Front bumper  vireo.bumper.front …    variant, knobs as name=value, and its
@@ -20,6 +20,15 @@
 //!
 //! Before version 3 the wear was the car's: `tread CORNER RIB…`, `engine GASKET BEARINGS
 //! TURBO` and `cylinder I PISTON VALVES ROD` lines, read onto the parts.
+//!
+//! Before version 4 an engine had one exhaust manifold part for every family
+//! (`exhaust-manifold.stock`, `short-headers`, `long-tube-headers`: lengths relative to
+//! the block's headers) and a "Turbo or supercharger" slot. They're read by their ids (in
+//! loose parts too, which carry no version): an old manifold becomes its family's without
+//! turbo mounts whose primaries are nearest what the old part made of them; a turbo in the
+//! old slot goes on every mount of its family's turbo manifold (nearest the manifold it
+//! had, which it replaces if that has no mounts); superchargers go into the supercharger
+//! slot.
 
 use crate::car::Car;
 use crate::catalogue::{Catalogue, Shared};
@@ -34,7 +43,17 @@ use crate::spec::CarSpec;
 use crate::wheels::{Rim, TireSize};
 
 /// The format's version.
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
+
+/// Before version 4: the exhaust manifolds' ids' start, each one's primaries relative to
+/// the block's headers, and the slot turbos and superchargers shared.
+const OLD_MANIFOLD: &str = "exhaust-manifold.";
+const OLD_HEADERS: [(&str, f32); 3] = [
+    ("stock", 1.0),
+    ("short-headers", 0.56),
+    ("long-tube-headers", 1.375),
+];
+const OLD_TURBO_SLOT: &str = "Turbo or supercharger";
 
 /// Each part's wear is a field `wear=…` after its knobs.
 const WEAR: &str = "wear";
@@ -310,7 +329,8 @@ impl Parts {
         }
         self.skipping = None;
         self.settle(catalogue, depth);
-        let Some(def) = catalogue.defs.iter().position(|def| def.id == *id) else {
+        let found = catalogue.defs.iter().position(|def| def.id == *id);
+        let Some(def) = found.or_else(|| self.old_manifold(catalogue, id)) else {
             bevy::log::warn!("A saved part {id} isn't in the catalogue any more");
             self.skipping = Some(depth);
             return Ok(());
@@ -364,6 +384,7 @@ impl Parts {
             });
             match free {
                 Some(place) => parent.slots[place] = Some(item),
+                None if slot == OLD_TURBO_SLOT && mount_old_turbo(catalogue, parent, &item) => {}
                 None => bevy::log::warn!(
                     "A saved part {} has no slot \"{slot}\" any more",
                     catalogue.defs[item.def].id
@@ -372,11 +393,98 @@ impl Parts {
         }
     }
 
+    /// The definition an exhaust manifold saved before version 4 (`OLD_MANIFOLD`) is now:
+    /// the manifold without turbo mounts made for the engine it's on (the item on top of
+    /// the stack; loose: the first family's first version) whose primaries are nearest what
+    /// the old part made of the block's.
+    fn old_manifold(&self, catalogue: &Catalogue, id: &str) -> Option<usize> {
+        let (_, times) = OLD_HEADERS
+            .iter()
+            .find(|(old, _)| id.strip_prefix(OLD_MANIFOLD) == Some(old))?;
+        let engine = self.stack.last().map(|(_, _, item)| item);
+        let block = engine
+            .filter(|engine| engine.def(catalogue).kind == Kind::Engine)
+            .and_then(|engine| engine.fitted(catalogue, Kind::LongBlock).next())
+            .map(|block| &block.def(catalogue).does);
+        let (family, version) = match block {
+            Some(&Does::Block { family, version }) => (family, version),
+            _ => (0, 0),
+        };
+        let made = catalogue.families.get(family)?;
+        let headers = made.versions.get(version)?.block.exhaust.header_length;
+        let wanted = crate::physics::engine::parts::round_to(headers * times, 0.01);
+        nearest_manifold(catalogue, family, wanted, false)
+    }
+
     /// The trees read.
     fn finish(mut self, catalogue: &Catalogue) -> Vec<Item> {
         self.settle(catalogue, 0);
         self.roots
     }
+}
+
+/// The definition of `family`'s manifold with turbo mounts (or without) whose primaries are
+/// nearest `length` (m; the first of those as near).
+fn nearest_manifold(
+    catalogue: &Catalogue,
+    family: usize,
+    length: f32,
+    mounts: bool,
+) -> Option<usize> {
+    let made = catalogue.families.get(family)?;
+    let off = |m: usize| (made.manifolds[m].manifold.primary_length - length).abs();
+    let manifold = (0..made.manifolds.len())
+        .filter(|&m| made.manifolds[m].mounts == mounts)
+        .min_by(|&a, &b| off(a).total_cmp(&off(b)))?;
+    let does = Does::Manifold { family, manifold };
+    catalogue.defs.iter().position(|def| def.does == does)
+}
+
+/// A turbo saved in an engine's old turbo slot (before version 4) onto `engine`: on every
+/// mount of its manifold, which becomes the family's turbo manifold nearest it if it has
+/// no mounts; the engine's empty slots that must have a part get the one standing for
+/// nothing (no supercharger). Whether it went on.
+fn mount_old_turbo(catalogue: &Catalogue, engine: &mut Item, turbo: &Item) -> bool {
+    if turbo.def(catalogue).kind != Kind::Turbo || engine.def(catalogue).kind != Kind::Engine {
+        return false;
+    }
+    let slots = catalogue.defs[engine.def].slots.clone();
+    let Some(manifold) = (slots.iter().zip(&mut engine.slots))
+        .find(|(slot, _)| slot.kind == Kind::Manifold)
+        .and_then(|(_, manifold)| manifold.as_mut())
+    else {
+        return false;
+    };
+    let Does::Manifold {
+        family,
+        manifold: m,
+    } = manifold.def(catalogue).does
+    else {
+        return false;
+    };
+    let mounted = |item: &Item| (item.def(catalogue).slots.iter()).any(|s| s.kind == Kind::Turbo);
+    if !mounted(manifold) {
+        let length = catalogue.families[family].manifolds[m]
+            .manifold
+            .primary_length;
+        let Some(def) = nearest_manifold(catalogue, family, length, true) else {
+            return false;
+        };
+        *manifold = Item::new(catalogue, def, 0);
+    }
+    let mounts = catalogue.defs[manifold.def].slots.clone();
+    for (slot, place) in mounts.iter().zip(&mut manifold.slots) {
+        if slot.kind == Kind::Turbo {
+            *place = Some(turbo.clone());
+        }
+    }
+    for (slot, place) in slots.iter().zip(&mut engine.slots) {
+        let nothing = (catalogue.defs.iter()).position(|def| def.absent && def.kind == slot.kind);
+        if let (true, None, Some(nothing)) = (slot.required, &place, nothing) {
+            *place = Some(Item::new(catalogue, nothing, 0));
+        }
+    }
+    true
 }
 
 /// What a size is saved as: rims' and tires' labels (their lists may grow), else its place.
@@ -681,6 +789,92 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    /// `text` as a game before version 4 wrote it: the engine's manifold the old part
+    /// `old`, and the turbo on its mounts (if any) in the old turbo slot.
+    fn before_mounts(text: &str, old: &str) -> String {
+        let lines: Vec<&str> = text.lines().collect();
+        let turbo = (lines.iter()).find_map(|line| line.strip_prefix("part\t3\tTurbo"));
+        let mut out = Vec::new();
+        for line in lines {
+            let fields: Vec<&str> = line.split('\t').collect();
+            match fields.as_slice() {
+                ["version", ..] => out.push("version 3".to_string()),
+                ["part", "2", "Exhaust manifold", _, rest @ ..] => out.push(format!(
+                    "part\t2\tExhaust manifold\t{old}\t{}",
+                    rest.join("\t")
+                )),
+                ["part", "3", slot, ..] if slot.starts_with("Turbo") => {}
+                ["part", "2", "Supercharger", ..] if turbo.is_some() => {
+                    let turbo = turbo.unwrap();
+                    let turbo = turbo.split_once('\t').map_or(turbo, |(_, rest)| rest);
+                    out.push(format!("part\t2\tTurbo or supercharger\t{turbo}"));
+                }
+                ["part", "2", "Supercharger", rest @ ..] => out.push(format!(
+                    "part\t2\tTurbo or supercharger\t{}",
+                    rest.join("\t")
+                )),
+                _ => out.push(line.to_string()),
+            }
+        }
+        out.join("\n")
+    }
+
+    /// The stock car `chassis`, `option` with the family's manifold `manifold` and the
+    /// turbo `turbo` on it (0: none), worn.
+    fn built(chassis: usize, option: usize, manifold: usize, turbo: usize) -> (CarSpec, Car) {
+        let setup = CarSetup::factory(chassis, option);
+        let mut parts = setup.engine.parts.clone();
+        parts.manifold = manifold;
+        parts.chosen[crate::catalogue::TURBO] = turbo;
+        let built = setup.changed(setup.build.clone(), parts, setup.engine.build.clone());
+        let mut car = Car::spawn_at(0, built.clone(), &Terrain::flat(), 0.0, 0.0, 0.0);
+        car.drivetrain.engine.damage.turbo = 0.25;
+        (CarSpec::of(&built), car)
+    }
+
+    #[test]
+    fn cars_saved_before_the_manifolds_had_mounts_read_as_they_were() {
+        let catalogue = crate::catalogue::builtin();
+        let ids = |spec: &CarSpec| -> Vec<String> {
+            (spec.car.all().into_iter())
+                .map(|item| item.def(&catalogue).id.clone())
+                .filter(|id| id.starts_with("b.") || id.starts_with("r.") || id.contains("turbo"))
+                .collect()
+        };
+        let cases = [
+            // The 1.6 with a turbo on the stock manifold; the 1.8 with long tubes; the
+            // V10 with short headers (gone: its stock ones), and with long tubes and a
+            // turbo (the pair of turbo manifolds, nearer than the 10-into-1).
+            ((0, 0, 3, 2), "exhaust-manifold.stock", (3, 2)),
+            ((0, 1, 2, 0), "exhaust-manifold.long-tube-headers", (2, 0)),
+            ((1, 0, 0, 0), "exhaust-manifold.short-headers", (0, 0)),
+            ((1, 0, 2, 1), "exhaust-manifold.long-tube-headers", (2, 1)),
+        ];
+        for ((chassis, option, manifold, turbo), old, (now, turbo_now)) in cases {
+            let (spec, car) = built(chassis, option, manifold, turbo);
+            let text = write(&catalogue, &spec, &Condition::of(&car));
+            let (read, condition) = read(&catalogue, &before_mounts(&text, old)).unwrap();
+            let (expected, _) = built(chassis, option, now, turbo_now);
+            assert_eq!(ids(&read), ids(&expected), "{old}");
+            assert_eq!(read.parts.manifold, now);
+            assert_eq!(read.parts.chosen[crate::catalogue::TURBO], turbo_now);
+            let worn = if turbo > 0 { 0.25 } else { 0.0 };
+            assert_eq!(condition.damage.turbo, worn, "{old}");
+        }
+        // The 1.6's turbo car reads back exactly.
+        let (spec, car) = built(0, 0, 3, 2);
+        let text = write(&catalogue, &spec, &Condition::of(&car));
+        let (read, _) = read(&catalogue, &before_mounts(&text, "exhaust-manifold.stock")).unwrap();
+        let mut worn = spec.clone();
+        Condition::of(&car).put_on(&catalogue, &mut worn.car);
+        assert_eq!(read, worn);
+        // A loose old manifold is the first family's.
+        let loose = "part\t0\t-\texhaust-manifold.short-headers\t-\t0\n";
+        let items = read_items(&catalogue, loose);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].def(&catalogue).id, "b.headers.short");
     }
 
     fn read_err(catalogue: &Shared, text: &str) -> bool {
