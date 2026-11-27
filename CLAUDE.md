@@ -849,7 +849,24 @@ factory car is its trim's (`CarSetup::factory_in`, `to_look_at`, via `items::tri
 so the server's start car, the showroom's "Drive it" and lent cars are trims);
 `assemble` keeps a part that does the same as asked (steel rims stay steel). Shots:
 `LINEUP` counts stock cars (each chassis × factory engine); its straight is in a
-forest now, `OFFLINE=1 CARCAM="-6,1.3,0"` shows the car side on in the village.
+forest now, `OFFLINE=1 CARCAM="-6,1.3,0"` shows the car side on in the village
+(`TRIM="chassis,option"` any stock car: `TRIM=1,0` the Merrow).
+
+**The Merrow** (2026-11-27, `docs/pushrod-v10.md` milestone C; the second chassis, at
+place 1): an early-90s open V10 roadster (made up), the R80 at 0.42 m behind the front
+axle, rear-wheel drive, limited slip, 1460 kg full (49.8 % front), 2.44 m wheelbase,
+4.45 × 1.92 m, 275/40 R17 front and 335/35 R17 rear on 9.5"/11.5" alloys, its own vented
+discs (`merrow.brake.front-vented`/`rear-vented`, 17" rims), an 85 L tank, two seats (no
+"Rear bench" slot; the lid is "Boot lid", `catalogue/items.rs`'s `layout`), a trunk over
+the rear axle, side pipes; trim `merrow.r80` (so `engine.r80`), paint "Dull navy",
+gearbox "6-speed heavy duty (inline)" (700 N·m, clutch 720; gearbox definitions are made
+for the chassis whose gearbox is of their kind). 0–100 in 4.7 s (`zero_to_hundred`,
+ignored). An open car's first opening is its cockpit (`Body::cockpit`): the deck's open
+there, sills round it, a bulkhead behind the seats, so bonnet and boot lid come off like
+the hatch's; `Body::bulges` (bonnet ridges) and `side_pipes` (protocol 51). Mechanicals:
+a longitudinal V (banks at 90°, low heads, plenum in the valley), gearbox case,
+propeller shaft, differential and half shafts, exhausts to side pipes. Not wired into
+shops, traffic only at weight 0.05, sound still `Layout::V10` (milestone D).
 
 Milestone 3, the body in pieces (2026-11-26): `body.rs` builds the body from a `Dress`
 (the shell's colour and each fitted body part's, `items::dress` from the tree: the first
@@ -1237,7 +1254,8 @@ The game is about tuning every aspect of a car. Agreed so far (the user's answer
   nothing planned yet.
 - **One car for now**: the hot hatch with 1.6 and 1.8 engine options, made to look like
   an early-90s hatchback (the user: like an EG Civic; no real names or badges); the other
-  twelve chassis go (others come later).
+  twelve chassis go (others come later). The second, since 2026-11-27: the Merrow, an
+  early-90s V10 roadster (`docs/pushrod-v10.md`).
 - Engines come out whole (bolt-ons on); the ECU, exhaust after the manifold and cooling
   stay with the car. Rims and tires are items of their own too (loose in trunks and
   garages), put together only at the tire shop. Springs, dampers, brakes, wheels per
@@ -1578,14 +1596,15 @@ catalogue entries, and things like swap subframes are named so they can be price
 
 - **Catalogues** (data in a `catalogue::Catalogue`, the server's, see "Server
   catalogue"; entries referred to by their place; engine versions also by code). The
-  built-in one (`src/catalogue/`): `chassis.rs` has the chassis (only the Vireo hatch, B16 and B18, since 2026-11-26,
+  built-in one (`src/catalogue/`): `chassis.rs` has the chassis (only the Vireo hatch, B16 and B18, from 2026-11-26; the
+  Merrow roadster with the R80 since 2026-11-27,
   see "Owning cars and parts"; the other twelve (Minim, Linnet, Tarn, Halden, Skarn,
   Harrow, Calder, Rheon, Vespera, Wisp, Drover, Carrow) and their engines are in git
   history before that; names are made up, no real cars), gearboxes (the two
-  transverse ones), clutches, suspension kits and paints (the tire
+  transverse ones and an inline 6-speed), clutches, suspension kits and paints (the tire
   compounds' rubber is `physics/tire.rs`'s `COMPOUNDS`, named in `catalogue/parts.rs`).
   `engines.rs` has the families (the B series, versions B16 and B18; the R-series V10,
-  R80, which no chassis offers yet; `EngineHardware::default`
+  R80, the Merrow's; `EngineHardware::default`
   is still the W20 2-litre four everything is scaled from). Tests needing another kind
   of car change the one: `catalogue::builtin_changed` (heavier, rear-wheel drive…).
 - **A car** is a `CarBuild` (chassis, paint, gearbox, clutch, final drive, limited-slip,
@@ -1926,8 +1945,8 @@ phasing, VTEC-style cam switching).
   separation keeps the overlap, so the idle, low), springs made for 6000 (398 N seat,
   float 6380 rpm), flywheel 0.35; 545 N·m at 1500, ~637 N·m at 3900, 295 kW at 4500,
   peak 305 kW at 5100, idle 850. 0.86 × 0.78 × 0.60 m, 300 kg (its long block item
-  `r80`, 210 kg, comes from the family like every version's; no `engine.r80` assembly
-  until a trim has it). `the_pushrod_v10_pulls_low_and_broad`. The NA torque range in
+  `r80`, 210 kg, comes from the family like every version's; `engine.r80` from the
+  Merrow's trim). `the_pushrod_v10_pulls_low_and_broad`. The NA torque range in
   `every_factory_engine_idles_and_pulls` starts at 75 N·m/l for it.
 - ECUs are switchable (agreed with the user): `EcuModel` (Stock, Programmable) is chosen
   in the garage like a part; the stock one stays. One `Ecu` struct for all models, the

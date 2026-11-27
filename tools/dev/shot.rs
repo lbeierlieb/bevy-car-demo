@@ -160,8 +160,14 @@ fn start_online(
         menu.open = false;
     } else if std::env::var("OFFLINE").is_ok() {
         let (p, yaw) = terrain.road_spawns(&crate::terrain::Spawn::DEFAULT, 1, 0.0)[0];
+        // TRIM=1 is the hatch's 1.8, TRIM="chassis,option" any stock car.
         let mut setup = match std::env::var("TRIM") {
-            Ok(_) => crate::car::CarSetup::factory(0, 1),
+            Ok(trim) => match trim.split_once(',') {
+                Some((c, o)) => {
+                    crate::car::CarSetup::factory(c.parse().unwrap(), o.parse().unwrap())
+                }
+                None => crate::car::CarSetup::factory(0, 1),
+            },
             Err(_) => crate::car::CarSetup::default(),
         };
         dress_up(&mut setup);

@@ -154,6 +154,56 @@ rarely.
 - `mechanicals.rs`: a longitudinal V (two banks, low heads without tall cam covers,
   intake in the valley), driveshaft and rear differential, exhausts out at the sides.
 
+**Built** (2026-11-27). Decided while building it:
+- The numbers: 780 kg chassis without seats at 1.42 m behind the front axle, engine at
+  0.42 m, gearbox at 1.25 m; 1460 kg with a full 85 L tank (1428 empty), 49.8 % on the
+  front; 4.8 kg per kW (305 kW); 0–100 km/h in 4.7 s flat out with traction control and
+  the automatic gearbox (`zero_to_hundred`, ignored, prints every stock car; the Vireo
+  1.6 8.4 s, 1.8 8.0 s). Track 1.52/1.54 m, CG 0.46 m, ride 1.45/1.6 Hz, bars 28/20 mm
+  (rates 200/300 per 20 mm), camber −0.8/−1.0°, pressures 2.1/1.85 bar (what suits the
+  tires, `factory_pressures_suit_the_tires`), drag area 0.82, max steer 0.5, final drive
+  3.07, eye at 2.68 m, 0.98 m up. Rims 17×9.5 front, 17×11.5 rear (the widest the 1.25"
+  rule allows round 275 and 335 mm tires lies under 12").
+- Gearbox: one inline box, "6-speed heavy duty (inline)" (2.66/1.78/1.3/1.0/0.74/0.5,
+  60 kg, 700 N·m, its stock clutch 720 N·m: the existing clutches are multipliers of
+  that). Gearbox part definitions are now made for (`fits`) the chassis whose factory
+  gearbox is of their kind, so a shop never offers the Merrow a transverse box.
+- The open body uses the pieces as they were: an open car's **first opening is its
+  cockpit** (`Body::cockpit`, `cockpit_half_width`): the deck's top is open there like
+  under a greenhouse, sills run from the deck's edge in to the opening, and a second
+  bulkhead stands behind the seats (trim towards them). So the bonnet (ahead of the
+  windscreen's base) and the boot lid (behind the cockpit, `Panel::Hatch`) are pieces
+  that come off, and details on them and on the fenders go with them (`piece_at`). A
+  spoiler on an open car is a lip on the boot lid's rear edge.
+- Two body fields (protocol 51): `bulges` (from x, to x, half-width, rise: a flat-topped
+  ridge with the bonnet, rising over its first half) and `side_pipes` (the exhaust leaves
+  at the sides ahead of the rear wheels; mechanicals draw it out of each bank's
+  collector, past a catalyst each, under the sill to a pipe outside the body with the
+  silencer in it).
+- Slots follow the body (`catalogue/items.rs`, `layout`): the Merrow's lid is "Boot lid",
+  its spoiler "Boot spoiler", and it has no "Rear bench" slot. Its hold: a trunk over the
+  rear axle (0.9 × 1.0 × 0.4 m) and the passenger seat's place while it's out.
+- Brakes per chassis: the Merrow has its own two (`merrow.brake.front-vented`, 1500 N·m,
+  17" rims; `merrow.brake.rear-vented`, 720 N·m), none of the hatch's (the big front kit
+  stays the Vireo's). Trims have wheels per axle (`TrimSpec::wheels`). The trim is
+  `merrow.r80` ("Merrow R80"), its factory paint "Dull navy".
+- Mechanicals: a longitudinal V's crank points forwards (belt at the front); its banks
+  are tilted boxes (block, low alloy head, a flat cover, red on a reworked head), runners
+  from the plenum in the valley, headers per bank to a collector each, the throttle and
+  air box ahead. Longitudinal engines get a bell housing and gearbox case, and
+  rear-wheel drive a propeller shaft, differential and half shafts. Turbos and
+  superchargers on a V are drawn where the inline engine has them (a V's other bank
+  crosses over to the turbo). Seats sit lower when the eyes are low (cushion at most
+  0.68 m under them).
+- Traffic: weight 0.05 against the Vireo's 3.0 (a placeholder for milestone D).
+- Shots: `OFFLINE=1 TRIM="1,0"` drives any stock car (chassis, option); `TRIM=1` is still
+  the Vireo 1.8. The Merrow is stock car 2 for `LINEUP`.
+- For milestone D: no shop sells `merrow.r80`, its parts (`merrow.*`, the inline
+  gearbox) or `engine.r80` yet; the showroom's floor places and `FactoryLooks` already
+  take any number of chassis. Sound is still `Layout::V10`. The power slide and
+  TC/ABS weren't tried with it; the sport and track springs and the alignment shop's
+  ride height work as on the Vireo (the same kits).
+
 ## Milestone D: wiring it in
 
 - Shops: a car dealer sells the Merrow's trim, used car dealers too, the showroom's
