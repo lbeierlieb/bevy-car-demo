@@ -42,7 +42,7 @@ use crate::trade::{Market, Stock, Trade};
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 55;
+pub const PROTOCOL: u32 = 56;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -911,6 +911,7 @@ impl Wire for EngineCharacter {
         self.exhaust.bore.put(out);
         self.exhaust.header.put(out);
         self.exhaust.turbine.put(out);
+        (self.exhaust.turbos as u8).put(out);
         self.turbo_limit.put(out);
         self.displacement.put(out);
         self.whine.put(out);
@@ -922,6 +923,7 @@ impl Wire for EngineCharacter {
             bore: r.get::<f32>()?.clamp(0.3, 3.0),
             header: r.get::<f32>()?.clamp(20.0, 2000.0),
             turbine: r.get::<f32>()?.clamp(0.0, 1.0),
+            turbos: f32::from(r.get::<u8>()?.min(12)),
         };
         Some(Self {
             layout,

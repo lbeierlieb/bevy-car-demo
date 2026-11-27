@@ -239,6 +239,11 @@ const WHISTLE_PITCH: f32 = 1.0;
 const WHISTLE_Q: f32 = 4.0;
 const WHISTLE: f32 = 0.007;
 const WHISTLE_IDLE: f32 = 0.3;
+/// Twin turbos (or more) whistle apart: no two shafts ever turn at quite the same speed,
+/// so a second band (standing for every turbo past the first) sits this much higher (a
+/// share of the pitch), and they beat. Together they are as loud as one turbo; on a V
+/// engine each side has its own bank's, as loud there as one.
+const TWIN_DETUNE: f32 = 0.02;
 /// A supercharger's whine: how loud at `WHINE_RPM` (on load; `WHINE_IDLE` of it off
 /// throttle, rising with the square of the revs), its highest pitch (Hz), how much of its
 /// second harmonic is in it, and a Roots blower's pockets per turn of its rotors.
@@ -342,6 +347,8 @@ pub struct ExhaustSound {
     pub header: f32,
     /// 1 with a turbine in the exhaust, 0 without.
     pub turbine: f32,
+    /// How many turbos (0 without; each whistles, see `TWIN_DETUNE`).
+    pub turbos: f32,
 }
 
 impl ExhaustSound {
@@ -368,6 +375,7 @@ impl ExhaustSound {
             bore: (exhaust.pipe_area / (stock.pipe_area * size)).sqrt(),
             header: EXHAUST_SOUND_SPEED / (4.0 * exhaust.manifold.primary_length.max(0.05)),
             turbine: if hardware.turbo.is_some() { 1.0 } else { 0.0 },
+            turbos: hardware.turbo_count(),
         }
     }
 }
@@ -466,7 +474,7 @@ struct Targets {
     /// The engine's layout, as its place in `LAYOUTS`.
     layout: AtomicU32,
     /// `ExhaustSound`'s fields.
-    exhaust: [AtomicU32; 4],
+    exhaust: [AtomicU32; 5],
     /// Turbo shaft speed (revolutions per second), and that relative to its limit.
     turbo: [AtomicU32; 2],
     /// A supercharger's whine in orders of the crank's speed.
@@ -534,19 +542,26 @@ impl Targets {
     }
 
     fn set_exhaust(&self, sound: ExhaustSound) {
-        let values = [sound.muffle, sound.bore, sound.header, sound.turbine];
+        let values = [
+            sound.muffle,
+            sound.bore,
+            sound.header,
+            sound.turbine,
+            sound.turbos,
+        ];
         for (atomic, value) in self.exhaust.iter().zip(values) {
             store(atomic, value);
         }
     }
 
     fn exhaust(&self) -> ExhaustSound {
-        let [muffle, bore, header, turbine] = self.exhaust.each_ref().map(read);
+        let [muffle, bore, header, turbine, turbos] = self.exhaust.each_ref().map(read);
         ExhaustSound {
             muffle,
             bore,
             header,
             turbine,
+            turbos,
         }
     }
 
@@ -812,10 +827,10 @@ struct EngineVoice {
     cycle: f32,
     banks: [Bank; 2],
     /// Turbo shaft speed (revolutions per second) and its share of the limit, and the
-    /// whistle's band-pass filter with the centre it's tuned to (Hz).
+    /// whistles' band-pass filters (a twin turbo's second) with the first's centre (Hz).
     turbo_speed: f32,
     turbo_share: f32,
-    whistle: Resonator,
+    whistle: [Resonator; 2],
     whistle_tuned: f32,
     /// The supercharger's whine: where in its cycle it is (0..1).
     whine: f32,
@@ -855,7 +870,7 @@ impl EngineVoice {
             cycle: 0.0,
             turbo_speed: 0.0,
             turbo_share: 0.0,
-            whistle: Resonator::default(),
+            whistle: Default::default(),
             whistle_tuned: 0.0,
             whine: 0.0,
             pan,
@@ -915,6 +930,8 @@ impl EngineVoice {
             exhaust.turbine.clamp(0.0, 1.0),
             GLIDE,
         );
+        // A count: taken as it is.
+        self.exhaust.turbos = exhaust.turbos.round().clamp(0.0, 12.0);
         let (revolutions, share) = self.targets.turbo();
         glide(&mut self.turbo_speed, revolutions.max(0.0), GLIDE);
         glide(&mut self.turbo_share, share.clamp(0.0, 1.5), GLIDE);
@@ -967,6 +984,7 @@ impl EngineVoice {
             bore,
             header,
             turbine,
+            ..
         } = self.exhaust;
         let open = 1.0 - muffle;
         let shape = Shape {
@@ -1010,22 +1028,33 @@ impl EngineVoice {
         let right = self.grounds[1].process(right, ground);
 
         // The turbo whistles around its shaft speed, louder spooled up and under load: a
-        // band of noise, retuned as the shaft speeds up.
+        // band of noise, retuned as the shaft speeds up. Twin turbos whistle a little
+        // apart, together as loud as one.
         let frequency =
             (doppler * self.turbo_speed * WHISTLE_PITCH).clamp(WHISTLE_MIN, WHISTLE_MAX);
         if (frequency / self.whistle_tuned.max(1.0) - 1.0).abs() > 0.005 {
-            self.whistle.tune(frequency, WHISTLE_Q);
+            self.whistle[0].tune(frequency, WHISTLE_Q);
+            self.whistle[1].tune(frequency * (1.0 + TWIN_DETUNE), WHISTLE_Q);
             self.whistle_tuned = frequency;
         }
+        let twins = self.exhaust.turbos >= 2.0;
+        // Two bands at most stand for them all.
+        let voices: f32 = if twins { 2.0 } else { 1.0 };
         // Uniform noise has an RMS of 1/√3, and the band-pass passes a share of it that
         // grows with its bandwidth: scale it back to an RMS of 1.
         let band = (PI * self.whistle_tuned / (WHISTLE_Q * rate)).sqrt() / 3f32.sqrt();
+        let each =
+            WHISTLE * self.turbo_share.powi(2) * (WHISTLE_IDLE + (1.0 - WHISTLE_IDLE) * load)
+                / band
+                / voices.sqrt();
         let hiss = self.noise();
-        let whistle = WHISTLE
-            * self.turbo_share.powi(2)
-            * (WHISTLE_IDLE + (1.0 - WHISTLE_IDLE) * load)
-            * self.whistle.process(hiss)
-            / band;
+        let first = each * self.whistle[0].process(hiss);
+        let second = if twins {
+            let hiss = self.noise();
+            each * (1.0 + TWIN_DETUNE).sqrt().recip() * self.whistle[1].process(hiss)
+        } else {
+            0.0
+        };
         // A supercharger whines at a pitch following the crank, louder with the revs.
         let orders = read(&self.targets.whine).clamp(0.0, 100.0);
         let pitch = (doppler * orders * self.rpm / 60.0).min(WHINE_MAX);
@@ -1039,7 +1068,17 @@ impl EngineVoice {
         } else {
             0.0
         };
-        let whistle = whistle + whine;
+        // Each side's (a V's twin turbos one on each bank, each as loud there as one turbo),
+        // and both together.
+        let sides = if twins {
+            [
+                first * voices.sqrt() + whine,
+                second * voices.sqrt() + whine,
+            ]
+        } else {
+            [first + whine; 2]
+        };
+        let whistle = first + second + whine;
 
         // Fewer cylinders pulse less often: level them out somewhat.
         let exhaust_level = (MUFFLED_LEVEL + (OPEN_LEVEL - MUFFLED_LEVEL) * open)
@@ -1047,7 +1086,8 @@ impl EngineVoice {
             * (1.0 - (1.0 - TURBINE_LEVEL) * turbine);
         let level = GAIN * self.volume * exhaust_level;
         let whistle = GAIN * self.volume * whistle;
-        let mix = |near: f32, far: f32| (level * (near + CROSSFEED * far) + whistle).tanh();
+        let sides = sides.map(|side| GAIN * self.volume * side);
+        let mix = |near: f32, far: f32, side: f32| (level * (near + CROSSFEED * far) + side).tanh();
         if self.cutoff > 0.0 {
             // Another car: one source, duller with distance, panned (constant power).
             let both = (level * (1.0 + CROSSFEED) / 2.0 * (left + right) + whistle).tanh();
@@ -1057,7 +1097,7 @@ impl EngineVoice {
             return (self.lowpass * angle.cos(), self.lowpass * angle.sin());
         }
         if self.sound.dual {
-            (mix(left, right), mix(right, left))
+            (mix(left, right, sides[0]), mix(right, left, sides[1]))
         } else {
             let both = (level * (1.0 + CROSSFEED) / 2.0 * (left + right) + whistle).tanh();
             (both, both)
@@ -1563,6 +1603,7 @@ mod tests {
             bore: 1.4,
             header: 400.0,
             turbine: 1.0,
+            turbos: 2.0,
         };
         for (i, layout) in LAYOUTS.into_iter().enumerate() {
             targets.set_layout(layout);
@@ -1629,6 +1670,19 @@ mod tests {
             ExhaustSound::of(&with(crate::catalogue::TURBO_SLOT, 2)).turbine,
             1.0
         );
+        // The R80's pair of turbo manifolds carries two turbos, the 10-into-1 one.
+        let r80 = crate::car::CarSetup::factory(1, 0).engine.parts;
+        let turbos = |id: &str| {
+            let mut parts = r80.clone();
+            parts.manifold = (parts.family().manifolds.iter())
+                .position(|m| m.id == id)
+                .unwrap();
+            parts.chosen[crate::catalogue::TURBO] = 2;
+            ExhaustSound::of(&parts.hardware()).turbos
+        };
+        assert_eq!(turbos("r.manifolds.turbo"), 2.0);
+        assert_eq!(turbos("r.manifold.turbo-crossover"), 1.0);
+        assert_eq!(ExhaustSound::of(&r80.hardware()).turbos, 0.0);
         // Every factory engine has a silencer and its pipes sized for it.
         let catalogue = crate::catalogue::builtin();
         for family in 0..catalogue.families.len() {
@@ -1677,6 +1731,7 @@ mod tests {
         };
         let turbo = ExhaustSound {
             turbine: 1.0,
+            turbos: 1.0,
             ..stock
         };
         let quiet = loudness(stock, 0.0);
@@ -1711,6 +1766,46 @@ mod tests {
                 "{revolutions}: {rms} for {set}"
             );
         }
+    }
+
+    #[test]
+    fn twin_turbos_whistle_apart_one_on_each_bank() {
+        // RMS of each channel and their correlation, the whistle alone at 3000 rev/s.
+        let heard = |layout: Layout, turbos: f32| {
+            let targets = Arc::new(Targets::new());
+            targets.set_layout(layout);
+            targets.set_exhaust(ExhaustSound {
+                turbine: 1.0,
+                turbos,
+                ..ExhaustSound::default()
+            });
+            targets.set_turbo(3000.0, 1.0);
+            targets.set(0.0, 1.0, 1.0);
+            let mut voice = EngineVoice::new(targets);
+            let (mut ll, mut rr, mut lr) = (0.0, 0.0, 0.0);
+            for i in 0..2 * SAMPLE_RATE {
+                let (left, right) = voice.frame();
+                if i >= SAMPLE_RATE {
+                    ll += left * left;
+                    rr += right * right;
+                    lr += left * right;
+                }
+            }
+            let n = SAMPLE_RATE as f32;
+            ((ll / n).sqrt(), (rr / n).sqrt(), lr / (ll * rr).sqrt())
+        };
+        let set = GAIN * WHISTLE;
+        let (one, _, same) = heard(Layout::V8, 1.0);
+        assert!((one / set - 1.0).abs() < 0.3 && same > 0.99, "{one} {same}");
+        // On a V each bank's turbo on its side, as loud there as one, the two unalike.
+        let (left, right, alike) = heard(Layout::V8, 2.0);
+        for side in [left, right] {
+            assert!((side / set - 1.0).abs() < 0.3, "{side}");
+        }
+        assert!(alike.abs() < 0.3, "{alike}");
+        // From one pipe, the two together as loud as one.
+        let (both, _, _) = heard(Layout::Inline4, 2.0);
+        assert!((both / set - 1.0).abs() < 0.3, "{both}");
     }
 
     #[test]

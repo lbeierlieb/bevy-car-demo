@@ -134,8 +134,14 @@ pub fn engine(ui: &mut egui::Ui, car: &Car) {
         engine.torque(build, drivetrain.rpm),
     ));
     if let Some(turbo) = &build.hardware.turbo {
+        // Twin turbos turn alike (one shaft state for them all).
+        let turbos = match build.hardware.turbos {
+            0 | 1 => "turbo".to_string(),
+            2 => "twin turbos".to_string(),
+            n => format!("{n} turbos"),
+        };
         ui.label(format!(
-            "boost {:.2} bar    turbo {:.0}k rpm ({:.0} % of its limit)    wastegate {:.0} %    \
+            "boost {:.2} bar    {turbos} {:.0}k rpm ({:.0} % of the limit)    wastegate {:.0} %    \
              charge {:.0} °C",
             (engine.boost_pressure - AMBIENT_PRESSURE) / 1e5,
             engine.turbo_speed * 60.0 / std::f32::consts::TAU / 1000.0,
