@@ -121,6 +121,34 @@ impl TimeOfDay {
     }
 }
 
+/// How much the tires throw up: smoke, dust, mud (`spray`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Particles {
+    Off,
+    Low,
+    High,
+}
+
+impl Particles {
+    pub const ALL: [Self; 3] = [Self::Off, Self::Low, Self::High];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Low => "Low",
+            Self::High => "High",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Low => "low",
+            Self::High => "high",
+        }
+    }
+}
+
 /// The lengths of a day in the cycle offered (minutes).
 pub const DAY_LENGTHS: [u32; 5] = [4, 12, 24, 48, 96];
 
@@ -150,6 +178,8 @@ pub struct Graphics {
     pub time_of_day: TimeOfDay,
     /// How long a day of the cycle takes (minutes).
     pub day_minutes: u32,
+    /// Tire smoke, dust and mud.
+    pub particles: Particles,
 }
 
 impl Default for Graphics {
@@ -162,6 +192,7 @@ impl Default for Graphics {
                 view: ViewDistance::Near,
                 resolution: None,
                 post: false,
+                particles: Particles::Low,
                 ..Self::NICEST
             }
         } else {
@@ -183,6 +214,7 @@ impl Graphics {
         day_night: true,
         time_of_day: TimeOfDay::Cycle,
         day_minutes: 24,
+        particles: Particles::High,
     };
 
     fn load() -> Self {
@@ -228,6 +260,11 @@ impl Graphics {
                         graphics.day_minutes = minutes;
                     }
                 }
+                ("particles", key) => {
+                    if let Some(&p) = Particles::ALL.iter().find(|p| p.key() == key) {
+                        graphics.particles = p;
+                    }
+                }
                 ("vsync", "on") => graphics.vsync = true,
                 ("vsync", "off") => graphics.vsync = false,
                 ("frame_cap", "off") => graphics.frame_cap = None,
@@ -264,6 +301,7 @@ impl Graphics {
         let time = self.time_of_day.key();
         let day_night = if self.day_night { "on" } else { "off" };
         let day = self.day_minutes;
+        let particles = self.particles.key();
         let cap = self.frame_cap.map_or("off".into(), |fps| fps.to_string());
         let resolution = self
             .resolution
@@ -271,7 +309,7 @@ impl Graphics {
         format!(
             "shadows {shadows}\nantialiasing {antialiasing}\nview {view}\n{resolution}\
              vsync {vsync}\nframe_cap {cap}\npost {post}\nday_night {day_night}\n\
-             time {time}\nday_length {day}\n"
+             time {time}\nday_length {day}\nparticles {particles}\n"
         )
     }
 }
@@ -540,6 +578,7 @@ mod tests {
             day_night: false,
             time_of_day: TimeOfDay::Night,
             day_minutes: 48,
+            particles: Particles::Low,
         };
         assert_eq!(Graphics::parse(&graphics.text()), graphics);
         assert_eq!(Graphics::parse(&Graphics::NICEST.text()), Graphics::NICEST);

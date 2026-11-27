@@ -17,7 +17,8 @@ use super::{CHASE_FOVS, DRIVER_FOVS, Display, SIZES};
 use crate::audio::SoundSettings;
 use crate::car::{ActiveCar, Away, Car, DriverAids, Spectating};
 use crate::graphics::{
-    Antialiasing, DAY_LENGTHS, FRAME_CAPS, Graphics, RESOLUTIONS, Shadows, TimeOfDay, ViewDistance,
+    Antialiasing, DAY_LENGTHS, FRAME_CAPS, Graphics, Particles, RESOLUTIONS, Shadows, TimeOfDay,
+    ViewDistance,
 };
 use crate::input::{
     self, Action, Capture, Capturing, CurveKind, Gamepads, LEAST_MAX_THROTTLE, MenuPresses, Nav,
@@ -966,6 +967,13 @@ fn graphics(ui: &mut egui::Ui, graphics: &mut ResMut<Graphics>) {
             |cap| cap.map_or("Off".into(), |fps| format!("{fps} fps")),
         );
     }
+    kit::pick(
+        ui,
+        "Tire smoke and dirt",
+        &mut new.particles,
+        &Particles::ALL,
+        |p| p.name().into(),
+    );
     kit::toggle(ui, "Post-processing", &mut new.post);
     if new.post {
         kit::toggle(ui, "Day and night", &mut new.day_night);

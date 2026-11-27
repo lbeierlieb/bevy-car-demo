@@ -60,6 +60,7 @@ pub mod sim;
 pub mod sky;
 pub mod snapshot;
 pub mod spec;
+pub mod spray;
 pub mod storage;
 pub mod terrain;
 pub mod trade;
@@ -159,7 +160,12 @@ impl Plugin for CorePlugin {
             hud::HudPlugin,
             map::MapPlugin,
             audio::AudioPlugin,
-            (sky::SkyPlugin, graphics::GraphicsPlugin, night::NightPlugin),
+            (
+                sky::SkyPlugin,
+                graphics::GraphicsPlugin,
+                night::NightPlugin,
+                spray::SprayPlugin,
+            ),
         ))
         .add_systems(Startup, setup);
     }

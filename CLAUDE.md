@@ -2279,6 +2279,27 @@ apply live.
   of their own with the glowing material). Our car (`car::Car`) has two `SpotLight`s
   at its head lamps (no shadows), hidden by day.
 
+## Tire smoke and dirt (asked for by the user, 2026-11-27)
+
+`src/spray.rs` (`SprayPlugin` in `CorePlugin`), local and cosmetic, nothing sent: every
+car drawn within `RANGE` (150 m) of the camera, ours, other players' and traffic alike,
+from its `Looks`, `Motion` and drawn `Transform` alone. A wheel touching the ground
+(`Terrain::ground` within `TOUCH`) slides at its speed there (frame to frame) less what
+it rolls (spin change × radius), smoothed over `SLIP_LAG` (remote cars' drawn places
+jitter); jumps over `JUMP` m/s count as placed. Asphalt and cobbles smoke from sliding
+only (`SMOKE_SLIDE` 3–12 m/s); off the road rolling (`ROLL_SPEED`) and sliding
+(`DIRT_SLIDE`) throw up puffs (dust, mist) and chunks (mud, turf, stones, drops) per
+surface (`rates`, `particle`). One blended unlit mesh of camera-facing quads rebuilt
+back to front every frame (`PostUpdate` in `PlaceTags`), a generated texture (soft puff,
+round blob), dimmed by `grade::Darkness`. Graphics setting "Tire smoke and dirt"
+(`Graphics::particles`, `particles off|low|high`; web low: 600 at 0.4 the rate, native
+high: 2000). Shots: a burnout is the Merrow with traction control off in the shot's
+config (`settings/aids.cfg`: `traction_control false`), `TRIM=1,0 STEP=0.02 OFFLINE=1
+TAPS="KeyE@20"`, keys `w`, 120 frames (`CARCAM="-7,1.8,3"` from the side); the Vireo
+floored from the spawn without `STEP` runs onto a meadow by frame 150. Not done: tuned
+by playing, soft particles (puffs cut hard into the ground), dirt left on the cars,
+tire marks.
+
 ## Sky
 
 `src/sky.rs`: a dome (900 m, inside the 1000 m far plane, following the camera) with an
