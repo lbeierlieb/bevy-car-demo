@@ -261,7 +261,7 @@ fn engine_bay(
             Vec3::new(0.32 * along, 0.08, 0.2),
             BLACK,
         );
-        let pulley = centre + axes[0] * (0.34 * along);
+        let pulley = base + axes[0] * (0.34 * along) + Vec3::Y * 0.04;
         b.cylinder(
             pulley - axes[0] * 0.02,
             pulley + axes[0] * 0.02,
@@ -292,7 +292,7 @@ fn engine_bay(
                 b.oriented_box(ring + axes[0] * u + axes[2] * w, axes, size, color);
             }
         }
-        intake_from = centre - axes[0] * (0.3 * along) + Vec3::Y * 0.02;
+        intake_from = base - axes[0] * (0.3 * along) + Vec3::Y * 0.04;
     }
     // A centrifugal supercharger at the belt end, low on the intake side: its snail, the
     // belt from the crank, and its pipe up to the throttle.

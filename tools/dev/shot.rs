@@ -403,7 +403,8 @@ fn line_up(
 }
 
 /// UNFIT="Bonnet,Door": the lined-up cars (or OFFLINE's, the 1.8 with TRIM set) without those body parts; FIT="FrontLip,SideSkirt"
-/// with those (in paint FITPAINT, a place in the catalogue's paints, else the car's).
+/// with those (in paint FITPAINT, a place in the catalogue's paints, else the car's);
+/// FITIDS by the parts' ids (see below).
 fn dress_up(setup: &mut crate::car::CarSetup) {
     use crate::items::{Item, Kind};
     let list = |name: &str| std::env::var(name).unwrap_or_default();
@@ -425,6 +426,36 @@ fn dress_up(setup: &mut crate::car::CarSetup) {
                 .unwrap();
             *item = Some(Item::new(&catalogue, def, paint));
         }
+    }
+    // FITIDS="vireo.wing,turbocharger.roots-blower": parts by id, each into the first slot
+    // of its kind in the tree (WING="angle" sets a wing's).
+    fn put(catalogue: &crate::catalogue::Catalogue, item: &mut Item, part: &Item) -> bool {
+        let kind = part.def(catalogue).kind;
+        let slots = item.def(catalogue).slots.clone();
+        if let Some(place) = slots.iter().position(|slot| slot.kind == kind) {
+            item.slots[place] = Some(part.clone());
+            return true;
+        }
+        item.slots
+            .iter_mut()
+            .flatten()
+            .any(|child| put(catalogue, child, part))
+    }
+    let ids = list("FITIDS");
+    for id in ids.split(',').filter(|id| !id.is_empty()) {
+        let def = (catalogue.defs.iter())
+            .position(|d| d.id == id)
+            .unwrap_or_else(|| panic!("no part {id}"));
+        let mut part = Item::new(&catalogue, def, paint);
+        if let (Ok(angle), Some(knob)) = (std::env::var("WING"), part.knobs.first_mut()) {
+            *knob = angle.parse().unwrap();
+        }
+        assert!(put(&catalogue, &mut setup.car, &part), "no slot for {id}");
+    }
+    if !ids.is_empty() {
+        let (build, parts) = setup.car.resolve(&catalogue).expect("a car");
+        let engine = crate::physics::engine::EngineBuild::new(parts.hardware(), parts.ecu);
+        *setup = crate::car::CarSetup::with_car(build, parts, engine, setup.car.clone());
     }
 }
 
