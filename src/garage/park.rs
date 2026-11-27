@@ -505,7 +505,7 @@ fn window(
     };
     let catalogue = &catalogue.0;
     let owned = &connection.owned;
-    let (mut leave_it, mut drive, mut stash) = (out, None, false);
+    let (mut drive, mut stash) = (None, false);
     let mut looked_at = None;
     let ctx = contexts.ctx_mut()?;
     Panel::new("garage hall", "Your garage")
@@ -513,9 +513,6 @@ fn window(
         .width(420.0)
         .back(Some("Back to the car"))
         .show(ctx, |ui| {
-            if kit::button(ui, "Back to the car").clicked() {
-                leave_it = true;
-            }
             kit::section(ui, "Cars");
             let driven = kit::button_with(ui, &car_name(catalogue, &car.setup.car), "You drive it");
             if kit::focused(ui, &driven) || driven.hovered() {
@@ -555,7 +552,7 @@ fn window(
     if stash {
         at.stash.push(Screen::List);
     }
-    if leave_it {
+    if out {
         leave(
             &mut commands,
             &mut hall,

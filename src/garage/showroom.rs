@@ -1041,9 +1041,6 @@ fn window(
             }
             brochure(ui, &catalogue, &shown);
             kit::note(ui, "Drag to look round, the mouse wheel to go nearer.");
-            if kit::button(ui, "Back to the car").clicked() {
-                out = true;
-            }
         });
     if drive
         && let Some(mut connection) = connection

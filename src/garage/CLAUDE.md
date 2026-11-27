@@ -36,7 +36,7 @@ as built, in order:
    button lights and its nozzle leaves the holster. The window on the right (simplified
    at the user's wish, 2026-11-23): the grade, then "Pump" (at `FLOW`, 1 L/s, until
    stopped or full; while it pumps the focus is locked on it, now "Stop", and back does
-   nothing), what's in the tank, back to the car. Shots: `TAPS="Enter@200"` is "Up to the
+   nothing), what's in the tank. Shots: `TAPS="Enter@200"` is "Up to the
    pump", then "Pump" is the pump window's second row (`ArrowDown@236;Enter@240`);
    `FUEL=12` empties the tank to 12 L at frame 160. 6. ✓ **Alignment shop**: camber, pressures
    (from the garage), toe and brake torque/balance (from the old panel; into `CarBuild`).
@@ -50,7 +50,7 @@ as built, in order:
    against the spec (kit camber ±0.5°, `FACTORY_TOE` ±0.1°, suited pressure ±0.15 bar),
    green or red. The window on the right is `garage::alignment`, applied live to the
    parked car (`car::Away` set, as in the dyno); drag swings, the wheel zooms. Shots: `TAPS="Enter@200"`
-   onto the lift; the rows are back to the car, then camber, toe, pressure per axle.
+   onto the lift; the rows are camber, toe, pressure per axle.
 7. ✓ **Paint shop**: the shop paints (swatches; gone from the garage). Every chassis
    leaves the factory in one dull paint, no choice (asked for by the user, 2026-11-22, so
    there's a reason to paint): `PAINTS` is the 10 shop paints (`SHOP_PAINTS`), then 11
@@ -97,8 +97,7 @@ as built, in order:
    inline, V or flat; a turbo if it has one), tires like its in a rack at the back;
    workbench with pegboard, tool chest, shelves of boxes, roller door, oil drain. The
    fitting window (`garage::fit`) is on the right. Shots: `TAPS="Enter@200"` onto the lift;
-   the first row is back to the car, then the car's slots by group (Engine first).
-   Shots: `TAPS="Enter@200"` onto the lift; the rows start with back to the car and building. 10. ✓ **Dyno** (`dyno/`): the career's chassis dyno room back
+   the rows are the car's slots by group (Engine first). 10. ✓ **Dyno** (`dyno/`): the career's chassis dyno room back
    (`mod.rs`, `rollers.rs`, `chart.rs`). A copy of the car runs in the room 200 m under
    the marker; the driven car stays parked there, a ghost (`car::Away` holds its input and
    R, `EngineAudio::hushed`); the engine (tune, cam timing, wastegate, wear) and the fuel
@@ -113,6 +112,9 @@ as built, in order:
    tires, engine wear, and leaves it in neutral with the parking brake on, so a teleport
    (rescue, a round starting or over, joining) never stalls it; agreed: no hint suggests anything for an empty tank or a wrecked
    engine, for now); `ui::tool_window` is gone; help, README.
+
+No scene's window has a "Back to the car" row (removed at the user's wish, 2026-11-27):
+back (Esc, a pad's or wheel's back button) leaves, and the prompt line says so.
 
 Not done yet: dyno runs aren't saved; the HUD shows the parked car's gauges while in the
 dyno's room.

@@ -90,6 +90,11 @@ impl Default for Fitter {
 }
 
 impl Fitter {
+    /// Whether a screen past the first is open (back goes to it, not to the car).
+    pub fn deeper(&self) -> bool {
+        self.screens.len() > 1
+    }
+
     /// Back a screen: false at the first (back to the car).
     pub fn back(&mut self) -> bool {
         if self.screens.len() > 1 {

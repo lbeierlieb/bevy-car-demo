@@ -1068,9 +1068,6 @@ fn window(
             }
             kit::info(ui, "Now", &paints[now].name);
             kit::note(ui, "Drag to look round, the mouse wheel to go nearer.");
-            if kit::button(ui, "Back to the car").clicked() {
-                out = true;
-            }
         });
     if out {
         leave(

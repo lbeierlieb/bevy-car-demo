@@ -774,7 +774,7 @@ fn results(
 ) -> Result {
     let mut again = false;
     let (mut hold, mut stop) = (false, false);
-    let mut out = back.take();
+    let out = back.take();
     let ctx = contexts.ctx_mut()?;
     let width = match view.tab {
         Tab::Ecu => ecu_ui::WIDTH + 32.0,
@@ -837,9 +837,6 @@ fn results(
             view.hold.throttle = percent / 100.0;
             if let Some(why) = why_not {
                 kit::warning(ui, why);
-            }
-            if kit::button(ui, "Back to the car").clicked() {
-                out = true;
             }
             match view.tab {
                 Tab::Runs => {

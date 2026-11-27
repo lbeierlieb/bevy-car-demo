@@ -969,11 +969,6 @@ fn window(
                 "Grades mix by volume. Higher octane resists knock: the factory tunes are \
                  for 95; more spark advance or boost may want more, and lower knocks.",
             );
-            ui.add_enabled_ui(!pumping, |ui| {
-                if kit::button(ui, "Back to the car").clicked() {
-                    out = true;
-                }
-            });
         });
     // Back does nothing while it pumps.
     out &= !station.pumping;

@@ -968,16 +968,13 @@ fn window(
     let Some(mut car) = cars.iter_mut().find(|car| car.index == active.0) else {
         return Ok(());
     };
-    let mut out = back.take();
+    let out = back.take();
     let ctx = contexts.ctx_mut()?;
     Panel::new("alignment", "Alignment")
         .place(Place::Right)
         .width(440.0)
         .back(Some("Back to the car"))
         .show(ctx, |ui| {
-            if kit::button(ui, "Back to the car").clicked() {
-                out = true;
-            }
             let mut build = car.setup.build.clone();
             garage::alignment(ui, &mut build, &car.setup);
             shops::rebuild(&mut car, build);

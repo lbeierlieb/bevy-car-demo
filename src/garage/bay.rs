@@ -1173,7 +1173,7 @@ fn window(
         return Ok(());
     };
     let (here, shop) = shop;
-    let mut out = back.take() && !bay.fitter.back();
+    let out = back.take() && !bay.fitter.back();
     let refused = (connection.refused.as_ref())
         .filter(|(_, at)| time.elapsed_secs_f64() - at < REFUSAL)
         .map(|(why, _)| why.clone());
@@ -1185,11 +1185,12 @@ fn window(
     Panel::new("fitting", shop.kind.title())
         .place(Place::Right)
         .width(470.0)
-        .back(Some("Back"))
+        .back(Some(if bay.fitter.deeper() {
+            "Back"
+        } else {
+            "Back to the car"
+        }))
         .show(ctx, |ui| {
-            if kit::button(ui, "Back to the car").clicked() {
-                out = true;
-            }
             if let Some(why) = &refused {
                 kit::warning(ui, why);
             }
