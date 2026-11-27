@@ -123,9 +123,12 @@ pub struct Ecu {
 }
 
 /// The factory's idle speed for `hardware`: wild cams (on the profile it idles on) run too
-/// roughly for a low idle.
+/// roughly for a low idle, from the overlap of the intake's and exhaust's opening (crank
+/// degrees: a long duration on a wide lobe separation idles smoothly).
 fn idle_rpm(hardware: &EngineHardware) -> f32 {
-    850.0 + 12.5 * (hardware.cams[0].intake_duration - 240.0).max(0.0)
+    let cam = &hardware.cams[0];
+    let overlap = (cam.intake_duration + cam.exhaust_duration) / 2.0 - 2.0 * cam.lobe_separation;
+    850.0 + 12.5 * (overlap - 20.0).max(0.0)
 }
 
 /// The factory's rev limit for `hardware` with a `model` ECU: without cam control, the
