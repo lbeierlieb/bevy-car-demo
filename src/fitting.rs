@@ -1143,7 +1143,7 @@ mod tests {
             };
             run(&catalogue, &workshop, &before, &[work])
         };
-        // The 1.6's 14" steel rims don't clear it, the 1.8's 15" alloys do.
+        // The 1.6's 14" steel rims don't clear it, the 2.0's 15" alloys do.
         let err = fit(0).unwrap_err();
         assert!(err.contains("15\""), "{err}");
         let done = fit(1).unwrap();
@@ -1199,16 +1199,16 @@ mod tests {
         let done = run(&catalogue, &dyno, &programmable, &[tune]).unwrap();
         assert_eq!(done.spec.ecu.rev_limit, tuned.rev_limit);
         // Back to a stock ECU: its own maps, not the tune.
-        let b18 = run(&catalogue, &workshop, &done.spec, &[fit("ecu.b18")]).unwrap();
-        let b18_tune = catalogue.ecus.iter().find(|e| e.id == "ecu.b18").unwrap();
-        assert_eq!(Some(&b18.spec.ecu), b18_tune.tune.as_ref());
-        // The B16's ECU keeps its maps with the B18 engine swapped in.
+        let b20 = run(&catalogue, &workshop, &done.spec, &[fit("ecu.b20")]).unwrap();
+        let b20_tune = catalogue.ecus.iter().find(|e| e.id == "ecu.b20").unwrap();
+        assert_eq!(Some(&b20.spec.ecu), b20_tune.tune.as_ref());
+        // The B16's ECU keeps its maps with the B20 engine swapped in.
         let swap = Work::Fit {
             slots: vec![vec![engine]],
             supply: Supply::Assembly(1),
         };
         let swapped = run(&catalogue, &workshop, &before, &[swap]).unwrap();
-        assert_eq!(swapped.spec.parts.hardware().name, "B18 1.8 four");
+        assert_eq!(swapped.spec.parts.hardware().name, "B20 2.0 SOHC four");
         assert_eq!(swapped.spec.ecu, before.ecu);
         // Four cylinders' ECU and the V10.
         let v10 = CarSpec::of(&CarSetup::factory(1, 0));
@@ -1260,7 +1260,7 @@ mod tests {
             supply: Supply::Assembly(1),
         };
         let done = run(&catalogue, &workshop, &before, &[swap]).unwrap();
-        assert_eq!(done.spec.parts.hardware().name, "B18 1.8 four");
+        assert_eq!(done.spec.parts.hardware().name, "B20 2.0 SOHC four");
         let out = Work::Remove { slot: vec![engine] };
         assert!(run(&catalogue, &workshop, &before, &[out]).is_err());
     }
@@ -1283,7 +1283,7 @@ mod tests {
         (path, block)
     }
 
-    const ENGINE_SHOP: &[&str] = &["pistons.*", "connecting-rods.*", "b18", "camshafts.*"];
+    const ENGINE_SHOP: &[&str] = &["pistons.*", "connecting-rods.*", "b20", "camshafts.*"];
 
     #[test]
     fn phasers_and_switching_cams_need_overhead_cams() {
@@ -1368,7 +1368,7 @@ mod tests {
         let (_, block) = in_block(&catalogue, &before.car, "pistons.race");
         let swap = Work::Fit {
             slots: vec![block],
-            supply: new(&catalogue, "b18"),
+            supply: new(&catalogue, "b20"),
         };
         let done = run(&catalogue, &engines, &before, &[swap]).unwrap();
         assert_eq!(done.spec.parts.version, 1);
@@ -1707,7 +1707,7 @@ mod tests {
         let catalogue = builtin();
         let before = spec(0);
         let engines = shop(ShopKind::Engine, ENGINE_SHOP);
-        // The B18 engine kept there, its rods worn.
+        // The B20 engine kept there, its rods worn.
         let mut kept = catalogue.assemblies[1].item.clone();
         let rods = (kept.slots[0].as_mut().unwrap().slots.iter_mut().flatten())
             .find(|item| catalogue.defs[item.def].wear == Some(crate::items::Wear::Rods))
@@ -1838,7 +1838,7 @@ mod tests {
         let off = Work::Remove { slot: bumper };
         let err = run(&catalogue, &workshop, &before, &[fit_lip, off]).unwrap_err();
         assert!(err.contains("front bumper"), "{err}");
-        // The hatch can't come off under the 1.8's spoiler.
+        // The hatch can't come off under the 2.0's spoiler.
         assert!(
             run(
                 &catalogue,

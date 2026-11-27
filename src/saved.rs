@@ -57,6 +57,12 @@ const OLD_TURBO_SLOT: &str = "Turbo or supercharger";
 /// Porting was the long block's "Cylinder head" slot before the heads were parts of their
 /// own (version 5): its parts' ids then.
 const OLD_PORTING: &str = "cylinder-head.";
+/// Parts renamed since (version 5: the B18 became the B20).
+const RENAMED: [(&str, &str); 3] = [
+    ("b18", "b20"),
+    ("b18.head", "b20.head"),
+    ("ecu.b18", "ecu.b20"),
+];
 
 /// Each part's wear is a field `wear=…` after its knobs.
 const WEAR: &str = "wear";
@@ -339,7 +345,10 @@ impl Parts {
         let old_porting = id.starts_with(OLD_PORTING);
         let id = match id.strip_prefix(OLD_PORTING) {
             Some(part) => format!("porting.{part}"),
-            None => id.to_string(),
+            None => (RENAMED.iter())
+                .find(|(old, _)| old == id)
+                .map_or(id, |(_, new)| new)
+                .to_string(),
         };
         let id = old_ecu(catalogue, &id, self.engine).unwrap_or(id);
         let id = id.as_str();
@@ -961,6 +970,23 @@ mod tests {
         assert_eq!(ecu_of(1, "ecu.stock"), "ecu.r80");
         assert_eq!(ecu_of(0, "ecu.programmable"), "ecu.programmable-4");
         assert_eq!(ecu_of(1, "ecu.programmable"), "ecu.programmable-10");
+    }
+
+    #[test]
+    fn the_b18_saved_is_the_b20() {
+        let catalogue = crate::catalogue::builtin();
+        let (spec, car) = car(0, 1);
+        assert_eq!(spec.parts.ecu_def().id, "ecu.b20");
+        let text = write(&catalogue, &spec, &Condition::of(&car));
+        let old = text
+            .replace("\tb20", "\tb18")
+            .replace("\tecu.b20", "\tecu.b18");
+        assert!(
+            old.contains("\tb18.head\t") && old.contains("\tecu.b18\t"),
+            "{old}"
+        );
+        let (read, _) = read(&catalogue, &old).expect("reads");
+        assert_eq!(read.car, spec.car);
     }
 
     #[test]

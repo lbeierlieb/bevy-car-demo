@@ -156,8 +156,9 @@ mod tests {
         let [r2, r3, r6] = curve(&roots);
         let [c2, c3, c6] = curve(&centrifugal);
         println!("Roots {r2:.2} {r3:.2} {r6:.2} bar, centrifugal {c2:.2} {c3:.2} {c6:.2} bar");
-        // The Roots blower boosts from low down, about as much all the way up.
-        assert!(r6 > 0.25 && r2 > 0.5 * r6, "{r2} {r6}");
+        // The Roots blower boosts from low down; more high up, where the B16's 8-valve
+        // head lets less through than the blower pumps.
+        assert!(r6 > 0.25 && r2 > 0.3 * r6, "{r2} {r6}");
         // The centrifugal one's boost grows with the revs squared: little low down.
         assert!(c6 > 0.25 && c3 < 0.4 * c6 && c2 < c3, "{c2} {c3} {c6}");
         // More torque than without, where each boosts; the Roots blower's hot charge.

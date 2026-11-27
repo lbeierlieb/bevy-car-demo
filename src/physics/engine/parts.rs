@@ -679,26 +679,31 @@ mod tests {
     use crate::catalogue::{INTERCOOLER, TURBO, builtin};
 
     #[test]
-    fn one_cam_in_the_block_moves_both_rows_of_valves() {
-        let mut parts = Parts::stock();
+    fn one_cam_moves_both_rows_of_valves() {
+        let mut parts = Parts::factory("B16R").unwrap();
         parts.intake_timing = 4.0;
         parts.exhaust_timing = 2.0;
         let dohc = parts.hardware();
         assert!(!parts.one_cam());
         assert_eq!((dohc.intake_timing, dohc.exhaust_timing), (4.0, 2.0));
+        // The B16's head: one cam over both rows.
+        parts.head = 0;
+        assert!(parts.one_cam());
+        // Advancing the cam advances the exhausts too: they're retarded by minus as much.
+        let sohc = parts.hardware();
+        assert_eq!((sohc.intake_timing, sohc.exhaust_timing), (4.0, -4.0));
         parts.catalogue = crate::catalogue::builtin_changed(|c| {
             c.families[0].heads[0].valvetrain =
                 crate::physics::engine::hardware::ValveLayout::PUSHROD;
         });
         assert!(parts.one_cam());
-        // Advancing the cam advances the exhausts too: they're retarded by minus as much.
         let ohv = parts.hardware();
         assert_eq!((ohv.intake_timing, ohv.exhaust_timing), (4.0, -4.0));
     }
 
     #[test]
     fn a_head_keeps_its_valves_on_another_bore() {
-        let mut parts = Parts::factory("B18").unwrap();
+        let mut parts = Parts::factory("B20").unwrap();
         let own = parts.hardware();
         parts.head = 0;
         let swapped = parts.hardware();
@@ -714,7 +719,7 @@ mod tests {
     #[test]
     fn the_presets_are_the_stock_engines() {
         let stock = Parts::stock().hardware();
-        assert_eq!(stock.name, "B16 1.6 four");
+        assert_eq!(stock.name, "B16 1.6 SOHC four");
         let block = &builtin().families[0].versions[0].block;
         assert_eq!(
             stock,
@@ -758,7 +763,7 @@ mod tests {
         let hardware = parts.hardware();
         assert_eq!(hardware.exhaust.manifold.primary_length, 0.6);
         // It's still the factory's engine, in a tight car.
-        assert_eq!(hardware.name, "B16 1.6 four");
+        assert_eq!(hardware.name, "B16 1.6 SOHC four");
         parts.manifold = 1;
         assert_eq!(parts.hardware().exhaust.manifold.primary_length, 0.39);
     }
@@ -798,11 +803,11 @@ mod tests {
             parts.hardware().redline()
         };
         let (crank, internals, cams, springs) = (1, 3, 5, 6);
-        assert_eq!(redline(&[]), 6800.0);
+        assert_eq!(redline(&[]), 6300.0);
         // A wilder cam on the stock springs floats later (the longer duration eases the
         // valves' deceleration more than the lift adds), but not much.
         let sport = redline(&[(cams, 1)]);
-        assert!((6900.0..7400.0).contains(&sport), "{sport}");
+        assert!((6400.0..6900.0).contains(&sport), "{sport}");
         // Stiffer springs: the rods limit then, and a short stroke revs higher.
         let sprung = redline(&[(cams, 1), (springs, 2)]);
         assert!(sprung > sport, "{sprung}");
@@ -810,7 +815,7 @@ mod tests {
         assert!(redline(&[(cams, 1), (springs, 2), (crank, 2)]) <= sprung - 300.0);
         // Forged internals rev higher still.
         let forged = redline(&[(cams, 1), (springs, 2), (internals, 2)]);
-        assert!(forged > sprung + 1500.0, "{forged}");
+        assert!(forged > sprung + 1000.0, "{forged} against {sprung}");
     }
 
     #[test]

@@ -805,6 +805,54 @@ mod tests {
         assert!(build.ecu.idle_rpm < 950.0, "{}", build.ecu.idle_rpm);
     }
 
+    /// The B16R's head on the B20's block: the B16R's top end with the B20's torque, held
+    /// back by the B20's long runners and its rods until short runners and forged rods go
+    /// in (and an ECU that switches cams runs it).
+    #[test]
+    fn the_twin_cam_head_on_the_two_litre_pays() {
+        use crate::physics::engine::parts::Parts;
+        let catalogue = crate::catalogue::builtin();
+        let measured = |name: &str, parts: &Parts| {
+            let build = EngineBuild::new(parts.hardware(), ecu::EcuModel::PROGRAMMABLE);
+            let (torque, power, at) = peaks(&build);
+            let limit = build.ecu.rev_limit;
+            println!("{name:26} {torque:4.0} N·m {power:4.0} kW at {at} rpm, limit {limit}");
+            (torque, power, limit)
+        };
+        let factory = |code: &str| Parts::factory(code).unwrap();
+        let b16 = measured("B16", &factory("B16"));
+        let b20 = measured("B20", &factory("B20"));
+        let b16r = measured("B16R", &factory("B16R"));
+        let mut swap = factory("B20");
+        let family = &catalogue.families[swap.family];
+        swap.head = family
+            .heads
+            .iter()
+            .position(|h| h.id == "b16r.head")
+            .unwrap();
+        let headed = measured("B20 with the B16R head", &swap);
+        swap.chosen[8] = 2;
+        let short = measured("… and short runners", &swap);
+        swap.chosen[3] = 1;
+        let forged = measured("… and forged rods", &swap);
+        // The stock three: the 2.0 pulls harder than the 1.6, the 1.6R makes far more power.
+        assert!(b20.0 > 1.15 * b16.0 && b20.1 > b16.1, "{b16:?} {b20:?}");
+        assert!(b16r.1 > 1.5 * b20.1, "{b20:?} {b16r:?}");
+        // The head alone: more torque than either, far more power than the B20.
+        assert!(headed.0 > b20.0 && headed.0 > 1.15 * b16r.0, "{headed:?}");
+        assert!(headed.1 > 1.4 * b20.1, "{headed:?}");
+        // The B20's rods hold it under the B16R's revs; forged ones don't.
+        assert!(
+            short.2 < b16r.2 - 500.0 && forged.2 >= b16r.2,
+            "{short:?} {forged:?}"
+        );
+        // All of it: more power than the B16R, and much more torque.
+        assert!(
+            forged.1 > 1.04 * b16r.1 && forged.0 > 1.15 * b16r.0,
+            "{forged:?} {b16r:?}"
+        );
+    }
+
     #[test]
     fn every_factory_engine_idles_and_pulls() {
         let catalogue = crate::catalogue::builtin();
@@ -1003,8 +1051,8 @@ mod tests {
             build.ecu = Ecu::calibrated(&build.hardware, &build.maps, 110.0, parts.ecu_model());
             build
         };
-        let mut parts = parts::Parts::turbo();
-        parts.boost = 1.4;
+        let mut parts = twin_cam_turbo();
+        parts.boost = 1.5;
         let stock = build(&parts);
         let engine = run_flat_out(&stock, 5500.0, 20.0);
         assert!(engine.blown(&stock.hardware), "{:?}", engine.damage);
@@ -1020,16 +1068,26 @@ mod tests {
     fn an_overspun_turbo_bursts() {
         // The small turbo with its wastegate held shut to 1.5 bar: its compressor runs out
         // of breath at high rpm and spins past its limit.
-        let mut parts = parts::Parts::turbo();
+        let mut parts = twin_cam_turbo();
         parts.chosen[crate::catalogue::TURBO] = 1;
         parts.boost = 1.5;
         let build = EngineBuild::new(parts.hardware(), ecu::EcuModel::STOCK);
-        let engine = run_flat_out(&build, 6000.0, 10.0);
+        let engine = run_flat_out(&build, 5800.0, 10.0);
         assert!(engine.damage.turbo_failed(), "{:?}", engine.damage);
         assert_eq!(engine.damage.failures(4), ["turbo failed"]);
         // It no longer boosts, but the engine runs on.
         assert!(engine.boost_pressure < AMBIENT_PRESSURE);
-        assert!(engine.torque(&build, 6000.0) > 50.0);
+        assert!(engine.torque(&build, 5800.0) > 50.0);
+    }
+
+    /// The B16R turbocharged as `Parts::turbo` does the B16 (whose 8-valve head doesn't
+    /// breathe enough to break things), on its first cam profile with a stock ECU.
+    fn twin_cam_turbo() -> parts::Parts {
+        let mut parts = parts::Parts::factory("B16R").unwrap();
+        parts.chosen[crate::catalogue::PISTONS] = 1;
+        parts.chosen[crate::catalogue::TURBO] = 2;
+        parts.manifold = parts.turbo_manifold().unwrap();
+        parts
     }
 
     /// The R80 on the family's manifold `id`, with turbo `turbo` (by its place in the
@@ -1198,21 +1256,21 @@ mod tests {
     }
 
     /// The B series' turbo manifold has one branch: its turbo is sized for the whole
-    /// engine, as before the manifolds, and only the turbine inlet's weaker reflection
-    /// changed it (less scavenging at the bottom, more at the top). Before: 202 N·m and
-    /// 0.40 bar at 3000 rpm, 254 at 4000, 241 and 0.69 bar at 5000.
+    /// engine. On the 8-valve B16 (since 2026-11-27; the 16-valve B16 made 202 N·m and 0.40
+    /// bar at 3000 rpm, 254 at 4000, 241 and 0.69 bar at 5000) its torque falls off sooner.
     #[test]
     fn the_b_series_turbo_is_as_before() {
         let build = EngineBuild::new(EngineHardware::turbo(), ecu::EcuModel::STOCK);
         assert_eq!(build.hardware.turbos, 1);
         for (rpm, torque, boost) in [
-            (3000.0, 202.0, 0.4),
-            (4000.0, 254.0, 0.65),
-            (5000.0, 241.0, 0.69),
+            (3000.0, 212.0, 0.47),
+            (4000.0, 229.0, 0.65),
+            (5000.0, 207.0, 0.68),
         ] {
             let engine = run_flat_out(&build, rpm, 4.0);
             let at = engine.torque(&build, rpm);
             let bar = (engine.boost_pressure - AMBIENT_PRESSURE) / 1e5;
+            println!("{rpm}: {at} N·m {bar} bar");
             assert!((at / torque - 1.0).abs() < 0.06, "{at} N·m at {rpm} rpm");
             assert!((bar - boost).abs() < 0.04, "{bar} bar at {rpm} rpm");
         }

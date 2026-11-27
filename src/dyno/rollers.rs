@@ -416,7 +416,7 @@ mod tests {
             wheel < 0.9 * crank && wheel > 0.75 * crank,
             "{wheel} whp of {crank} hp"
         );
-        assert!((100.0..160.0).contains(&crank), "{crank} hp");
+        assert!((80.0..130.0).contains(&crank), "{crank} hp");
         // The wheels' torque follows the crank's.
         for sample in samples.iter().skip(2) {
             let share = sample.wheel_torque() / sample.crank;

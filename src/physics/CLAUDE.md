@@ -13,14 +13,15 @@ catalogue entries, and things like swap subframes are named so they can be price
 
 - **Catalogues** (data in a `catalogue::Catalogue`, the server's, see "Server
   catalogue"; entries referred to by their place; engine versions also by code). The
-  built-in one (`src/catalogue/`): `chassis.rs` has the chassis (only the Vireo hatch, B16 and B18, from 2026-11-26; the
+  built-in one (`src/catalogue/`): `chassis.rs` has the chassis (only the Vireo hatch, from 2026-11-26: B16, B20 and B16R since 2026-11-27; the
   Merrow roadster with the R80 since 2026-11-27,
   see "Owning cars and parts"; the other twelve (Minim, Linnet, Tarn, Halden, Skarn,
   Harrow, Calder, Rheon, Vespera, Wisp, Drover, Carrow) and their engines are in git
   history before that; names are made up, no real cars), gearboxes (the two
   transverse ones and an inline 6-speed), clutches, suspension kits and paints (the tire
   compounds' rubber is `physics/tire.rs`'s `COMPOUNDS`, named in `catalogue/parts.rs`).
-  `engines.rs` has the families (the B series, versions B16 and B18; the R-series V10,
+  `engines.rs` has the families (the B series, versions B16 and B20 (one cam, 8 valves) and B16R (two cams, 16
+  valves, switching cams; see `docs/vireo-lineup.md`); the R-series V10,
   R80, the Merrow's; `EngineHardware::default`
   is still the W20 2-litre four everything is scaled from). Tests needing another kind
   of car change the one: `catalogue::builtin_changed` (heavier, rear-wheel drive…).

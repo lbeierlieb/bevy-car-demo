@@ -74,7 +74,8 @@ reading checks every item against the catalogue (`Item::fine`: in it, in a slot 
 its kind, required slots filled, knobs within range).
 Milestone 2 (one car): the Vireo is an early-90s three-door (4.07 m, 2.57 m wheelbase,
 14" wheels, 820 kg sprung; a cabin point's glazing 2 is a painted side with the rear
-window glazed: the C pillar), engines B16 and B18 (baked), trims `vireo.1-6` (steel
+window glazed: the C pillar), engines B16 and B18 (baked; since 2026-11-27 B16, B20 and B16R, trims `vireo.1-6`,
+`vireo.2-0` (the 1.8's equipment) and `vireo.1-6r` (the same), see "Cylinder heads"), trims `vireo.1-6` (steel
 rims, 185/60 R14, solid front discs, rear drums, open differential) and `vireo.1-8`
 (15" alloys, 195/55 R15, vented discs, rear discs, limited slip, roof spoiler: an item,
 not drawn until the body is in pieces) from `catalogue/items.rs`'s `trim_specs`. A
@@ -504,7 +505,7 @@ The game is about tuning every aspect of a car. Agreed so far (the user's answer
   under it; upside down you see the silencer, cat or straight pipe.
 - Showrooms sell trims, used car dealers worn ones. Weekly races with rewards: later,
   nothing planned yet.
-- **One car for now**: the hot hatch with 1.6 and 1.8 engine options, made to look like
+- **One car for now**: the hot hatch with 1.6 and 1.8 engine options (1.6, 2.0 and 1.6R since 2026-11-27), made to look like
   an early-90s hatchback (the user: like an EG Civic; no real names or badges); the other
   twelve chassis go (others come later). The second, since 2026-11-27: the Merrow, an
   early-90s V10 roadster (`docs/pushrod-v10.md`).
@@ -591,3 +592,16 @@ but no editor; `Work::Tune` on it is refused. Fitting refuses an ECU firing fewe
 the engine has. `Parts::is_factory` ignores the ECU. Saved `ecu.stock`/`ecu.programmable`
 (before version 5) are the car's engine's stock ECU / the smallest programmable one for its
 cylinders (`saved::old_ecu`). Tunes say `ecu <name>`. Protocol 62.
+
+## The Vireo's lineup (2026-11-27, `docs/vireo-lineup.md` step 4)
+
+B16 (1.6, SOHC, 8 valves: `Head::SINGLE_CAM`, 154 N·m, 66 kW, 6300 rpm), B20 (2.0, SOHC,
+189 N·m, 78 kW, 6000 rpm), B16R (1.6, DOHC, `Head::BIG_VALVES`, port flow 1.35, switching
+cams from the factory (`Block::high`: 232° / 270°, 1.22× lift), 164 N·m, 129 kW at 7500, 8200
+rpm), each with its locked ECU (the B16R's switches). The B20 block with the B16R head
+(`the_twin_cam_head_on_the_two_litre_pays` prints them): 207 N·m but its long runners peak it at
+6500; with short runners 195 N·m and 136 kW at 7500 once forged rods let it rev past the B20
+rods' 7300; it needs a programmable ECU (the B16R's runs 1.6-litre maps), and its torque is over
+the stock 5-speed's 200 N·m. Saved `b18`, `b18.head`, `ecu.b18` read as the B20's
+(`saved::RENAMED`). Tests that broke things with a turbo on the B16 use the B16R
+(`twin_cam_turbo`): the 8-valve head doesn't breathe enough to. Protocol 63.

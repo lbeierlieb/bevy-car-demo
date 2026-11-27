@@ -31,7 +31,7 @@ block should be the swap players want (a "Frankenstein" engine).
    Fitting refuses an ECU that can't drive the engine's cylinders. Old saved
    `ecu.stock` becomes the engine version's stock ECU, `ecu.programmable` the
    programmable one for its cylinders.
-4. **The lineup**: B16 (1.6, SOHC, 8 valves), B20 (2.0, SOHC, 8 valves; replaces the
+4. **The lineup** (done): B16 (1.6, SOHC, 8 valves), B20 (2.0, SOHC, 8 valves; replaces the
    B18), B16R (1.6, DOHC, 16 valves, switching cams from the factory, about 8200 rpm).
    Trims `vireo.1-6`, `vireo.2-0` (the 1.8's equipment), `vireo.1-6r` (new), each with
    its stock ECU. The B20 block with the B16R head: more power than either, but the

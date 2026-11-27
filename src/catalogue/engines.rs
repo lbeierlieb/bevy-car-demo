@@ -10,8 +10,8 @@ use crate::physics::engine::families::{
     Family, HeadDef, Layout, ManifoldDef, Version, relative_size,
 };
 use crate::physics::engine::hardware::{
-    BottomEnd, CamProfile, Collector, Cooling, EngineHardware, Exhaust, FLOAT_MARGIN, Intake,
-    Manifold, ROD_MARGIN, ValveLayout, ValveTrain,
+    BottomEnd, CamDrive, CamProfile, Collector, Cooling, EngineHardware, Exhaust, FLOAT_MARGIN,
+    Intake, Manifold, ROD_MARGIN, ValveLayout, ValveTrain,
 };
 use crate::physics::engine::maps::EngineMaps;
 use crate::physics::engine::parts::{Preset, round_to};
@@ -27,6 +27,9 @@ struct Block {
     /// Cam duration (crank degrees) and lobe separation (cam degrees).
     duration: f32,
     separation: f32,
+    /// A second cam profile to switch to, if it has one: its duration, lobe separation
+    /// and lift over the first's.
+    high: Option<(f32, f32, f32)>,
     /// The speed its valve springs and rods are made for (rpm).
     redline: f32,
     /// Intake runner and header primary lengths (mm).
@@ -54,6 +57,30 @@ struct Head {
 }
 
 impl Head {
+    /// One cam over two valves per cylinder, working them through rockers.
+    const SINGLE_CAM: Self = Self {
+        layout: ValveLayout {
+            drive: CamDrive::Sohc,
+            valves: 2,
+            intake_diameter: 0.46,
+            exhaust_diameter: 0.38,
+        },
+        rocker_ratio: 1.0,
+        cam_side_mass: 0.0,
+        rollers: false,
+        lift: 0.11,
+    };
+    /// Two cams over four big valves.
+    const BIG_VALVES: Self = Self {
+        layout: ValveLayout {
+            drive: CamDrive::Dohc,
+            valves: 4,
+            intake_diameter: 0.41,
+            exhaust_diameter: 0.35,
+        },
+        lift: 0.105,
+        ..Self::TWIN_CAM
+    };
     /// Two cams over four valves, as on the 2-litre four.
     const TWIN_CAM: Self = Self {
         layout: ValveLayout::FOUR_VALVE,
@@ -102,7 +129,14 @@ fn block(b: Block) -> EngineHardware {
             piston_toughness: 1.0,
         },
         head_gasket: reference.head_gasket,
-        cams: vec![cam],
+        cams: std::iter::once(cam)
+            .chain(b.high.map(|(duration, separation, lift)| CamProfile {
+                intake_duration: duration,
+                exhaust_duration: duration,
+                lobe_separation: separation,
+                lift: round_to(cam.lift * lift, 1e-4),
+            }))
+            .collect(),
         intake_phasing: 0.0,
         exhaust_phasing: 0.0,
         intake_timing: 0.0,
@@ -382,42 +416,69 @@ pub fn families() -> Vec<Family> {
             versions: vec![
                 version(
                     "B16",
-                    "1.6 four",
+                    "1.6 SOHC four",
                     || {
                         block(Block {
                             cylinders: 4,
                             bore: 78.0,
                             stroke: 83.6,
-                            compression: 10.5,
-                            duration: 240.0,
-                            separation: 110.0,
-                            redline: 6800.0,
-                            runner: 350.0,
+                            compression: 9.4,
+                            duration: 236.0,
+                            separation: 112.0,
+                            high: None,
+                            redline: 6300.0,
+                            runner: 420.0,
                             header: 700.0,
                             inertia: 0.13,
-                            flow: 1.0,
-                            head: Head::TWIN_CAM,
+                            flow: 0.95,
+                            head: Head::SINGLE_CAM,
                         })
                     },
                     none,
                 ),
                 version(
-                    "B18",
-                    "1.8 four",
+                    "B20",
+                    "2.0 SOHC four",
                     || {
                         block(Block {
                             cylinders: 4,
-                            bore: 81.0,
-                            stroke: 87.2,
-                            compression: 10.0,
-                            duration: 244.0,
-                            separation: 110.0,
-                            redline: 6700.0,
-                            runner: 360.0,
+                            bore: 84.0,
+                            stroke: 89.0,
+                            compression: 9.2,
+                            duration: 240.0,
+                            separation: 112.0,
+                            high: None,
+                            redline: 6000.0,
+                            runner: 440.0,
                             header: 700.0,
-                            inertia: 0.14,
-                            flow: 1.0,
-                            head: Head::TWIN_CAM,
+                            inertia: 0.15,
+                            flow: 0.95,
+                            head: Head::SINGLE_CAM,
+                        })
+                    },
+                    none,
+                ),
+                version(
+                    "B16R",
+                    "1.6 DOHC four",
+                    || {
+                        // Short and oversquare, a mild cam for the street and a wild one
+                        // from the middle up, big valves and ports that flow freely: it
+                        // revs.
+                        block(Block {
+                            cylinders: 4,
+                            bore: 81.0,
+                            stroke: 77.4,
+                            compression: 10.4,
+                            duration: 232.0,
+                            separation: 110.0,
+                            high: Some((270.0, 106.0, 1.22)),
+                            redline: 8200.0,
+                            runner: 300.0,
+                            header: 700.0,
+                            inertia: 0.11,
+                            flow: 1.35,
+                            head: Head::BIG_VALVES,
                         })
                     },
                     none,
@@ -448,6 +509,7 @@ pub fn families() -> Vec<Family> {
                         // the big American V10s), with little overlap (it idles low).
                         duration: 276.0,
                         separation: 130.0,
+                        high: None,
                         redline: 6000.0,
                         runner: 400.0,
                         header: 500.0,

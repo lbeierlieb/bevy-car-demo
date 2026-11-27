@@ -162,8 +162,8 @@ fn vireo() -> Chassis {
         name: "Vireo".into(),
         class: "Hatchback".into(),
         about: "A light three-door hatch from the early nineties: low nose, long glass, a \
-                chopped tail, front-wheel drive and eager fours; the 1.8 comes with \
-                alloys, bigger brakes and a limited-slip differential"
+                chopped tail, front-wheel drive and eager fours; the 2.0 and the high-revving \
+                1.6R come with alloys, bigger brakes and a limited-slip differential"
             .into(),
         // Without the seats (see `items`: 50 kg with them, the car's centre where it was).
         mass: 770.0,
@@ -171,7 +171,7 @@ fn vireo() -> Chassis {
         cg_height: 0.5,
         wheelbase: 2.57,
         track: [1.475, 1.465],
-        // The 1.6's wheels; the 1.8 has its own (see `items`).
+        // The 1.6's wheels; the 2.0 and 1.6R have their own (see `items`).
         wheels: [
             wheel(14, 55, 185, 60, STREET),
             wheel(14, 55, 185, 60, STREET),
@@ -220,7 +220,7 @@ fn vireo() -> Chassis {
         limited_slip: false,
         gearbox: 0,
         final_drive: 4.25,
-        engines: codes(&["B16", "B18"]),
+        engines: codes(&["B16", "B20", "B16R"]),
         paint: 11,
         body: Body {
             length: 4.07,

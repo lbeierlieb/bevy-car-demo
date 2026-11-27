@@ -538,7 +538,7 @@ mod tests {
                 throttle: 1.0,
                 ..default()
             };
-            run(&mut car, &terrain, 2.5);
+            run(&mut car, &terrain, 2.0);
             let radius = car.setup.front.tire.radius;
             let wheels = (car.corners[0].omega + car.corners[1].omega) / 2.0 * radius;
             (car.forward_speed(), wheels)
@@ -555,7 +555,8 @@ mod tests {
             wheels > 1.3 * spinning,
             "wheels at {wheels} m/s, car at {spinning}"
         );
-        assert!(speed > spinning + 1.0, "{speed} against {spinning} m/s");
+        // (Two seconds in: the 8-valve B16 is on its limiter in first soon after.)
+        assert!(speed > spinning + 0.6, "{speed} against {spinning} m/s");
     }
 
     #[test]

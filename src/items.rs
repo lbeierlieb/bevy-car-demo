@@ -1085,7 +1085,7 @@ mod tests {
     fn the_trims_differ_in_more_than_the_engine() {
         let catalogue = builtin();
         let ids: Vec<&str> = catalogue.trims.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["vireo.1-6", "vireo.1-8", "merrow.r80"]);
+        assert_eq!(ids, ["vireo.1-6", "vireo.2-0", "vireo.1-6r", "merrow.r80"]);
         let rims = |car: &Item| -> Vec<String> {
             (car.fitted(&catalogue, Kind::Wheel))
                 .flat_map(|wheel| wheel.fitted(&catalogue, Kind::Rim))
@@ -1103,7 +1103,7 @@ mod tests {
         assert!(!spoiler(&base.car) && spoiler(&sport.car));
         assert!(!base.build.limited_slip && sport.build.limited_slip);
         assert_eq!(sport.build.wheels[0].rim.diameter, 15);
-        assert_eq!(sport.engine.parts.hardware().name, "B18 1.8 four");
+        assert_eq!(sport.engine.parts.hardware().name, "B20 2.0 SOHC four");
         // A shop's change keeps the steel rims steel.
         let mut build = base.build.clone();
         build.clutch = 1;

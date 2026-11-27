@@ -57,7 +57,7 @@ Topic notes live next to the code and load when working there; update them there
 The game is a library (`src/lib.rs`) and apps, each the list of plugins it adds: the
 **sandbox** (`src/main.rs`: the shared `CorePlugin` (`WorldPlugin` (terrain, obstacles,
 simulation, traffic: all the server has too), scenery, input, driving, visuals, camera,
-HUD, map, sound, egui), help (quick start, hints), the car the server gives (its catalogue's start: the Vireo hot hatch, B16),
+HUD, map, sound, egui), help (quick start, hints), the car the server gives (its catalogue's start: the Vireo hot hatch, B16, the 8-valve 1.6),
 gizmos, 2 telemetry, the central menu (Esc), shops (online), F11 fullscreen in all apps). The career was removed for the multiplayer work (see
 "Multiplayer"). Keep it that way: no mode flags; something only one app has is a plugin
 of its own (e.g. `ui::PanelPlugin`), and
@@ -135,8 +135,8 @@ mute key went into it, 2026-11-23).
   (commands in README, "The map and baking it"; a bake takes about 20 s). The native
 apps load `assets/gerach.terrain` at startup, so they see a re-bake at once (tests use
 the embedded copy, `Terrain::baked`, the fallback otherwise); commit the re-baked file.
-- Engine maps of every factory engine of the built-in catalogue (B16 and B18 since
-  2026-11-26, R80 since 2026-11-27, see `catalogue/engines.rs`), plus two engines tests measure against (W20,
+- Engine maps of every factory engine of the built-in catalogue (B16, B20 and B16R since
+  2026-11-27 (the B18 before), R80, see `catalogue/engines.rs`), plus two engines tests measure against (W20,
   `EngineHardware::default`; B16T, `EngineHardware::turbo`), are baked into
   `src/physics/engine/baked/<code>.maps` (listed in `engine/store.rs`'s `BAKED`). After changing `cycle.rs`, `maps.rs` (outside
   their tests; any edit counts, their text is in the fingerprint) or a factory engine's
