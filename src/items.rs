@@ -131,6 +131,53 @@ pub enum Does {
     },
 }
 
+/// What wears on a part, as the simulation knows wear (`saved::Condition`): the part
+/// carries it (`Item::wear`), so a part taken off keeps its wear and a new one is new.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wear {
+    /// Each cylinder's piston and rings (knock).
+    Pistons,
+    /// Each cylinder's connecting rod (fatigue).
+    Rods,
+    /// Each cylinder's valves (meeting the pistons when they float): in the head.
+    Valves,
+    /// The head gasket (overheating, pressure over what it seals).
+    HeadGasket,
+    /// The crank's bearings (hot oil).
+    Bearings,
+    /// The turbo (overspeed, a hot turbine).
+    Turbo,
+    /// A tire's tread, each rib's.
+    Tread,
+}
+
+impl Wear {
+    pub const ALL: [Wear; 7] = [
+        Wear::Pistons,
+        Wear::Rods,
+        Wear::Valves,
+        Wear::HeadGasket,
+        Wear::Bearings,
+        Wear::Turbo,
+        Wear::Tread,
+    ];
+}
+
+/// The oversizes a block can be bored to (mm over its bore): a block's and its pistons'
+/// sizes (`Item::variant`), which must match.
+pub const OVERSIZES: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
+
+/// What an oversize is called: "stock bore", "+0.50 mm".
+pub fn oversize_label(step: usize) -> String {
+    match OVERSIZES.get(step) {
+        Some(&mm) if mm > 0.0 => format!("+{mm:.2} mm"),
+        _ => "stock bore".into(),
+    }
+}
+
+/// The most wear values an item carries (a cylinder's each, or a tire's ribs).
+pub const MOST_WEAR: usize = 8;
+
 /// A setting a part has: what it's called, the range it can be set in and where it
 /// starts.
 #[derive(Clone, Debug, PartialEq)]
@@ -173,6 +220,10 @@ pub struct PartDef {
     /// Stands for nothing fitted, in a slot the engine needs filled (no turbo): taking a
     /// part off puts it in, and it's never sold or carried.
     pub absent: bool,
+    /// What wears on it, if anything the simulation wears.
+    pub wear: Option<Wear>,
+    /// Comes in the bore sizes (`OVERSIZES`): a block, and the pistons for it.
+    pub bores: bool,
     pub knobs: Vec<Knob>,
     pub slots: Vec<SlotDef>,
 }
@@ -207,6 +258,9 @@ pub struct Item {
     pub knobs: Vec<f32>,
     /// A part (or none) for each of its definition's slots.
     pub slots: Vec<Option<Item>>,
+    /// How worn it is, as its definition's `wear` says (0 new, 1 failed; a value per
+    /// cylinder or rib, trailing zeros left out: none, new).
+    pub wear: Vec<f32>,
 }
 
 /// Why a tree doesn't make a car.
@@ -225,6 +279,9 @@ pub const CORNERS: [&str; 4] = ["front left", "front right", "rear left", "rear 
 impl PartDef {
     /// How many sizes it comes in (one for most parts).
     pub fn variants(&self, catalogue: &Catalogue, chassis: Option<usize>) -> usize {
+        if self.bores {
+            return OVERSIZES.len();
+        }
         match self.does {
             Does::Rim => Rim::all().count(),
             Does::Tire(_) => TireSize::all().count(),
@@ -247,6 +304,7 @@ impl Item {
             variant: 0,
             knobs: made.knobs.iter().map(|knob| knob.default).collect(),
             slots: vec![None; made.slots.len()],
+            wear: Vec::new(),
         }
     }
 
@@ -349,6 +407,7 @@ impl Item {
             return Err(Unfit("not a block".into()));
         };
         let mut parts = Parts::of_version(catalogue, family, version);
+        parts.bore = block.variant.min(OVERSIZES.len() - 1);
         parts.ecu = ecu;
         parts.intake_timing = engine.knobs[0];
         parts.exhaust_timing = engine.knobs[1];
@@ -569,10 +628,24 @@ pub fn assemble(
             (*intake, *exhaust, *boost) = (parts.intake_timing, parts.exhaust_timing, parts.boost);
         }
         swap(catalogue, engine, Kind::LongBlock, paint, |_, block| {
+            block.variant = parts.bore;
             for slot in 0..slots {
-                swap(catalogue, block, Kind::EnginePart(slot), paint, |_, _| {
-                    engine_part(slot)
-                })?;
+                swap(
+                    catalogue,
+                    block,
+                    Kind::EnginePart(slot),
+                    paint,
+                    |_, part| {
+                        // Pistons the block's size.
+                        let d = engine_part(slot)?;
+                        part.variant = if catalogue.defs[d].bores {
+                            parts.bore
+                        } else {
+                            0
+                        };
+                        Ok(d)
+                    },
+                )?;
             }
             let does = Does::Block {
                 family: parts.family,

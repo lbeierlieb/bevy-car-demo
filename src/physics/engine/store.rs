@@ -42,11 +42,12 @@ pub fn is_stock(hardware: &EngineHardware) -> bool {
 /// The maps baked with the game for the hardware with `fingerprint`, as compressed text
 /// for the network (see `unpack`).
 pub fn packed(fingerprint: u64) -> Option<Vec<u8>> {
-    let text = stock_text(fingerprint)?;
-    Some(miniz_oxide::deflate::compress_to_vec_zlib(
-        text.as_bytes(),
-        6,
-    ))
+    Some(pack(stock_text(fingerprint)?))
+}
+
+/// Maps' text (`EngineMaps::to_text`) compressed for the network (see `unpack`).
+pub fn pack(text: &str) -> Vec<u8> {
+    miniz_oxide::deflate::compress_to_vec_zlib(text.as_bytes(), 6)
 }
 
 /// Maps' text from `packed`.

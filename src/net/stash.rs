@@ -10,7 +10,7 @@ use super::shadow::BakedMaps;
 use crate::car::CarSetup;
 use crate::cargo;
 use crate::catalogue::{Catalogue, Shared};
-use crate::fitting::{Bench, Fresh, Work};
+use crate::fitting::{Bench, Work};
 use crate::items::Item;
 use crate::items::{Does, trim_of};
 use crate::owned::{GARAGE_CARS, GARAGE_PARTS, Owned, Parked, SHOP_HOLD, Source, Stash, name};
@@ -82,7 +82,7 @@ pub fn tell(peer: &mut Peer, shops: &[Shop], why: Option<String>) {
 /// player told.
 fn drive(peer: &mut Peer, spec: CarSpec, baked: &mut BakedMaps) {
     peer.shadow.set_spec(spec, baked);
-    if let Some(spec) = peer.shadow.spec().cloned() {
+    if let Some(spec) = peer.shadow.driven().cloned() {
         peer.tell(&ToClient::YourCar(Box::new(spec)));
     }
 }
@@ -205,6 +205,8 @@ fn try_act(
                 return Err("Your car isn't there yet".into());
             };
             let condition = Condition::of(now);
+            // The wear on its parts, for what the player is told.
+            condition.put_on(catalogue, &mut spec.car);
             let picked = owned.cars.remove(usize::from(car));
             owned
                 .cars
@@ -238,7 +240,7 @@ pub fn work(
             Some(why)
         }
     };
-    if let Some(spec) = peer.shadow.spec().cloned() {
+    if let Some(spec) = peer.shadow.driven().cloned() {
         peer.tell(&ToClient::YourCar(Box::new(spec)));
     }
     tell(peer, shops, why);
@@ -257,9 +259,17 @@ fn try_work(
     let shop = (peer.at_shop())
         .and_then(|i| shops.get(i))
         .ok_or("Stop at a shop for that")?;
-    let spec = peer.shadow.spec().cloned().ok_or("You have no car yet")?;
+    let mut spec = peer.shadow.spec().cloned().ok_or("You have no car yet")?;
     if peer.shadow.lent() {
         return Err("Not while you drive a lent car".into());
+    }
+    // The parts as worn as the car is now (unless the car driven is still the one before
+    // a change whose maps are baking: then the parts are as they went in).
+    let condition = (peer.shadow.kept())
+        .filter(|_| !peer.shadow.pending())
+        .map(|(_, car)| Condition::of(car));
+    if let Some(condition) = &condition {
+        condition.put_on(catalogue, &mut spec.car);
     }
     let mut bench = Bench::new(catalogue, shop, &spec, peer.owned.held_at(&shop.name));
     for work in works {
@@ -269,14 +279,11 @@ fn try_work(
     if done.spec == spec && done.held == peer.owned.held_at(&shop.name) {
         return Ok(None);
     }
-    // New tires, a new engine or turbo are new: the server says so, not the game.
-    let condition = (done.fresh != Fresh::default())
-        .then(|| peer.shadow.kept().map(|(_, car)| Condition::of(car)))
-        .flatten()
-        .map(|mut condition| {
-            renew(&mut condition, &done.fresh);
-            condition
-        });
+    // The car is as worn as the parts in it now: a new part is new, one brought as worn
+    // as it was (the server says so, not the game).
+    let condition = condition.map(|condition| {
+        Condition::of_parts(catalogue, &done.spec.car, condition.fuel, condition.octane)
+    });
     if done.held != peer.owned.held_at(&shop.name) {
         *peer.owned.held_at_mut(&shop.name) = done.held;
         peer.owned.touch();
@@ -285,27 +292,21 @@ fn try_work(
     if let Some(condition) = condition {
         peer.shadow.set_condition(condition);
     }
-    Ok((!done.thrown.is_empty()).then(|| {
-        format!(
+    let baking = peer.shadow.pending();
+    let mut said = Vec::new();
+    if !done.thrown.is_empty() {
+        said.push(format!(
             "No room in the trunk or the shop for the old {}: thrown away",
             done.thrown.join(", ")
-        )
-    }))
-}
-
-/// `condition` with what's `fresh` new.
-fn renew(condition: &mut Condition, fresh: &Fresh) {
-    for (tread, new) in condition.treads.iter_mut().zip(fresh.tires) {
-        if new {
-            *tread = Default::default();
-        }
+        ));
     }
-    if fresh.engine {
-        condition.damage = Default::default();
+    if baking {
+        said.push(
+            "The engine's maps are being worked out: it runs as it was until they're done"
+                .to_string(),
+        );
     }
-    if fresh.turbo {
-        condition.damage.turbo = 0.0;
-    }
+    Ok((!said.is_empty()).then(|| said.join(". ")))
 }
 
 /// A player at a car dealer buys its trim `trim` (in the catalogue's `trims`): the car they
@@ -342,7 +343,7 @@ pub fn buy(
         .find(|&option| trim_of(catalogue, chassis, option).is_some_and(|t| t.id == made.id))
         .ok_or("No such car")?;
     let spec = CarSpec::of(&CarSetup::factory_in(catalogue, chassis, option));
-    bought(peer, spec, baked, trade_in)?;
+    bought(peer, spec, catalogue, baked, trade_in)?;
     Ok(made.name.clone())
 }
 
@@ -351,6 +352,7 @@ pub fn buy(
 fn bought(
     peer: &mut Peer,
     spec: CarSpec,
+    catalogue: &Catalogue,
     baked: &mut BakedMaps,
     trade_in: bool,
 ) -> Result<(), String> {
@@ -361,10 +363,11 @@ fn bought(
         if peer.owned.cars.len() >= GARAGE_CARS {
             return Err(format!("Your garage holds {GARAGE_CARS} cars at most"));
         }
-        let parked = Parked {
+        let mut parked = Parked {
             spec: old.clone(),
             condition: Condition::of(car),
         };
+        parked.condition.put_on(catalogue, &mut parked.spec.car);
         peer.owned.cars.push(parked);
         peer.owned.touch();
     }

@@ -193,15 +193,6 @@ pub fn wheel_of(catalogue: &Catalogue, wheel: &Item) -> Option<Wheel> {
     })
 }
 
-/// What changed in what's fitted, for the car's condition: the corners with new tires
-/// (in the order of the car's wheel slots), a new engine, a new turbo.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Fresh {
-    pub tires: [bool; 4],
-    pub engine: bool,
-    pub turbo: bool,
-}
-
 /// A shop's bench: the car being changed, with the trunk and what the shop holds for the
 /// player. Works are done on it one after another; `finish` checks what came of them.
 pub struct Bench<'a> {
@@ -214,8 +205,6 @@ pub struct Bench<'a> {
     pub held: Vec<Item>,
     /// What came off, to go into the trunk or be held.
     off: Vec<Item>,
-    /// The slots parts went into.
-    placed: Vec<Path>,
 }
 
 /// What came of a bench's works.
@@ -223,7 +212,6 @@ pub struct Bench<'a> {
 pub struct Done {
     pub spec: CarSpec,
     pub held: Vec<Item>,
-    pub fresh: Fresh,
     /// What was thrown away (no room for it), for the player.
     pub thrown: Vec<String>,
 }
@@ -238,7 +226,6 @@ impl<'a> Bench<'a> {
             cargo: spec.cargo.clone(),
             held: held.to_vec(),
             off: Vec::new(),
-            placed: Vec::new(),
         }
     }
 
@@ -479,7 +466,6 @@ impl<'a> Bench<'a> {
             self.off.push(old);
         }
         *place = Some(part);
-        self.placed.push(path.to_vec());
         Ok(())
     }
 
@@ -526,7 +512,6 @@ impl<'a> Bench<'a> {
         if fitting.len() < cargo.len() {
             return Err("The trunk's load wouldn't fit any more".into());
         }
-        let fresh = fresh(catalogue, &self.car, &self.placed);
         let spec = CarSpec {
             car: self.car,
             build,
@@ -541,7 +526,6 @@ impl<'a> Bench<'a> {
         Ok(Done {
             spec,
             held: self.held,
-            fresh,
             thrown,
         })
     }
@@ -568,40 +552,6 @@ pub fn needs_missing(catalogue: &Catalogue, car: &Item) -> Option<String> {
         }
     }
     None
-}
-
-/// Whether the catalogue's engine slot `slot` holds turbos.
-fn turbo_slot(catalogue: &Catalogue, slot: usize) -> bool {
-    use crate::physics::engine::parts::Effect;
-    let turbo = |effect: &Effect| matches!(effect, Effect::Turbo(_));
-    (catalogue.slots.get(slot))
-        .is_some_and(|slot| (slot.parts.iter()).any(|part| part.effects.iter().any(turbo)))
-}
-
-/// What's new on `after`, parts having gone into `placed`.
-fn fresh(catalogue: &Catalogue, after: &Item, placed: &[Path]) -> Fresh {
-    let mut fresh = Fresh::default();
-    let wheels: Vec<usize> = (after.def(catalogue).slots.iter().enumerate())
-        .filter(|(_, slot)| slot.kind == Kind::Wheel)
-        .map(|(i, _)| i)
-        .collect();
-    for path in placed {
-        let Some((kind, _)) = slot_kinds(catalogue, after, path) else {
-            continue;
-        };
-        let corner = wheels.iter().position(|&w| usize::from(path[0]) == w);
-        match kind {
-            Kind::Wheel | Kind::Tire => {
-                if let Some(corner) = corner.filter(|&c| c < 4) {
-                    fresh.tires[corner] = true;
-                }
-            }
-            Kind::Engine | Kind::LongBlock => fresh.engine = true,
-            Kind::EnginePart(slot) if turbo_slot(catalogue, slot) => fresh.turbo = true,
-            _ => {}
-        }
-    }
-    fresh
 }
 
 /// The works that make `old` (a car's tree and tune) into `new`, as far as works can:
@@ -903,7 +853,6 @@ mod tests {
         };
         let done = run(&catalogue, &workshop, &before, &[swap]).unwrap();
         assert_eq!(done.spec.parts.hardware().name, "B18 1.8 four");
-        assert!(done.fresh.engine);
         let out = Work::Remove { slot: vec![engine] };
         assert!(run(&catalogue, &workshop, &before, &[out]).is_err());
     }
@@ -925,8 +874,19 @@ mod tests {
                 paint: 0,
             },
         };
-        let done = run(&catalogue, &tires, &before, &[fit]).unwrap();
-        assert_eq!(done.fresh.tires, [true; 4]);
+        // The old tires are worn: they keep it, the new ones are new.
+        let mut worn = before.clone();
+        let mut condition = crate::saved::Condition::of_parts(&catalogue, &worn.car, 40.0, 95.0);
+        condition.treads = [[0.3; crate::physics::tire::RIBS]; 4];
+        condition.put_on(&catalogue, &mut worn.car);
+        let done = run(&catalogue, &tires, &worn, &[fit]).unwrap();
+        let now = crate::saved::Condition::of_parts(&catalogue, &done.spec.car, 40.0, 95.0);
+        assert_eq!(now.treads, [[0.0; crate::physics::tire::RIBS]; 4]);
+        let off: Vec<&Item> = done.spec.cargo.iter().chain(&done.held).collect();
+        assert!(
+            off.iter()
+                .all(|tire| tire.wear == [0.3; crate::physics::tire::RIBS])
+        );
         assert_eq!(done.spec.build.wheels[1].compound, 2);
         // The old tires: as many as the trunk takes, the rest held.
         assert_eq!(done.spec.cargo.len() + done.held.len(), 4);

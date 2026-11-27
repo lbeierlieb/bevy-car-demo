@@ -24,8 +24,11 @@
 //! its car's state after a numbered step (`check`), which is only compared with the
 //! server's for the log (how many matched to the bit, how far off the others were).
 //!
-//! A car built of an engine whose maps don't come with the game is baked on a thread of
-//! its own (seconds); meanwhile the player's own word is shown.
+//! A car built of an engine whose maps don't come with the game, nor were baked before,
+//! is baked on a thread of its own at the lowest priority (seconds, the physics going
+//! first: a small server has one slow core). Meanwhile a car that's already driving goes
+//! on as it was (`pending`), and the player is told the new one once it's built
+//! (`take_switched`); the maps are kept by their fingerprint and given to games that ask.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -96,9 +99,21 @@ const FUEL_PER_SECOND: f32 = 0.1;
 #[derive(Resource, Default)]
 pub struct Tick(pub u32);
 
-/// Engine maps the server has baked for players' cars, by their hardware's fingerprint.
+/// Engine maps the server has baked for players' cars, by their hardware's fingerprint,
+/// with their text packed for the games that ask (`store::packed`'s form).
 #[derive(Resource, Default)]
-pub struct BakedMaps(HashMap<u64, EngineMaps>);
+pub struct BakedMaps(HashMap<u64, (EngineMaps, Vec<u8>)>);
+
+impl BakedMaps {
+    /// The packed text of the maps with `fingerprint`, if they were baked here.
+    pub fn packed(&self, fingerprint: u64) -> Option<Vec<u8>> {
+        self.0.get(&fingerprint).map(|(_, packed)| packed.clone())
+    }
+
+    fn maps(&self, fingerprint: u64) -> Option<EngineMaps> {
+        self.0.get(&fingerprint).map(|(maps, _)| maps.clone())
+    }
+}
 
 /// How far step `a` is after step `b` (negative: before), the counters wrapping.
 fn after(a: u32, b: u32) -> i32 {
@@ -110,6 +125,10 @@ fn after(a: u32, b: u32) -> i32 {
 pub struct Shadow {
     /// What the car is built of, as the player last said.
     spec: Option<CarSpec>,
+    /// What it's to be built of once its engine's maps are baked (the car driving on as
+    /// `spec` meanwhile), and whether it was built so since the player was last told.
+    pending: Option<CarSpec>,
+    switched: bool,
     /// Its engine's maps being baked (by their fingerprint), there when done.
     baking: Option<(u64, Baking)>,
     /// The copy (none until a check gave it a state), and the last step it was driven
@@ -211,9 +230,33 @@ struct Report {
 impl Shadow {
     /// The player's car is built of `spec` from now on.
     pub fn set_spec(&mut self, spec: CarSpec, baked: &mut BakedMaps) {
-        if self.spec.as_ref() == Some(&spec) || self.own.is_some() {
+        if self.spec() == Some(&spec) || self.own.is_some() {
             return;
         }
+        if self.spec.as_ref() == Some(&spec) {
+            // Back to what's driving: nothing waits any more.
+            self.pending = None;
+            self.baking = None;
+            return;
+        }
+        let hardware = spec.parts.hardware();
+        let print = fingerprint(&hardware);
+        let maps = (spec.stock_maps()).or_else(|| baked.maps(print));
+        if maps.is_none() && self.car.is_some() && self.spec.is_some() {
+            // The car drives on as it is until the new engine's maps are baked.
+            if self.baking.as_ref().is_none_or(|(p, _)| *p != print) {
+                info!("Baking the maps of a player's engine ({print:016x})");
+                self.baking = Some((print, bake(hardware)));
+            }
+            self.pending = Some(spec);
+            return;
+        }
+        self.pending = None;
+        self.build(spec, maps, print);
+    }
+
+    /// The car is built of `spec` from now on: with `maps`, or once they're baked.
+    fn build(&mut self, spec: CarSpec, maps: Option<EngineMaps>, print: u64) {
         // The new car goes where the old one is.
         if let Some(car) = &self.car {
             self.anchor = Some(Spot {
@@ -223,21 +266,31 @@ impl Shadow {
                 hold: car.hold,
             });
         }
-        self.car = None;
         self.built = None;
         self.baking = None;
         self.ours.clear();
         self.waiting.clear();
         self.placements.clear();
-        let hardware = spec.parts.hardware();
-        let print = fingerprint(&hardware);
-        if let Some(maps) = (spec.stock_maps()).or_else(|| baked.0.get(&print).cloned()) {
-            self.built = Some(spec_car(&spec, maps));
-        } else {
-            info!("Baking the maps of a player's engine ({print:016x})");
-            self.baking = Some((print, bake(hardware)));
+        self.car = None;
+        match maps {
+            Some(maps) => self.built = Some(spec_car(&spec, maps)),
+            None => {
+                info!("Baking the maps of a player's engine ({print:016x})");
+                self.baking = Some((print, bake(spec.parts.hardware())));
+            }
         }
         self.spec = Some(spec);
+    }
+
+    /// Whether a change waits for its engine's maps (the car driving on as it was).
+    pub fn pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Whether the car was built anew from a change that waited for its maps since this
+    /// was last asked: the player's to be told (`ToClient::YourCar`).
+    pub fn take_switched(&mut self) -> bool {
+        std::mem::take(&mut self.switched)
     }
 
     /// The car, once it has a state, is in `condition` (a saved car's: its fuel and wear).
@@ -330,8 +383,14 @@ impl Shadow {
         self.yours.take()
     }
 
-    /// What the car is built of, as the server has it.
+    /// What the car is built of, as the server has it: as it's to be, if a change waits
+    /// for its engine's maps (what's changed further builds on).
     pub fn spec(&self) -> Option<&CarSpec> {
+        self.pending.as_ref().or(self.spec.as_ref())
+    }
+
+    /// What the car driving is built of (what the player's game is to build).
+    pub fn driven(&self) -> Option<&CarSpec> {
         self.spec.as_ref()
     }
 
@@ -406,6 +465,8 @@ impl Shadow {
         let mut lent = spec_car(&spec, maps);
         lent.keep_settings(&own);
         self.own = Some((self.spec.replace(spec.clone()), own));
+        // (A change waiting for its maps is dropped: none is made away from a shop.)
+        self.pending = None;
         self.baking = None;
         self.built = None;
         self.car = Some(lent);
@@ -700,11 +761,26 @@ impl Shadow {
             return;
         };
         info!("Baked the maps of a player's engine ({print:016x})");
-        baked.0.insert(*print, maps.clone());
-        if let Some(spec) = &self.spec {
-            self.built = Some(spec_car(spec, maps));
-        }
+        let print = *print;
+        baked.0.insert(print, maps.clone());
         self.baking = None;
+        if let Some(spec) = self.pending.take() {
+            if fingerprint(&spec.parts.hardware()) == print {
+                // The fuel it's to have from its first state is what's in it now (a shop
+                // set its wear when the change was asked for).
+                if let (Some(condition), Some(car)) = (&mut self.condition, &self.car) {
+                    condition.fuel = car.fuel.litres();
+                    condition.octane = car.fuel.octane();
+                }
+                self.build(spec, Some(maps.0), print);
+                self.switched = true;
+            } else {
+                // Changed again meanwhile: the other engine's turn.
+                self.set_spec(spec, baked);
+            }
+        } else if let Some(spec) = &self.spec {
+            self.built = Some(spec_car(spec, maps.0));
+        }
     }
 
     fn log(&mut self, now: f64, who: &str) {
@@ -794,20 +870,42 @@ fn spec_car(spec: &CarSpec, maps: EngineMaps) -> Car {
     Car::new(0, spec.setup_with(maps), Vec3::ZERO, Quat::IDENTITY)
 }
 
-/// Maps being baked on a thread of their own: there once done.
-type Baking = Arc<Mutex<Option<EngineMaps>>>;
+/// Maps being baked on a thread of their own, with their text packed: there once done.
+type Baking = Arc<Mutex<Option<(EngineMaps, Vec<u8>)>>>;
 
-/// Bakes `hardware`'s maps on a thread of its own.
+/// Bakes `hardware`'s maps on a thread of its own, at the lowest priority.
 fn bake(hardware: crate::physics::engine::hardware::EngineHardware) -> Baking {
     let baking = Baking::default();
     let done = baking.clone();
     std::thread::spawn(move || {
+        lowest_priority();
         let maps = EngineMaps::bake(&hardware);
+        let packed = crate::physics::engine::store::pack(&maps.to_text(&hardware));
         if let Ok(mut done) = done.lock() {
-            *done = Some(maps);
+            *done = Some((maps, packed));
         }
     });
     baking
+}
+
+/// This thread (and those it starts) at the lowest priority: they get what the server's
+/// cars leave of the processor.
+fn lowest_priority() {
+    #[cfg(target_os = "linux")]
+    {
+        unsafe extern "C" {
+            fn setpriority(which: i32, who: u32, prio: i32) -> i32;
+        }
+        const PRIO_PROCESS: i32 = 0;
+        // On Linux the nice value is the thread's, and `who` 0 is the calling thread; the
+        // threads it starts inherit it.
+        // SAFETY: setpriority takes plain integers and changes nothing in this process'
+        // memory.
+        let result = unsafe { setpriority(PRIO_PROCESS, 0, 19) };
+        if result != 0 {
+            warn!("Couldn't lower the baking thread's priority");
+        }
+    }
 }
 
 #[cfg(test)]

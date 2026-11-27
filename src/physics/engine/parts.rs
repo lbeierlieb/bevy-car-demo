@@ -407,6 +407,8 @@ pub struct Parts {
     pub version: usize,
     /// The part fitted in each of the catalogue's `slots`, by its place in the slot.
     pub chosen: Vec<usize>,
+    /// How far the block is bored over (a step of `items::OVERSIZES`).
+    pub bore: usize,
     /// Cam timing (crank degrees; intake advanced, exhaust retarded).
     pub intake_timing: f32,
     pub exhaust_timing: f32,
@@ -426,6 +428,7 @@ impl Parts {
             family,
             version,
             chosen: preset.chosen.clone(),
+            bore: 0,
             intake_timing: 0.0,
             exhaust_timing: 0.0,
             boost: preset.boost,
@@ -498,6 +501,13 @@ impl Parts {
             for effect in &part.effects {
                 effect.apply(&mut hardware);
             }
+        }
+        // A block bored over takes bigger pistons.
+        if let Some(&mm) = crate::items::OVERSIZES
+            .get(self.bore)
+            .filter(|&&mm| mm > 0.0)
+        {
+            hardware.bore = round_to(hardware.bore + mm * 1e-3, 1e-5);
         }
         // Where the primaries the manifold should have don't fit, shorter ones are made.
         let room = round_to(self.header_room, 0.01);

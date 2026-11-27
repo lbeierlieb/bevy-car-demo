@@ -125,6 +125,7 @@ impl Wire for Parts {
         for chosen in &self.chosen {
             chosen.put(out);
         }
+        self.bore.put(out);
         self.intake_timing.put(out);
         self.exhaust_timing.put(out);
         self.boost.put(out);
@@ -144,6 +145,7 @@ impl Wire for Parts {
             family,
             version,
             chosen,
+            bore: r.get()?,
             intake_timing: r.get()?,
             exhaust_timing: r.get()?,
             boost: r.get()?,
@@ -152,6 +154,7 @@ impl Wire for Parts {
         };
         let fine = (catalogue.families.get(family)).is_some_and(|f| version < f.versions.len())
             && crate::physics::engine::parts::fits(catalogue, &parts.chosen)
+            && parts.bore < crate::items::OVERSIZES.len()
             && within(parts.intake_timing, &(-10.0..=10.0))
             && within(parts.exhaust_timing, &(-10.0..=10.0))
             && within(parts.boost, &(0.3..=1.5));

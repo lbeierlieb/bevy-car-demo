@@ -1,27 +1,29 @@
 //! A car as the server keeps it between sessions: text, readable whatever the catalogue
 //! has become. What it's built of goes by the definitions' string ids, slot and knob names,
 //! paint names and sizes' labels (a definition gone takes its item with it, a knob gone
-//! is dropped, a new one starts where it starts), then the ECU's tune (all of it), and
-//! the car's condition: the fuel, each tire's wear and the engine's.
+//! is dropped, a new one starts where it starts), each part's wear (the engine's on the
+//! parts it's in, the tires' on the tires: see `Condition::put_on`), then the ECU's tune
+//! (all of it). The fuel is the car's own.
 //!
 //! ```text
 //! # car-sim car
-//! version 1
+//! version 3
 //! fuel 31.5 96.2
-//! tread 0 0.01 0.012 0.013 0.012 0.01        (a corner, then each rib's wear)
-//! engine 0 0 0                               (head gasket, bearings, turbo)
-//! cylinder 0 0.002 0 0.0001                  (piston, valves, rod)
 //! part 0 -  vireo  putty  0  Brake force=1 …  (tab-separated: depth, slot, id, paint,
-//! part 1 Front bumper  vireo.bumper.front …    variant, knobs as name=value)
+//! part 1 Front bumper  vireo.bumper.front …    variant, knobs as name=value, and its
+//! part 3 Pistons  pistons.stock  -  0  wear=0.1,0,0.02   wear if it has any)
 //! cargo                                      (then the loose parts it carries, each a
 //! part 0 -  silencer.stock  -  0              tree from depth 0)
 //! tune
 //! # car-sim ECU tune …
 //! ```
+//!
+//! Before version 3 the wear was the car's: `tread CORNER RIB…`, `engine GASKET BEARINGS
+//! TURBO` and `cylinder I PISTON VALVES ROD` lines, read onto the parts.
 
 use crate::car::Car;
 use crate::catalogue::{Catalogue, Shared};
-use crate::items::{Does, Item};
+use crate::items::{Does, Item, Kind, Wear};
 use crate::net::wire::{decode_with, encode};
 use crate::physics::engine::damage::{Damage, MAX_CYLINDERS};
 use crate::physics::engine::ecu::Ecu;
@@ -31,7 +33,10 @@ use crate::spec::CarSpec;
 use crate::wheels::{Rim, TireSize};
 
 /// The format's version.
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
+
+/// Each part's wear is a field `wear=…` after its knobs.
+const WEAR: &str = "wear";
 
 /// Where the loose parts carried begin (version 2 on).
 const CARGO: &str = "cargo";
@@ -70,29 +75,134 @@ impl Condition {
         }
         car.drivetrain.engine.damage = self.damage;
     }
+
+    /// Puts the wear on the parts of `car` (a car's tree) that carry it (`Item::wear`): the
+    /// engine's on the parts of it each kind of wear is in (pistons, rods, the head's
+    /// valves, the head gasket, the crank's bearings, the turbo), each tire's tread on the
+    /// tire at its corner.
+    pub fn put_on(&self, catalogue: &Catalogue, car: &mut Item) {
+        let damage = &self.damage;
+        each_mut(car, &mut |item| {
+            let Some(wear) = item.def(catalogue).wear else {
+                return;
+            };
+            let per = |of: fn(&crate::physics::engine::damage::CylinderWear) -> f32| {
+                damage.cylinders.iter().map(of).collect()
+            };
+            let values: Vec<f32> = match wear {
+                Wear::Pistons => per(|c| c.piston),
+                Wear::Rods => per(|c| c.rod),
+                Wear::Valves => per(|c| c.valves),
+                Wear::HeadGasket => vec![damage.head_gasket],
+                Wear::Bearings => vec![damage.bearings],
+                Wear::Turbo => vec![damage.turbo],
+                // By the corner (below).
+                Wear::Tread => return,
+            };
+            item.wear = trimmed(values);
+        });
+        for (corner, tire) in tires_mut(catalogue, car).into_iter().enumerate() {
+            if let Some(tread) = self.treads.get(corner) {
+                tire.wear = trimmed(tread.to_vec());
+            }
+        }
+    }
+
+    /// The condition of a car whose parts carry `car`'s wear (see `put_on`), with `fuel`
+    /// litres of `octane` in the tank.
+    pub fn of_parts(catalogue: &Catalogue, car: &Item, fuel: f32, octane: f32) -> Self {
+        let mut damage = Damage::default();
+        for item in car.all() {
+            let Some(wear) = item.def(catalogue).wear else {
+                continue;
+            };
+            let at = |i: usize| item.wear.get(i).copied().unwrap_or(0.0);
+            for (i, cylinder) in damage.cylinders.iter_mut().enumerate() {
+                match wear {
+                    Wear::Pistons => cylinder.piston = at(i),
+                    Wear::Rods => cylinder.rod = at(i),
+                    Wear::Valves => cylinder.valves = at(i),
+                    _ => {}
+                }
+            }
+            match wear {
+                Wear::HeadGasket => damage.head_gasket = at(0),
+                Wear::Bearings => damage.bearings = at(0),
+                Wear::Turbo => damage.turbo = at(0),
+                _ => {}
+            }
+        }
+        let mut treads = [[0.0; RIBS]; 4];
+        let mut car = car.clone();
+        for (corner, tire) in tires_mut(catalogue, &mut car).into_iter().enumerate() {
+            if let Some(tread) = treads.get_mut(corner) {
+                for (rib, wear) in tread.iter_mut().enumerate() {
+                    *wear = tire.wear.get(rib).copied().unwrap_or(0.0);
+                }
+            }
+        }
+        Self {
+            fuel,
+            octane,
+            treads,
+            damage,
+        }
+    }
+}
+
+/// `f` on every item of the tree.
+fn each_mut(item: &mut Item, f: &mut impl FnMut(&mut Item)) {
+    f(item);
+    for child in item.slots.iter_mut().flatten() {
+        each_mut(child, f);
+    }
+}
+
+/// The tires on a car's wheels, in the order of its wheel slots (its corners).
+fn tires_mut<'a>(catalogue: &Catalogue, car: &'a mut Item) -> Vec<&'a mut Item> {
+    let slots = &catalogue.defs[car.def].slots;
+    let mut tires = Vec::new();
+    for (slot, wheel) in slots.iter().zip(&mut car.slots) {
+        if slot.kind != Kind::Wheel {
+            continue;
+        }
+        let Some(wheel) = wheel else {
+            continue;
+        };
+        let inner = &catalogue.defs[wheel.def].slots;
+        let tire = (inner.iter().zip(&mut wheel.slots))
+            .find(|(slot, _)| slot.kind == Kind::Tire)
+            .and_then(|(_, tire)| tire.as_mut());
+        if let Some(tire) = tire {
+            tires.push(tire);
+        }
+    }
+    tires
+}
+
+/// Wear values without the zeros at the end (none: new), each within 0..1.
+pub fn trimmed(mut values: Vec<f32>) -> Vec<f32> {
+    for value in &mut values {
+        *value = if value.is_finite() {
+            value.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+    values.truncate(crate::items::MOST_WEAR);
+    while values.last() == Some(&0.0) {
+        values.pop();
+    }
+    values
 }
 
 /// `spec` as built and in `condition`, as text.
 pub fn write(catalogue: &Catalogue, spec: &CarSpec, condition: &Condition) -> String {
     let mut text = format!("# car-sim car\nversion {VERSION}\n");
     text += &format!("fuel {} {}\n", condition.fuel, condition.octane);
-    for (corner, wear) in condition.treads.iter().enumerate() {
-        text += &format!("tread {corner} {}\n", join(wear));
-    }
-    let damage = &condition.damage;
-    text += &format!(
-        "engine {} {} {}\n",
-        damage.head_gasket, damage.bearings, damage.turbo
-    );
-    for (i, cylinder) in damage.cylinders.iter().enumerate() {
-        if *cylinder != Default::default() {
-            text += &format!(
-                "cylinder {i} {} {} {}\n",
-                cylinder.piston, cylinder.valves, cylinder.rod
-            );
-        }
-    }
-    write_item(catalogue, &spec.car, 0, "-", &mut text);
+    let mut car = spec.car.clone();
+    condition.put_on(catalogue, &mut car);
+    write_item(catalogue, &car, 0, "-", &mut text);
     text += CARGO;
     text += "\n";
     for item in &spec.cargo {
@@ -173,6 +283,11 @@ impl Parts {
             let Some((name, value)) = knob.split_once('=') else {
                 continue;
             };
+            if name == WEAR && made.knobs.iter().all(|k| k.name != WEAR) {
+                let values = value.split(',').map(|w| w.parse().unwrap_or(0.0)).collect();
+                item.wear = made.wear.map_or_else(Vec::new, |_| trimmed(values));
+                continue;
+            }
             let place = made.knobs.iter().position(|k| k.name == name);
             if let (Some(place), Ok(value)) = (place, value.parse::<f32>()) {
                 item.knobs[place] = value;
@@ -212,14 +327,6 @@ impl Parts {
     }
 }
 
-fn join(values: &[f32]) -> String {
-    values
-        .iter()
-        .map(f32::to_string)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// What a size is saved as: rims' and tires' labels (their lists may grow), else its place.
 fn variant_text(def: &crate::items::PartDef, variant: usize) -> String {
     match def.does {
@@ -252,6 +359,10 @@ fn write_item(catalogue: &Catalogue, item: &Item, depth: usize, slot: &str, text
     for (knob, value) in def.knobs.iter().zip(&item.knobs) {
         *text += &format!("\t{}={value}", knob.name);
     }
+    if !item.wear.is_empty() {
+        let wear: Vec<String> = item.wear.iter().map(f32::to_string).collect();
+        *text += &format!("\t{WEAR}={}", wear.join(","));
+    }
     *text += "\n";
     for (slot, fitted) in def.slots.iter().zip(&item.slots) {
         if let Some(fitted) = fitted {
@@ -274,6 +385,7 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
         damage: Damage::default(),
     };
     let mut fuel = None;
+    let mut version = 1;
     // The car's parts, then (from the `cargo` line on) what it carries.
     let mut car_parts = Parts::default();
     let mut cargo_parts: Option<Parts> = None;
@@ -297,9 +409,10 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
         let key = words.next().unwrap_or_default();
         let numbers: Vec<f32> = words.filter_map(|w| w.parse().ok()).collect();
         match (key, numbers.as_slice()) {
-            ("version", [version]) if *version as u32 > VERSION => {
-                return Err(format!("a car saved by a newer game (version {version})"));
+            ("version", [v]) if *v as u32 > VERSION => {
+                return Err(format!("a car saved by a newer game (version {v})"));
             }
+            ("version", [v]) => version = *v as u32,
             ("fuel", [litres, octane]) => fuel = Some((*litres, *octane)),
             ("tread", [corner, wear @ ..]) if wear.len() == RIBS => {
                 if let Some(tread) = condition.treads.get_mut(*corner as usize) {
@@ -342,7 +455,7 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
         cargo,
     };
     // Checked as a car from a player's game.
-    let spec: CarSpec = decode_with(&encode(&spec), Some(catalogue)).ok_or(
+    let mut spec: CarSpec = decode_with(&encode(&spec), Some(catalogue)).ok_or(
         "not a car the catalogue allows (a part in the wrong place, a setting out of range)",
     )?;
     let (litres, octane) = fuel.unwrap_or((spec.build.chassis().tank.litres, condition.octane));
@@ -351,6 +464,10 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
     condition.octane = finite(octane)
         .unwrap_or(condition.octane)
         .clamp(80.0, 110.0);
+    if version < 3 {
+        // The car's wear, onto its parts.
+        condition.put_on(catalogue, &mut spec.car);
+    }
     let wear = |x: &mut f32| *x = finite(*x).unwrap_or(0.0).clamp(0.0, 1.0);
     condition.treads.iter_mut().flatten().for_each(wear);
     let damage = &mut condition.damage;
@@ -369,6 +486,9 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
         ]
         .into_iter()
         .for_each(wear);
+    }
+    if version >= 3 {
+        condition = Condition::of_parts(catalogue, &spec.car, condition.fuel, condition.octane);
     }
     Ok((spec, condition))
 }
@@ -407,10 +527,56 @@ mod tests {
                 car.drivetrain.engine.damage.head_gasket = 0.05;
                 let text = write(&catalogue, &spec, &Condition::of(&car));
                 let (read, condition) = read(&catalogue, &text).expect("reads back");
+                // The wear on the parts.
+                Condition::of(&car).put_on(&catalogue, &mut spec.car);
                 assert_eq!(read, spec, "{text}");
                 assert_eq!(condition, Condition::of(&car));
             }
         }
+    }
+
+    #[test]
+    fn the_wear_goes_onto_the_parts_it_is_in() {
+        let catalogue = crate::catalogue::builtin();
+        let (spec, mut car) = car(0, 0);
+        let damage = &mut car.drivetrain.engine.damage;
+        damage.cylinders[1].piston = 0.4;
+        damage.cylinders[2].rod = 0.3;
+        damage.cylinders[0].valves = 0.2;
+        damage.bearings = 0.1;
+        car.corners[3].tread.wear = [0.1, 0.2, 0.3, 0.2, 0.15];
+        let condition = Condition::of(&car);
+        let mut tree = spec.car.clone();
+        condition.put_on(&catalogue, &mut tree);
+        let worn = |id: &str| {
+            (tree.all().into_iter())
+                .find(|item| item.def(&catalogue).id == id)
+                .map(|item| item.wear.clone())
+                .unwrap()
+        };
+        assert_eq!(worn("pistons.stock"), [0.0, 0.4]);
+        assert_eq!(worn("connecting-rods.stock"), [0.0, 0.0, 0.3]);
+        assert_eq!(worn("cylinder-head.stock"), [0.2]);
+        assert_eq!(worn("crankshaft.stock"), [0.1]);
+        assert!(worn("head-gasket.stock").is_empty());
+        let back = Condition::of_parts(&catalogue, &tree, condition.fuel, condition.octane);
+        assert_eq!(back, condition);
+        // A car saved before the parts carried it: its wear goes onto them.
+        let text = write(&catalogue, &spec, &Condition::of(&car));
+        let old: String = (text.lines())
+            .map(|line| match line.split_once("\twear=") {
+                Some((before, _)) => before.to_string(),
+                None if line.starts_with("version") => "version 2\ncylinder 1 0.4 0 0".into(),
+                None => line.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (old, condition) = read(&catalogue, &old).unwrap();
+        assert_eq!(condition.damage.cylinders[1].piston, 0.4);
+        let pistons = (old.car.all().into_iter())
+            .find(|item| item.def(&catalogue).id == "pistons.stock")
+            .unwrap();
+        assert_eq!(pistons.wear, [0.0, 0.4]);
     }
 
     #[test]

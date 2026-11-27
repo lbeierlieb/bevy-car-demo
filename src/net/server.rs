@@ -376,7 +376,7 @@ fn receive(
         // matters to them, not the engine's maps).
         if let Some(spec) = peer
             .shadow
-            .spec()
+            .driven()
             .filter(|&spec| peer.looks_of.as_ref() != Some(spec))
         {
             let spec = spec.clone();
@@ -519,7 +519,9 @@ fn receive(
                     super::stash::work(&mut peer, id, &works, shops, &catalogue.0, &mut baked);
                 }
                 ToServer::Maps { fingerprint } => {
-                    let text = crate::physics::engine::store::packed(fingerprint);
+                    // The stock ones, or those baked here for a player's car.
+                    let text = crate::physics::engine::store::packed(fingerprint)
+                        .or_else(|| baked.packed(fingerprint));
                     peer.tell(&ToClient::Maps {
                         fingerprint,
                         text: text.map(super::wire::Blob),
@@ -973,6 +975,12 @@ fn run_shadows(
         let peer = &mut *peer;
         if let Some(name) = &peer.name {
             peer.shadow.update(&terrain, &mut baked, tick.0, now, name);
+        }
+        if peer.shadow.take_switched()
+            && let Some(spec) = peer.shadow.driven().cloned()
+        {
+            // A change that waited for its engine's maps is made now.
+            peer.tell(&ToClient::YourCar(Box::new(spec)));
         }
         if let Some(yours) = peer.shadow.take_yours() {
             peer.tell(&ToClient::Yours(yours));

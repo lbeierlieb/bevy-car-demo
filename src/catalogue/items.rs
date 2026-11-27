@@ -6,8 +6,8 @@ use std::sync::Arc;
 use super::{Catalogue, Shared};
 use crate::chassis::CarBuild;
 use crate::items::{
-    Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, assemble, chassis_knobs,
-    damper_knobs, engine_knobs, knob, tire_knobs,
+    Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, Wear, assemble,
+    chassis_knobs, damper_knobs, engine_knobs, knob, tire_knobs,
 };
 use crate::physics::engine::ecu::EcuModel;
 use crate::physics::tire::STREET;
@@ -53,6 +53,8 @@ struct Def {
     mass: f32,
     painted: bool,
     absent: bool,
+    wear: Option<Wear>,
+    bores: bool,
     knobs: Vec<Knob>,
     slots: Vec<SlotDef>,
 }
@@ -69,6 +71,8 @@ impl Def {
             mass,
             painted: false,
             absent: false,
+            wear: None,
+            bores: false,
             knobs: Vec::new(),
             slots: Vec::new(),
         }
@@ -81,6 +85,16 @@ impl Def {
 
     fn painted(mut self) -> Self {
         self.painted = true;
+        self
+    }
+
+    fn wears(mut self, wear: Wear) -> Self {
+        self.wear = Some(wear);
+        self
+    }
+
+    fn bored(mut self) -> Self {
+        self.bores = true;
         self
     }
 
@@ -106,6 +120,8 @@ impl Def {
             price: 0,
             painted: self.painted,
             absent: self.absent,
+            wear: self.wear,
+            bores: self.bores,
             knobs: self.knobs,
             slots: self.slots,
         }
@@ -387,6 +403,7 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             [0.65, 0.65, 0.22],
             8.0,
         )
+        .wears(Wear::Tread)
         .knobs(tire_knobs()));
     }
     for (g, gearbox) in catalogue.gearboxes.iter().enumerate() {
@@ -483,6 +500,7 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
                 size,
                 0.7 * family.mass,
             )
+            .bored()
             .slots(LONG_BLOCK_SLOTS.map(engine_slot).to_vec()));
         }
     }
@@ -499,6 +517,19 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             );
             // "None": no turbo, no intercooler, no catalyst.
             def.absent = part.name == "None";
+            // What wears in the engine sits on the part it's in.
+            def.wear = match kind.name.as_str() {
+                _ if def.absent => None,
+                "Pistons" => Some(Wear::Pistons),
+                "Connecting rods" => Some(Wear::Rods),
+                "Cylinder head" => Some(Wear::Valves),
+                "Head gasket" => Some(Wear::HeadGasket),
+                "Crankshaft" => Some(Wear::Bearings),
+                "Turbocharger" => Some(Wear::Turbo),
+                _ => None,
+            };
+            // Pistons come in the bore sizes.
+            def.bores = kind.name == "Pistons";
             add(def);
         }
     }

@@ -6,7 +6,7 @@ use super::{Catalogue, Clutch, Paint, Suspension, TireCompound};
 use crate::body::{Body, Detail, Tone};
 use crate::cargo::{Area, Hold};
 use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars};
-use crate::items::{Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim};
+use crate::items::{Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, Wear};
 use crate::net::wire::{Reader, Wire};
 use crate::physics::drivetrain::Drive;
 use crate::physics::engine::families::{Family, Layout, Version};
@@ -448,6 +448,7 @@ fields!(Slot {
 
 listed!(Panel, Panel::ALL);
 listed!(Seat, Seat::ALL);
+listed!(Wear, Wear::ALL);
 
 impl Wire for Kind {
     fn put(&self, out: &mut Vec<u8>) {
@@ -581,6 +582,8 @@ fields!(PartDef {
     price,
     painted,
     absent,
+    wear,
+    bores,
     knobs,
     slots
 } text { id, name });
@@ -598,6 +601,7 @@ impl Wire for Item {
         (self.variant as u16).put(out);
         self.knobs.put(out);
         self.slots.put(out);
+        self.wear.put(out);
     }
 
     /// Read only into a tree that's right for the reader's catalogue (`Item::fine`).
@@ -625,12 +629,17 @@ fn read_item(r: &mut Reader, depth: usize) -> Option<Item> {
             true => Some(Some(read_item(r, depth + 1)?)),
         })
         .collect::<Option<_>>()?;
+    let wear: Vec<f32> = r.get()?;
+    let worn =
+        wear.len() <= crate::items::MOST_WEAR && wear.iter().all(|w| (0.0..=1.0).contains(w));
+    worn.then_some(())?;
     Some(Item {
         def,
         paint,
         variant,
         knobs,
         slots,
+        wear,
     })
 }
 
