@@ -466,6 +466,23 @@ impl Body {
         height(&self.deck, x)
     }
 
+    /// How high a bulge in the bonnet rises over the deck at `x`, along its flat top (half
+    /// as wide as `half` and less); 0 where there's none.
+    fn bulge_rise(from: f32, to: f32, rise: f32, x: f32) -> f32 {
+        let t = ((x - from) / (0.5 * (to - from))).clamp(0.0, 1.0);
+        rise * (t * (2.0 - t))
+    }
+
+    /// The bonnet's top at `x`, `across` from the middle: the deck, or a bulge's flat top
+    /// where one is.
+    pub fn bonnet_top(&self, x: f32, across: f32) -> f32 {
+        let bulge = (self.bulges.iter())
+            .filter(|&&[from, to, half, _]| (from..=to).contains(&x) && across.abs() <= 0.7 * half)
+            .map(|&[from, to, _, rise]| 0.005 + Self::bulge_rise(from, to, rise, x))
+            .fold(0.0, f32::max);
+        self.deck_height(x) + bulge
+    }
+
     /// Half the cabin's width at its base at `x`.
     pub fn cabin_half_width(&self, x: f32) -> f32 {
         CABIN_WIDTH * self.half_width(x)
@@ -890,10 +907,7 @@ impl Body {
             );
             xs.sort_by(f32::total_cmp);
             xs.dedup_by(|a, b| (*a - *b).abs() < 1e-3);
-            let up = |x: f32| {
-                let t = ((x - from) / (0.5 * (to - from))).clamp(0.0, 1.0);
-                rise * (t * (2.0 - t))
-            };
+            let up = |x: f32| Self::bulge_rise(from, to, rise, x);
             // Each station's corners: base right, top right, top left, base left.
             let corners = |x: f32| {
                 let base = self.deck_height(x) + 0.005;

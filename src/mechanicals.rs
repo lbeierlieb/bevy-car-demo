@@ -533,12 +533,25 @@ fn engine_bay(
             intakes.push(compressor + axes[0] * (intake_end * (radius * 0.5 + 0.06)));
         }
     }
+    // Where a bonnet's cut-out goes (over the intake, where a Roots blower sticks up
+    // through it): its middle, half its length along the engine's crank and across, and
+    // the bonnet's highest point round it (a bulge's top where it has one).
+    let cut_out_middle = to(0.0, 0.92, if vee { 0.0 } else { -0.18 });
+    let (half_u, half_w) = (0.32 * along + 0.04, 0.16);
+    let cut_out_top = [-1.0, 1.0]
+        .into_iter()
+        .flat_map(|su| [-1.0, 1.0].map(|sw| (su, sw)))
+        .map(|(su, sw)| {
+            let p = cut_out_middle + axes[0] * (su * half_u) + axes[2] * (sw * half_w);
+            body.bonnet_top(body.x(p.z, &frame.wheels), p.x)
+        })
+        .fold(f32::MIN, f32::max);
     // A Roots blower on top of the engine, over the intake, sticking up through the
     // bonnet's cut-out; its belt from the
     // crank's pulley at the belt end, the air filter's pipe to its inlet.
     if roots {
         let base = to(0.0, 0.92, if vee { 0.0 } else { -0.18 });
-        let top = under_bonnet + 0.16;
+        let top = cut_out_top + 0.12;
         let rise = (top - base.y).max(0.12);
         let centre = base + Vec3::Y * (rise / 2.0);
         b.oriented_box(centre, axes, Vec3::new(0.58 * along, rise, 0.24), ALLOY);
@@ -577,9 +590,7 @@ fn engine_bay(
     {
         let paint = bonnet.paint.or(car.paint).unwrap_or(0);
         let color = catalogue.paints.get(paint).map_or([0.5; 3], |p| p.color);
-        let middle = to(0.0, 0.92, if vee { 0.0 } else { -0.18 });
-        let ring = Vec3::new(middle.x, under_bonnet + 0.05, middle.z);
-        let (half_u, half_w) = (0.32 * along + 0.04, 0.16);
+        let ring = Vec3::new(cut_out_middle.x, cut_out_top + 0.01, cut_out_middle.z);
         for (u, w, long) in [
             (0.0, half_w, true),
             (0.0, -half_w, true),

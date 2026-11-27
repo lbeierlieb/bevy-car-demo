@@ -359,7 +359,8 @@ blower needs `BONNET_CUT_OUT`, which "Bonnet with a blower cut-out" (`vireo.bonn
 provides, and so does no bonnet at all (`unmet_need`; the user, 2026-11-27; protocol 59, as
 whole cars an older client would refuse can come). Drawn in `mechanicals.rs` (the blower sticking up through the bonnet; the
 cut-out's frame in the bonnet's paint, with a dark opening when there's no blower (the
-bonnet's mesh has no hole; until 2026-11-27 nothing showed without one), the centrifugal snail at the belt end); a whine in
+bonnet's mesh has no hole; until 2026-11-27 nothing showed without one), sitting on the
+bonnet's highest point round it (`Body::bonnet_top`: the Merrow's ridge hid it), the centrifugal snail at the belt end); a whine in
 the engine sound (`EngineCharacter::whine`, orders of the crank: Roots 6 × ratio,
 centrifugal the impeller's; `WHINE*`). Telemetry (2) shows clutch and gear wear, downforce,
 a supercharger's boost, brake temperatures and pads; hints for fading brakes, worn pads, a
