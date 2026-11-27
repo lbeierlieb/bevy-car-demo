@@ -58,6 +58,8 @@ pub enum Action {
     SteerLeft,
     SteerRight,
     Throttle,
+    /// Held: the throttle isn't limited (the driving aids' most throttle).
+    FullThrottle,
     Brake,
     Clutch,
     Handbrake,
@@ -128,11 +130,12 @@ impl Nav {
 }
 
 impl Action {
-    pub const ALL: [Action; 30] = [
+    pub const ALL: [Action; 31] = [
         Action::Steer,
         Action::SteerLeft,
         Action::SteerRight,
         Action::Throttle,
+        Action::FullThrottle,
         Action::Brake,
         Action::Clutch,
         Action::Handbrake,
@@ -168,6 +171,7 @@ impl Action {
             Action::SteerLeft => "steer_left".into(),
             Action::SteerRight => "steer_right".into(),
             Action::Throttle => "throttle".into(),
+            Action::FullThrottle => "full_throttle".into(),
             Action::Brake => "brake".into(),
             Action::Clutch => "clutch".into(),
             Action::Handbrake => "handbrake".into(),
@@ -192,6 +196,7 @@ impl Action {
             Action::SteerLeft => "Steer left".into(),
             Action::SteerRight => "Steer right".into(),
             Action::Throttle => "Throttle".into(),
+            Action::FullThrottle => "Full power (held)".into(),
             Action::Brake => "Brake".into(),
             Action::Clutch => "Clutch".into(),
             Action::Handbrake => "Handbrake".into(),
@@ -449,7 +454,7 @@ impl Default for Curves {
     }
 }
 /// The keyboard defaults' version written to `wheel.cfg` (2: no arrows; see `from_text`).
-const KEYS_VERSION: u32 = 2;
+const KEYS_VERSION: u32 = 3;
 
 /// A set of bindings with a name.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -465,6 +470,7 @@ impl Profile {
         use KeyCode::*;
         let keys = [
             (Action::Throttle, KeyW),
+            (Action::FullThrottle, ShiftLeft),
             (Action::Brake, KeyS),
             (Action::SteerLeft, KeyA),
             (Action::SteerRight, KeyD),
@@ -729,6 +735,15 @@ impl WheelConfig {
                             .iter()
                             .any(|&(a, key)| a == *action && b.input == Input::Key(key))
                     });
+                }
+                // Full power came later: on the left Shift, if that's still free.
+                let keyboard = &mut list[0];
+                let shift = Input::Key(KeyCode::ShiftLeft);
+                if keys_version < 3
+                    && keyboard.bindings_of(Action::FullThrottle).next().is_none()
+                    && !keyboard.bindings.iter().any(|(_, b)| b.input == shift)
+                {
+                    keyboard.bind(Action::FullThrottle, Binding::key(KeyCode::ShiftLeft));
                 }
                 config.profiles = list;
                 config.active = active.unwrap_or(0);
@@ -998,6 +1013,8 @@ pub struct WheelInput {
     pub view: bool,
     /// The look-back button is held.
     pub look_back: bool,
+    /// The full power button is held: the throttle isn't limited.
+    pub full_power: bool,
     /// Looking around by a stick: x from -1 (right) to 1 (left), y from -1 (down) to 1
     /// (up); zero when let go or unbound.
     pub look: Vec2,
@@ -1238,6 +1255,7 @@ fn read_wheel(
         reset: pressed(Action::Reset),
         view: pressed(Action::View),
         look_back: down(Action::LookBack),
+        full_power: down(Action::FullThrottle),
         look: Vec2::new(look(Action::LookSide), look(Action::LookUp)),
         ignition_held: down(Action::Ignition),
         map: pressed(Action::Map),
@@ -1767,7 +1785,7 @@ mod tests {
         old.bind(Action::SteerLeft, Binding::key(KeyCode::ArrowLeft));
         let mut config = WheelConfig::default();
         config.profiles[0] = old;
-        let text = config.to_text().replace("keys 2\n", "");
+        let text = config.to_text().replace("keys 3\n", "");
         assert_eq!(
             WheelConfig::from_text(&text).profiles[0],
             Profile::keyboard()
@@ -1777,6 +1795,48 @@ mod tests {
         assert_eq!(
             WheelConfig::from_text(&text).profiles[0],
             config.profiles[0]
+        );
+    }
+
+    #[test]
+    fn a_file_from_before_gets_full_power_on_shift_if_free() {
+        let mut config = WheelConfig::default();
+        config.profiles[0]
+            .bindings
+            .retain(|(action, _)| *action != Action::FullThrottle);
+        let text = config.to_text().replace("keys 3\n", "keys 2\n");
+        let read = WheelConfig::from_text(&text);
+        assert_eq!(
+            read.profiles[0]
+                .bindings_of(Action::FullThrottle)
+                .collect::<Vec<_>>(),
+            [&Binding::key(KeyCode::ShiftLeft)]
+        );
+        assert_eq!(
+            read.profiles[0].bindings.len(),
+            Profile::keyboard().bindings.len()
+        );
+        // Shift taken by something else: left alone.
+        config.profiles[0].bind(Action::LookBack, Binding::key(KeyCode::ShiftLeft));
+        let text = config.to_text().replace("keys 3\n", "keys 2\n");
+        let read = WheelConfig::from_text(&text);
+        assert!(
+            read.profiles[0]
+                .bindings_of(Action::FullThrottle)
+                .next()
+                .is_none()
+        );
+        // Unbound since: stays unbound.
+        config.profiles[0] = Profile::keyboard();
+        config.profiles[0]
+            .bindings
+            .retain(|(action, _)| *action != Action::FullThrottle);
+        let read = WheelConfig::from_text(&config.to_text());
+        assert!(
+            read.profiles[0]
+                .bindings_of(Action::FullThrottle)
+                .next()
+                .is_none()
         );
     }
 

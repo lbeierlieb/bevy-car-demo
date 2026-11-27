@@ -139,7 +139,7 @@ As built (`src/menu/`):
   bindings like pad inputs (`Input::Key`/`Input::Pad`); `WheelConfig::profiles` (4) and
   `active`; the first is `Profile::keyboard()` (WASD (no arrows since 2026-11-23, at the
   user's wish: they're the menus'; a `wheel.cfg` without `keys 2` has them taken out of
-  the first profile), Space, Q/E, I, R, C, B, M), the others start empty ("set one up for a gamepad, one for a wheel"); each action
+  the first profile), Space, Q/E, I, R, C, B, M, left Shift full power), the others start empty ("set one up for a gamepad, one for a wheel"); each action
   up to `PER_ACTION` (2) inputs, binding a third drops the oldest, an input belongs to one
   action per profile, except that an axis's two halves can go to two pedals (a stick
   up throttle, down brake; asked for by the user, 2026-11-24: `Binding::other_half`, same
@@ -1740,6 +1740,14 @@ catalogue entries, and things like swap subframes are named so they can be price
   Traction control and ABS are the driver's, not the car's (asked for by the user):
   `car::DriverAids`, saved in `~/.config/car-sim/settings/aids.cfg`, handed to the
   active car by `drive`.
+- **Maximum throttle** (asked for by the user, 2026-11-27, for keyboard players: keys
+  know only full or nothing): `DriverAids::max_throttle` (30–100 %, 100 = off, the
+  default), a slider among the driving aids. `take_input` scales the pedal (after the
+  curve, before the linkage, so not exactly the torque share) and encodes the input
+  again: the server just gets a smaller throttle (no protocol or server change). Any
+  input is limited, pedals too. Held, `Action::FullThrottle` ("Full power", left Shift
+  in the keyboard profile; `wheel.cfg` `keys 3` binds it in an older file's first
+  profile if Shift is free) lifts the limit.
 - **ABS** (asked for by the user, on by default, next to traction control): per wheel,
   eases the brake share to hold a slip ratio of 0.1, the same smooth way (`ABS_*` in
   `sim.rs`), off below 2 m/s. Without it, braking while steering locks the inside

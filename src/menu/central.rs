@@ -15,7 +15,7 @@ use super::kit::{self, Panel, rank};
 use super::nav::{MenuInput, MenuSet};
 use super::{CHASE_FOVS, DRIVER_FOVS, Display, SIZES};
 use crate::audio::SoundSettings;
-use crate::car::{ActiveCar, Away, Car, DriverAids, Spectating};
+use crate::car::{ActiveCar, Away, Car, DriverAids, LEAST_MAX_THROTTLE, Spectating};
 use crate::graphics::{
     Antialiasing, DAY_LENGTHS, FRAME_CAPS, Graphics, RESOLUTIONS, Shadows, TimeOfDay, ViewDistance,
 };
@@ -508,9 +508,30 @@ fn aids(ui: &mut egui::Ui, settings: &mut Settings) {
         ui,
         "Eases the brakes before a wheel locks, so the car still steers while braking.",
     );
-    if (tc, abs) != (aids.traction_control, aids.abs) {
+    let mut most = aids.max_throttle;
+    kit::slider(
+        ui,
+        "Maximum throttle",
+        &mut most,
+        LEAST_MAX_THROTTLE..=1.0,
+        0.05,
+        |v| {
+            if v >= 1.0 {
+                "Off".into()
+            } else {
+                format!("{:.0} %", v * 100.0)
+            }
+        },
+    );
+    kit::note(
+        ui,
+        "Keys only know full or nothing: this makes a full press give less, for a calmer \
+         drive. Hold the full power button (left Shift on the keyboard) for all of it.",
+    );
+    if (tc, abs, most) != (aids.traction_control, aids.abs, aids.max_throttle) {
         aids.traction_control = tc;
         aids.abs = abs;
+        aids.max_throttle = most;
         aids.save();
     }
 }
@@ -592,6 +613,7 @@ fn bindings(ui: &mut egui::Ui, menu: &mut CentralMenu, wheel: &mut Wheel) -> Opt
             | Action::SteerLeft
             | Action::SteerRight
             | Action::Throttle
+            | Action::FullThrottle
             | Action::Brake
             | Action::Clutch => "Driving",
             Action::Handbrake | Action::ShiftUp | Action::ShiftDown | Action::Gate(_) => {
