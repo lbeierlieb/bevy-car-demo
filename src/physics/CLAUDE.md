@@ -108,6 +108,10 @@ catalogue entries, and things like swap subframes are named so they can be price
   front wheel of most cars and they go straight on (`abs_keeps_the_wheels_turning`).
 - **A clutch slips** when the engine makes more torque than it passes, so a swapped
   engine may need the sport or race clutch. Gearboxes have no torque limit yet.
+- **The automatic clutch** (no clutch control bound; with one bound, none of this, asked
+  for by the user, 2026-11-27): up a gear, the throttle stays shut after the gear goes in
+  until the engine is down to the gear's speed (`CUT_RPM`), then fades back in
+  (`CUT_FADE`), so it doesn't flare against the slipping clutch.
 - Gotchas met: engines much bigger than 2 litres on light flywheels hunt at idle (the
   V8/V10/V12 flywheels are heavier than realistic for that); wild cams idle faster
   (ECU idle speed follows the cam). With all-wheel drive, locked front wheels drag the

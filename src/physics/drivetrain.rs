@@ -37,6 +37,12 @@ const SYNC_RPM: f32 = 150.0;
 /// The automatic clutch blips the throttle on a downshift: fully open this far below the
 /// lower gear's speed, closing towards it.
 const BLIP_RPM: f32 = 400.0;
+/// After an upshift with the automatic clutch (no clutch control bound), the throttle
+/// stays shut until the engine is down within this of the new gear's speed (rpm), then
+/// comes back over `CUT_FADE` (s); at the latest after `CUT_MOST` (s) in the gear.
+const CUT_RPM: f32 = 50.0;
+const CUT_FADE: f32 = 0.1;
+const CUT_MOST: f32 = 0.6;
 /// The clutch's engagement, pedal travel (0 released, 1 floored) to the share of its
 /// torque capacity it passes (linear in between). Like a real one, the pedal has free
 /// play at the top (fully engaged) and the bottom (fully apart), and the plates meet at
@@ -317,6 +323,9 @@ pub struct Drivetrain {
     in_gear: f32,
     /// How far the clutch has closed again after a shift (0..1).
     engaged: f32,
+    /// Share of the driver's throttle let through after an upshift with the automatic
+    /// clutch (0 cut until the engine has come down to the gear's speed, 1 all).
+    cut: f32,
     locked: bool,
     pub engine: Engine,
     /// How hard the engine fired in the last step (0 at idle or cut, 1 at full load).
@@ -376,6 +385,7 @@ impl Drivetrain {
             shift: None,
             in_gear: AUTO_DWELL,
             engaged: 1.0,
+            cut: 1.0,
             locked: false,
             engine: Engine::default(),
             load: 0.0,
@@ -521,6 +531,7 @@ impl Drivetrain {
         self.shift = None;
         self.in_gear = 0.0;
         self.engaged = 1.0;
+        self.cut = 1.0;
         self.locked = false;
         self.grinding = None;
     }
@@ -532,6 +543,7 @@ impl Drivetrain {
         if gear == self.selected_gear() {
             return;
         }
+        self.cut = 1.0;
         if self.clutch_pedal.is_some_and(|travel| travel > CLUTCH_IN) {
             self.gear = gear;
             self.shift = None;
@@ -588,6 +600,9 @@ impl Drivetrain {
         if let Some((gear, left)) = &mut self.shift {
             *left -= dt;
             if *left <= 0.0 {
+                if clutch.is_none() && self.gear >= 1 && *gear > self.gear {
+                    self.cut = 0.0;
+                }
                 self.gear = *gear;
                 self.shift = None;
                 self.in_gear = 0.0;
@@ -624,7 +639,15 @@ impl Drivetrain {
             (0.0, blip)
         } else {
             self.engaged = (self.engaged + dt / engine.engage_time).min(1.0);
-            (engine.ratio(self.gear), throttle)
+            // Up a gear, the engine comes down to the gear's speed before the throttle
+            // opens again: on the gas while the clutch still slips it would flare.
+            if self.cut < 1.0 {
+                let matched = self.rpm <= engine.rpm_in(self.gear, wheel_omega) + CUT_RPM;
+                if self.cut > 0.0 || matched || self.locked || self.in_gear > CUT_MOST {
+                    self.cut = (self.cut + dt / CUT_FADE).min(1.0);
+                }
+            }
+            (engine.ratio(self.gear), throttle * self.cut)
         };
         let build = &engine.build;
         let firing = (self.running || (cranking && synced && !blown))
@@ -815,6 +838,7 @@ crate::snapshot::snapshot!(Drivetrain {
     shift,
     in_gear,
     engaged,
+    cut,
     locked,
     engine,
     load,
@@ -1315,6 +1339,51 @@ mod tests {
             drivetrain.rpm
         );
         assert!(top < target + 400.0, "flared to {top} for {target}");
+    }
+
+    #[test]
+    fn the_automatic_clutch_cuts_the_throttle_up_a_gear_until_the_speeds_match() {
+        let engine = EngineSetup::default();
+        let (radius, mass, dt) = (0.33, 1260.0, 1.0 / 120.0);
+        let mut drivetrain = Drivetrain::new(&engine);
+        let mut omega = 0.0;
+        let step = |drivetrain: &mut Drivetrain, omega: &mut f32| {
+            let out = drivetrain.step(&engine, 1.0, None, *omega, true, dt);
+            *omega += out.torque / (mass * radius * radius + out.inertia) * dt;
+        };
+        while drivetrain.rpm < 6000.0 || !drivetrain.locked {
+            step(&mut drivetrain, &mut omega);
+        }
+        drivetrain.shift_by(&engine, 1, omega, omega * radius);
+        while drivetrain.shift.is_some() {
+            step(&mut drivetrain, &mut omega);
+        }
+        // Into second, the engine is still far above its speed: no gas until it's down.
+        assert!(drivetrain.rpm > engine.rpm_in(2, omega) + 500.0);
+        let mut time = 0.0;
+        while !drivetrain.locked {
+            step(&mut drivetrain, &mut omega);
+            assert!(drivetrain.load < 0.05, "load {} slipping", drivetrain.load);
+            time += dt;
+            assert!(time < 0.5, "still slipping");
+        }
+        // Then the gas comes back.
+        for _ in 0..30 {
+            step(&mut drivetrain, &mut omega);
+        }
+        assert!(drivetrain.load > 0.5, "load {}", drivetrain.load);
+        // With a clutch control bound, the driver does it: the gas is there at once.
+        let mut pedal = Drivetrain::new(&engine);
+        let omega = 6000.0 / engine.rpm_in(1, 1.0);
+        for _ in 0..120 {
+            pedal.step(&engine, 1.0, Some(0.0), omega, true, dt);
+        }
+        pedal.shift_by(&engine, 1, omega, omega * radius);
+        while pedal.shift.is_some() {
+            pedal.step(&engine, 1.0, Some(0.0), omega, true, dt);
+        }
+        pedal.step(&engine, 1.0, Some(0.0), omega, true, dt);
+        assert!(pedal.cut == 1.0 && pedal.load > 0.5, "load {}", pedal.load);
     }
 
     #[test]
