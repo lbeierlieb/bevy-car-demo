@@ -67,6 +67,8 @@ pub struct Gearbox {
     pub mass: f32,
     /// Most torque its stock clutch passes (N·m).
     pub clutch_torque: f32,
+    /// Most torque its gears take for good (N·m at the input shaft): more wears them.
+    pub torque: f32,
     /// Time the clutch stays open for a gear change, and takes to close again (s).
     pub shift_time: f32,
     pub engage_time: f32,

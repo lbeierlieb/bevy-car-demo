@@ -210,10 +210,14 @@ pub enum Wear {
     Tread,
     /// A brake's pads.
     Pads,
+    /// A clutch's friction plate.
+    Clutch,
+    /// A gearbox's gears and synchros, each forward gear's.
+    Gears,
 }
 
 impl Wear {
-    pub const ALL: [Wear; 8] = [
+    pub const ALL: [Wear; 10] = [
         Wear::Pistons,
         Wear::Rods,
         Wear::Valves,
@@ -222,6 +226,8 @@ impl Wear {
         Wear::Turbo,
         Wear::Tread,
         Wear::Pads,
+        Wear::Clutch,
+        Wear::Gears,
     ];
 }
 

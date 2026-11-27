@@ -505,6 +505,7 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             [0.6, 0.45, 0.4],
             gearbox.mass,
         )
+        .wears(Wear::Gears)
         .slots(vec![
             slot("Final drive", Kind::FinalDrive, true),
             slot("Differential", Kind::Differential, true),
@@ -544,7 +545,8 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             Does::Clutch(k),
             [0.3, 0.3, 0.08],
             5.0,
-        ));
+        )
+        .wears(Wear::Clutch));
     }
     for (model, id, title) in [
         (EcuModel::Stock, "ecu.stock", "Stock ECU"),

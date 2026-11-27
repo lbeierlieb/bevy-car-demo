@@ -25,6 +25,7 @@ use crate::car::Car;
 use crate::catalogue::{Catalogue, Shared};
 use crate::items::{Does, Item, Kind, Wear};
 use crate::net::wire::{decode_with, encode};
+use crate::physics::drivetrain::MAX_GEARS;
 use crate::physics::engine::damage::{Damage, MAX_CYLINDERS};
 use crate::physics::engine::ecu::Ecu;
 use crate::physics::fuel::Fuel;
@@ -55,6 +56,9 @@ pub struct Condition {
     pub damage: Damage,
     /// Each corner's brake pads' wear (0 new, 1 worn through).
     pub pads: [f32; 4],
+    /// The clutch's wear, and each forward gear's (0 new, 1 worn out).
+    pub clutch: f32,
+    pub gears: [f32; MAX_GEARS],
 }
 
 impl Condition {
@@ -65,6 +69,8 @@ impl Condition {
             treads: car.corners.each_ref().map(|corner| corner.tread.wear),
             damage: car.drivetrain.engine.damage,
             pads: car.corners.each_ref().map(|corner| corner.brake.wear),
+            clutch: car.drivetrain.clutch_wear,
+            gears: car.drivetrain.gear_wear,
         }
     }
 
@@ -80,6 +86,8 @@ impl Condition {
             corner.brake.wear = wear;
         }
         car.drivetrain.engine.damage = self.damage;
+        car.drivetrain.clutch_wear = self.clutch;
+        car.drivetrain.gear_wear = self.gears;
     }
 
     /// Puts the wear on the parts of `car` (a car's tree) that carry it (`Item::wear`): the
@@ -102,6 +110,8 @@ impl Condition {
                 Wear::HeadGasket => vec![damage.head_gasket],
                 Wear::Bearings => vec![damage.bearings],
                 Wear::Turbo => vec![damage.turbo],
+                Wear::Clutch => vec![self.clutch],
+                Wear::Gears => self.gears.to_vec(),
                 // By the corner (below).
                 Wear::Tread | Wear::Pads => return,
             };
@@ -123,6 +133,7 @@ impl Condition {
     /// litres of `octane` in the tank.
     pub fn of_parts(catalogue: &Catalogue, car: &Item, fuel: f32, octane: f32) -> Self {
         let mut damage = Damage::default();
+        let (mut clutch, mut gears) = (0.0, [0.0; MAX_GEARS]);
         for item in car.all() {
             let Some(wear) = item.def(catalogue).wear else {
                 continue;
@@ -140,6 +151,8 @@ impl Condition {
                 Wear::HeadGasket => damage.head_gasket = at(0),
                 Wear::Bearings => damage.bearings = at(0),
                 Wear::Turbo => damage.turbo = at(0),
+                Wear::Clutch => clutch = at(0),
+                Wear::Gears => gears = std::array::from_fn(at),
                 _ => {}
             }
         }
@@ -164,6 +177,8 @@ impl Condition {
             treads,
             damage,
             pads,
+            clutch,
+            gears,
         }
     }
 }
@@ -411,6 +426,8 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
         treads: [[0.0; RIBS]; 4],
         damage: Damage::default(),
         pads: [0.0; 4],
+        clutch: 0.0,
+        gears: [0.0; MAX_GEARS],
     };
     let mut fuel = None;
     let mut version = 1;

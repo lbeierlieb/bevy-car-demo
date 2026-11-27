@@ -275,6 +275,7 @@ impl CarSetup {
                 build: engine,
                 clutch_torque: gearbox.clutch_torque
                     * build.catalogue.clutches[build.clutch].torque,
+                gearbox_torque: gearbox.torque,
                 gears: gearbox.gears.clone(),
                 reverse: gearbox.reverse,
                 final_drive: build.final_drive,
@@ -629,6 +630,8 @@ impl Car {
         placed.fuel = self.fuel;
         placed.load_fuel();
         placed.drivetrain.engine.damage = self.drivetrain.engine.damage;
+        placed.drivetrain.clutch_wear = self.drivetrain.clutch_wear;
+        placed.drivetrain.gear_wear = self.drivetrain.gear_wear;
         placed.drivetrain.engine.thermal = self.drivetrain.engine.thermal;
         for (corner, old) in placed.corners.iter_mut().zip(&self.corners) {
             corner.tread = old.tread;
@@ -654,6 +657,13 @@ impl Car {
             car.drivetrain.engine = self.drivetrain.engine;
         }
         let (new, old) = (&car.setup.build, &self.setup.build);
+        // The same clutch and gearbox keep their wear.
+        if new.clutch == old.clutch {
+            car.drivetrain.clutch_wear = self.drivetrain.clutch_wear;
+        }
+        if new.gearbox == old.gearbox {
+            car.drivetrain.gear_wear = self.drivetrain.gear_wear;
+        }
         // Each axle keeps its tires' state if they're the same tires.
         let same_tires = |front: bool| {
             let axle = usize::from(!front);

@@ -158,6 +158,7 @@ fields!(Gearbox {
     reverse,
     mass,
     clutch_torque,
+    torque,
     shift_time,
     engage_time
 } text { name });

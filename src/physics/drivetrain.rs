@@ -71,6 +71,49 @@ pub fn clutch_engagement(travel: f32) -> f32 {
         None => 0.0,
     }
 }
+/// The most forward gears a gearbox's wear is kept for.
+pub const MAX_GEARS: usize = 8;
+/// Energy the clutch takes slipping until it's worn out, per N·m it passes new (J/N·m).
+const CLUTCH_LIFE: f32 = 500e3;
+/// Worn past this the clutch passes less, down to `CLUTCH_WORN` of its torque just before
+/// it's worn out; worn out, `CLUTCH_GONE`.
+const CLUTCH_WEARING: f32 = 0.6;
+const CLUTCH_WORN: f32 = 0.5;
+const CLUTCH_GONE: f32 = 0.15;
+/// A synchro brings the clutch disc and the input shaft (this inertia, kg·m²) to the
+/// gear's speed, wearing by the energy that takes: this much wears one out (J).
+const SYNCHRO_INERTIA: f32 = 0.012;
+const SYNCHRO_LIFE: f32 = 3e6;
+/// Worn past this, a synchro can't bring a gear in from as far off its speed: from
+/// `SYNCHRO_REACH` (rpm) down to `SYNC_RPM` worn out (only rev-matched, then).
+const SYNCHRO_WEARING: f32 = 0.5;
+const SYNCHRO_REACH: f32 = 3000.0;
+/// A gear passing more than the gearbox takes wears this much a second per share over.
+const OVERLOAD_WEAR: f32 = 1.0 / 600.0;
+/// A gear refused grinds this long (s).
+const GRIND_TIME: f32 = 0.3;
+
+/// The share of its torque a clutch worn `wear` (0 new, 1 worn out) passes.
+pub fn clutch_grip(wear: f32) -> f32 {
+    if wear >= 1.0 {
+        CLUTCH_GONE
+    } else if wear > CLUTCH_WEARING {
+        1.0 - (1.0 - CLUTCH_WORN) * (wear - CLUTCH_WEARING) / (1.0 - CLUTCH_WEARING)
+    } else {
+        1.0
+    }
+}
+
+/// How far off a gear's speed (rpm) a synchro worn `wear` still brings it in from.
+pub fn synchro_reach(wear: f32) -> f32 {
+    if wear < SYNCHRO_WEARING {
+        f32::INFINITY
+    } else {
+        let left = (1.0 - (wear - SYNCHRO_WEARING) / (1.0 - SYNCHRO_WEARING)).max(0.0);
+        SYNC_RPM + (SYNCHRO_REACH - SYNC_RPM) * left
+    }
+}
+
 /// Reverse only goes in below this speed (m/s): at a standstill, near enough.
 pub const REVERSE_SPEED: f32 = 2.0;
 /// Time the automatic stays in a gear before it shifts again (s): just after a shift, the
@@ -174,8 +217,10 @@ pub struct EngineSetup {
     /// The parts the engine is built from, and the engine: its hardware, maps and ECU.
     pub parts: Parts,
     pub build: EngineBuild,
-    /// Most torque the clutch can pass while slipping (N·m).
+    /// Most torque the clutch can pass while slipping (N·m), new.
     pub clutch_torque: f32,
+    /// Most torque the gearbox takes for good (N·m at its input shaft).
+    pub gearbox_torque: f32,
     /// Forward gear ratios from first, the reverse ratio, and the final drive.
     pub gears: Vec<f32>,
     pub reverse: f32,
@@ -197,6 +242,7 @@ impl Default for EngineSetup {
             parts: Parts::stock(),
             build: EngineBuild::default(),
             clutch_torque: 350.0,
+            gearbox_torque: 400.0,
             gears: vec![3.3, 2.1, 1.5, 1.17, 0.95, 0.8],
             reverse: 3.3,
             final_drive: 3.7,
@@ -300,6 +346,17 @@ pub struct Drivetrain {
     /// neutral until the lever moves, so a reset or a round's end doesn't put the car
     /// straight back in the gear the lever was left in.
     parked: bool,
+    /// How worn the clutch is (0 new, 1 worn out): it slips under less torque.
+    pub clutch_wear: f32,
+    /// How worn each forward gear and its synchro is (0 new, 1 worn out): worn, it grinds
+    /// unless shifted gently, worn out it only goes in rev-matched.
+    pub gear_wear: [f32; MAX_GEARS],
+    /// The gear in the last step, and the input shaft's speed then (rpm): turning with
+    /// the gear in gear, with the engine in neutral with the clutch up.
+    last_gear: i8,
+    shaft: f32,
+    /// Time left grinding after a shift a worn synchro refused (s).
+    grind: f32,
 }
 
 /// What the drivetrain does to the driven wheels this step (shared by both).
@@ -332,7 +389,33 @@ impl Drivetrain {
             turned: 0.0,
             lever: None,
             parked: false,
+            clutch_wear: 0.0,
+            gear_wear: [0.0; MAX_GEARS],
+            last_gear: 1,
+            shaft: engine.idle_rpm(),
+            grind: 0.0,
         }
+    }
+
+    /// Most torque the clutch passes as worn as it is (N·m).
+    pub fn clutch_capacity(&self, engine: &EngineSetup) -> f32 {
+        engine.clutch_torque * clutch_grip(self.clutch_wear)
+    }
+
+    /// Whether the synchro of forward `gear` brings it in at the driven wheels'
+    /// `wheel_omega`: the input shaft is that far off the gear's speed. It wears by the
+    /// work it does.
+    fn synchro(&mut self, engine: &EngineSetup, gear: i8, wheel_omega: f32) -> bool {
+        let Some(wear) = self.gear_wear.get_mut(gear as usize - 1) else {
+            return true;
+        };
+        let off = (self.shaft - engine.rpm_in(gear, wheel_omega)).abs();
+        if off > synchro_reach(*wear) {
+            return false;
+        }
+        let spun = off / RPM;
+        *wear = (*wear + 0.5 * SYNCHRO_INERTIA * spun * spun / SYNCHRO_LIFE).min(1.0);
+        true
     }
 
     /// The ignition off: the engine stops firing and runs down. It stays off until
@@ -434,6 +517,7 @@ impl Drivetrain {
     pub fn neutral(&mut self) {
         self.parked = true;
         self.gear = 0;
+        self.last_gear = 0;
         self.shift = None;
         self.in_gear = 0.0;
         self.engaged = 1.0;
@@ -509,6 +593,23 @@ impl Drivetrain {
                 self.in_gear = 0.0;
             }
         }
+        // A gear going in: its synchro brings the input shaft to its speed, if it can; else
+        // it grinds and stays out.
+        if self.grind > 0.0 {
+            self.grind -= dt;
+            if self.grind <= 0.0 {
+                self.grinding = None;
+            }
+        }
+        if self.gear != self.last_gear {
+            if self.gear >= 1 && !self.synchro(engine, self.gear, wheel_omega) {
+                self.grinding = Some(self.gear);
+                self.grind = GRIND_TIME;
+                self.gear = 0;
+                self.locked = false;
+            }
+            self.last_gear = self.gear;
+        }
         // While shifting, the clutch is open and the driver's throttle is cut (like a
         // sequential gearbox), so the engine doesn't flare up and slam the wheels. Going
         // down a gear, it blips the throttle up to the lower gear's speed instead.
@@ -547,16 +648,18 @@ impl Drivetrain {
             }
         };
         let engine_torque = move |rpm: f32| state.torque(build, rpm) + starter(rpm);
+        let most = self.clutch_capacity(engine);
         if let Some(travel) = clutch {
-            let capacity = engine.clutch_torque * clutch_engagement(travel) * self.engaged;
+            let capacity = most * clutch_engagement(travel) * self.engaged;
             let drive = self.step_pedal(engine, engine_torque, capacity, ratio, wheel_rpm, dt);
             self.catch(cranking && !blown);
+            self.wear(engine, &drive, ratio, wheel_rpm, wheel_omega, dt);
             return drive;
         }
 
         // Lock once the wheels have caught up with the engine; slip again below idle, or
         // when the engine makes more torque than the clutch can pass.
-        let holds = engine_torque(wheel_rpm).abs() <= engine.clutch_torque;
+        let holds = engine_torque(wheel_rpm).abs() <= most;
         if ratio == 0.0 || wheel_rpm < engine.idle_rpm() * 0.9 || !holds {
             self.locked = false;
         } else if wheel_rpm >= self.rpm - 50.0 {
@@ -577,7 +680,7 @@ impl Drivetrain {
             let clutch = if ratio == 0.0 {
                 0.0
             } else {
-                engine.clutch_torque * bite * bite * (3.0 - 2.0 * bite) * self.engaged
+                most * bite * bite * (3.0 - 2.0 * bite) * self.engaged
             };
             let net = engine_torque(self.rpm) - clutch;
             self.rpm = (self.rpm + net / engine.build.hardware.inertia * dt * RPM).max(0.0);
@@ -587,7 +690,45 @@ impl Drivetrain {
             }
         };
         self.catch(cranking && !blown);
+        self.wear(engine, &drive, ratio, wheel_rpm, wheel_omega, dt);
         drive
+    }
+
+    /// What the step did to the clutch and the gears: the clutch wears by the work it did
+    /// slipping, the gear in by the torque it passed over what the gearbox takes; and where
+    /// the input shaft turns now.
+    fn wear(
+        &mut self,
+        engine: &EngineSetup,
+        drive: &WheelDrive,
+        ratio: f32,
+        wheel_rpm: f32,
+        wheel_omega: f32,
+        dt: f32,
+    ) {
+        if ratio != 0.0 {
+            let input = drive.torque / ratio;
+            let slip = (self.rpm - wheel_rpm).abs() / RPM;
+            if !self.locked {
+                let life = CLUTCH_LIFE * engine.clutch_torque;
+                self.clutch_wear = (self.clutch_wear + input.abs() * slip * dt / life).min(1.0);
+            }
+            if let Some(wear) = (self.gear >= 1)
+                .then(|| self.gear_wear.get_mut(self.gear as usize - 1))
+                .flatten()
+            {
+                let over = input.abs() / engine.gearbox_torque - 1.0;
+                if over > 0.0 {
+                    *wear = (*wear + over * OVERLOAD_WEAR * dt).min(1.0);
+                }
+            }
+        }
+        let pressed = self.clutch_pedal.is_some_and(|travel| travel > CLUTCH_IN);
+        if self.shift.is_none() && self.gear != 0 {
+            self.shaft = engine.rpm_in(self.gear, wheel_omega);
+        } else if self.shift.is_none() && !pressed {
+            self.shaft = self.rpm;
+        }
     }
 
     /// Cranked (with the ignition on) past what the starter alone reaches: it has caught.
@@ -687,6 +828,11 @@ crate::snapshot::snapshot!(Drivetrain {
     turned,
     lever,
     parked,
+    clutch_wear,
+    gear_wear,
+    last_gear,
+    shaft,
+    grind,
 });
 
 #[cfg(test)]
@@ -757,6 +903,93 @@ mod tests {
         assert!(held.locked && !slipping.locked);
         assert!(slow < 0.7 * fast, "{slow} against {fast} m/s");
         assert!(slipping.rpm > 5000.0, "{} rpm", slipping.rpm);
+    }
+
+    #[test]
+    fn a_worn_clutch_slips_and_wears_on() {
+        let engine = EngineSetup {
+            clutch_torque: 230.0,
+            ..EngineSetup::default()
+        };
+        let mut new = Drivetrain::new(&engine);
+        let mut worn = Drivetrain::new(&engine);
+        worn.clutch_wear = 0.95;
+        let fast = drive(&mut new, &engine, 1.0, 4.0);
+        let slow = drive(&mut worn, &engine, 1.0, 4.0);
+        assert!(new.locked && !worn.locked);
+        assert!(slow < 0.9 * fast, "{slow} against {fast} m/s");
+        assert!(worn.clutch_wear > 0.951, "{}", worn.clutch_wear);
+        // Pulling away wears a new one a little.
+        assert!(
+            new.clutch_wear > 0.0 && new.clutch_wear < 0.01,
+            "{}",
+            new.clutch_wear
+        );
+    }
+
+    #[test]
+    fn worn_synchros_grind_then_refuse_the_gear() {
+        let engine = EngineSetup::default();
+        let dt = 1.0 / 120.0;
+        // From second into third with the clutch pressed, the wheels at `omega`, third's
+        // synchro worn `wear`; double-clutched (the revs matched in neutral with the clutch
+        // up) or not.
+        let shift = |wear: f32, omega: f32, double: bool| {
+            let mut drivetrain = Drivetrain::new(&engine);
+            drivetrain.gear_wear[2] = wear;
+            drivetrain.gear = 2;
+            drivetrain.last_gear = 2;
+            drivetrain.step(&engine, 0.2, Some(0.0), omega, true, dt);
+            if double {
+                drivetrain.step(&engine, 0.0, Some(1.0), omega, true, dt);
+                drivetrain.select_gate(&engine, 0, 10.0, omega);
+                drivetrain.rpm = engine.rpm_in(3, omega);
+                drivetrain.step(&engine, 0.0, Some(0.0), omega, true, dt);
+            }
+            drivetrain.step(&engine, 0.0, Some(1.0), omega, true, dt);
+            drivetrain.select_gate(&engine, 3, 10.0, omega);
+            drivetrain.step(&engine, 0.0, Some(1.0), omega, true, dt);
+            drivetrain
+        };
+        assert_eq!(shift(0.0, 30.0, false).gear, 3);
+        let new = shift(0.0, 30.0, false).gear_wear[2];
+        assert!(new > 0.0 && new < 1e-3, "{new}");
+        // Worn, a gentle shift still goes in, a quick one grinds.
+        assert_eq!(shift(0.8, 30.0, false).gear, 3);
+        let quick = shift(0.8, 75.0, false);
+        assert_eq!((quick.gear, quick.grinding), (0, Some(3)));
+        // Worn out, it only goes in rev-matched.
+        assert_eq!(shift(1.0, 30.0, false).gear, 0);
+        assert_eq!(shift(1.0, 30.0, true).gear, 3);
+        // With the automatic clutch, a refused gear leaves the box in neutral, grinding a
+        // moment.
+        let mut drivetrain = Drivetrain::new(&engine);
+        drivetrain.gear_wear[1] = 1.0;
+        drivetrain.step(&engine, 0.5, None, 40.0, true, dt);
+        drivetrain.shift_to(&engine, 2);
+        for _ in 0..40 {
+            drivetrain.step(&engine, 0.5, None, 40.0, true, dt);
+        }
+        assert_eq!((drivetrain.gear, drivetrain.grinding), (0, Some(2)));
+        for _ in 0..60 {
+            drivetrain.step(&engine, 0.0, None, 40.0, true, dt);
+        }
+        assert_eq!(drivetrain.grinding, None);
+    }
+
+    #[test]
+    fn torque_over_what_the_gearbox_takes_wears_the_gear() {
+        let strong = EngineSetup::default();
+        let weak = EngineSetup {
+            gearbox_torque: 120.0,
+            ..strong.clone()
+        };
+        let mut fine = Drivetrain::new(&strong);
+        let mut overloaded = Drivetrain::new(&weak);
+        drive(&mut fine, &strong, 1.0, 4.0);
+        drive(&mut overloaded, &weak, 1.0, 4.0);
+        assert_eq!(fine.gear_wear[0], 0.0);
+        assert!(overloaded.gear_wear[0] > 1e-3, "{:?}", overloaded.gear_wear);
     }
 
     #[test]
