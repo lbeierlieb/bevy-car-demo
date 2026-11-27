@@ -59,6 +59,8 @@ pub struct Catalogue {
     /// The chassis a player starts in (with its base engine).
     pub start: usize,
     /// Every part there is (see `items`), and the stock cars built of them.
+    /// The ECUs there are (each version's factory one its preset's).
+    pub ecus: Vec<EcuDef>,
     pub defs: Vec<crate::items::PartDef>,
     pub trims: Vec<crate::items::Trim>,
     /// Parts sold as one, put together as the factory does (the factory engines).
@@ -68,6 +70,18 @@ pub struct Catalogue {
 }
 
 /// A clutch: how much more torque than the gearbox's stock one it passes.
+/// An ECU: its hardware (`EcuModel`) and, if its maps are locked, the tune it runs (the
+/// factory's for the engine version `factory`, whatever engine it's fitted to).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EcuDef {
+    /// Stable, for saved cars and items: e.g. `ecu.b16`.
+    pub id: String,
+    pub name: String,
+    pub model: crate::physics::engine::ecu::EcuModel,
+    pub factory: Option<String>,
+    pub tune: Option<crate::physics::engine::ecu::Ecu>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clutch {
     pub name: String,
@@ -127,6 +141,7 @@ impl Catalogue {
             families,
             slots,
             start,
+            ecus: Vec::new(),
             defs: Vec::new(),
             trims: Vec::new(),
             assemblies: Vec::new(),
@@ -144,7 +159,7 @@ impl Catalogue {
     /// FNV-1a over everything in it.
     fn hash(&self) -> u64 {
         let text = format!(
-            "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{}{:?}{:?}{:?}",
+            "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{}{:?}{:?}{:?}{:?}",
             self.chassis,
             self.gearboxes,
             self.clutches,
@@ -154,6 +169,7 @@ impl Catalogue {
             self.families,
             self.slots,
             self.start,
+            self.ecus,
             self.defs,
             self.trims,
             self.assemblies
@@ -223,20 +239,31 @@ impl std::fmt::Debug for Catalogue {
 #[cfg(any(test, not(target_arch = "wasm32")))]
 pub fn builtin() -> Shared {
     use std::sync::LazyLock;
-    static BUILTIN: LazyLock<Shared> = LazyLock::new(|| {
-        Arc::new(items::with_items(Catalogue::new(
-            chassis::chassis(),
-            chassis::gearboxes(),
-            chassis::clutches(),
-            chassis::suspensions(),
-            chassis::paints(),
-            parts::compounds(),
-            engines::families(),
-            parts::slots(),
-            DEFAULT_CHASSIS,
-        )))
-    });
+    static BUILTIN: LazyLock<Shared> =
+        LazyLock::new(|| Arc::new(items::with_items(builtin_parts())));
     BUILTIN.clone()
+}
+
+/// The built-in catalogue before its items: its engines' presets fitting their factory
+/// ECUs.
+#[cfg(any(test, not(target_arch = "wasm32")))]
+fn builtin_parts() -> Catalogue {
+    let mut families = engines::families();
+    let ecus = engines::ecus(&mut families);
+    let mut catalogue = Catalogue::new(
+        chassis::chassis(),
+        chassis::gearboxes(),
+        chassis::clutches(),
+        chassis::suspensions(),
+        chassis::paints(),
+        parts::compounds(),
+        families,
+        parts::slots(),
+        DEFAULT_CHASSIS,
+    );
+    catalogue.ecus = ecus;
+    catalogue.rehash();
+    catalogue
 }
 
 /// The built-in catalogue changed by `change` (for tests: the variations of the one car).

@@ -490,6 +490,13 @@ impl<'a> Bench<'a> {
                 if kind != ShopKind::Dyno {
                     return Err("Tunes are loaded at a dyno".into());
                 }
+                let fitted = self.car.fitted(catalogue, Kind::Ecu).next();
+                if let Some(Does::Ecu(e)) = fitted.map(|ecu| &ecu.def(catalogue).does)
+                    && let Some(def) = catalogue.ecus.get(*e)
+                    && def.model.locked
+                {
+                    return Err(format!("The {} is locked to its own maps", def.name));
+                }
                 self.ecu = (**ecu).clone();
             }
             Work::MakeWheel(supply) => {
@@ -751,10 +758,21 @@ impl<'a> Bench<'a> {
                 ));
             }
         }
-        // Another ECU runs the same tune as far as it goes.
-        self.ecu.model = parts.ecu;
-        if self.ecu.cylinders != parts.hardware().cylinders {
-            return Err("The tune is for another number of cylinders".into());
+        let ecu = parts.ecu_def();
+        let cylinders = parts.hardware().cylinders;
+        if cylinders > ecu.model.cylinders {
+            return Err(format!("The {} can't fire {cylinders} cylinders", ecu.name));
+        }
+        match &ecu.tune {
+            // A locked ECU runs its own maps.
+            Some(tune) if ecu.model.locked => self.ecu = tune.clone(),
+            // Another ECU runs the same tune as far as it goes.
+            _ => {
+                self.ecu.model = ecu.model;
+                if self.ecu.cylinders != cylinders {
+                    return Err("The tune is for another number of cylinders".into());
+                }
+            }
         }
         let mut thrown = Vec::new();
         let mut cargo = std::mem::take(&mut self.cargo);
@@ -1154,6 +1172,68 @@ mod tests {
         assert_eq!(done.spec.build.gearbox, 1);
         assert!(done.spec.build.limited_slip);
         assert_eq!(done.spec.build.final_drive, before.build.final_drive);
+    }
+
+    /// A stock ECU is locked to its factory's maps, on whatever engine; a programmable one
+    /// takes a tune; neither fires more cylinders than it's made for.
+    #[test]
+    fn stock_ecus_are_locked_and_ecus_fire_their_cylinders() {
+        let catalogue = builtin();
+        let before = spec(0);
+        let ecu_slot = vec![slots_of(&catalogue, &before.car, Kind::Ecu)[0]];
+        let engine = slots_of(&catalogue, &before.car, Kind::Engine)[0];
+        let dyno = shop(ShopKind::Dyno, &[]);
+        let mut tuned = before.ecu.clone();
+        tuned.rev_limit -= 500.0;
+        let tune = Work::Tune(Box::new(tuned.clone()));
+        let err = run(&catalogue, &dyno, &before, std::slice::from_ref(&tune)).unwrap_err();
+        assert!(err.contains("locked"), "{err}");
+        let workshop = shop(ShopKind::Car, &["*"]);
+        let fit = |id: &str| Work::Fit {
+            slots: vec![ecu_slot.clone()],
+            supply: new(&catalogue, id),
+        };
+        let programmable = run(&catalogue, &workshop, &before, &[fit("ecu.programmable-4")])
+            .unwrap()
+            .spec;
+        let done = run(&catalogue, &dyno, &programmable, &[tune]).unwrap();
+        assert_eq!(done.spec.ecu.rev_limit, tuned.rev_limit);
+        // Back to a stock ECU: its own maps, not the tune.
+        let b18 = run(&catalogue, &workshop, &done.spec, &[fit("ecu.b18")]).unwrap();
+        let b18_tune = catalogue.ecus.iter().find(|e| e.id == "ecu.b18").unwrap();
+        assert_eq!(Some(&b18.spec.ecu), b18_tune.tune.as_ref());
+        // The B16's ECU keeps its maps with the B18 engine swapped in.
+        let swap = Work::Fit {
+            slots: vec![vec![engine]],
+            supply: Supply::Assembly(1),
+        };
+        let swapped = run(&catalogue, &workshop, &before, &[swap]).unwrap();
+        assert_eq!(swapped.spec.parts.hardware().name, "B18 1.8 four");
+        assert_eq!(swapped.spec.ecu, before.ecu);
+        // Four cylinders' ECU and the V10.
+        let v10 = CarSpec::of(&CarSetup::factory(1, 0));
+        let slot = vec![slots_of(&catalogue, &v10.car, Kind::Ecu)[0]];
+        let fit_v10 = |id: &str| Work::Fit {
+            slots: vec![slot.clone()],
+            supply: new(&catalogue, id),
+        };
+        let err = run(
+            &catalogue,
+            &workshop,
+            &v10,
+            &[fit_v10("ecu.programmable-4")],
+        )
+        .unwrap_err();
+        assert!(err.contains("10 cylinders"), "{err}");
+        assert!(
+            run(
+                &catalogue,
+                &workshop,
+                &v10,
+                &[fit_v10("ecu.programmable-10")]
+            )
+            .is_ok()
+        );
     }
 
     #[test]

@@ -147,9 +147,9 @@ mod tests {
 
     #[test]
     fn the_superchargers_boost_curves() {
-        let na = EngineBuild::new(Parts::stock().hardware(), EcuModel::Stock);
-        let roots = EngineBuild::new(charged("Roots blower"), EcuModel::Stock);
-        let centrifugal = EngineBuild::new(charged("Centrifugal supercharger"), EcuModel::Stock);
+        let na = EngineBuild::new(Parts::stock().hardware(), EcuModel::STOCK);
+        let roots = EngineBuild::new(charged("Roots blower"), EcuModel::STOCK);
+        let centrifugal = EngineBuild::new(charged("Centrifugal supercharger"), EcuModel::STOCK);
         let curve = |build: &EngineBuild| {
             [2000.0, 3000.0, 6000.0].map(|rpm| boost(&flat_out(build, rpm, 3.0)))
         };
@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn a_supercharged_engines_factory_tune_doesnt_knock() {
         for name in ["Roots blower", "Centrifugal supercharger"] {
-            let build = EngineBuild::new(charged(name), EcuModel::Stock);
+            let build = EngineBuild::new(charged(name), EcuModel::STOCK);
             for rpm in [2000.0, 3500.0, 5000.0, 6500.0] {
                 let engine = flat_out(&build, rpm, 4.0);
                 let cycle = engine.cycle(&build, rpm);

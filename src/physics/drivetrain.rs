@@ -1534,7 +1534,7 @@ mod tests {
             for (v, version) in family.versions.iter().enumerate() {
                 let parts = crate::physics::engine::parts::Parts::of_version(&catalogue, f, v);
                 let engine = EngineSetup {
-                    build: EngineBuild::new(parts.hardware(), parts.ecu),
+                    build: EngineBuild::of_parts(&parts),
                     parts,
                     ..EngineSetup::default()
                 };

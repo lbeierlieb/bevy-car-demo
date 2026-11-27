@@ -315,6 +315,9 @@ struct Parts {
     roots: Vec<Item>,
     /// Below an item that's gone: lines deeper than this are its parts, gone with it.
     skipping: Option<usize>,
+    /// The engine family and version of the car's long block, for ECUs saved before there
+    /// was one of each (`old_ecu`).
+    engine: Option<(usize, usize)>,
 }
 
 impl Parts {
@@ -338,6 +341,7 @@ impl Parts {
             Some(part) => format!("porting.{part}"),
             None => id.to_string(),
         };
+        let id = old_ecu(catalogue, &id, self.engine).unwrap_or(id);
         let id = id.as_str();
         let found = catalogue.defs.iter().position(|def| def.id == *id);
         let Some(def) = found.or_else(|| self.old_manifold(catalogue, id)) else {
@@ -508,6 +512,38 @@ fn mount_old_turbo(catalogue: &Catalogue, engine: &mut Item, turbo: &Item) -> bo
     true
 }
 
+/// What an ECU saved before version 5 (`ecu.stock`, `ecu.programmable`) is now, on a car
+/// whose engine is `engine`'s family and version (the first's if not known): the version's
+/// own stock ECU, or the programmable one for its cylinders.
+fn old_ecu(catalogue: &Catalogue, id: &str, engine: Option<(usize, usize)>) -> Option<String> {
+    let (family, version) = engine.unwrap_or((0, 0));
+    let version = catalogue.families.get(family)?.versions.get(version)?;
+    let id = match id {
+        "ecu.stock" => &catalogue.ecus.get(version.preset.ecu)?.id,
+        "ecu.programmable" => {
+            let cylinders = version.block.cylinders;
+            &(catalogue.ecus.iter())
+                .filter(|ecu| !ecu.model.locked && ecu.model.cylinders >= cylinders)
+                .min_by_key(|ecu| ecu.model.cylinders)?
+                .id
+        }
+        _ => return None,
+    };
+    Some(id.clone())
+}
+
+/// The engine family and version of the first long block in `text` (saved parts).
+fn first_block(catalogue: &Catalogue, text: &str) -> Option<(usize, usize)> {
+    text.lines().find_map(|line| {
+        let id = line.strip_prefix("part\t")?.split('\t').nth(2)?;
+        let def = catalogue.defs.iter().find(|def| def.id == id)?;
+        match def.does {
+            Does::Block { family, version } => Some((family, version)),
+            _ => None,
+        }
+    })
+}
+
 /// A part saved in a long block that now goes into its cylinder head (before version 5)
 /// into `block`'s head, which is the factory one of its version if it has none yet.
 /// Whether it went in.
@@ -608,7 +644,10 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
     let mut fuel = None;
     let mut version = 1;
     // The car's parts, then (from the `cargo` line on) what it carries.
-    let mut car_parts = Parts::default();
+    let mut car_parts = Parts {
+        engine: first_block(catalogue, car_text),
+        ..Parts::default()
+    };
     let mut cargo_parts: Option<Parts> = None;
     for line in car_text.lines() {
         let line = line.trim_end();
@@ -616,7 +655,11 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
             continue;
         }
         if line == CARGO {
-            cargo_parts.get_or_insert_default();
+            let engine = car_parts.engine;
+            cargo_parts.get_or_insert_with(|| Parts {
+                engine,
+                ..Parts::default()
+            });
             continue;
         }
         if let Some(rest) = line.strip_prefix("part\t") {
@@ -665,7 +708,7 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
     let (build, parts) = car
         .resolve(catalogue)
         .map_err(|e| format!("not a car: {}", e.0))?;
-    let mut ecu = Ecu::blank(&parts.hardware(), parts.ecu);
+    let mut ecu = Ecu::blank(&parts.hardware(), parts.ecu_model());
     ecu.read_text(tune);
     // Saved before the second cam profile had maps of its own: the first's.
     if !tune.contains("table ve_high") {
@@ -673,7 +716,11 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
         ecu.cams.lambda = ecu.lambda.clone();
         ecu.cams.spark = ecu.spark.clone();
     }
-    ecu.model = parts.ecu;
+    ecu.model = parts.ecu_model();
+    // A locked ECU runs its own maps.
+    if let (true, Some(tune)) = (ecu.model.locked, &parts.ecu_def().tune) {
+        ecu = tune.clone();
+    }
     let spec = CarSpec {
         car,
         build,
@@ -738,11 +785,28 @@ mod tests {
     fn a_saved_car_reads_back_as_it_was() {
         let catalogue = crate::catalogue::builtin();
         for (chassis, made) in catalogue.chassis.iter().enumerate() {
-            for option in 0..made.engines.len() {
+            for (option, programmable) in
+                (0..made.engines.len()).flat_map(|o| [(o, false), (o, true)])
+            {
                 let (mut spec, mut car) = car(chassis, option);
-                // A tune of its own, a painted bonnet, some wear and fuel burnt.
-                spec.ecu.rev_limit -= 123.5;
-                spec.ecu.spark.set_cell(&[3, 4], 17.25);
+                // A programmable ECU with a tune of its own (a locked one runs its own maps),
+                // a painted bonnet, some wear and fuel burnt.
+                if programmable {
+                    let cylinders = spec.parts.hardware().cylinders;
+                    spec.parts.ecu = (catalogue.ecus.iter())
+                        .position(|e| !e.model.locked && e.model.cylinders >= cylinders)
+                        .unwrap();
+                    spec.ecu.model = spec.parts.ecu_model();
+                    spec.car = crate::items::assemble(
+                        &catalogue,
+                        Some(&spec.car),
+                        &spec.build,
+                        &spec.parts,
+                    )
+                    .unwrap();
+                    spec.ecu.rev_limit -= 123.5;
+                    spec.ecu.spark.set_cell(&[3, 4], 17.25);
+                }
                 // And a silencer in the trunk.
                 let silencer = (catalogue.defs.iter())
                     .position(|def| def.id == "silencer.sport")
@@ -880,6 +944,23 @@ mod tests {
             }
         }
         out.join("\n")
+    }
+
+    #[test]
+    fn ecus_saved_before_there_was_one_of_each_are_the_engines_own() {
+        let catalogue = crate::catalogue::builtin();
+        let ecu_of = |chassis: usize, old: &str| {
+            let (spec, car) = car(chassis, 0);
+            let text = write(&catalogue, &spec, &Condition::of(&car));
+            let id = &spec.parts.ecu_def().id;
+            let text = text.replace(&format!("\t{id}\t"), &format!("\t{old}\t"));
+            let (read, _) = read(&catalogue, &text).expect("reads");
+            read.parts.ecu_def().id.clone()
+        };
+        assert_eq!(ecu_of(0, "ecu.stock"), "ecu.b16");
+        assert_eq!(ecu_of(1, "ecu.stock"), "ecu.r80");
+        assert_eq!(ecu_of(0, "ecu.programmable"), "ecu.programmable-4");
+        assert_eq!(ecu_of(1, "ecu.programmable"), "ecu.programmable-10");
     }
 
     #[test]

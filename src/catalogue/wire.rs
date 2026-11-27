@@ -2,7 +2,7 @@
 //! checks that it holds together (every place it refers to is in it, every list that must
 //! have something does), so a car built from it can't index out of it.
 
-use super::{Catalogue, Clutch, Paint, Suspension, TireCompound};
+use super::{Catalogue, Clutch, EcuDef, Paint, Suspension, TireCompound};
 use crate::body::{Body, Detail, Tone};
 use crate::cargo::{Area, Hold};
 use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars};
@@ -432,6 +432,7 @@ impl Wire for Manifold {
     }
 }
 fields!(ManifoldDef { manifold, mounts, cast } text { id, name });
+fields!(EcuDef { model, factory, tune } text { id, name });
 fields!(HeadDef {
     bore,
     cams,
@@ -857,6 +858,7 @@ impl Wire for Catalogue {
         self.families.put(out);
         self.slots.put(out);
         self.start.put(out);
+        self.ecus.put(out);
         self.defs.put(out);
         self.trims.put(out);
         self.assemblies.put(out);
@@ -873,6 +875,7 @@ impl Wire for Catalogue {
             r.get()?,
             r.get()?,
         );
+        catalogue.ecus = r.get()?;
         catalogue.defs = r.get()?;
         catalogue.trims = r.get()?;
         catalogue.assemblies = r.get()?;
@@ -906,7 +909,8 @@ impl Catalogue {
             !family.versions.is_empty()
                 && family.versions.iter().all(version)
                 && (family.versions.iter()).all(|version| {
-                    version.preset.manifold < family.manifolds.len()
+                    version.preset.ecu < self.ecus.len()
+                        && version.preset.manifold < family.manifolds.len()
                         && version.preset.head < family.heads.len()
                 })
                 && (family.heads.iter()).all(|head| !head.cams.is_empty() && head.bore > 0.0)

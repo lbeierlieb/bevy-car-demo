@@ -12,7 +12,6 @@
 
 use crate::catalogue::Catalogue;
 use crate::chassis::{BRAKE_BALANCES, BRAKE_FORCES, CarBuild, Misfit, PRESSURES, TOES};
-use crate::physics::engine::ecu::EcuModel;
 use crate::physics::engine::parts::{Effect, Parts};
 use crate::wheels::{Rim, TireSize, Wheel};
 
@@ -127,7 +126,8 @@ pub enum Does {
     },
     /// The catalogue's clutch (by its place).
     Clutch(usize),
-    Ecu(EcuModel),
+    /// The catalogue's ECU (by its place in `ecus`).
+    Ecu(usize),
     Engine,
     /// A version of an engine family (both by their places in the catalogue).
     Block {
@@ -1172,7 +1172,9 @@ mod tests {
         parts.chosen[crate::catalogue::TURBO] = 2;
         parts.manifold = parts.turbo_manifold().unwrap();
         parts.boost = 0.9;
-        parts.ecu = EcuModel::Programmable;
+        parts.ecu = (catalogue.ecus.iter())
+            .position(|ecu| ecu.id == "ecu.programmable-4")
+            .unwrap();
         let parts = build.install(parts).unwrap();
         let changed = assemble(&catalogue, Some(car), &build, &parts).unwrap();
         assert_eq!(changed.resolve(&catalogue), Ok((build, parts)));

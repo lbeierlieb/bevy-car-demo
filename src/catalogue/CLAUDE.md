@@ -576,3 +576,18 @@ head of a family fits any of its blocks (`engines` = the family). Engine shop wo
 long block's insides (`fitting::in_long_block`). Saved cars before version 5 (the parts in the
 block, `cylinder-head.*`) are read into the version's factory head (`saved::into_old_head`, the
 valves' wear with it). Protocol 60.
+
+## ECUs (asked for by the user, 2026-11-27, see `docs/vireo-lineup.md`)
+
+`Catalogue::ecus` (`EcuDef`: id, name, `EcuModel` (most cylinders, switching, phasers,
+wideband, locked), `factory` code, `tune`); `Does::Ecu(place)`, `Parts::ecu` (a place;
+`ecu_def`, `ecu_model`), `Preset::ecu` the version's own. Built-in (`engines::ecus`): a stock
+ECU per factory version (`ecu.<code>`, locked, its factory tune for 95 octane made from the
+baked maps when the catalogue is built: the catalogue carries it, so the web client needn't
+bake), `ecu.programmable-4` (cam switching, phasers, wideband) and `ecu.programmable-10` (no cam
+control). A locked ECU runs its tune on whatever engine (`EngineBuild::of_parts`,
+`Bench::finish`, `saved::read`; `CarSpec` reading checks it); the dyno shows its readings
+but no editor; `Work::Tune` on it is refused. Fitting refuses an ECU firing fewer cylinders than
+the engine has. `Parts::is_factory` ignores the ECU. Saved `ecu.stock`/`ecu.programmable`
+(before version 5) are the car's engine's stock ECU / the smallest programmable one for its
+cylinders (`saved::old_ecu`). Tunes say `ecu <name>`. Protocol 62.

@@ -105,9 +105,15 @@ impl Wire for CarSpec {
         }) && within(build.brake_force, &BRAKE_FORCES)
             && within(build.brake_balance, &BRAKE_BALANCES)
             && within(build.final_drive, &(2.0..=6.0));
-        let tune = ecu.model == parts.ecu
-            && ecu.cylinders == parts.hardware().cylinders
-            && ecu.cylinders > 0;
+        // A locked ECU runs its own maps; any other a tune for the engine's cylinders.
+        let def = parts.ecu_def();
+        let cylinders = parts.hardware().cylinders;
+        let tune = ecu.model == def.model
+            && cylinders <= def.model.cylinders
+            && match &def.tune {
+                Some(tune) if def.model.locked => ecu == *tune,
+                _ => ecu.cylinders == cylinders,
+            };
         let parts_fine = within(parts.intake_timing, &(-10.0..=10.0))
             && within(parts.exhaust_timing, &(-10.0..=10.0))
             && within(parts.boost, &(0.3..=1.5));
@@ -162,6 +168,7 @@ impl Wire for Parts {
         };
         let fine = (catalogue.families.get(family)).is_some_and(|f| {
             version < f.versions.len()
+                && parts.ecu < catalogue.ecus.len()
                 && parts.manifold < f.manifolds.len()
                 && parts.head < f.heads.len()
         }) && crate::physics::engine::parts::fits(catalogue, &parts.chosen)
@@ -175,11 +182,22 @@ impl Wire for Parts {
 
 impl Wire for EcuModel {
     fn put(&self, out: &mut Vec<u8>) {
-        let i = Self::ALL.iter().position(|m| m == self).expect("a model");
-        i.put(out);
+        self.cylinders.put(out);
+        self.switching.put(out);
+        self.phasers.put(out);
+        self.wideband.put(out);
+        self.locked.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
-        Self::ALL.get(r.get::<usize>()?).copied()
+        let model = Self {
+            cylinders: r.get()?,
+            switching: r.get()?,
+            phasers: r.get()?,
+            wideband: r.get()?,
+            locked: r.get()?,
+        };
+        let most = crate::physics::engine::damage::MAX_CYLINDERS as u32;
+        (1..=most).contains(&model.cylinders).then_some(model)
     }
 }
 

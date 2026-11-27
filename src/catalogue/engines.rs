@@ -3,7 +3,9 @@
 
 use std::f32::consts::PI;
 
+use super::EcuDef;
 use super::parts::SLOTS;
+use crate::physics::engine::ecu::{Ecu, EcuModel};
 use crate::physics::engine::families::{
     Family, HeadDef, Layout, ManifoldDef, Version, relative_size,
 };
@@ -11,7 +13,9 @@ use crate::physics::engine::hardware::{
     BottomEnd, CamProfile, Collector, Cooling, EngineHardware, Exhaust, FLOAT_MARGIN, Intake,
     Manifold, ROD_MARGIN, ValveLayout, ValveTrain,
 };
+use crate::physics::engine::maps::EngineMaps;
 use crate::physics::engine::parts::{Preset, round_to};
+use crate::physics::fuel::PUMP_OCTANE;
 
 /// What sets one block apart from another; the rest follows from its size.
 struct Block {
@@ -290,6 +294,63 @@ fn r_manifolds() -> Vec<ManifoldDef> {
             Tubes,
         ),
     ]
+}
+
+/// The ECUs: a stock one for each factory version (locked on its factory tune, firing its
+/// cylinders and switching or phasing its cams if it has them), each version's preset
+/// fitting its own; and the programmable ones, for up to four cylinders with cam control
+/// and for up to ten without.
+pub fn ecus(families: &mut [Family]) -> Vec<EcuDef> {
+    let mut ecus = Vec::new();
+    for family in families.iter_mut() {
+        for version in &mut family.versions {
+            let mut hardware = version.block.clone();
+            hardware.name = format!("{} {}", version.code, version.name);
+            let model = EcuModel {
+                cylinders: hardware.cylinders,
+                switching: hardware.cams.len() > 1,
+                phasers: hardware.intake_phasing > 0.0 || hardware.exhaust_phasing > 0.0,
+                wideband: false,
+                locked: true,
+            };
+            let maps = EngineMaps::for_hardware(&hardware);
+            let tune = Ecu::calibrated(&hardware, &maps, PUMP_OCTANE, model);
+            version.preset.ecu = ecus.len();
+            ecus.push(EcuDef {
+                id: format!("ecu.{}", version.code.to_lowercase()),
+                name: format!("{} ECU", version.code),
+                model,
+                factory: Some(version.code.clone()),
+                tune: Some(tune),
+            });
+        }
+    }
+    let programmable = |id: &str, name: &str, model| EcuDef {
+        id: id.into(),
+        name: name.into(),
+        model,
+        factory: None,
+        tune: None,
+    };
+    ecus.push(programmable(
+        "ecu.programmable-4",
+        "Programmable ECU (4 cylinders)",
+        EcuModel {
+            cylinders: 4,
+            ..EcuModel::PROGRAMMABLE
+        },
+    ));
+    ecus.push(programmable(
+        "ecu.programmable-10",
+        "Programmable ECU (up to 10 cylinders)",
+        EcuModel {
+            cylinders: 10,
+            switching: false,
+            phasers: false,
+            ..EcuModel::PROGRAMMABLE
+        },
+    ));
+    ecus
 }
 
 /// Every version's factory head made one of its family's heads (`<code>.head`), and the

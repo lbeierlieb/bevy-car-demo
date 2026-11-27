@@ -35,37 +35,44 @@ const PHASE_TO: f32 = 75e3;
 /// Manifold pressure above which the factory tune switches cams (Pa).
 const SWITCH_MAP: f32 = 60e3;
 
-/// The kinds of ECU there are: what they can sense and drive.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum EcuModel {
-    /// Speed-density fuelling, a spark map, rev limiter and idle control.
-    #[default]
-    Stock,
-    /// The stock ECU's features, plus cam switching and cam phasing.
-    Programmable,
+/// What an ECU's hardware can do: how many cylinders it fires, whether it switches cams
+/// and drives phasers, reads a wideband lambda sensor, and whether its maps are locked
+/// (a stock ECU's, the factory's for one engine). The catalogue names them (`EcuDef`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EcuModel {
+    pub cylinders: u32,
+    pub switching: bool,
+    pub phasers: bool,
+    pub wideband: bool,
+    pub locked: bool,
 }
 
 impl EcuModel {
-    pub const ALL: [Self; 2] = [Self::Stock, Self::Programmable];
+    /// For tests and tools: fuelling, spark, rev limiter and idle control for any engine.
+    pub const STOCK: Self = Self {
+        cylinders: super::damage::MAX_CYLINDERS as u32,
+        switching: false,
+        phasers: false,
+        wideband: false,
+        locked: false,
+    };
+    /// The same, with cam switching, phasers and a wideband sensor.
+    pub const PROGRAMMABLE: Self = Self {
+        switching: true,
+        phasers: true,
+        wideband: true,
+        ..Self::STOCK
+    };
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Stock => "Stock",
-            Self::Programmable => "Programmable",
-        }
-    }
-
-    /// The word for it in tune files.
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Stock => "stock",
-            Self::Programmable => "programmable",
-        }
-    }
-
-    /// It drives cam switching (to the second cam profile) and the cam phasers.
+    /// It drives cam switching (to the second cam profile) or the cam phasers.
     pub fn cam_control(self) -> bool {
-        self == Self::Programmable
+        self.switching || self.phasers
+    }
+}
+
+impl Default for EcuModel {
+    fn default() -> Self {
+        Self::STOCK
     }
 }
 
@@ -134,7 +141,7 @@ fn idle_rpm(hardware: &EngineHardware) -> f32 {
 /// The factory's rev limit for `hardware` with a `model` ECU: without cam control, the
 /// valvetrain stays on the first profile.
 fn rev_limit(hardware: &EngineHardware, model: EcuModel) -> f32 {
-    hardware.safe_rpm(if model.cam_control() { usize::MAX } else { 0 })
+    hardware.safe_rpm(if model.switching { usize::MAX } else { 0 })
 }
 
 /// When to switch cam profiles, and where to put the phasers.
@@ -235,11 +242,10 @@ impl Ecu {
             })
         };
         let displacement = hardware.displacement();
-        let mut cams = CamControl::calibrated(hardware, maps, axes);
-        let control = model.cam_control();
+        let mut cams = CamControl::calibrated(hardware, maps, model.switching, axes);
         // The phasers where the ECU puts them.
         let phases = |rpm: f32, map: f32| {
-            if !control {
+            if !model.phasers {
                 return (0.0, 0.0);
             }
             let point = [rpm, map];
@@ -290,7 +296,7 @@ impl Ecu {
         };
         let (ve, spark, lambda) = tables(0);
         // The second profile's maps where the ECU can switch to one (else the first's).
-        (cams.ve, cams.spark, cams.lambda) = if control && hardware.cams.len() > 1 {
+        (cams.ve, cams.spark, cams.lambda) = if model.switching && hardware.cams.len() > 1 {
             tables(1)
         } else {
             (ve.clone(), spark.clone(), lambda.clone())
@@ -352,19 +358,20 @@ impl Ecu {
 
         // Cams: switched with some hysteresis, phased by the maps.
         let cams = &self.cams;
-        let (cam_profile, intake_phase, exhaust_phase) = if self.model.cam_control() {
-            let margin = if state.high_cam { 1.0 } else { 0.0 };
-            state.high_cam = rpm > cams.switch_rpm - margin * CAM_HYSTERESIS_RPM
-                && map > cams.switch_map - margin * CAM_HYSTERESIS_MAP;
-            let point = [rpm, map];
+        let margin = if state.high_cam { 1.0 } else { 0.0 };
+        state.high_cam = self.model.switching
+            && rpm > cams.switch_rpm - margin * CAM_HYSTERESIS_RPM
+            && map > cams.switch_map - margin * CAM_HYSTERESIS_MAP;
+        let point = [rpm, map];
+        let (intake_phase, exhaust_phase) = if self.model.phasers {
             (
-                usize::from(state.high_cam),
                 cams.intake_phase.get(&point),
                 cams.exhaust_phase.get(&point),
             )
         } else {
-            (0, 0.0, 0.0)
+            (0.0, 0.0)
         };
+        let cam_profile = usize::from(state.high_cam);
 
         let point = [rpm, map];
         let (ve, lambda, spark) = self.maps_on(cam_profile);
@@ -394,6 +401,7 @@ impl CamControl {
     fn calibrated(
         hardware: &EngineHardware,
         maps: &EngineMaps,
+        switching: bool,
         axes: impl Fn() -> Vec<Vec<f32>>,
     ) -> Self {
         let positions = |range: f32| [0.0, range / 2.0, range];
@@ -413,7 +421,7 @@ impl CamControl {
         };
         // From where the second profile breathes better all the way to the redline.
         let mut switch_rpm = 9500.0;
-        if hardware.cams.len() > 1 {
+        if switching && hardware.cams.len() > 1 {
             let mut rpm = hardware.redline();
             while rpm >= 2000.0 && best(1, rpm, 100e3).2 > best(0, rpm, 100e3).2 {
                 switch_rpm = rpm;
@@ -446,26 +454,29 @@ impl CamControl {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TuneOrigin {
     pub engine: Option<String>,
-    pub ecu: Option<EcuModel>,
+    pub ecu: Option<String>,
 }
 
-/// Tunes as text: a comment, `engine <name>` (the build it was made for), `ecu <model>`, the
-/// settings as `<key> <value>`, and the maps (see `table::write_table`). The cam control's
-/// settings and maps are only written for ECUs that have it.
+/// Tunes as text: a comment, `engine <name>` (the build it was made for), `ecu <name>` (the
+/// ECU it was made on), the settings as `<key> <value>`, and the maps (see
+/// `table::write_table`). The cam control's settings and maps are only written for ECUs
+/// that have it.
 impl Ecu {
-    pub fn to_text(&self, engine: &str) -> String {
-        self.write_text(engine, self.model.cam_control())
+    pub fn to_text(&self, engine: &str, ecu: &str) -> String {
+        self.write_text(engine, ecu, self.model.cam_control())
     }
 
     /// As `to_text`, with the cam control's settings and maps whatever the ECU (a saved
     /// car's ECU comes back exactly as it was).
     pub fn to_text_whole(&self, engine: &str) -> String {
-        self.write_text(engine, true)
+        self.write_text(engine, "", true)
     }
 
-    fn write_text(&self, engine: &str, cams: bool) -> String {
+    fn write_text(&self, engine: &str, ecu: &str, cams: bool) -> String {
         let mut text = format!("# car-sim ECU tune\nengine {engine}\n");
-        text += &format!("ecu {}\n", self.model.key());
+        if !ecu.is_empty() {
+            text += &format!("ecu {ecu}\n");
+        }
         text += &format!("cylinders {}\n", self.cylinders);
         for (key, value) in self.settings() {
             if cams || !key.starts_with("cam_") {
@@ -489,7 +500,7 @@ impl Ecu {
             text,
             |key, value| match key {
                 "engine" => origin.engine = Some(value.to_string()),
-                "ecu" => origin.ecu = EcuModel::ALL.into_iter().find(|m| m.key() == value),
+                "ecu" => origin.ecu = Some(value.to_string()),
                 "cylinders" => self.cylinders = value.parse().unwrap_or(self.cylinders),
                 _ => {
                     let value = value.parse::<f32>().ok().filter(|v| v.is_finite());
@@ -592,7 +603,7 @@ mod tests {
         parts.chosen[5] = 3;
         let hardware = parts.hardware();
         assert_eq!(hardware.cams.len(), 2);
-        let build = EngineBuild::new(hardware.clone(), EcuModel::Programmable);
+        let build = EngineBuild::new(hardware.clone(), EcuModel::PROGRAMMABLE);
         let maps = &build.maps;
         let (rpm, load) = (7000.0, 0.9);
         let differs = |a: f32, b: f32| (a - b).abs() > 1e-3 * a.abs().max(1.0);
@@ -606,7 +617,7 @@ mod tests {
         assert!(differs(ecu.ve.get(&point), ecu.cams.ve.get(&point)));
         assert!(differs(ecu.spark.get(&point), ecu.cams.spark.get(&point)));
         // Without cam control the cams stay on the first profile: both the same.
-        let stock = Ecu::calibrated(&hardware, maps, 95.0, EcuModel::Stock);
+        let stock = Ecu::calibrated(&hardware, maps, 95.0, EcuModel::STOCK);
         assert_eq!(stock.ve, stock.cams.ve);
         assert_eq!(stock.spark, stock.cams.spark);
     }
@@ -618,14 +629,14 @@ mod tests {
         tuned.rev_limit = 7234.5;
         tuned.spark.set_cell(&[10, 8], 31.25);
         tuned.ve.scale_at(&[3300.0, 71e3], 1.07);
-        let text = tuned.to_text("test engine");
+        let text = tuned.to_text("test engine", "Stock");
         // Read into a different ECU (the turbo's, with longer maps): all of it comes over.
-        let turbo = EngineBuild::new(EngineHardware::turbo(), EcuModel::Stock);
+        let turbo = EngineBuild::new(EngineHardware::turbo(), EcuModel::STOCK);
         let mut read = turbo.ecu.clone();
         let origin = read.read_text(&text);
         assert_eq!(origin.engine.as_deref(), Some("test engine"));
-        assert_eq!(origin.ecu, Some(EcuModel::Stock));
-        assert_eq!(read.to_text("test engine"), text);
+        assert_eq!(origin.ecu.as_deref(), Some("Stock"));
+        assert_eq!(read.to_text("test engine", "Stock"), text);
         assert_eq!(read.spark.cell(&[10, 8]), 31.25);
         assert_eq!(read.ve.values(), tuned.ve.values());
     }
@@ -649,7 +660,7 @@ mod tests {
         // The stock ECU leaves the cams alone.
         let stock = step(&ecu, 6000.0, 90e3);
         assert_eq!((stock.cam_profile, stock.intake_phase), (0, 0.0));
-        ecu.model = EcuModel::Programmable;
+        ecu.model = EcuModel::PROGRAMMABLE;
         assert_eq!(step(&ecu, 4900.0, 90e3).cam_profile, 0);
         let high = step(&ecu, 5100.0, 90e3);
         assert_eq!((high.cam_profile, high.intake_phase), (1, 25.0));
@@ -661,16 +672,16 @@ mod tests {
     #[test]
     fn cam_control_is_in_the_tune_only_with_a_programmable_ecu() {
         let mut ecu = EngineBuild::default().ecu;
-        assert!(!ecu.to_text("e").contains("intake_phase"));
-        ecu.model = EcuModel::Programmable;
+        assert!(!ecu.to_text("e", "Stock").contains("intake_phase"));
+        ecu.model = EcuModel::PROGRAMMABLE;
         ecu.cams.switch_rpm = 6123.0;
         ecu.cams.exhaust_phase.set_cell(&[12, 8], 17.0);
-        let text = ecu.to_text("e");
+        let text = ecu.to_text("e", "Programmable");
         let mut read = EngineBuild::default().ecu;
         let origin = read.read_text(&text);
-        assert_eq!(origin.ecu, Some(EcuModel::Programmable));
+        assert_eq!(origin.ecu.as_deref(), Some("Programmable"));
         // It stays the ECU it is, but keeps what the tune says about the cams.
-        assert_eq!(read.model, EcuModel::Stock);
+        assert_eq!(read.model, EcuModel::STOCK);
         assert_eq!(read.cams.switch_rpm, 6123.0);
         assert_eq!(read.cams.exhaust_phase.cell(&[12, 8]), 17.0);
     }

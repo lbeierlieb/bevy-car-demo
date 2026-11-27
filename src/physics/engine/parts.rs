@@ -6,7 +6,6 @@
 //! for its displacement). Some slots change the cylinder side, so fitting their parts
 //! means baking the maps again; the rest act live.
 
-use super::ecu::EcuModel;
 use super::families::{Family, ManifoldDef, Version, relative_size};
 use super::hardware::{
     CamProfile, Compressor, Diverter, EngineHardware, Intercooler, Turbine, Turbo, Wastegate,
@@ -438,7 +437,8 @@ pub struct Preset {
     pub manifold: usize,
     pub head: usize,
     pub boost: f32,
-    pub ecu: EcuModel,
+    /// The factory's ECU, by its place in the catalogue's `ecus`.
+    pub ecu: usize,
 }
 
 impl Preset {
@@ -449,7 +449,7 @@ impl Preset {
             manifold: 0,
             head: 0,
             boost: 0.6,
-            ecu: EcuModel::Stock,
+            ecu: 0,
         }
     }
 }
@@ -476,7 +476,8 @@ pub struct Parts {
     pub exhaust_timing: f32,
     /// Boost where the wastegate starts to open (bar).
     pub boost: f32,
-    pub ecu: EcuModel,
+    /// The ECU, by its place in the catalogue's `ecus`.
+    pub ecu: usize,
     /// Longest header primaries there's room for around the engine in its car (m).
     pub header_room: f32,
 }
@@ -530,6 +531,16 @@ impl Parts {
         parts
     }
 
+    /// The ECU fitted.
+    pub fn ecu_def(&self) -> &crate::catalogue::EcuDef {
+        &self.catalogue.ecus[self.ecu]
+    }
+
+    /// What the ECU fitted can do.
+    pub fn ecu_model(&self) -> super::ecu::EcuModel {
+        self.ecu_def().model
+    }
+
     /// The family's exhaust manifold fitted.
     pub fn manifold(&self) -> &ManifoldDef {
         &self.family().manifolds[self.manifold]
@@ -569,10 +580,12 @@ impl Parts {
             || self.version().block.turbo.is_some()
     }
 
-    /// Just as the factory builds this version (wherever it's fitted).
+    /// Just as the factory builds this version (wherever it's fitted, whatever ECU runs
+    /// it).
     pub fn is_factory(&self) -> bool {
         let factory = Self {
             header_room: self.header_room,
+            ecu: self.ecu,
             ..Self::of_version(&self.catalogue, self.family, self.version)
         };
         *self == factory

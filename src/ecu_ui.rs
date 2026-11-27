@@ -136,6 +136,19 @@ pub fn tuning(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
         panel.listed = true;
     }
     readings(ui, car);
+    let ecu = car.setup.engine.parts.ecu_def();
+    if ecu.model.locked {
+        let engine = ecu.factory.as_deref().unwrap_or("engine it was made for");
+        kit::note(
+            ui,
+            &format!(
+                "The {} is locked: it runs the factory's maps for the {engine}, whatever \
+                 engine it's on. A programmable ECU can be tuned.",
+                ecu.name
+            ),
+        );
+        return;
+    }
     map_editor(ui, panel, car);
     settings(ui, car);
     saved_tunes(ui, panel, car);
@@ -252,6 +265,7 @@ fn settings(ui: &mut egui::Ui, car: &mut Car) {
 
 /// Saving the tune under a name, and loading or deleting saved ones.
 fn saved_tunes(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
+    let ecu_name = &car.setup.engine.parts.ecu_def().name.clone();
     let build = &mut car.setup.engine.build;
     kit::section(ui, "Tunes");
     kit::text_field(ui, &mut panel.name, "Name to save the tune under", 1);
@@ -267,15 +281,17 @@ fn saved_tunes(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
         };
         panel.status = match tunes::clean_name(&name) {
             None => "That name won't do as a file name.".to_string(),
-            Some(name) => match tunes::save(&name, &build.ecu.to_text(&build.hardware.name)) {
-                Ok(()) => {
-                    panel.saved = tunes::list();
-                    panel.chosen = Some(name.clone());
-                    panel.name = name.clone();
-                    format!("Saved \"{name}\".")
+            Some(name) => {
+                match tunes::save(&name, &build.ecu.to_text(&build.hardware.name, ecu_name)) {
+                    Ok(()) => {
+                        panel.saved = tunes::list();
+                        panel.chosen = Some(name.clone());
+                        panel.name = name.clone();
+                        format!("Saved \"{name}\".")
+                    }
+                    Err(err) => format!("Couldn't save: {err}"),
                 }
-                Err(err) => format!("Couldn't save: {err}"),
-            },
+            }
         };
     }
     if !panel.saved.is_empty() {
@@ -301,11 +317,8 @@ fn saved_tunes(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
                     if let Some(engine) = origin.engine.filter(|e| *e != build.hardware.name) {
                         status += &format!(" Made for the {engine}: watch λ and knock.");
                     }
-                    if let Some(made) = origin.ecu.filter(|&m| m != model) {
-                        status += &format!(
-                            " Made for the {} ECU: this one takes what it can use.",
-                            made.name().to_lowercase()
-                        );
+                    if let Some(made) = origin.ecu.filter(|made| made != ecu_name) {
+                        status += &format!(" Made on the {made}: this one takes what it can use.");
                     }
                     status
                 }

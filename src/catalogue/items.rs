@@ -11,7 +11,6 @@ use crate::items::{
     tire_knobs, wing_knobs,
 };
 use crate::physics::brakes::Brake;
-use crate::physics::engine::ecu::EcuModel;
 use crate::physics::engine::hardware::CamDrive;
 use crate::physics::tire::STREET;
 use crate::wheels::Wheel;
@@ -640,19 +639,12 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
         )
         .wears(Wear::Clutch));
     }
-    for (model, id, title) in [
-        (EcuModel::Stock, "ecu.stock", "Stock ECU"),
-        (
-            EcuModel::Programmable,
-            "ecu.programmable",
-            "Programmable ECU",
-        ),
-    ] {
+    for (e, ecu) in catalogue.ecus.iter().enumerate() {
         add(Def::new(
-            id,
-            title,
+            &ecu.id,
+            &ecu.name,
             Kind::Ecu,
-            Does::Ecu(model),
+            Does::Ecu(e),
             [0.25, 0.2, 0.05],
             1.0,
         ));

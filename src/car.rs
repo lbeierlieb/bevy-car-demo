@@ -337,7 +337,7 @@ impl CarSetup {
     /// `option` for it.
     pub fn factory_in(catalogue: &Shared, chassis: usize, option: usize) -> Self {
         let (build, parts, car) = Self::stock(catalogue, chassis, option);
-        let engine = EngineBuild::new(parts.hardware(), parts.ecu);
+        let engine = EngineBuild::of_parts(&parts);
         Self::with_car(build, parts, engine, car)
     }
 
@@ -366,7 +366,7 @@ impl CarSetup {
         let (build, parts, car) = Self::stock(catalogue, chassis, option);
         let hardware = parts.hardware();
         let engine = EngineBuild {
-            ecu: Ecu::blank(&hardware, parts.ecu),
+            ecu: Ecu::blank(&hardware, parts.ecu_model()),
             hardware,
             maps: EngineMaps::blank(),
             octane: crate::physics::fuel::PUMP_OCTANE,
@@ -381,7 +381,7 @@ impl CarSetup {
         let (build, parts) = car.resolve(catalogue).ok()?;
         let hardware = parts.hardware();
         let engine = EngineBuild {
-            ecu: Ecu::blank(&hardware, parts.ecu),
+            ecu: Ecu::blank(&hardware, parts.ecu_model()),
             hardware,
             maps: EngineMaps::blank(),
             octane: crate::physics::fuel::PUMP_OCTANE,

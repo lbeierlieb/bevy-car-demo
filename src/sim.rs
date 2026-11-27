@@ -513,7 +513,7 @@ mod tests {
             .unwrap();
         parts.chosen[crate::catalogue::TURBO] = 2;
         parts.boost = 1.2;
-        let engine = crate::physics::engine::EngineBuild::new(parts.hardware(), parts.ecu);
+        let engine = crate::physics::engine::EngineBuild::of_parts(&parts);
         CarSetup::new(build, parts, engine)
     }
 

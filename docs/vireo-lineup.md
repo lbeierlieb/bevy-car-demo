@@ -13,7 +13,7 @@ block should be the swap players want (a "Frankenstein" engine).
 2. **Maps per cam profile** (done): the maps by load (MBT, efficiency, knock limit,
    exhaust temperature, heat to coolant, peak pressure) are baked for each profile, and
    an ECU that switches cams has fuel, λ and spark maps of its own for the second.
-3. **ECUs from the catalogue**: `EcuModel` becomes data (`Catalogue::ecus`: most
+3. **ECUs from the catalogue** (done): `EcuModel` becomes data (`Catalogue::ecus`: most
    cylinders, cam switching, phasers, wideband, locked, and for a stock ECU the version
    whose factory maps it carries).
 
