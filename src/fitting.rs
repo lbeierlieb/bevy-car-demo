@@ -1116,6 +1116,43 @@ mod tests {
     const ENGINE_SHOP: &[&str] = &["pistons.*", "connecting-rods.*", "b18", "camshafts.*"];
 
     #[test]
+    fn phasers_and_switching_cams_need_overhead_cams() {
+        let catalogue = builtin();
+        let before = spec(0);
+        let engines = shop(ShopKind::Engine, &["*"]);
+        let fit = |catalogue: &Catalogue, id: &str| {
+            let (path, _) = in_block(catalogue, &before.car, id);
+            Work::Fit {
+                slots: vec![path],
+                supply: new(catalogue, id),
+            }
+        };
+        for id in ["cam-phasers.intake", "camshafts.switching"] {
+            assert!(run(&catalogue, &engines, &before, &[fit(&catalogue, id)]).is_ok());
+        }
+        // The same block with its cam in the block (pushrods) provides no overhead cams.
+        let pushrods = crate::catalogue::builtin_changed(|c| {
+            for def in &mut c.defs {
+                def.provides
+                    .retain(|what| what != crate::items::OVERHEAD_CAMS);
+            }
+        });
+        for id in ["cam-phasers.intake", "camshafts.switching"] {
+            let err = run(&pushrods, &engines, &before, &[fit(&pushrods, id)]).unwrap_err();
+            assert!(err.contains("overhead cams"), "{err}");
+        }
+        assert!(
+            run(
+                &pushrods,
+                &engines,
+                &before,
+                &[fit(&pushrods, "camshafts.sport")]
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn an_engine_shop_works_on_long_blocks_only() {
         let catalogue = builtin();
         let mut before = spec(0);

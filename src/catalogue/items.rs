@@ -6,12 +6,13 @@ use std::sync::Arc;
 use super::{Catalogue, Shared};
 use crate::chassis::CarBuild;
 use crate::items::{
-    Aero, Assembly, BONNET_CUT_OUT, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim,
-    Wear, assemble, chassis_knobs, damper_knobs, engine_knobs, knob, spring_knobs, tire_knobs,
-    wing_knobs,
+    Aero, Assembly, BONNET_CUT_OUT, Does, Item, Kind, Knob, OVERHEAD_CAMS, Panel, PartDef, Seat,
+    SlotDef, Trim, Wear, assemble, chassis_knobs, damper_knobs, engine_knobs, knob, spring_knobs,
+    tire_knobs, wing_knobs,
 };
 use crate::physics::brakes::Brake;
 use crate::physics::engine::ecu::EcuModel;
+use crate::physics::engine::hardware::CamDrive;
 use crate::physics::tire::STREET;
 use crate::wheels::Wheel;
 
@@ -608,7 +609,7 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
     for (f, family) in catalogue.families.iter().enumerate() {
         for (v, version) in family.versions.iter().enumerate() {
             let size = [family.length, family.width, family.height];
-            add(Def::new(
+            let mut def = Def::new(
                 &version.code.to_lowercase(),
                 &format!("{} {} long block", version.code, version.name),
                 Kind::LongBlock,
@@ -620,7 +621,11 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
                 0.7 * family.mass,
             )
             .bored()
-            .slots(LONG_BLOCK_SLOTS.map(engine_slot).to_vec()));
+            .slots(LONG_BLOCK_SLOTS.map(engine_slot).to_vec());
+            if version.block.valvetrain.drive != CamDrive::Ohv {
+                def = def.provides(OVERHEAD_CAMS);
+            }
+            add(def);
         }
     }
     for (s, kind) in catalogue.slots.iter().enumerate() {
@@ -658,10 +663,26 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             if part.name == super::ROOTS {
                 def.needs.push(BONNET_CUT_OUT.into());
             }
+            // Phasers and switching cams turn or rock cams in the head.
+            if moves_overhead_cams(part) {
+                def.needs.push(OVERHEAD_CAMS.into());
+            }
             add(def);
         }
     }
     defs
+}
+
+/// Whether `part` works on cams in the head: phasers or a switching cam.
+fn moves_overhead_cams(part: &crate::physics::engine::parts::Part) -> bool {
+    use crate::physics::engine::parts::{Effect, Field};
+    (part.effects.iter()).any(|effect| match effect {
+        Effect::Switching { .. } => true,
+        Effect::Change { field, .. } => {
+            matches!(field, Field::IntakePhasing | Field::ExhaustPhasing)
+        }
+        _ => false,
+    })
 }
 
 /// Whether `part` is a supercharger.

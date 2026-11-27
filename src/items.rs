@@ -513,6 +513,10 @@ impl Item {
 /// What a Roots blower needs (and a bonnet with a cut-out provides).
 pub const BONNET_CUT_OUT: &str = "bonnet with a cut-out";
 
+/// What cam phasers and a switching cam need (and a long block with its cams in the head
+/// provides).
+pub const OVERHEAD_CAMS: &str = "head with overhead cams";
+
 /// A part of `car` (a car's tree) that needs what no part of it provides: the part's name
 /// and what it needs.
 pub fn unmet_need<'a>(catalogue: &'a Catalogue, car: &Item) -> Option<(&'a str, &'a str)> {
