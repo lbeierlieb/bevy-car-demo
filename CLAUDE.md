@@ -1904,6 +1904,16 @@ phasing, VTEC-style cam switching).
   of its limit (the X25T sat right on it and lost its turbo in ~10 min of hard driving;
   2026-11-22). Exhaust temperatures run hot (no losses before the turbine),
   hence the high turbine limit.
+- **Valvetrain kinds** (2026-11-27, `docs/pushrod-v10.md` milestone A):
+  `EngineHardware::valvetrain` (`ValveLayout`: `CamDrive` Ohv/Sohc/Dohc, 2–4 valves, the
+  valves' diameters relative to the bore; in the fingerprint) is what `cycle.rs` breathes
+  through; `ValveTrain` has `rocker_ratio`, `cam_side_mass` (lifter and pushrod, at the
+  valve ÷ ratio², `moving_mass`) and `rollers`. With one cam (Ohv, Sohc) `Parts::hardware`
+  retards the exhaust by minus the intake advance and the dyno shows one knob. The
+  valvetrain friction is live (`spring_drag`: force × valves/4, rollers half), so the
+  4-valve engines' maps stayed the same. Phasers and switching cams need
+  `items::OVERHEAD_CAMS`, provided by long blocks not `Ohv`. Every factory engine so far
+  is 4-valve DOHC.
 - ECUs are switchable (agreed with the user): `EcuModel` (Stock, Programmable) is chosen
   in the garage like a part; the stock one stays. One `Ecu` struct for all models, the
   model deciding which features it uses (cam control lives in every `Ecu` but only the

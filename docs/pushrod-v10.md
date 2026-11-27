@@ -56,6 +56,43 @@ rarely.
    off above a 4-valve head of the same bore. Protocol bump (the catalogue's engine
    hardware on the wire).
 
+**Built** (2026-11-27). Decided while building it:
+- The struct is `hardware::ValveLayout` (`drive: CamDrive`, `valves`, `intake_diameter`,
+  `exhaust_diameter`; `FOUR_VALVE` the old head, `PUSHROD` 2 valves of 0.48/0.39), next to
+  the springs' `ValveTrain` (`valves`), which got `rocker_ratio`, `cam_side_mass` and
+  `rollers`. A third valve is an intake. `cycle.rs` rounds the diameters to 1e-4 of the
+  bore, so the f32 0.36 is exactly the old f64 literal (bit-identical maps).
+- The cam side counts at the valve **divided** by the rocker ratio squared
+  (`ValveTrain::moving_mass`): the lifter and pushrod move 1/ratio as far as the valve, so
+  their kinetic energy is as from m/ratio² at the valve. The plan's "× ratio²" was the
+  wrong way round. `block()` scales the cam side mass like the valve's (zero for now).
+- One cam for **SOHC too** (`CamDrive::one_cam`): `Parts::hardware` sets
+  `exhaust_timing = -intake_timing` (the cam's advance retards nothing), so the maps and
+  the fingerprint see it without special cases in `cycle.rs`; the engine item's exhaust
+  knob stays but does nothing. The dyno shows "Cam advance" alone (`Parts::one_cam`, from
+  the version's block).
+- The valvetrain friction is **live, not baked**: the existing `SPRING_FRICTION` term in
+  `Engine::cycle` now takes `EngineHardware::spring_drag` (spring force at full lift ×
+  valves/4, × 0.5 with rollers) instead of the plain spring force, so the maps needed no
+  change and 4-valve flat-tappet engines get exactly the old value. A 2-valve roller OHV
+  with the same springs drags a quarter of the force (less friction: about 5 kPa of FMEP
+  at stock-like springs).
+- The tag is `items::OVERHEAD_CAMS` ("head with overhead cams"): every long block whose
+  `drive` isn't `Ohv` provides it; parts with a `Switching` effect or changing
+  `IntakePhasing`/`ExhaustPhasing` need it (`catalogue/items.rs`).
+- Wire: `ValveLayout` checked by `fine` (2–4 valves, diameters 0.15–0.6 of the bore),
+  `ValveTrain` by mass > 0, cam side ≥ 0, rocker ratio 0.5–3. Protocol 49.
+- Re-baked B16, B18, W20, B16T: every table identical, only the fingerprints changed.
+- Tests: `hardware::tests` (pushrod float < 0.85 of OHC with 0.15 kg cam side at 1.6:1;
+  spring drag), `cycle::tests::two_big_valves_breathe_well_low_and_run_out_high` (the
+  `PUSHROD` head on the W20: over 93 % of the four valves' VE at 2500 rpm, at least 5
+  points less of it at 7000), `parts::tests::one_cam_in_the_block_moves_both_rows_of_valves`,
+  `fitting::tests::phasers_and_switching_cams_need_overhead_cams`.
+- For milestone B: `block()` still takes the reference's valvetrain; it needs a
+  `ValveLayout` (and rocker ratio, cam side mass, rollers) per `Block`, and `made_for`
+  then sizes the springs against the heavier moving mass by itself. `port_flow` scales
+  the valves' and ports' areas whatever the layout.
+
 ## Milestone B: the R-series V10
 
 - 90° V10, two valves, one cam in the block, 8.0 L: bore 101.6 mm, stroke 98.6 mm, CR
