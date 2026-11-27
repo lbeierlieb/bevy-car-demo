@@ -115,6 +115,18 @@ pub fn gearboxes() -> Vec<Gearbox> {
             shift_time: 0.22,
             engage_time: 0.15,
         },
+        // Behind a big longitudinal engine: long ratios, two overdrives, made for torque.
+        Gearbox {
+            name: "6-speed heavy duty (inline)".into(),
+            kind: GearboxKind::Inline,
+            gears: vec![2.66, 1.78, 1.3, 1.0, 0.74, 0.5],
+            reverse: 2.9,
+            mass: 60.0,
+            clutch_torque: 720.0,
+            torque: 700.0,
+            shift_time: 0.28,
+            engage_time: 0.16,
+        },
     ]
 }
 
@@ -141,7 +153,12 @@ const fn detail(at: [f32; 3], size: [f32; 3], tone: Tone) -> Detail {
 pub const DEFAULT_CHASSIS: usize = 0;
 
 pub fn chassis() -> Vec<Chassis> {
-    vec![Chassis {
+    vec![vireo(), merrow()]
+}
+
+/// The hot hatch.
+fn vireo() -> Chassis {
+    Chassis {
         name: "Vireo".into(),
         class: "Hatchback".into(),
         about: "A light three-door hatch from the early nineties: low nose, long glass, a \
@@ -263,7 +280,129 @@ pub fn chassis() -> Vec<Chassis> {
                 area([0, 8], [7, 12], 0, 9, Some("Passenger seat")),
             ],
         },
-    }]
+    }
+}
+
+/// The V10 roadster.
+fn merrow() -> Chassis {
+    Chassis {
+        name: "Merrow".into(),
+        class: "Roadster".into(),
+        about: "An early-nineties open two-seater built round an eight-litre V10: a long, low \
+                bonnet, the engine set back behind the front axle, wide tires at the back, \
+                side pipes and no roof to speak of"
+            .into(),
+        // Without the seats (see `items`).
+        mass: 780.0,
+        mass_at: 1.42,
+        cg_height: 0.46,
+        wheelbase: 2.44,
+        track: [1.52, 1.54],
+        wheels: [
+            wheel(17, 95, 275, 40, STREET),
+            wheel(17, 115, 335, 35, STREET),
+        ],
+        room: [
+            WheelRoom {
+                diameter: 0.7,
+                width: 295,
+                min_rim: 17,
+            },
+            WheelRoom {
+                diameter: 0.71,
+                width: 345,
+                min_rim: 17,
+            },
+        ],
+        // Without the brakes (see `items`).
+        hub: [16.0, 20.0],
+        ride: [1.45, 1.6],
+        damping: 0.3,
+        bars: [
+            bars(&[24, 26, 28, 30, 32], 2, 200.0),
+            bars(&[16, 18, 20, 22, 24], 2, 300.0),
+        ],
+        camber: [-0.8, -1.0],
+        pressure: [2.1, 1.85],
+        max_steer: 0.5,
+        drag_area: 0.82,
+        downforce_area: [0.0, 0.0],
+        tank: Tank {
+            litres: 85.0,
+            at: 2.15,
+            height: 0.35,
+        },
+        bay: EngineBay {
+            place: "front-mid, longitudinal".into(),
+            orientation: Orientation::Longitudinal,
+            length: 0.98,
+            width: 0.92,
+            height: 0.62,
+            engine_at: 0.42,
+            gearbox_at: 1.25,
+            header_room: 0.8,
+        },
+        drive: Drive::Rear,
+        limited_slip: true,
+        gearbox: 2,
+        final_drive: 3.07,
+        engines: codes(&["R80"]),
+        paint: 18,
+        body: Body {
+            length: 4.45,
+            width: 1.92,
+            front_overhang: 0.95,
+            floor: 0.12,
+            // A low, blunt nose, a long bonnet rising slowly to a raked windscreen, a
+            // short rear deck and a tail cut off square.
+            deck: vec![
+                [0.0, 0.42],
+                [0.07, 0.58],
+                [0.5, 0.66],
+                [1.2, 0.74],
+                [1.95, 0.8],
+                [2.6, 0.82],
+                [3.3, 0.85],
+                [4.33, 0.88],
+                [4.45, 0.74],
+            ],
+            // The windscreen's base and top: no roof.
+            cabin: vec![[1.95, 0.8, 1.0], [2.42, 1.12, 1.0]],
+            nose: 0.76,
+            tail: 0.9,
+            tumblehome: 0.9,
+            open_wheels: false,
+            // The cockpit, from the windscreen to behind the seats.
+            openings: vec![[1.95, 3.18, 0.66]],
+            details: vec![
+                // Hoops behind the seats.
+                detail([3.12, 1.0, 0.36], [0.07, 0.3, 0.26], Tone::Dark),
+                // Vents in the fenders behind the front wheels.
+                detail([1.5, 0.6, 0.955], [0.3, 0.1, 0.02], Tone::Dark),
+                detail([1.5, 0.48, 0.955], [0.3, 0.06, 0.02], Tone::Dark),
+            ],
+            door: [1.62, 2.88],
+            bumpers: [0.36, 0.3],
+            bumper_top: 0.42,
+            // A long bulge down the middle of the bonnet, over the engine's intake.
+            bulges: vec![[0.75, 1.88, 0.3, 0.05]],
+            side_pipes: true,
+        },
+        eye: [2.68, 0.98, 0.36],
+        insulation: 0.15,
+        traffic: 0.05,
+        // A small trunk under the boot lid, over the rear axle, and the passenger seat's
+        // place while it's out.
+        hold: Hold {
+            from: 2.4,
+            left: -0.6,
+            base: 0.2,
+            areas: vec![
+                area([10, 19], [1, 11], 2, 6, None),
+                area([0, 7], [7, 12], 0, 6, Some("Passenger seat")),
+            ],
+        },
+    }
 }
 
 fn area(along: [u8; 2], across: [u8; 2], floor: u8, ceiling: u8, seat: Option<&str>) -> Area {
@@ -370,6 +509,50 @@ mod tests {
         let hardware = parts.hardware();
         assert_eq!(hardware.exhaust.header_length, tight.header_room);
         assert!(EngineMaps::stock(&hardware).is_none());
+    }
+
+    #[test]
+    fn the_roadster_is_a_heavy_v10_driving_its_rear_wheels() {
+        use crate::car::CarSetup;
+        use crate::chassis::{GearboxKind, Orientation};
+        use crate::physics::drivetrain::Drive;
+        let catalogue = builtin();
+        let merrow = catalogue.find_chassis("Merrow").expect("the roadster");
+        let setup = CarSetup::factory(merrow, 0);
+        let full = setup.tank.litres;
+        let (mass, front) = (setup.mass_with(full), setup.front_weight_with(full));
+        let hardware = setup.engine.parts.hardware();
+        println!(
+            "Merrow: {mass:.0} kg full, {:.1} % front, {:.1} kg/kW",
+            front * 100.0,
+            mass / 305.0
+        );
+        assert!((1400.0..1500.0).contains(&mass), "{mass} kg");
+        assert!((0.46..0.52).contains(&front), "{front} at the front");
+        assert_eq!(hardware.name, "R80 8.0 V10");
+        let made = &catalogue.chassis[merrow];
+        assert_eq!(made.drive, Drive::Rear);
+        assert_eq!(made.bay.orientation, Orientation::Longitudinal);
+        assert!(setup.build.limited_slip);
+        // Its gearbox takes the V10's torque, and only inline gearboxes go in.
+        assert_eq!(setup.build.gearbox().kind, GearboxKind::Inline);
+        assert!(setup.engine.gearbox_torque >= 640.0 && setup.engine.clutch_torque >= 650.0);
+        let boxes: Vec<usize> = catalogue.gearboxes_for(made).collect();
+        assert_eq!(boxes, [made.gearbox]);
+        // Wider tires at the back, on 17" rims.
+        let [f, r] = setup.build.wheels;
+        assert_eq!(
+            (f.tire.label(), r.tire.label()),
+            ("275/40 R17".into(), "335/35 R17".into())
+        );
+        // The V10 goes into the roadster, not into the hatch.
+        let vee = family("R80");
+        assert!(
+            catalogue.chassis[DEFAULT_CHASSIS]
+                .fit(&catalogue, vee)
+                .is_err()
+        );
+        assert!(made.fit(&catalogue, vee).is_ok());
     }
 
     #[test]

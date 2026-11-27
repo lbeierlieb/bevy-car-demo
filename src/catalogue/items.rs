@@ -159,10 +159,35 @@ fn needing(slot: SlotDef, place: usize) -> SlotDef {
     }
 }
 
-/// The hot hatch's slots: body, seats, a wheel, brake, spring and damper at each corner,
+/// What a chassis' body is called where it differs: the lid at the back and the spoiler
+/// on it, and whether there's a rear bench behind the front seats.
+struct Layout {
+    lid: &'static str,
+    spoiler: &'static str,
+    rear_bench: bool,
+}
+
+fn layout(chassis: &str) -> Layout {
+    match chassis {
+        // An open two-seater.
+        "Merrow" => Layout {
+            lid: "Boot lid",
+            spoiler: "Boot spoiler",
+            rear_bench: false,
+        },
+        _ => Layout {
+            lid: "Hatch",
+            spoiler: "Roof spoiler",
+            rear_bench: true,
+        },
+    }
+}
+
+/// A chassis' slots: body, seats, a wheel, brake, spring and damper at each corner,
 /// anti-roll bars, the drivetrain, the exhaust after the manifold, cooling, the ECU and the
 /// engine.
-fn hatch_slots(catalogue: &Catalogue) -> Vec<SlotDef> {
+fn chassis_slots(catalogue: &Catalogue, chassis: &str) -> Vec<SlotDef> {
+    let layout = layout(chassis);
     let body = |name: &str, panel| slot(name, Kind::Body(panel), false);
     // A lip goes on the front bumper, mirrors on the doors, the spoiler on the hatch, the
     // diffuser under the rear bumper (by their places here).
@@ -178,14 +203,16 @@ fn hatch_slots(catalogue: &Catalogue) -> Vec<SlotDef> {
         needing(body("Right mirror", Panel::Mirror), 6),
         body("Left side skirt", Panel::SideSkirt),
         body("Right side skirt", Panel::SideSkirt),
-        body("Hatch", Panel::Hatch),
+        body(layout.lid, Panel::Hatch),
         needing(body("Rear spoiler", Panel::RearSpoiler), 11),
         body("Rear bumper", Panel::RearBumper),
         needing(body("Diffuser", Panel::Diffuser), 13),
         slot("Driver's seat", Kind::Seat(Seat::Front), true),
         slot("Passenger seat", Kind::Seat(Seat::Front), false),
-        slot("Rear bench", Kind::Seat(Seat::RearBench), false),
     ];
+    if layout.rear_bench {
+        slots.push(slot("Rear bench", Kind::Seat(Seat::RearBench), false));
+    }
     for corner in crate::items::CORNERS {
         slots.push(slot(&format!("Wheel, {corner}"), Kind::Wheel, true));
         slots.push(slot(&format!("Brake, {corner}"), Kind::Brake, true));
@@ -272,7 +299,8 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
         )
         .painted()
         .knobs(chassis_knobs())
-        .slots(hatch_slots(catalogue)));
+        .slots(chassis_slots(catalogue, name)));
+        let layout = layout(name);
         let panels = [
             (
                 "front-bumper",
@@ -299,10 +327,10 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
                 [1.8, 0.15, 0.1],
                 3.0,
             ),
-            ("hatch", "Hatch", Panel::Hatch, [1.3, 1.0, 0.25], 15.0),
+            ("hatch", layout.lid, Panel::Hatch, [1.3, 1.0, 0.25], 15.0),
             (
                 "rear-spoiler",
-                "Roof spoiler",
+                layout.spoiler,
                 Panel::RearSpoiler,
                 [1.1, 0.3, 0.1],
                 2.0,
@@ -375,7 +403,7 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             fade,
             life,
         };
-        let brakes = [
+        let hatch_brakes = [
             (
                 "front-solid",
                 "Solid front disc brake",
@@ -407,7 +435,26 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
                 brake(230.0, 13, 1800.0, [6.0, 1.2], 640.0, 200.0),
             ),
         ];
-        for (part, title, mass, brake) in brakes {
+        // A heavy, fast car's: big vented discs all round, behind 17" wheels.
+        let roadster_brakes = [
+            (
+                "front-vented",
+                "Vented front disc brake, four-piston",
+                14.0,
+                brake(1500.0, 17, 5600.0, [16.0, 3.6], 720.0, 800.0),
+            ),
+            (
+                "rear-vented",
+                "Vented rear disc brake",
+                10.0,
+                brake(720.0, 17, 3600.0, [10.0, 2.4], 680.0, 500.0),
+            ),
+        ];
+        let brakes: &[_] = match name.as_str() {
+            "Merrow" => &roadster_brakes,
+            _ => &hatch_brakes,
+        };
+        for &(part, title, mass, brake) in brakes {
             let def = Def::new(
                 &format!("{id}.brake.{part}"),
                 title,
@@ -525,7 +572,8 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
         .knobs(tire_knobs()));
     }
     for (g, gearbox) in catalogue.gearboxes.iter().enumerate() {
-        add(Def::new(
+        // Made for the chassis whose layout takes it (transverse, inline…).
+        let mut def = Def::new(
             &format!("gearbox.{}", slug(&gearbox.name)),
             &gearbox.name,
             Kind::Gearbox,
@@ -537,7 +585,13 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
         .slots(vec![
             slot("Final drive", Kind::FinalDrive, true),
             slot("Differential", Kind::Differential, true),
-        ]));
+        ]);
+        for chassis in &catalogue.chassis {
+            if catalogue.gearboxes[chassis.gearbox].kind == gearbox.kind {
+                def = def.fits(&chassis.name);
+            }
+        }
+        add(def);
     }
     add(Def::new(
         "final-drive",
@@ -691,13 +745,13 @@ fn is_supercharger(part: &crate::physics::engine::parts::Part) -> bool {
     (part.effects.iter()).any(|effect| matches!(effect, Effect::Supercharger(_)))
 }
 
-/// What sets a stock car apart: its factory engine, wheels (the same all round), rims,
+/// What sets a stock car apart: its factory engine, wheels (front and rear), rims,
 /// brakes (front and rear, by the part ids after the chassis' "<id>.brake."),
 /// differential and whether it has a rear spoiler.
 struct TrimSpec {
     engine: String,
     name: String,
-    wheel: Wheel,
+    wheels: [Wheel; 2],
     rim: &'static str,
     brakes: [&'static str; 2],
     limited_slip: bool,
@@ -712,7 +766,7 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
             TrimSpec {
                 engine: "B16".into(),
                 name: "1.6".into(),
-                wheel: super::chassis::wheel(14, 55, 185, 60, STREET),
+                wheels: [super::chassis::wheel(14, 55, 185, 60, STREET); 2],
                 rim: "rim.steel",
                 brakes: ["front-solid", "rear-drum"],
                 limited_slip: false,
@@ -721,13 +775,25 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
             TrimSpec {
                 engine: "B18".into(),
                 name: "1.8".into(),
-                wheel: super::chassis::wheel(15, 60, 195, 55, STREET),
+                wheels: [super::chassis::wheel(15, 60, 195, 55, STREET); 2],
                 rim: "rim.alloy",
                 brakes: ["front-vented", "rear-disc"],
                 limited_slip: true,
                 spoiler: true,
             },
         ],
+        "Merrow" => vec![TrimSpec {
+            engine: "R80".into(),
+            name: "R80".into(),
+            wheels: [
+                super::chassis::wheel(17, 95, 275, 40, STREET),
+                super::chassis::wheel(17, 115, 335, 35, STREET),
+            ],
+            rim: "rim.alloy",
+            brakes: ["front-vented", "rear-vented"],
+            limited_slip: true,
+            spoiler: false,
+        }],
         _ => Vec::new(),
     }
 }
@@ -749,7 +815,7 @@ fn trims(catalogue: &Shared) -> Vec<Trim> {
                 .map(|code| TrimSpec {
                     engine: code.clone(),
                     name: code.clone(),
-                    wheel: factory.wheels[0],
+                    wheels: factory.wheels,
                     rim: "rim.alloy",
                     brakes: ["front-vented", "rear-disc"],
                     limited_slip: chassis.limited_slip,
@@ -791,7 +857,7 @@ fn trims(catalogue: &Shared) -> Vec<Trim> {
                 *item = Some(made(&part));
             }
             let mut build = CarBuild::factory_in(catalogue, c);
-            build.wheels = [spec.wheel; 2];
+            build.wheels = spec.wheels;
             build.limited_slip = spec.limited_slip;
             let option = (chassis.engines.iter())
                 .position(|code| *code == spec.engine)

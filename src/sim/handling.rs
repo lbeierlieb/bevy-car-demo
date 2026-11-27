@@ -780,3 +780,36 @@ fn step_cost() {
         car.body.position.xz().distance(p)
     );
 }
+
+/// Prints every factory car's time from standing to 100 km/h, flat out with traction
+/// control and the automatic gearbox, on warm tires:
+/// `cargo test --profile release-dev zero_to_hundred -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn zero_to_hundred() {
+    for (chassis, made) in crate::catalogue::builtin().chassis.iter().enumerate() {
+        for option in 0..made.engines.len() {
+            let terrain = Terrain::flat();
+            let setup = CarSetup::factory(chassis, option);
+            let angle = -0.75 * std::f32::consts::PI;
+            let mut car = Car::spawn_at(0, setup, &terrain, -480.0, -480.0, angle);
+            car.warm_tires();
+            car.drivetrain.automatic = true;
+            car.traction_control = true;
+            car.parking_brake = false;
+            let dt = 1.0 / CHASSIS_HZ as f32;
+            let mut time = 0.0;
+            while car.forward_speed() < 100.0 / 3.6 && time < 30.0 {
+                car.controls.throttle = if time < 0.5 { 0.0 } else { 1.0 };
+                step_car(&mut car, &terrain, dt);
+                time += dt;
+            }
+            println!(
+                "{:<8} {:<5} {:4.1} s",
+                made.name,
+                made.engines[option],
+                time - 0.5
+            );
+        }
+    }
+}

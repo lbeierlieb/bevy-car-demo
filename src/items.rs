@@ -906,7 +906,7 @@ mod tests {
     fn the_trims_differ_in_more_than_the_engine() {
         let catalogue = builtin();
         let ids: Vec<&str> = catalogue.trims.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["vireo.1-6", "vireo.1-8"]);
+        assert_eq!(ids, ["vireo.1-6", "vireo.1-8", "merrow.r80"]);
         let rims = |car: &Item| -> Vec<String> {
             (car.fitted(&catalogue, Kind::Wheel))
                 .flat_map(|wheel| wheel.fitted(&catalogue, Kind::Rim))
@@ -931,6 +931,38 @@ mod tests {
         let parts = base.engine.parts.clone();
         let changed = base.changed(build, parts, base.engine.build.clone());
         assert_eq!(rims(&changed.car), ["rim.steel"; 4]);
+    }
+
+    #[test]
+    fn the_roadster_is_its_trim() {
+        let catalogue = builtin();
+        let trim = (catalogue.trims.iter())
+            .find(|trim| trim.id == "merrow.r80")
+            .expect("the roadster's trim");
+        let (build, parts) = trim.car.resolve(&catalogue).expect("a car");
+        assert_eq!(parts.hardware().name, "R80 8.0 V10");
+        assert_ne!(build.wheels[0].tire, build.wheels[1].tire);
+        assert!(build.limited_slip);
+        assert_eq!(
+            assemble(&catalogue, None, &build, &parts).as_ref(),
+            Ok(&trim.car)
+        );
+        // Two seats and a boot lid; its engine is sold whole.
+        let slots = &trim.car.def(&catalogue).slots;
+        assert!(
+            slots
+                .iter()
+                .all(|slot| slot.kind != Kind::Seat(Seat::RearBench))
+        );
+        assert!(slots.iter().any(|slot| slot.name == "Boot lid"));
+        assert!(catalogue.assemblies.iter().any(|a| a.id == "engine.r80"));
+        // The hatch's transverse gearboxes aren't made for it.
+        let chassis = &catalogue.chassis[build.chassis].name;
+        let fitting: Vec<&str> = (catalogue.defs.iter())
+            .filter(|def| def.kind == Kind::Gearbox && crate::fitting::made_for(def, chassis))
+            .map(|def| def.id.as_str())
+            .collect();
+        assert_eq!(fitting, ["gearbox.6-speed-heavy-duty-inline"]);
     }
 
     #[test]
