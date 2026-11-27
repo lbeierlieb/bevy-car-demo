@@ -124,7 +124,7 @@ N ways, at no extra cost: that's what's built.
    `fitting::tests` (long tubes have no mount, a turbo fills every mount, mixed turbos
    refused, turbo + supercharger refused, a B-series manifold refused on the R80).
 
-## Milestone 2: physics
+## Milestone 2: physics (built 2026-11-27)
 
 1. `hardware::Exhaust`: `header_length` becomes `manifold: Manifold { primary_length,
    collector: Collector, branches: u32 }`; `EngineHardware::turbos: u32` (0 without a
@@ -234,3 +234,83 @@ Built 2026-11-27. Where the plan was silent:
 12. `mechanicals` draws short or long headers by the primaries against the family's
     first manifold, and a turbo when one is on a mount (one turbo, as before, for a pair
     too, until milestone 3). Protocol 53.
+
+## Decided while building milestone 2
+
+Built 2026-11-27. Where the plan was silent:
+
+1. **`Exhaust::manifold`** (`hardware::Manifold`) replaced `header_length`; a block's is
+   its factory primaries with a `Tuned` collector and one branch, and `Parts::hardware`
+   puts the fitted manifold in *before* the parts' effects, so a turbo kit knows the
+   branches it goes on. `EngineHardware::turbos` is set by `TurboKit::fit` to the
+   manifold's branches (a turbo chosen on a manifold without mounts, possible only in
+   tests, still gets one per branch); `turbo_count()` is the factor (1 at least with a
+   turbo). Both are on the wire (catalogue blocks): protocol 54.
+2. **What is shared**: the air filter, the ducts, the intercooler (sized for the whole
+   engine, `3e-3 × size`) and the wastegate's opening (one state: the turbos see the same
+   boost). Per turbo: compressor, turbine, wastegate valve, diverter valve (all sized for
+   the displacement behind the branch). The mass of the turbos is 12 kg each plus 6 kg ×
+   the engine's relative size (one turbo: as before).
+3. **Turbine inlet reflection 0.3** (tuned collectors 0.8, as before). The model's waves
+   come back inverted; a turbine's nozzle chokes the collector, so less comes back. The
+   fingerprint has the primary length and the collector kind, not the branches (one
+   cylinder is simulated, so the pair and a 10-into-1 of the same primaries would share
+   maps). Every stock engine re-baked.
+4. **Scale efficiency**: with kits scaled exactly by displacement, two half-size turbos
+   and one big one are the same engine in steady state (the model is homogeneous in the
+   size); only the shafts' inertia (∝ wheel⁵) differed. Real small turbos are a little
+   less efficient (tip clearances, blade edges), so the compressor's and turbine's best
+   efficiencies gain `TURBO_SCALE_EFFICIENCY` (0.02) per doubling of the displacement
+   behind them (±0.05 at most). The B series' turbo (sized for 1.6 l) loses 0.006.
+   This makes the big single hold boost high up; the twins still spool quicker.
+5. **No exhaust heat loss before the turbine** was added (it would have slowed the
+   crossover's 900 mm primaries further, but changes every turbo engine's temperatures,
+   the turbine limit and the factory tunes' richening). Steady state, the big single is a
+   little ahead low down too (its efficiency); its lag is only in transients.
+6. **Oil cooling** (`thermal.rs`): the oil passed heat to the coolant at the 2-litre
+   four's 600 W/K whatever the engine, so the R80 with twin turbos (~1000 N·m) overheated
+   its oil (434 K, bearings 17 % worn) in a minute flat out at 5500 rpm, and the NA R80
+   reached 412 K. Now ×(oil heat capacity / the 2-litre's) (2.8× on the R80, 0.88× on
+   the B16): NA R80 391 K; the twin turbo engine lasts the minute (a separate commit).
+7. **`Ecu::calibrated`** needed no change: it goes through `exhaust_pressure` (which
+   splits the flow) and the turbine inlet temperature is the cylinders' exhaust, the same
+   for every turbo, so the margin per turbo is the one margin.
+8. A test changed: `traction_control_keeps_a_big_engine_from_spinning_its_wheels` (the
+   B16T at 1.2 bar floored in first without traction control) spins its wheels at 1.4×
+   the road speed now (asserted > 1.3×, was > 1.5×): the turbine inlet's weaker
+   reflection changed the low-rpm torque.
+
+### Measured (flat out after 4 s at each speed; boost bar, torque N·m)
+
+The R80 with low compression pistons and the medium turbo kit on every mount, wastegate
+at 0.6 bar (compressor 71 mm on each of the pair, 100 mm on the 10-into-1):
+
+| rpm | pair (2 × 4 l) | 10-into-1 (1 × 8 l) |
+|---|---|---|
+| 2000 | 0.09, 596 | 0.09, 599 |
+| 2500 | 0.18, 663 | 0.19, 674 |
+| 3000 | 0.36, 800 | 0.40, 831 |
+| 3500 | 0.62, 974 | 0.62, 982 |
+| 4000 | 0.65, 968 | 0.65, 979 |
+| 5000 | 0.69, 885 | 0.69, 906 |
+| 5800 | 0.70, 763 | 0.70, 788 |
+
+Time to 0.4 bar after flooring it from a light throttle: pair 0.64 s at 3500 rpm, 0.43 s
+at 4000; the 10-into-1 0.83 s and 0.56 s (the small kit: 0.28/0.23 s against 0.35/0.28
+s; the large: 1.48 s against 1.78 s at 4000). The small kit held to 1.5 bar at 5800 rpm
+spins the pair's shafts at 96 % of their limit, the big one's at 87 %; held to 1.8 bar
+the pair burst at 5000 rpm while the big one holds 1.8 bar (it bursts at 5800).
+
+The R80 naturally aspirated, 3500–5500 rpm in 500 rpm steps: stock cast pair 631, 638,
+625, 585, 520; turbo manifolds with empty mounts (same 500 mm primaries, turbine inlets)
+628, 634, 622, 581, 518; long tubes (690 mm) 632, 637, 616, 570, 496 (a little ahead of
+the empty turbo manifolds at 3500 and 4000, behind higher up: the longer primaries tune
+lower; `the_r80s_manifolds_tune_it_without_turbos`). The header's tuning is a small effect in this model on the R80 (under 1 %).
+
+The B16T (medium turbo, 0.6 bar): 2000 rpm 0.10 bar 158 N·m, 3000 0.42/209, 4000
+0.65/245, 4500 0.67/250, 5000 0.69/248, 5800 0.71/242; before (reflection 0.8): 3000
+0.40/202, 4000 0.65/254, 5000 0.69/241, 5800 0.70/230 (within 6 %:
+`the_b_series_turbo_is_as_before`).
+
+Not done: the twin turbos' second whistle, telemetry and drawing (milestone 3); exhaust
+heat loss before the turbine; pulse interference within a collector.

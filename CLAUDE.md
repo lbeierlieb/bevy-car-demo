@@ -1279,14 +1279,14 @@ The game is about tuning every aspect of a car. Agreed so far (the user's answer
   corner. Doors are parts. Gearboxes (gear set, final drive, differential) are worked on
   by car and tuning shops, not the engine shop.
 
-## Exhaust manifolds (planned with the user, 2026-11-27; milestone 1 built)
+## Exhaust manifolds (planned with the user, 2026-11-27; milestones 1–2 built)
 
 The plan, with milestones: `docs/exhaust-manifolds.md` (keep it up to date; its last
 section lists what was decided while building). **The manifold decides the layout,
 turbos sit in its mounts.** Milestone 1 (data, no physics change): `Family::manifolds`
 (`ManifoldDef`: id, name, `hardware::Manifold` (primary length, `Collector`, branches),
 `mounts`), `Parts::manifold`/`Preset::manifold` (its place in the family's; sets
-`header_length`), items `Kind::Manifold` (`Does::Manifold`, the engine's "Exhaust
+`Exhaust::manifold`, before the parts' effects), items `Kind::Manifold` (`Does::Manifold`, the engine's "Exhaust
 manifold" slot, `PartDef::engines` = the family's name) and `Kind::Turbo` (the old
 `turbocharger.small|medium|large`, `Does::EnginePart` of the catalogue's `mounted` slot
 `TURBO`, 11) on the manifold's mounts; the old turbo slot is `SUPERCHARGER` (12). Rules
@@ -1299,7 +1299,17 @@ every mount"). B series: `b.manifold.stock`, `b.headers.short`, `b.headers.long-
 converted, `saved::mount_old_turbo`). Protocol 53. Every factory engine and old part
 combination comes out the same hardware (no re-bake). Shots: `FITIDS` puts a turbo on
 the first mount only, so `FITIDS="b.manifold.turbo,turbocharger.medium"` (the manifold
-first); a pair can't be dressed that way.
+first); a pair can't be dressed that way. Milestone 2 (physics, protocol 54):
+`EngineHardware::turbos` alike (`turbo_count`), each turbine and wastegate passing its
+share (`exhaust_pressure`), compressors and diverters × turbos into the ducts
+(`tract_inflow`), one shaft state, one shared intercooler (sized for the whole engine);
+`TurboKit::fit` sizes a turbo for the displacement behind its branch (efficiency +2 % per
+doubling, `TURBO_SCALE_EFFICIENCY`, so a big single holds boost high up; the twins spool
+quicker by their lighter shafts); `cycle.rs` reflects 0.8 of the header's wave off a
+`Tuned` collector, `TURBINE_REFLECTION` 0.3 off a turbine's inlet; the fingerprint has
+the primaries and the collector, not the branches. The oil→coolant exchange grows with
+the engine (`thermal.rs`, by the oil's heat capacity). Numbers: the plan's "Decided
+while building milestone 2"; `turbo_layouts` (ignored) prints them.
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 
