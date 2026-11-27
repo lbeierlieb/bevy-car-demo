@@ -1152,7 +1152,16 @@ mod tests {
                 .all(|car| car.body.position.xz().distance(p) > SPAWN_GAP)
             {
                 let catalogue = crate::catalogue::builtin();
-                let chassis = rng.pick(catalogue.chassis.iter().map(|c| c.traffic));
+                let mut chassis = rng.pick(catalogue.chassis.iter().map(|c| c.traffic));
+                // Every fifth the rarest chassis, so the rare ones are driven too.
+                if cars.len() % 5 == 4 {
+                    chassis = (0..catalogue.chassis.len())
+                        .min_by(|&a, &b| {
+                            let traffic = |c: usize| catalogue.chassis[c].traffic;
+                            traffic(a).total_cmp(&traffic(b))
+                        })
+                        .unwrap();
+                }
                 let keen = rng.range(KEEN);
                 let world = (&catalogue, &network, &terrain);
                 cars.push(TrafficCar::new(world, chassis, 0, leg, s, keen, rng.0));

@@ -390,7 +390,8 @@ fn merrow() -> Chassis {
         },
         eye: [2.68, 0.98, 0.36],
         insulation: 0.15,
-        traffic: 0.05,
+        // Rare in traffic: about one car in fifty.
+        traffic: 0.06,
         // A small trunk under the boot lid, over the rear axle, and the passenger seat's
         // place while it's out.
         hold: Hold {
@@ -553,6 +554,13 @@ mod tests {
                 .is_err()
         );
         assert!(made.fit(&catalogue, vee).is_ok());
+        // Rare in traffic: one car in 40 to 60.
+        let all: f32 = catalogue.chassis.iter().map(|c| c.traffic).sum();
+        let one_in = all / made.traffic;
+        assert!(
+            (40.0..60.0).contains(&one_in),
+            "one traffic car in {one_in}"
+        );
     }
 
     #[test]
