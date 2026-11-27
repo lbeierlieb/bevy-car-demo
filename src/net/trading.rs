@@ -1,22 +1,33 @@
 //! The server's side of trading (see `trade`): what the used parts shops and used car
 //! dealers have (made up anew every `trade::STOCK_PERIOD`), buying from them and selling to
 //! them. Money changes with what it pays for, in one go (`Peer::pay`).
+//!
+//! The marketplace is the database's (`db`): what players ask of it goes there
+//! (`Accounts::offers`, `offer`, `withdraw`, `buy_offer`), and its answers come back to be
+//! told (`answered`). A server without a database has no marketplace.
 
 use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use super::accounts::Accounts;
+use super::accounts::{Accounts, CAR, MarketReply, OfferRow, PART};
 use super::protocol::ToClient;
 use super::server::Peer;
 use super::shadow::BakedMaps;
 use super::stash::{bought, drive, spec_of_trim, tell};
 use crate::cargo;
 use crate::catalogue::{Catalogue, Shared};
-use crate::owned::{SHOP_HOLD, Source, name};
-use crate::saved::Condition;
+use crate::items::Item;
+use crate::owned::{GARAGE_CARS, GARAGE_PARTS, Parked, ParkedView, SHOP_HOLD, Source, name};
+use crate::saved::{self, Condition};
 use crate::shops::{Shop, ShopKind};
-use crate::trade::{self, CarWare, Stock, Trade, Ware};
+use crate::trade::{
+    self, CarWare, LEAST_PRICE, MOST_PRICE, Market, OfferView, Offered, Offering, Origin, Stock,
+    Trade, Ware,
+};
+
+/// What a server without a database is told at the marketplace.
+const NO_MARKET: &str = "This server keeps no marketplace (it has no database)";
 
 /// How full a used car's tank is (a share).
 const USED_TANK: f32 = 0.3;
@@ -123,8 +134,99 @@ fn try_trade(peer: &mut Peer, asked: Trade, desk: &mut Desk) -> Result<(), Strin
             .then_some(())
             .ok_or_else(|| format!("{} doesn't trade in parts", shop.name))
     };
+    // At the marketplace, the database.
+    let market = || {
+        (shop.kind == ShopKind::Market)
+            .then_some(())
+            .ok_or_else(|| format!("{} isn't a marketplace", shop.name))?;
+        desk.accounts.ok_or_else(|| NO_MARKET.to_string())
+    };
     match asked {
+        Trade::Look if shop.kind == ShopKind::Market => {
+            market()?.offers(peer.id);
+            peer.market_waiting += 1;
+            Ok(())
+        }
         Trade::Look => Ok(()),
+        Trade::Offer { what, price } => {
+            let accounts = market()?;
+            let account = (peer.account)
+                .ok_or("Offering at the marketplace needs an account: a guest can only buy")?;
+            if !(LEAST_PRICE..=MOST_PRICE).contains(&price) {
+                return Err(format!(
+                    "A price is {} to {}",
+                    trade::euros(LEAST_PRICE),
+                    trade::euros(MOST_PRICE)
+                ));
+            }
+            if peer.shadow.lent() {
+                return Err("Not while you drive a lent car".into());
+            }
+            let gone = || "That's gone already".to_string();
+            let (kind, text, pending) = match what {
+                Offering::Part { from, item } => {
+                    let i = usize::from(item);
+                    let part = match from {
+                        Origin::Trunk => {
+                            let mut spec = peer.shadow.spec().cloned().ok_or_else(gone)?;
+                            spec.cargo.get(i).ok_or_else(gone)?;
+                            let part = spec.cargo.remove(i);
+                            drive(peer, spec, desk.baked);
+                            part
+                        }
+                        Origin::Here => {
+                            let held = peer.owned.held_at_mut(&shop.name);
+                            held.get(i).ok_or_else(gone)?;
+                            held.remove(i)
+                        }
+                        Origin::Garage => {
+                            peer.owned.parts.get(i).ok_or_else(gone)?;
+                            peer.owned.parts.remove(i)
+                        }
+                    };
+                    let text = saved::write_items(catalogue, std::slice::from_ref(&part));
+                    (PART, text, Pending::Part(part))
+                }
+                Offering::Car { car } => {
+                    let i = usize::from(car);
+                    peer.owned.cars.get(i).ok_or_else(gone)?;
+                    let parked = peer.owned.cars.remove(i);
+                    let text = saved::write(catalogue, &parked.spec, &parked.condition);
+                    (CAR, text, Pending::Car(Box::new(parked)))
+                }
+            };
+            peer.owned.touch();
+            peer.offering.push_back(pending);
+            peer.market_waiting += 1;
+            let seller = (account, peer.name.clone().unwrap_or_default());
+            let belongings = super::stash::belongings(peer, catalogue);
+            accounts.offer(peer.id, seller, (kind, text, price), belongings);
+            peer.owned_saved = peer.owned.revision;
+            Ok(())
+        }
+        Trade::Withdraw { offer } => {
+            let accounts = market()?;
+            let account = peer.account.ok_or("A guest has no offers")?;
+            accounts.withdraw(peer.id, account, offer as i64);
+            peer.market_waiting += 1;
+            Ok(())
+        }
+        Trade::BuyOffer { offer, price } => {
+            let accounts = market()?;
+            if peer.money < price {
+                return Err(format!(
+                    "Not enough money: it's {}, you have {}",
+                    trade::euros(price),
+                    trade::euros(peer.money)
+                ));
+            }
+            if peer.owned.cars.len() >= GARAGE_CARS || peer.owned.parts.len() >= GARAGE_PARTS {
+                return Err("Your garage is full".into());
+            }
+            accounts.buy_offer(peer.id, peer.account, offer as i64, price);
+            peer.market_waiting += 1;
+            Ok(())
+        }
         Trade::BuyPart { ware } => {
             used()?;
             let mut spec = peer.shadow.spec().cloned().ok_or("You have no car yet")?;
@@ -240,4 +342,136 @@ fn try_trade(peer: &mut Peer, asked: Trade, desk: &mut Desk) -> Result<(), Strin
             Ok(())
         }
     }
+}
+
+/// Something offered at the marketplace, until the database has said it's up.
+pub enum Pending {
+    Part(Item),
+    Car(Box<Parked>),
+}
+
+/// What sold at the marketplace: whose it was, for how much, and what it was called.
+pub struct Sold {
+    pub seller: super::accounts::AccountId,
+    pub price: i64,
+    pub what: String,
+}
+
+/// What an offer as the database keeps it is of (none if it doesn't read: a definition
+/// gone), and as it goes into a garage.
+fn read_offer(catalogue: &Shared, row: &OfferRow) -> Option<(Offered, Pending)> {
+    if row.what == CAR {
+        let (spec, condition) = saved::read(catalogue, &row.data).ok()?;
+        let mut car = spec.car.clone();
+        condition.put_on(catalogue, &mut car);
+        let view = ParkedView {
+            car,
+            cargo: spec.cargo.clone(),
+        };
+        Some((
+            Offered::Car(view),
+            Pending::Car(Box::new(Parked { spec, condition })),
+        ))
+    } else {
+        let item = saved::read_items(catalogue, &row.data).into_iter().next()?;
+        Some((Offered::Part(item.clone()), Pending::Part(item)))
+    }
+}
+
+/// What an offer is called, for people.
+fn offer_name(catalogue: &Catalogue, what: &Offered) -> String {
+    match what {
+        Offered::Part(item) => name(catalogue, item),
+        Offered::Car(parked) => crate::trunk::car_name(catalogue, &parked.car),
+    }
+}
+
+/// Into `peer`'s garage.
+fn into_garage(peer: &mut Peer, pending: Pending) {
+    match pending {
+        Pending::Part(item) => peer.owned.parts.push(item),
+        Pending::Car(parked) => peer.owned.cars.push(*parked),
+    }
+    peer.owned.touch();
+}
+
+/// Tells `peer` what the database answered to what they asked of the marketplace (and asks
+/// it for the offers again after a change, with `accounts`). What they bought, if they did,
+/// for the seller to be paid.
+pub(super) fn answered(
+    peer: &mut Peer,
+    reply: MarketReply,
+    accounts: Option<&Accounts>,
+    shops: &[Shop],
+    catalogue: &Shared,
+) -> Option<Sold> {
+    peer.market_waiting = peer.market_waiting.saturating_sub(1);
+    let mut sold = None;
+    let why = match reply {
+        MarketReply::Offers(Ok(rows)) => {
+            let offers = (rows.iter())
+                .filter_map(|row| {
+                    let (what, _) = read_offer(catalogue, row)?;
+                    Some(OfferView {
+                        id: row.id as u64,
+                        seller: row.seller_name.clone(),
+                        mine: peer.account == Some(row.seller),
+                        price: row.price,
+                        what,
+                    })
+                })
+                .collect();
+            peer.tell(&ToClient::Market(Box::new(Market { offers })));
+            return None;
+        }
+        MarketReply::Offered(Ok(_)) => {
+            peer.offering.pop_front();
+            None
+        }
+        MarketReply::Offered(Err(why)) => {
+            // Back, into the garage.
+            if let Some(pending) = peer.offering.pop_front() {
+                into_garage(peer, pending);
+            }
+            Some(format!("{why}: it's in your garage"))
+        }
+        MarketReply::Withdrawn(Ok(row)) => {
+            if let Some((_, pending)) = read_offer(catalogue, &row) {
+                into_garage(peer, pending);
+            }
+            None
+        }
+        MarketReply::Bought(Ok(row)) => {
+            if let Some((what, pending)) = read_offer(catalogue, &row) {
+                let called = offer_name(catalogue, &what);
+                peer.tell(&ToClient::Chat {
+                    from: super::protocol::SERVER,
+                    text: format!(
+                        "You bought the {called} for {}: it's in your garage",
+                        trade::euros(row.price)
+                    ),
+                });
+                into_garage(peer, pending);
+                sold = Some(Sold {
+                    seller: row.seller,
+                    price: row.price,
+                    what: called,
+                });
+            }
+            peer.paid(-row.price);
+            None
+        }
+        MarketReply::Offers(Err(why))
+        | MarketReply::Withdrawn(Err(why))
+        | MarketReply::Bought(Err(why)) => Some(why),
+    };
+    if let Some(why) = &why {
+        info!("Player {}: the marketplace: {why}", peer.id);
+    }
+    if let Some(accounts) = accounts {
+        accounts.offers(peer.id);
+        peer.market_waiting += 1;
+    }
+    tell(peer, shops, why);
+    sold
 }

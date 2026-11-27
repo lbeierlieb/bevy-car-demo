@@ -96,7 +96,16 @@ impl Plugin for ServerPlugin {
             .insert_resource(Time::<Fixed>::from_hz(crate::sim::CHASSIS_HZ))
             .add_systems(
                 Update,
-                (accept, receive, keep, run_shadows, run_rounds, haunt, send)
+                (
+                    accept,
+                    receive,
+                    keep,
+                    market,
+                    run_shadows,
+                    run_rounds,
+                    haunt,
+                    send,
+                )
                     .chain()
                     .run_if(resource_exists::<Server>),
             )
@@ -288,11 +297,16 @@ pub struct Peer {
     at_marker: Option<Marker>,
     /// What they own besides the car they drive, and its revision last saved.
     pub owned: Owned,
-    owned_saved: u32,
+    pub(super) owned_saved: u32,
     /// What's in their wallet (cents), and how many times the server changed it (a
     /// database's word on it from before a change is stale).
     pub money: i64,
     money_changes: u32,
+    /// How many things they asked of the marketplace the database hasn't answered yet
+    /// (what it did is in the database, not here, until it has), and what they offered
+    /// meanwhile (in case it's refused).
+    pub(super) market_waiting: u32,
+    pub(super) offering: VecDeque<super::trading::Pending>,
 }
 
 /// What a player has been told of a car: its looks' revision and the name it shows, and
@@ -318,13 +332,18 @@ impl Peer {
     /// and with an account saves it with everything they own now, in one go: what changed
     /// with it is what the money paid for.
     pub(super) fn pay(&mut self, delta: i64, accounts: Option<&Accounts>, catalogue: &Catalogue) {
-        self.money += delta;
-        self.money_changes = self.money_changes.wrapping_add(1);
+        self.paid(delta);
         if let (Some(accounts), Some(account)) = (accounts, self.account) {
             let belongings = super::stash::belongings(self, catalogue);
             accounts.pay(account, delta, Some(belongings));
             self.owned_saved = self.owned.revision;
         }
+    }
+
+    /// Their wallet changed by `delta` cents (the database knows already).
+    pub(super) fn paid(&mut self, delta: i64) {
+        self.money += delta;
+        self.money_changes = self.money_changes.wrapping_add(1);
     }
 }
 
@@ -363,6 +382,8 @@ fn accept(
             owned_saved: 0,
             money: 0,
             money_changes: 0,
+            market_waiting: 0,
+            offering: VecDeque::new(),
         });
     }
 }
@@ -643,6 +664,16 @@ fn receive(
                 info!("{name} left (player {})", peer.id);
                 left.push((peer.id, name.clone()));
             }
+            let server = &mut *server;
+            if peer.market_waiting > 0
+                && let Some(accounts) = server.accounts.as_mut()
+            {
+                // What the marketplace did for them, before what they own is saved.
+                accounts.flush(std::time::Duration::from_secs(2));
+                for (_, reply) in accounts.market(Some(peer.id)) {
+                    super::trading::answered(&mut peer, reply, None, &server.shops, &catalogue);
+                }
+            }
             if let (Some(accounts), Some(account)) = (&server.accounts, peer.account) {
                 save(&mut peer, accounts, &catalogue);
                 accounts.release(account);
@@ -820,7 +851,8 @@ fn save(peer: &mut Peer, accounts: &Accounts, catalogue: &Catalogue) {
     let Some(account) = peer.account else {
         return;
     };
-    if peer.owned.revision != peer.owned_saved {
+    // (While the marketplace has things to answer, the database knows better.)
+    if peer.owned.revision != peer.owned_saved && peer.market_waiting == 0 {
         accounts.save_all(account, super::stash::belongings(peer, catalogue));
         peer.owned_saved = peer.owned.revision;
     } else if let Some((spec, car)) = peer.shadow.kept() {
@@ -871,6 +903,39 @@ fn keep(
         server.saved = now;
         for mut peer in &mut peers {
             save(&mut peer, accounts, &catalogue);
+        }
+    }
+}
+
+/// What the database did at the marketplace for players: each told, and a seller playing
+/// here paid at once (one elsewhere sees it with the next refresh of the wallets).
+fn market(mut server: ResMut<Server>, mut peers: Query<&mut Peer>, catalogue: Res<Current>) {
+    let server = &mut *server;
+    let Some(accounts) = server.accounts.as_mut() else {
+        return;
+    };
+    for (player, reply) in accounts.market(None) {
+        // (Gone meanwhile: the database has done it all.)
+        let Some(mut peer) = peers.iter_mut().find(|peer| peer.id == player) else {
+            continue;
+        };
+        let sold =
+            super::trading::answered(&mut peer, reply, Some(accounts), &server.shops, &catalogue);
+        let Some(sold) = sold else {
+            continue;
+        };
+        let seller = peers.iter_mut().find(|p| p.account == Some(sold.seller));
+        if let Some(mut seller) = seller {
+            seller.paid(sold.price);
+            super::stash::tell(&mut seller, &server.shops, None);
+            seller.tell(&ToClient::Chat {
+                from: SERVER,
+                text: format!(
+                    "Your {} was sold at the marketplace for {}",
+                    sold.what,
+                    crate::trade::euros(sold.price)
+                ),
+            });
         }
     }
 }

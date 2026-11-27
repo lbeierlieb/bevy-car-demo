@@ -1093,6 +1093,7 @@ mod tests {
             .block_on(async {
                 let store = crate::db::Store::open(&url).await.unwrap();
                 store.add_user("Anna", "secret").await.unwrap();
+                store.add_user("Ben", "secret").await.unwrap();
             });
         let accounts = accounts::Accounts::open(&url, guests).unwrap();
         let mut app = server(listener);
@@ -1495,6 +1496,161 @@ mod tests {
         // Gone from the dealer's (what was bought).
         let cars = connection(&anna).stock.clone().unwrap().cars;
         assert!(cars.iter().all(|w| w.id != first.id));
+        let _ = std::fs::remove_file(file);
+    }
+
+    /// Runs a while with the database answering on its thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn settle(apps: &mut [&mut App]) {
+        for _ in 0..40 {
+            run(apps, 1);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        run(apps, 20);
+    }
+
+    /// Two players at the marketplace: Anna offers a part from her garage (locked there,
+    /// gone from what she owns), Ben sees it and buys it (not at another price, and only
+    /// once): the money goes to her, the part to his garage. She takes another offer back
+    /// (into her garage; it can't be bought then), and is paid for a third while she's
+    /// away. A guest can buy but not offer.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn players_trade_at_the_marketplace() {
+        use super::server::Peer;
+        use crate::shops::{Shop, ShopKind};
+        use crate::trade::{Offering, Origin, START_MONEY, Trade};
+        let listener = LoopbackListener::default();
+        let (file, mut server) = server_with_accounts(&listener, true);
+        let shop = Shop {
+            kind: ShopKind::Market,
+            name: "Markt".into(),
+            at: Vec2::ZERO,
+            sells: Vec::new(),
+        };
+        let with = server.world_mut().remove_resource::<Server>().unwrap();
+        server.insert_resource(with.with_shops(vec![shop]));
+        let mut anna = account_driver(&listener, "Anna", "secret");
+        assert!(matches!(
+            log_in(&mut server, &mut anna),
+            Status::Joined { .. }
+        ));
+        let mut ben = account_driver(&listener, "Ben", "secret");
+        assert!(matches!(
+            log_in(&mut server, &mut ben),
+            Status::Joined { .. }
+        ));
+        let catalogue = car(&mut anna).setup.build.catalogue.clone();
+        // Three parts in Anna's garage, there for the test.
+        let clutch = |id: &str| {
+            let def = catalogue.defs.iter().position(|d| d.id == id).unwrap();
+            crate::items::Item::new(&catalogue, def, 0)
+        };
+        let parts = [
+            clutch("clutch.sport"),
+            clutch("clutch.race"),
+            clutch("clutch.stock"),
+        ];
+        let mut peers = server.world_mut().query::<&mut Peer>();
+        for mut peer in peers.iter_mut(server.world_mut()) {
+            if peer.name.as_deref() == Some("Anna") {
+                peer.owned.parts = parts.to_vec();
+                peer.owned.touch();
+            }
+        }
+        let ask = |player: &mut App, trade: Trade| {
+            player
+                .world_mut()
+                .resource_mut::<Connection>()
+                .say(&protocol::ToServer::Trade(trade));
+        };
+        let offer = |anna: &mut App, price| {
+            let what = Offering::Part {
+                from: Origin::Garage,
+                item: 0,
+            };
+            ask(anna, Trade::Offer { what, price });
+        };
+        offer(&mut anna, 12_000);
+        settle(&mut [&mut server, &mut anna, &mut ben]);
+        assert_eq!(connection(&anna).owned.parts, parts[1..], "locked there");
+        let market = connection(&anna).market.clone().expect("the offers");
+        assert_eq!(market.offers.len(), 1);
+        assert!(market.offers[0].mine);
+        // Ben looks and buys.
+        ask(&mut ben, Trade::Look);
+        settle(&mut [&mut server, &mut anna, &mut ben]);
+        let offers = connection(&ben).market.clone().expect("the offers").offers;
+        assert_eq!(offers.len(), 1);
+        let first = offers[0].clone();
+        assert!(!first.mine);
+        assert_eq!(first.seller, "Anna");
+        assert_eq!(first.what, crate::trade::Offered::Part(parts[0].clone()));
+        let buy = |ben: &mut App, offer: u64, price| ask(ben, Trade::BuyOffer { offer, price });
+        buy(&mut ben, first.id, 9_000);
+        settle(&mut [&mut server, &mut anna, &mut ben]);
+        assert!(connection(&ben).refused.is_some(), "another price");
+        assert!(connection(&ben).owned.parts.is_empty());
+        buy(&mut ben, first.id, 12_000);
+        settle(&mut [&mut server, &mut anna, &mut ben]);
+        assert_eq!(connection(&ben).owned.parts, [parts[0].clone()]);
+        assert_eq!(connection(&ben).owned.money, START_MONEY - 12_000);
+        assert_eq!(connection(&anna).owned.money, START_MONEY + 12_000);
+        assert!(connection(&ben).market.as_ref().unwrap().offers.is_empty());
+        buy(&mut ben, first.id, 12_000);
+        settle(&mut [&mut server, &mut anna, &mut ben]);
+        assert!(connection(&ben).refused.is_some(), "sold already");
+        assert_eq!(connection(&ben).owned.money, START_MONEY - 12_000);
+        // Offered and taken back.
+        offer(&mut anna, 5_000);
+        settle(&mut [&mut server, &mut anna, &mut ben]);
+        assert_eq!(connection(&anna).owned.parts, parts[2..]);
+        let second = connection(&anna).market.clone().unwrap().offers[0].clone();
+        ask(&mut anna, Trade::Withdraw { offer: second.id });
+        settle(&mut [&mut server, &mut anna, &mut ben]);
+        assert_eq!(connection(&anna).owned.parts.len(), 2);
+        assert!(connection(&anna).owned.parts.contains(&parts[1]));
+        buy(&mut ben, second.id, 5_000);
+        settle(&mut [&mut server, &mut anna, &mut ben]);
+        assert!(connection(&ben).refused.is_some(), "taken back");
+        // Offered, and bought while she's away: paid all the same.
+        offer(&mut anna, 2_500);
+        settle(&mut [&mut server, &mut anna, &mut ben]);
+        let third = connection(&anna).market.clone().unwrap().offers[0].clone();
+        anna.world_mut().resource_mut::<Connection>().close();
+        run(&mut [&mut server, &mut ben], 5);
+        buy(&mut ben, third.id, 2_500);
+        settle(&mut [&mut server, &mut ben]);
+        assert_eq!(connection(&ben).owned.parts.len(), 2);
+        let mut back = account_driver(&listener, "Anna", "secret");
+        assert!(matches!(
+            log_in(&mut server, &mut back),
+            Status::Joined { .. }
+        ));
+        assert_eq!(connection(&back).owned.money, START_MONEY + 12_000 + 2_500);
+        assert_eq!(connection(&back).owned.parts.len(), 1);
+        // A guest buys, but can't offer.
+        let mut cleo = account_driver(&listener, "Cleo", "");
+        assert!(matches!(
+            log_in(&mut server, &mut cleo),
+            Status::Joined { .. }
+        ));
+        offer(&mut back, 3_000);
+        settle(&mut [&mut server, &mut back, &mut cleo]);
+        let fourth = connection(&back).market.clone().unwrap().offers[0].clone();
+        buy(&mut cleo, fourth.id, 3_000);
+        settle(&mut [&mut server, &mut back, &mut cleo]);
+        assert_eq!(connection(&cleo).owned.parts.len(), 1);
+        assert_eq!(connection(&cleo).owned.money, START_MONEY - 3_000);
+        assert_eq!(connection(&back).owned.money, START_MONEY + 17_500);
+        let what = Offering::Part {
+            from: Origin::Garage,
+            item: 0,
+        };
+        ask(&mut cleo, Trade::Offer { what, price: 100 });
+        settle(&mut [&mut server, &mut cleo]);
+        assert!(connection(&cleo).refused.is_some());
+        assert_eq!(connection(&cleo).owned.parts.len(), 1);
         let _ = std::fs::remove_file(file);
     }
 

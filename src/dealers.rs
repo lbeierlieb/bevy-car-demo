@@ -1,6 +1,7 @@
 //! The windows of the shops that trade (see `trade`): a used parts shop's wares and what
-//! it pays for what we bring, a used car dealer's cars, and the view of what a car is built
-//! of and how worn each part is (also for the garage's cars). Their screens go on the shop's stack (`AtShop::stash`, as
+//! it pays for what we bring, a used car dealer's cars, the marketplace's offers (buying,
+//! offering at a price, taking an offer back), and the view of what a car or engine is
+//! built of and how worn each part is (also for the garage's cars). Their screens go on the shop's stack (`AtShop::stash`, as
 //! `trunk::Screen::Deal`), so "back" goes back a screen as in the trunk's. Everything is
 //! asked of the server (`ToServer::Trade`), which answers with what the shop has and what
 //! we own.
@@ -16,7 +17,7 @@ use crate::net::Connection;
 use crate::net::protocol::ToServer;
 use crate::owned::{Source, name};
 use crate::shops::{AtShop, ShopKind, Shops, shop_window};
-use crate::trade::{self, Trade, euros};
+use crate::trade::{self, Offered, Offering, Origin, Trade, euros};
 
 /// How long the server's word on why something wasn't done stays up (s).
 const REFUSAL: f64 = 8.0;
@@ -34,6 +35,12 @@ pub enum Screen {
     Car(u32),
     /// What a car or part is built of, and how worn.
     Inspect(Look),
+    /// An offer at the marketplace (by its number).
+    Offer(u64),
+    /// What we could offer there.
+    Offering,
+    /// Its price, before it's offered.
+    Price(Offering),
 }
 
 /// A car or part looked into.
@@ -43,6 +50,8 @@ pub enum Look {
     CarWare(u32),
     /// A car in our garage (by its place).
     Garage(usize),
+    /// An offer at the marketplace (by its number).
+    Offer(u64),
 }
 
 /// What's picked on the screens.
@@ -50,6 +59,9 @@ pub enum Look {
 pub struct Deals {
     /// Whether the car driven is traded in for a used car.
     pub trade_in: bool,
+    /// The price picked for an offer (its place in `trade::price_steps`), and for which.
+    pub price_step: f32,
+    pub price_for: Option<Offering>,
 }
 
 impl Screen {
@@ -60,6 +72,9 @@ impl Screen {
             Screen::SellOne(..) => "Sell it",
             Screen::Car(_) => "Used car",
             Screen::Inspect(_) => "What it's built of",
+            Screen::Offer(_) => "Offer",
+            Screen::Offering => "Offer something",
+            Screen::Price(_) => "At what price",
         }
     }
 }
@@ -68,8 +83,10 @@ pub struct DealersPlugin;
 
 impl Plugin for DealersPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Deals>()
-            .add_systems(EguiPrimaryContextPass, (used_parts, used_cars, screens));
+        app.init_resource::<Deals>().add_systems(
+            EguiPrimaryContextPass,
+            (used_parts, used_cars, market, screens),
+        );
     }
 }
 
@@ -183,6 +200,80 @@ fn used_cars(
     Ok(())
 }
 
+/// What an offer is called.
+fn offer_name(catalogue: &Catalogue, what: &Offered) -> String {
+    match what {
+        Offered::Part(item) => name(catalogue, item),
+        Offered::Car(parked) => crate::trunk::car_name(catalogue, &parked.car),
+    }
+}
+
+/// The marketplace's window: the offers, ours, and offering something.
+fn market(
+    mut contexts: EguiContexts,
+    (shops, mut at): (Res<Shops>, ResMut<AtShop>),
+    connection: Option<ResMut<Connection>>,
+    catalogue: Option<Res<Current>>,
+    time: Res<Time<Real>>,
+) -> Result {
+    let (Some(mut connection), Some(catalogue)) = (connection, catalogue) else {
+        return Ok(());
+    };
+    let catalogue = &catalogue.0;
+    let market = connection.market.clone();
+    let refused = refusal(&connection, &time);
+    let (mut look, mut go) = (false, None);
+    let ctx = contexts.ctx_mut()?;
+    shop_window(ctx, &shops, &mut at, ShopKind::Market, |ui, came_in| {
+        look = came_in;
+        if let Some(why) = &refused {
+            kit::warning(ui, why);
+        }
+        if kit::submenu(ui, Screen::Offering.title()).clicked() {
+            go = Some(Screen::Offering);
+        }
+        let Some(market) = &market else {
+            kit::note(ui, "Looking what's offered…");
+            return;
+        };
+        for (mine, title) in [(false, "Offers"), (true, "Your offers")] {
+            kit::section(ui, title);
+            let offers: Vec<_> = market.offers.iter().filter(|o| o.mine == mine).collect();
+            if offers.is_empty() {
+                kit::note(ui, "None.");
+            }
+            for offer in offers {
+                let label = format!(
+                    "{} ({})",
+                    offer_name(catalogue, &offer.what),
+                    trade::condition(catalogue, offer.what.item())
+                );
+                let label = if mine {
+                    label
+                } else {
+                    format!("{label}, from {}", offer.seller)
+                };
+                if kit::submenu_with(ui, &label, &euros(offer.price)).clicked() {
+                    go = Some(Screen::Offer(offer.id));
+                }
+            }
+        }
+        kit::note(
+            ui,
+            "Players offer parts and cars here at their own prices. What's bought is shipped \
+             to the buyer's garage; the seller is paid even when away.",
+        );
+    });
+    if look {
+        connection.refused = None;
+        connection.say(&ToServer::Trade(Trade::Look));
+    }
+    if let Some(screen) = go {
+        at.stash.push(crate::trunk::Screen::Deal(screen));
+    }
+    Ok(())
+}
+
 /// A whole number with its thousands apart: "123 000".
 fn thousands(n: u32) -> String {
     let digits = n.to_string();
@@ -280,7 +371,9 @@ fn screens(
     let trunk = &car.setup.cargo;
     let held = connection.owned.held_at(here).to_vec();
     let garage = connection.owned.cars.clone();
+    let garage_parts = connection.owned.parts.clone();
     let money = connection.owned.money;
+    let offers = (connection.market.as_ref()).map_or(Vec::new(), |m| m.offers.clone());
     let stock = (connection.stock.as_ref())
         .filter(|stock| usize::from(stock.shop) == here)
         .cloned()
@@ -417,11 +510,152 @@ fn screens(
                     let item = match look {
                         Look::CarWare(id) => stock.cars.iter().find(|w| w.id == id).map(|w| &w.car),
                         Look::Garage(i) => garage.get(i).map(|parked| &parked.car),
+                        Look::Offer(id) => {
+                            offers.iter().find(|o| o.id == id).map(|o| o.what.item())
+                        }
                     };
                     match item {
                         Some(item) => inspect(ui, catalogue, item),
                         None => kit::note(ui, "It's gone."),
                     }
+                }
+                Screen::Offer(id) => {
+                    let Some(offer) = offers.iter().find(|o| o.id == id) else {
+                        kit::note(ui, "It's gone.");
+                        up = kit::button(ui, "Back").clicked();
+                        return;
+                    };
+                    let item = offer.what.item();
+                    kit::info(ui, "Offered", &offer_name(catalogue, &offer.what));
+                    kit::info(ui, "By", &offer.seller);
+                    kit::info(ui, "Condition", &trade::condition(catalogue, item));
+                    if let Offered::Car(parked) = &offer.what {
+                        for loose in &parked.cargo {
+                            kit::info(ui, "In the trunk", &name(catalogue, loose));
+                        }
+                    }
+                    kit::info(ui, "Price", &euros(offer.price));
+                    if item.slots.iter().any(Option::is_some) {
+                        let look = Screen::Inspect(Look::Offer(id));
+                        if kit::submenu(ui, look.title()).clicked() {
+                            go = Some(look);
+                        }
+                    }
+                    if offer.mine {
+                        if kit::button(ui, "Take it back").clicked() {
+                            ask = Some(Trade::Withdraw { offer: id });
+                        }
+                        kit::note(ui, "Taken back, it goes into your garage.");
+                    } else {
+                        let afford = money >= offer.price;
+                        let label = format!("Buy it for {}", euros(offer.price));
+                        let buy = ui
+                            .add_enabled_ui(afford, |ui| kit::button(ui, &label))
+                            .inner;
+                        if buy.clicked() {
+                            ask = Some(Trade::BuyOffer {
+                                offer: id,
+                                price: offer.price,
+                            });
+                        }
+                        if !afford {
+                            kit::note(ui, "You haven't got enough money for it.");
+                        }
+                        kit::note(ui, "Bought, it's shipped to your garage.");
+                    }
+                }
+                Screen::Offering => {
+                    let lists = [
+                        (Origin::Trunk, "In the trunk", trunk.as_slice()),
+                        (Origin::Here, "Held for you here", held.as_slice()),
+                        (
+                            Origin::Garage,
+                            "Parts in your garage",
+                            garage_parts.as_slice(),
+                        ),
+                    ];
+                    for (from, title, items) in lists {
+                        kit::section(ui, title);
+                        if items.is_empty() {
+                            kit::note(ui, "Nothing.");
+                        }
+                        for (i, item) in items.iter().enumerate() {
+                            if kit::submenu(ui, &worn_name(catalogue, item)).clicked() {
+                                go = Some(Screen::Price(Offering::Part {
+                                    from,
+                                    item: i as u16,
+                                }));
+                            }
+                        }
+                    }
+                    kit::section(ui, "Cars in your garage");
+                    if garage.is_empty() {
+                        kit::note(ui, "None (the car you drive can't be offered).");
+                    }
+                    for (i, parked) in garage.iter().enumerate() {
+                        let label = format!(
+                            "{} ({})",
+                            crate::trunk::car_name(catalogue, &parked.car),
+                            trade::condition(catalogue, &parked.car)
+                        );
+                        if kit::submenu(ui, &label).clicked() {
+                            go = Some(Screen::Price(Offering::Car { car: i as u16 }));
+                        }
+                    }
+                    kit::note(
+                        ui,
+                        "What you offer stays here, locked, until someone buys it or you take \
+                         it back.",
+                    );
+                }
+                Screen::Price(what) => {
+                    let item = match what {
+                        Offering::Part { from, item } => {
+                            let list = match from {
+                                Origin::Trunk => trunk.as_slice(),
+                                Origin::Here => held.as_slice(),
+                                Origin::Garage => garage_parts.as_slice(),
+                            };
+                            list.get(usize::from(item))
+                        }
+                        Offering::Car { car } => {
+                            garage.get(usize::from(car)).map(|parked| &parked.car)
+                        }
+                    };
+                    let Some(item) = item else {
+                        up = true;
+                        return;
+                    };
+                    let car = matches!(what, Offering::Car { .. });
+                    if deals.price_for != Some(what) {
+                        // A price to start from: what a dealer would ask.
+                        let guess = if car {
+                            trade::car_price(catalogue, item, 120_000.0)
+                        } else {
+                            trade::selling_price(catalogue, item)
+                        };
+                        deals.price_for = Some(what);
+                        deals.price_step = trade::nearest_step(guess) as f32;
+                    }
+                    let what_name = if car {
+                        crate::trunk::car_name(catalogue, item)
+                    } else {
+                        name(catalogue, item)
+                    };
+                    kit::info(ui, "Offering", &what_name);
+                    kit::info(ui, "Condition", &trade::condition(catalogue, item));
+                    let steps = trade::price_steps();
+                    let last = (steps.len() - 1) as f32;
+                    let shown = |step: f32| euros(steps[(step as usize).min(steps.len() - 1)]);
+                    kit::slider(ui, "Price", &mut deals.price_step, 0.0..=last, 1.0, shown);
+                    let price = steps[(deals.price_step as usize).min(steps.len() - 1)];
+                    if kit::button(ui, &format!("Offer it for {}", euros(price))).clicked() {
+                        ask = Some(Trade::Offer { what, price });
+                    }
+                    kit::note(
+                        ui,
+                        "Left and right set the price. Guests can't offer, only buy.",
+                    );
                 }
             }
         });

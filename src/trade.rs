@@ -14,11 +14,18 @@
 //! with a mileage, their parts worn by it (tires and pads anyhow), in a paint of any kind,
 //! priced by what they're worth as worn (`car_price`). Buying one works as at a car dealer
 //! (the old car into the garage, or traded in: here it's worth `trade_in_price`).
+//!
+//! **The marketplace**: players offer parts (from the trunk, held for them there, or from
+//! their garage) and cars from their garage, at a price of their own; what's offered is
+//! locked there (gone from what they own) until it's bought or they take it back (into
+//! their garage). Whoever buys it pays the seller (even one who's away), and it's shipped
+//! to the buyer's garage. The offers are kept in the server's database, shared by every
+//! instance of it (`db`).
 
 use crate::catalogue::Catalogue;
 use crate::items::{Item, Kind, Panel, Wear};
 use crate::net::wire::{Reader, Wire};
-use crate::owned::Source;
+use crate::owned::{ParkedView, Source};
 use crate::shops::Shop;
 
 /// What a new player has (cents): an account when it's made, a guest when they join.
@@ -472,6 +479,89 @@ pub enum Trade {
     Sell { from: Source, item: u16 },
     /// A used car, by its number: the car driven goes into the garage, or is traded in.
     BuyCar { ware: u32, trade_in: bool },
+    /// At the marketplace: something offered for `price` cents.
+    Offer { what: Offering, price: i64 },
+    /// At the marketplace: our offer taken back (into the garage).
+    Withdraw { offer: u64 },
+    /// At the marketplace: an offer bought for `price` (what we were shown).
+    BuyOffer { offer: u64, price: i64 },
+}
+
+/// The least and most an offer at the marketplace may ask (cents).
+pub const LEAST_PRICE: i64 = 100;
+pub const MOST_PRICE: i64 = 100_000_000;
+
+/// Where a part offered at the marketplace is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    Trunk,
+    /// Held for us at the marketplace.
+    Here,
+    Garage,
+}
+
+/// What's offered at the marketplace: a part (by its place in the list it's in) or a car
+/// in the garage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Offering {
+    Part { from: Origin, item: u16 },
+    Car { car: u16 },
+}
+
+/// What an offer is of.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Offered {
+    Part(Item),
+    Car(ParkedView),
+}
+
+impl Offered {
+    /// The part, or the car's tree.
+    pub fn item(&self) -> &Item {
+        match self {
+            Offered::Part(item) => item,
+            Offered::Car(parked) => &parked.car,
+        }
+    }
+}
+
+/// An offer at the marketplace as players see it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OfferView {
+    pub id: u64,
+    pub seller: String,
+    /// Ours.
+    pub mine: bool,
+    pub price: i64,
+    pub what: Offered,
+}
+
+/// The offers at the marketplace.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Market {
+    pub offers: Vec<OfferView>,
+}
+
+/// The prices a price is picked from (cents): 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8 € and
+/// every tenfold of them up to `MOST_PRICE`.
+pub fn price_steps() -> Vec<i64> {
+    const STEPS: [i64; 10] = [100, 120, 150, 200, 250, 300, 400, 500, 600, 800];
+    let mut steps = Vec::new();
+    let mut scale = 1;
+    while STEPS[0] * scale < MOST_PRICE {
+        steps.extend(STEPS.iter().map(|step| step * scale));
+        scale *= 10;
+    }
+    steps.push(MOST_PRICE);
+    steps
+}
+
+/// The step of `price_steps` nearest to `price`.
+pub fn nearest_step(price: i64) -> usize {
+    let steps = price_steps();
+    (0..steps.len())
+        .min_by_key(|&i| (steps[i] - price).abs())
+        .unwrap_or(0)
 }
 
 impl Wire for Ware {
@@ -542,6 +632,17 @@ impl Wire for Trade {
                 ware.put(out);
                 trade_in.put(out);
             }
+            Trade::Offer { what, price } => {
+                4u8.put(out);
+                what.put(out);
+                price.put(out);
+            }
+            Trade::Withdraw { offer } => (5u8, offer).put(out),
+            Trade::BuyOffer { offer, price } => {
+                6u8.put(out);
+                offer.put(out);
+                price.put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -556,8 +657,96 @@ impl Wire for Trade {
                 ware: r.get()?,
                 trade_in: r.get()?,
             },
+            4 => Trade::Offer {
+                what: r.get()?,
+                price: r.get()?,
+            },
+            5 => Trade::Withdraw { offer: r.get()? },
+            6 => Trade::BuyOffer {
+                offer: r.get()?,
+                price: r.get()?,
+            },
             _ => return None,
         })
+    }
+}
+
+impl Wire for Offering {
+    fn put(&self, out: &mut Vec<u8>) {
+        match *self {
+            Offering::Part { from, item } => {
+                let from = match from {
+                    Origin::Trunk => 0u8,
+                    Origin::Here => 1,
+                    Origin::Garage => 2,
+                };
+                (0u8, from).put(out);
+                item.put(out);
+            }
+            Offering::Car { car } => (1u8, car).put(out),
+        }
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        Some(match r.get::<u8>()? {
+            0 => Offering::Part {
+                from: match r.get::<u8>()? {
+                    0 => Origin::Trunk,
+                    1 => Origin::Here,
+                    2 => Origin::Garage,
+                    _ => return None,
+                },
+                item: r.get()?,
+            },
+            1 => Offering::Car { car: r.get()? },
+            _ => return None,
+        })
+    }
+}
+
+impl Wire for OfferView {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.id.put(out);
+        self.seller.put(out);
+        self.mine.put(out);
+        self.price.put(out);
+        match &self.what {
+            Offered::Part(item) => {
+                0u8.put(out);
+                item.put(out);
+            }
+            Offered::Car(parked) => {
+                1u8.put(out);
+                parked.put(out);
+            }
+        }
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        let (id, seller, mine, price) = (r.get()?, r.get()?, r.get()?, r.get()?);
+        let what = match r.get::<u8>()? {
+            0 => {
+                let item: Item = r.get()?;
+                (item.def(r.catalogue()?).kind != Kind::Chassis).then_some(())?;
+                Offered::Part(item)
+            }
+            1 => Offered::Car(r.get()?),
+            _ => return None,
+        };
+        Some(Self {
+            id,
+            seller,
+            mine,
+            price,
+            what,
+        })
+    }
+}
+
+impl Wire for Market {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.offers.put(out);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        Some(Self { offers: r.get()? })
     }
 }
 
@@ -650,6 +839,22 @@ mod tests {
                 ware: 9,
                 trade_in: true,
             },
+            Trade::Offer {
+                what: Offering::Part {
+                    from: Origin::Garage,
+                    item: 4,
+                },
+                price: 12_000,
+            },
+            Trade::Offer {
+                what: Offering::Car { car: 1 },
+                price: 300_000,
+            },
+            Trade::Withdraw { offer: 77 },
+            Trade::BuyOffer {
+                offer: 78,
+                price: 900,
+            },
         ] {
             assert_eq!(decode_with(&encode(&trade), None), Some(trade));
         }
@@ -698,5 +903,49 @@ mod tests {
         };
         let read: Stock = decode_with(&encode(&stock), Some(&catalogue)).unwrap();
         assert_eq!(read, stock);
+    }
+
+    #[test]
+    fn prices_are_picked_in_steps_and_offers_go_over_the_wire() {
+        let steps = price_steps();
+        assert_eq!(steps[0], LEAST_PRICE);
+        assert_eq!(*steps.last().unwrap(), MOST_PRICE);
+        assert!(steps.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(steps[nearest_step(149_000)], 150_000);
+        assert_eq!(nearest_step(1), 0);
+        let catalogue = builtin();
+        let car = catalogue.trims[0].car.clone();
+        let part = car.slots.iter().flatten().next().unwrap().clone();
+        let market = Market {
+            offers: vec![
+                OfferView {
+                    id: 3,
+                    seller: "Anna".into(),
+                    mine: false,
+                    price: 1500,
+                    what: Offered::Part(part),
+                },
+                OfferView {
+                    id: 4,
+                    seller: "Ben".into(),
+                    mine: true,
+                    price: 300_000,
+                    what: Offered::Car(ParkedView {
+                        car: car.clone(),
+                        cargo: Vec::new(),
+                    }),
+                },
+            ],
+        };
+        let read: Market = decode_with(&encode(&market), Some(&catalogue)).unwrap();
+        assert_eq!(read, market);
+        // A car isn't a part.
+        let wrong = Market {
+            offers: vec![OfferView {
+                what: Offered::Part(car),
+                ..market.offers[0].clone()
+            }],
+        };
+        assert!(decode_with::<Market>(&encode(&wrong), Some(&catalogue)).is_none());
     }
 }

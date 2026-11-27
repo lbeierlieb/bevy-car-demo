@@ -34,6 +34,42 @@ pub struct Belongings {
     pub items: Vec<(String, String)>,
 }
 
+/// What an offer at the marketplace is of (`OfferRow::what`): a part (with what's fitted
+/// into it), or a car.
+pub const PART: &str = "part";
+pub const CAR: &str = "car";
+
+/// An offer at the marketplace as the database keeps it: the part or car as text
+/// (`saved::write_items`, `saved::write`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct OfferRow {
+    pub id: i64,
+    pub seller: AccountId,
+    pub seller_name: String,
+    /// `PART` or `CAR`.
+    pub what: String,
+    pub data: String,
+    /// Cents.
+    pub price: i64,
+}
+
+/// What the database says to what a player asked of the marketplace.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MarketReply {
+    /// The offers there are.
+    Offers(Result<Vec<OfferRow>, String>),
+    /// Their offer is up (its number), or why not.
+    Offered(Result<i64, String>),
+    /// Their offer taken back: what it was (in their garage now), or why not.
+    Withdrawn(Result<OfferRow, String>),
+    /// What they bought (in their garage now, if they have an account; the seller paid), or
+    /// why not.
+    Bought(Result<OfferRow, String>),
+}
+
+/// The most offers a player has up at a time.
+pub const MOST_OFFERS: usize = 20;
+
 /// Someone let in: the name they play as, their account (none for a guest) and what they
 /// own as saved.
 #[derive(Clone, Debug, PartialEq)]
@@ -53,7 +89,7 @@ mod native {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::db::{Admission, Answer, Database, Login};
+    use crate::db::{Admission, Answer, Database, Login, MarketJob};
 
     /// A server's database and who it lets in.
     pub struct Accounts {
@@ -156,6 +192,63 @@ mod native {
             self.db.pay(account, delta, belongings);
         }
 
+        /// Asks for the offers at the marketplace, for player `peer`.
+        pub fn offers(&self, peer: PlayerId) {
+            self.db.market(peer, MarketJob::Offers);
+        }
+
+        /// Puts up an offer for player `peer` (account `seller`, called `seller_name`):
+        /// `data` (what `what` says it is) for `price` cents, with what they own without it
+        /// (`belongings`).
+        pub fn offer(
+            &self,
+            peer: PlayerId,
+            (seller, seller_name): (AccountId, String),
+            (what, data, price): (&'static str, String, i64),
+            belongings: Belongings,
+        ) {
+            let ask = MarketJob::Offer {
+                seller,
+                seller_name,
+                what,
+                data,
+                price,
+                belongings,
+            };
+            self.db.market(peer, ask);
+        }
+
+        /// Player `peer` (account `seller`) takes their offer back.
+        pub fn withdraw(&self, peer: PlayerId, seller: AccountId, offer: i64) {
+            self.db.market(peer, MarketJob::Withdraw { seller, offer });
+        }
+
+        /// Player `peer` (account `buyer`, none for a guest) buys an offer for `price`.
+        pub fn buy_offer(&self, peer: PlayerId, buyer: Option<AccountId>, offer: i64, price: i64) {
+            let ask = MarketJob::Buy {
+                buyer,
+                offer,
+                price,
+            };
+            self.db.market(peer, ask);
+        }
+
+        /// The database's answers about the marketplace since this was last asked, for
+        /// whom (only player `only`'s, if given: the others' wait).
+        pub fn market(&mut self, only: Option<PlayerId>) -> Vec<(PlayerId, MarketReply)> {
+            self.said.extend(self.db.answers());
+            let mut replies = Vec::new();
+            self.said.retain_mut(|answer| match answer {
+                Answer::Market { peer, reply } if only.is_none_or(|only| only == *peer) => {
+                    let reply = std::mem::replace(reply, MarketReply::Offers(Ok(Vec::new())));
+                    replies.push((*peer, reply));
+                    false
+                }
+                _ => true,
+            });
+            replies
+        }
+
         /// Saves `account`'s car driven (text, `saved::write`).
         pub fn save(&self, account: AccountId, car: String) {
             self.db.save(account, car);
@@ -201,6 +294,20 @@ impl Accounts {
         Vec::new()
     }
     pub fn pay(&self, _: AccountId, _: i64, _: Option<Belongings>) {}
+    pub fn offers(&self, _: PlayerId) {}
+    pub fn offer(
+        &self,
+        _: PlayerId,
+        _: (AccountId, String),
+        _: (&'static str, String, i64),
+        _: Belongings,
+    ) {
+    }
+    pub fn withdraw(&self, _: PlayerId, _: AccountId, _: i64) {}
+    pub fn buy_offer(&self, _: PlayerId, _: Option<AccountId>, _: i64, _: i64) {}
+    pub fn market(&mut self, _: Option<PlayerId>) -> Vec<(PlayerId, MarketReply)> {
+        Vec::new()
+    }
     pub fn flush(&self, _: Duration) -> bool {
         true
     }

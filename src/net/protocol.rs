@@ -38,11 +38,11 @@ use crate::physics::suspension::ArmGeometry;
 use crate::shops::Shop;
 use crate::spec::CarSpec;
 use crate::terrain::Spawn;
-use crate::trade::{Stock, Trade};
+use crate::trade::{Market, Stock, Trade};
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 47;
+pub const PROTOCOL: u32 = 48;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -221,6 +221,8 @@ pub enum ToClient {
     },
     /// What the shop that trades we're at has, after we asked (`ToServer::Trade`).
     Stock(Box<Stock>),
+    /// The offers at the marketplace, after we asked or changed something there.
+    Market(Box<Market>),
 }
 
 /// A player's car's whole state as the server drives it: after their step `step`, which
@@ -560,6 +562,10 @@ impl Wire for ToClient {
                 23u8.put(out);
                 stock.put(out);
             }
+            ToClient::Market(market) => {
+                24u8.put(out);
+                market.put(out);
+            }
         }
     }
 
@@ -619,6 +625,7 @@ impl Wire for ToClient {
             },
             22 => ToClient::Done { id: r.get()? },
             23 => ToClient::Stock(Box::new(r.get()?)),
+            24 => ToClient::Market(Box::new(r.get()?)),
             _ => return None,
         })
     }
