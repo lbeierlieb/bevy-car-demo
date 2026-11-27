@@ -7,8 +7,9 @@ use crate::chassis::{CarBuild, Chassis};
 use crate::input::WheelInput;
 use crate::items::{Aero, Does, Item, Kind, Seat};
 use crate::net::wire::{Reader, Wire, decode, encode};
+use crate::physics::brakes::Brake;
 use crate::physics::collision::Obb;
-use crate::physics::drivetrain::{Differential, Drive, Drivetrain, EngineSetup, REVERSE_SPEED};
+use crate::physics::drivetrain::{Differential, Drivetrain, EngineSetup, REVERSE_SPEED};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::parts::Parts;
 use crate::physics::fuel::{self, Fuel, Tank};
@@ -22,6 +23,16 @@ use crate::wheels::{HUB_INERTIA, Wheel};
 
 /// A tank with less than this in it (L) leaves a car stranded (`Car::stranded`).
 pub const STRANDED_LITRES: f32 = 0.5;
+
+/// What a corner without a brake part has (never, in a car read whole).
+const NO_BRAKE: Brake = Brake {
+    torque: 0.0,
+    min_rim: 0,
+    heat: 1000.0,
+    cooling: [10.0, 1.0],
+    fade: 600.0,
+    life: 1.0,
+};
 
 /// Where the seats' masses sit: the front seats and the rear bench this far behind the
 /// driver's eyes (m).
@@ -61,6 +72,8 @@ pub struct CarSetup {
     /// Total brake torque, the front axle's share of it, and handbrake torque per rear wheel.
     pub brake_torque: f32,
     pub brake_bias: f32,
+    /// The brakes' parts front and rear (their heat, fade and wear).
+    pub brakes: [Brake; 2],
     pub handbrake_torque: f32,
     /// Drag coefficient times frontal area (m²).
     pub drag_area: f32,
@@ -151,19 +164,15 @@ impl CarSetup {
                 1.0 - front_share
             }
         };
-        let unsprung = |i: usize| chassis.hub[i] + build.wheels[i].mass();
-        // Each tire's load at rest.
-        let static_load = |i: usize| (laden * share(i) / 2.0 + unsprung(i)) * 9.81;
-        // The tires' friction at rest (warm and new), averaged over the car by load: of the
-        // ones fitted, and of the factory's, which the brakes are made for.
-        let compounds = &build.catalogue.compounds;
-        let grip_of = |wheels: &[Wheel; 2]| {
-            let load = |i: usize| static_load(i);
-            let rubber = |i: usize| &compounds[wheels[i].compound].rubber;
-            let friction = |i: usize| wheels[i].tire.params(rubber(i)).friction(load(i));
-            (friction(0) * load(0) + friction(1) * load(1)) / (load(0) + load(1))
-        };
-        let (grip, factory_grip) = (grip_of(&build.wheels), grip_of(&chassis.wheels));
+        // The brakes front and rear (the left corner's, as the bridge goes).
+        let brakes = [0, 1].map(|i| match car.fitted(catalogue, Kind::Brake).nth(2 * i) {
+            Some(item) => match item.def(catalogue).does {
+                Does::Brake(brake) => (brake, item.def(catalogue).mass),
+                _ => (NO_BRAKE, 0.0),
+            },
+            None => (NO_BRAKE, 0.0),
+        });
+        let unsprung = |i: usize| chassis.hub[i] + build.wheels[i].mass() + brakes[i].1;
         let axle = |i: usize| {
             let wheel = &build.wheels[i];
             let radius = wheel.tire.radius();
@@ -211,17 +220,9 @@ impl CarSetup {
         };
 
         let mass = laden + 2.0 * (unsprung(0) + unsprung(1));
-        let radius = (build.wheels[0].tire.radius() + build.wheels[1].tire.radius()) / 2.0;
-        // Braking as hard as the tires can, the weight shifts forward by the height of
-        // the centre of mass over the wheelbase; a little more to the front keeps the
-        // rear wheels from locking first.
-        // Rear-wheel drive adds the engine's braking at the back.
-        let margin = if chassis.drive == Drive::Rear {
-            0.06
-        } else {
-            0.03
-        };
-        let brake_bias = front_share + grip * chassis.cg_height / chassis.wheelbase + margin;
+        // Each axle's brakes' share of the braking, and moved as the alignment shop set it.
+        let [front, rear] = brakes.map(|(brake, _)| brake.torque);
+        let brake_bias = (front / (front + rear).max(1.0) + build.brake_balance).clamp(0.3, 0.95);
         let differential = if build.limited_slip {
             Differential::LIMITED_SLIP
         } else {
@@ -283,8 +284,9 @@ impl CarSetup {
                 differential,
                 centre: differential,
             },
-            brake_torque: chassis.brakes * factory_grip * mass * 9.81 * radius * build.brake_force,
-            brake_bias: (brake_bias.min(0.9) + build.brake_balance).clamp(0.3, 0.95),
+            brake_torque: 2.0 * (front + rear) * build.brake_force,
+            brake_bias,
+            brakes: brakes.map(|(brake, _)| brake),
             handbrake_torque: 2.0 * mass,
             drag_area: chassis.drag_area + tire_drag(&build.wheels, &chassis.wheels) + aero.drag,
             downforce_area: [0, 1].map(|i| chassis.downforce_area[i] + aero.downforce[i]),
@@ -630,6 +632,8 @@ impl Car {
         placed.drivetrain.engine.thermal = self.drivetrain.engine.thermal;
         for (corner, old) in placed.corners.iter_mut().zip(&self.corners) {
             corner.tread = old.tread;
+            corner.brake = old.brake;
+            corner.brake.torque = 0.0;
         }
         // A hold goes on.
         placed.hold = self.hold;
@@ -656,10 +660,21 @@ impl Car {
             new.chassis == old.chassis && new.wheels[axle] == old.wheels[axle]
         };
         let same_tires = [true, false].map(same_tires);
+        // Each corner keeps its brake's state if it's the same brake.
+        let brakes = |setup: &CarSetup| {
+            let catalogue = &setup.build.catalogue;
+            (setup.car.fitted(catalogue, Kind::Brake))
+                .map(|item| item.def)
+                .collect::<Vec<_>>()
+        };
+        let same_brakes = brakes(&car.setup) == brakes(&self.setup);
         for (corner, old) in car.corners.iter_mut().zip(&self.corners) {
             corner.omega = old.omega;
             if same_tires[usize::from(!corner.front)] {
                 corner.tread = old.tread;
+            }
+            if same_brakes {
+                corner.brake = old.brake;
             }
         }
         car.fuel = self.fuel;
@@ -1591,6 +1606,36 @@ pub mod tests_with_parts {
         assert!(without(&["Left mirror", "Right mirror"]) < stock);
         assert!(without(&["Bonnet"]) > stock + 0.02);
         assert!(without(&["Left door", "Right door"]) > stock);
+    }
+
+    #[test]
+    fn brakes_fade_under_repeated_stops_and_their_pads_wear() {
+        let terrain = Terrain::flat();
+        let mut car = Car::spawn_at(0, CarSetup::factory(0, 0), &terrain, 0.0, 0.0, 0.0);
+        car.drivetrain.neutral();
+        car.parking_brake = false;
+        // Stops from 30 m/s to 10 m/s, one after another: how far each takes.
+        let mut stops = Vec::new();
+        for _ in 0..12 {
+            car.body.position = Vec3::new(0.0, car.body.position.y, 300.0);
+            let forward = car.body.rotation * Vec3::NEG_Z;
+            car.body.velocity = forward * 30.0;
+            for corner in &mut car.corners {
+                corner.omega = 30.0 / car.setup.axle(corner.front).tire.radius;
+            }
+            car.controls.brake = 1.0;
+            let start = car.body.position;
+            while car.forward_speed() > 10.0 {
+                crate::sim::step_car(&mut car, &terrain, crate::sim::STEP);
+            }
+            stops.push(car.body.position.distance(start));
+        }
+        let (first, last) = (stops[0], stops[stops.len() - 1]);
+        let hot = car.corners[0].brake.temperature;
+        assert!(last > first * 1.15, "{stops:?}, {hot} K");
+        assert!(car.corners[0].brake.wear > 0.0);
+        // The front brakes do most of it.
+        assert!(car.corners[0].brake.temperature > car.corners[2].brake.temperature);
     }
 
     #[test]

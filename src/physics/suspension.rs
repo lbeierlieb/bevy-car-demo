@@ -270,6 +270,8 @@ pub struct Corner {
     pub spin: f32,
     /// The tire's rubber: temperatures and wear.
     pub tread: Tread,
+    /// The brake: its temperature and pads.
+    pub brake: crate::physics::brakes::BrakeState,
     /// The slips the tire acts on (the slip ratio, and the slip angle's tangent): they lag
     /// the patch's motion as the carcass flexes, see `TireParams::relax`.
     pub slips: [f32; 2],
@@ -300,6 +302,7 @@ impl Corner {
             omega: 0.0,
             spin: 0.0,
             tread: Tread::default(),
+            brake: Default::default(),
             slips: [0.0; 2],
             steer: 0.0,
             drive_torque: 0.0,
@@ -504,6 +507,7 @@ crate::snapshot::snapshot!(Corner {
     omega,
     spin,
     tread,
+    brake,
     slips,
     steer,
     drive_torque,

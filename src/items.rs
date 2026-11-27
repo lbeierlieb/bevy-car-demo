@@ -104,7 +104,7 @@ pub enum Does {
     /// A tire of the catalogue's compound (by its place), in any of the sizes there are
     /// (`TireSize::all`, the item's `variant`).
     Tire(usize),
-    Brake,
+    Brake(crate::physics::brakes::Brake),
     /// A spring and a damper from the catalogue's suspension kits (by its place).
     Spring(usize),
     Damper(usize),
@@ -208,10 +208,12 @@ pub enum Wear {
     Turbo,
     /// A tire's tread, each rib's.
     Tread,
+    /// A brake's pads.
+    Pads,
 }
 
 impl Wear {
-    pub const ALL: [Wear; 7] = [
+    pub const ALL: [Wear; 8] = [
         Wear::Pistons,
         Wear::Rods,
         Wear::Valves,
@@ -219,6 +221,7 @@ impl Wear {
         Wear::Bearings,
         Wear::Turbo,
         Wear::Tread,
+        Wear::Pads,
     ];
 }
 

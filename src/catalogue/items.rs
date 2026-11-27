@@ -9,6 +9,7 @@ use crate::items::{
     Aero, Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, Wear, assemble,
     chassis_knobs, damper_knobs, engine_knobs, knob, spring_knobs, tire_knobs, wing_knobs,
 };
+use crate::physics::brakes::Brake;
 use crate::physics::engine::ecu::EcuModel;
 use crate::physics::tire::STREET;
 use crate::wheels::Wheel;
@@ -336,22 +337,58 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
         .fits(name)
         .painted()
         .knobs(wing_knobs()));
+        // Torque (N·m), smallest rim, heat capacity (J/K), cooling standing and per m/s
+        // (W/K), fade temperature (K), the pads' life (MJ).
+        let brake = |torque, min_rim, heat, cooling, fade, life| Brake {
+            torque,
+            min_rim,
+            heat,
+            cooling,
+            fade,
+            life,
+        };
         let brakes = [
-            ("front-solid", "Solid front disc brake", 8.0),
-            ("front-vented", "Vented front disc brake", 10.0),
-            ("rear-drum", "Rear drum brake", 7.0),
-            ("rear-disc", "Rear disc brake", 6.0),
+            (
+                "front-solid",
+                "Solid front disc brake",
+                8.0,
+                brake(950.0, 13, 2300.0, [6.0, 1.2], 620.0, 300.0),
+            ),
+            (
+                "front-vented",
+                "Vented front disc brake",
+                10.0,
+                brake(1100.0, 14, 3000.0, [10.0, 2.4], 660.0, 400.0),
+            ),
+            (
+                "front-big",
+                "Big front brake kit, four-piston",
+                12.0,
+                brake(1400.0, 15, 4200.0, [14.0, 3.2], 720.0, 600.0),
+            ),
+            (
+                "rear-drum",
+                "Rear drum brake",
+                7.0,
+                brake(190.0, 13, 2600.0, [5.0, 0.6], 560.0, 250.0),
+            ),
+            (
+                "rear-disc",
+                "Rear disc brake",
+                6.0,
+                brake(230.0, 13, 1800.0, [6.0, 1.2], 640.0, 200.0),
+            ),
         ];
-        for (brake, title, mass) in brakes {
+        for (part, title, mass, brake) in brakes {
             let def = Def::new(
-                &format!("{id}.brake.{brake}"),
+                &format!("{id}.brake.{part}"),
                 title,
                 Kind::Brake,
-                Does::Brake,
+                Does::Brake(brake),
                 [0.35, 0.35, 0.2],
                 mass,
             );
-            add(def.fits(name));
+            add(def.fits(name).wears(Wear::Pads));
         }
         for (axle, end) in ["front", "rear"].into_iter().enumerate() {
             add(Def::new(

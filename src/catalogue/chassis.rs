@@ -169,7 +169,8 @@ pub fn chassis() -> Vec<Chassis> {
                 min_rim: 13,
             },
         ],
-        hub: [16.0, 13.0],
+        // Without the brakes (see `items`).
+        hub: [8.0, 6.0],
         ride: [1.5, 1.7],
         damping: 0.32,
         bars: [
@@ -179,7 +180,6 @@ pub fn chassis() -> Vec<Chassis> {
         camber: [-1.0, -1.0],
         pressure: [2.45, 2.1],
         max_steer: 0.55,
-        brakes: 0.8,
         drag_area: 0.62,
         downforce_area: [0.0, 0.0],
         tank: Tank {

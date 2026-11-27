@@ -95,7 +95,8 @@ pub struct Chassis {
     pub cg_height: f32,
     pub wheelbase: f32,
     /// Front and rear: track (m), the factory's rims and tires, the room in the wheel
-    /// wells, and the unsprung mass of a corner without its wheel (hub, upright, brake; kg).
+    /// wells, and the unsprung mass of a corner without its wheel and brake (hub, upright;
+    /// kg).
     pub track: [f32; 2],
     pub wheels: [Wheel; 2],
     pub room: [WheelRoom; 2],
@@ -111,11 +112,6 @@ pub struct Chassis {
     /// car's weight (see `TireParams::suited_pressure`).
     pub pressure: [f32; 2],
     pub max_steer: f32,
-    /// Share of the stock tires' grip the brakes use with the pedal to the floor. Well
-    /// short of all of it, they don't lock the wheels on a dry road; with all-wheel drive
-    /// that matters, as locked front wheels drag the rear ones along through the centre
-    /// differential.
-    pub brakes: f32,
     pub drag_area: f32,
     pub downforce_area: [f32; 2],
     /// The fuel tank.
@@ -198,7 +194,8 @@ impl Chassis {
         }
     }
 
-    /// Unsprung mass of a front or rear corner (kg) on the factory's wheels.
+    /// Unsprung mass of a front or rear corner (kg) on the factory's wheels, without the
+    /// brake.
     pub fn unsprung(&self, axle: usize) -> f32 {
         self.hub[axle] + self.wheels[axle].mass()
     }

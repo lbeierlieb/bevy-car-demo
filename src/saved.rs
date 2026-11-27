@@ -53,6 +53,8 @@ pub struct Condition {
     /// Each corner's ribs' wear (0 new, 1 worn through).
     pub treads: [[f32; RIBS]; 4],
     pub damage: Damage,
+    /// Each corner's brake pads' wear (0 new, 1 worn through).
+    pub pads: [f32; 4],
 }
 
 impl Condition {
@@ -62,6 +64,7 @@ impl Condition {
             octane: car.fuel.octane(),
             treads: car.corners.each_ref().map(|corner| corner.tread.wear),
             damage: car.drivetrain.engine.damage,
+            pads: car.corners.each_ref().map(|corner| corner.brake.wear),
         }
     }
 
@@ -72,6 +75,9 @@ impl Condition {
         car.load_fuel();
         for (corner, wear) in car.corners.iter_mut().zip(self.treads) {
             corner.tread.wear = wear;
+        }
+        for (corner, wear) in car.corners.iter_mut().zip(self.pads) {
+            corner.brake.wear = wear;
         }
         car.drivetrain.engine.damage = self.damage;
     }
@@ -97,13 +103,18 @@ impl Condition {
                 Wear::Bearings => vec![damage.bearings],
                 Wear::Turbo => vec![damage.turbo],
                 // By the corner (below).
-                Wear::Tread => return,
+                Wear::Tread | Wear::Pads => return,
             };
             item.wear = trimmed(values);
         });
         for (corner, tire) in tires_mut(catalogue, car).into_iter().enumerate() {
             if let Some(tread) = self.treads.get(corner) {
                 tire.wear = trimmed(tread.to_vec());
+            }
+        }
+        for (corner, brake) in brakes_mut(catalogue, car).into_iter().enumerate() {
+            if let Some(&wear) = self.pads.get(corner) {
+                brake.wear = trimmed(vec![wear]);
             }
         }
     }
@@ -141,13 +152,29 @@ impl Condition {
                 }
             }
         }
+        let mut pads = [0.0; 4];
+        for (corner, brake) in brakes_mut(catalogue, &mut car).into_iter().enumerate() {
+            if let Some(wear) = pads.get_mut(corner) {
+                *wear = brake.wear.first().copied().unwrap_or(0.0);
+            }
+        }
         Self {
             fuel,
             octane,
             treads,
             damage,
+            pads,
         }
     }
+}
+
+/// The brakes at a car's corners, in the order of its brake slots.
+fn brakes_mut<'a>(catalogue: &Catalogue, car: &'a mut Item) -> Vec<&'a mut Item> {
+    let slots = &catalogue.defs[car.def].slots;
+    (slots.iter().zip(&mut car.slots))
+        .filter(|(slot, _)| slot.kind == Kind::Brake)
+        .filter_map(|(_, brake)| brake.as_mut())
+        .collect()
 }
 
 /// `f` on every item of the tree.
@@ -383,6 +410,7 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
         octane: crate::physics::fuel::PUMP_OCTANE,
         treads: [[0.0; RIBS]; 4],
         damage: Damage::default(),
+        pads: [0.0; 4],
     };
     let mut fuel = None;
     let mut version = 1;

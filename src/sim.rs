@@ -163,6 +163,12 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
         }
         sum += steering::Rack::of(setup, corners, position, rotation);
     }
+    // The brakes heat with what they held the wheels back with.
+    let speed = body.velocity.length();
+    for corner in corners.iter_mut() {
+        let brake = &setup.brakes[usize::from(!corner.front)];
+        corner.brake.step(brake, corner.omega, speed, dt);
+    }
     // What the front wheels do to the steering, averaged over the substeps.
     *rack = sum.scaled(1.0 / SUBSTEPS as f32);
     // The air: drag against the motion, and downforce over each axle, both with the
@@ -291,14 +297,17 @@ fn apply_controls(car: &mut Car, dt: f32) {
         });
         corner.drive_torque = torque[i];
         corner.drive_inertia = shares[i] * drive.inertia;
-        if corner.front {
+        // The pads, as hot and worn as they are.
+        let grip = corner.brake.grip(&setup.brakes[usize::from(!corner.front)]);
+        let pads = if corner.front {
             corner.steer = steer;
-            corner.brake_torque = rolling + brake * setup.brake_torque * setup.brake_bias / 2.0;
+            brake * setup.brake_torque * setup.brake_bias / 2.0
         } else {
-            corner.brake_torque = rolling
-                + brake * setup.brake_torque * (1.0 - setup.brake_bias) / 2.0
-                + c.handbrake * setup.handbrake_torque;
-        }
+            brake * setup.brake_torque * (1.0 - setup.brake_bias) / 2.0
+                + c.handbrake * setup.handbrake_torque
+        } * grip;
+        corner.brake.torque = pads;
+        corner.brake_torque = rolling + pads;
     }
 }
 

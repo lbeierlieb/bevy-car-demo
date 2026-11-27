@@ -409,7 +409,7 @@ fn build_hall(
         };
         let look = match def.does {
             Does::Wheel | Does::Tire(_) => &rubber,
-            Does::Rim | Does::Block { .. } | Does::Gearbox(_) | Does::Brake => &metal,
+            Does::Rim | Does::Block { .. } | Does::Gearbox(_) | Does::Brake(_) => &metal,
             _ => item.paint.and_then(|p| paints.get(p)).unwrap_or(&cardboard),
         };
         block(

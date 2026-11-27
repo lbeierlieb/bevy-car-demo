@@ -10,6 +10,7 @@ use crate::items::{
     Aero, Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, Wear,
 };
 use crate::net::wire::{Reader, Wire};
+use crate::physics::brakes::Brake;
 use crate::physics::drivetrain::Drive;
 use crate::physics::engine::families::{Family, Layout, Version};
 use crate::physics::engine::hardware::{
@@ -196,7 +197,6 @@ fields!(Chassis {
     camber,
     pressure,
     max_steer,
-    brakes,
     drag_area,
     downforce_area,
     tank,
@@ -515,7 +515,10 @@ impl Wire for Does {
             Does::Wheel => 2u8.put(out),
             Does::Rim => 3u8.put(out),
             Does::Tire(c) => (4u8, *c).put(out),
-            Does::Brake => 5u8.put(out),
+            Does::Brake(brake) => {
+                5u8.put(out);
+                brake.put(out);
+            }
             Does::Spring(k) => (6u8, *k).put(out),
             Does::Damper(k) => (7u8, *k).put(out),
             Does::AntiRollBar(a) => (8u8, *a).put(out),
@@ -552,7 +555,7 @@ impl Wire for Does {
             2 => Does::Wheel,
             3 => Does::Rim,
             4 => Does::Tire(r.get()?),
-            5 => Does::Brake,
+            5 => Does::Brake(r.get()?),
             6 => Does::Spring(r.get()?),
             7 => Does::Damper(r.get()?),
             8 => Does::AntiRollBar(r.get::<usize>()?.min(1)),
@@ -578,6 +581,14 @@ impl Wire for Does {
     }
 }
 
+fields!(Brake {
+    torque,
+    min_rim,
+    heat,
+    cooling,
+    fade,
+    life
+});
 fields!(Aero {
     drag,
     downforce,

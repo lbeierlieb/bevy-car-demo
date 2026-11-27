@@ -649,6 +649,21 @@ impl<'a> Bench<'a> {
                 return Err(format!("{}: {why}", crate::items::CORNERS[n.min(3)]));
             }
         }
+        // Every brake inside its wheel's rim.
+        let wheels: Vec<_> = (self.car.fitted(catalogue, Kind::Wheel))
+            .filter_map(|wheel| wheel_of(catalogue, wheel))
+            .collect();
+        for (n, brake) in self.car.fitted(catalogue, Kind::Brake).enumerate() {
+            if let (Does::Brake(brake), Some(wheel)) = (&brake.def(catalogue).does, wheels.get(n))
+                && wheel.rim.diameter < brake.min_rim
+            {
+                return Err(format!(
+                    "{}: the brake needs at least {}\" rims",
+                    crate::items::CORNERS[n.min(3)],
+                    brake.min_rim
+                ));
+            }
+        }
         // Another ECU runs the same tune as far as it goes.
         self.ecu.model = parts.ecu;
         if self.ecu.cylinders != parts.hardware().cylinders {
@@ -1003,6 +1018,29 @@ mod tests {
         assert!(run(&catalogue, &other, &before, std::slice::from_ref(&fit)).is_err());
         let paint = shop(ShopKind::Paint, &["clutch.*"]);
         assert!(run(&catalogue, &paint, &before, &[fit]).is_err());
+    }
+
+    #[test]
+    fn a_big_brake_needs_a_big_rim() {
+        let catalogue = builtin();
+        let workshop = shop(ShopKind::Tuning, &["vireo.brake.*"]);
+        let fit = |option: usize| {
+            let before = spec(option);
+            let brakes = slots_of(&catalogue, &before.car, Kind::Brake);
+            let work = Work::Fit {
+                slots: vec![vec![brakes[0]], vec![brakes[1]]],
+                supply: new(&catalogue, "vireo.brake.front-big"),
+            };
+            run(&catalogue, &workshop, &before, &[work])
+        };
+        // The 1.6's 14" steel rims don't clear it, the 1.8's 15" alloys do.
+        let err = fit(0).unwrap_err();
+        assert!(err.contains("15\""), "{err}");
+        let done = fit(1).unwrap();
+        let setup = done
+            .spec
+            .setup_with(crate::physics::engine::maps::EngineMaps::blank());
+        assert!(setup.brakes[0].torque > CarSetup::factory(0, 1).brakes[0].torque);
     }
 
     #[test]
