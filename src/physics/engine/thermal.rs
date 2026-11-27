@@ -6,8 +6,9 @@
 use super::AMBIENT_TEMPERATURE;
 use super::hardware::Cooling;
 
-/// Heat passed from the oil to the coolant, and lost from the block and the sump to the
-/// air around them (W/K).
+/// Heat passed from the oil to the coolant (a 2-litre four's; more in a bigger engine, by
+/// its oil's heat capacity, like the wetted area), and lost from the block and the sump
+/// to the air around them (W/K).
 const OIL_TO_COOLANT: f32 = 600.0;
 const BLOCK_LOSS: f32 = 15.0;
 const SUMP_LOSS: f32 = 10.0;
@@ -62,7 +63,8 @@ impl Thermal {
             / (cooling.thermostat_open - cooling.thermostat_opens))
             .clamp(BYPASS, 1.0);
         let radiator = cooling.radiator_effectiveness * air * opening;
-        let exchange = OIL_TO_COOLANT * (self.oil - self.coolant);
+        let size = cooling.oil_capacity / Cooling::default().oil_capacity;
+        let exchange = OIL_TO_COOLANT * size * (self.oil - self.coolant);
         let coolant_out = (radiator + BLOCK_LOSS) * (self.coolant - AMBIENT_TEMPERATURE);
         let oil_out = SUMP_LOSS * (1.0 + 0.05 * airspeed.abs()) * (self.oil - AMBIENT_TEMPERATURE);
         self.coolant += (to_coolant + exchange - coolant_out) / cooling.coolant_capacity * dt;
