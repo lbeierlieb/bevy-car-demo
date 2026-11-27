@@ -213,3 +213,39 @@ rarely.
   alternating 54°/90°), the R-series' layout; protocol bump.
 - Handling: 630 N·m at the rear; bring back a power-slide test for this car
   (`a_power_slide_can_be_caught`), check traction control and ABS.
+
+**Built** (2026-11-27). Decided while building it:
+- Shops (`assets/shops.cfg`): two of the four car dealers sell `merrow.r80` (Reckendorf
+  and by the Gewerbepark; the others show it only to look at), both used car dealers
+  sell it worn; the car workshops its stock body parts (bumpers, bonnet, fenders,
+  doors, mirrors, boot lid: id `merrow.hatch`), its brakes, bars, stock springs and
+  dampers, the inline gearbox, the limited slip (it's the stock differential of both
+  cars' better trims, but the car workshops didn't sell it before) and `engine.r80`; the
+  tuning shops its lip, skirts, spoiler, wing, diffuser, cut-out bonnet, sport and track
+  springs and dampers and bars; the engine shop the `r80` long block.
+- Traffic weight 0.06 (one car in 51); `the_roadster_is_a_heavy_v10_driving_its_rear_wheels`
+  holds it to one in 40–60, and `drivers_follow_the_roads` makes every fifth car the
+  rarest chassis, so the Merrow is driven there. Traffic's powertrain needed nothing for
+  rear-wheel drive (it already took the driven wheels' radius); calm or keen it shifts at
+  2350–2700 rpm and gets to 100 in ~23 s (traffic's acceleration cap).
+- Sound: `Layout::OddFireV10` last in `Layout::ALL` (protocol 52); the synth's `Sound`
+  has a lateness per firing (`late`, in firing intervals), 0.25 on the right bank's: the
+  banks alternate, left to right 90°, right to left 54°, each bank even at 144° (so each
+  bank alone sounds like an even V10's; their sum doesn't cancel the 2.5th order). Pipes
+  1.3 (the even V10's 1.5, the V8's 1.0). Rendered (`write_engine_wavs`, `ENGINES=R80`),
+  at 2500 rpm the mono sum's order 2.5 is +13.7 dB over order 5 (as an even V10, −5.3)
+  and 7.5 +5.5 (−14.3); at idle order 2.5 −10 dB (−20.5). Peak 0.93 outside, 0.98 inside,
+  no sample over 0.99. Never listened to (no audio here).
+- Handling: the bot catches the Merrow's power slide on the circle in second and third
+  only with traction control (6.5° and 9.9°, snap back 3° and 7°): without, it spins in
+  both (floored in second, the rear is at 13° when the bot reacts and at 40° by full
+  opposite lock), and in fourth it doesn't slide at all. So `a_power_slide_can_be_caught`
+  asserts the caught slide with traction control (like the old 6.2 V8 Harrow, which spun
+  floored in second too). `traction_control_launches_the_roadster`: from standing in
+  first, 8.7 m/s after 1.5 s with the rear wheels at 1.1 of the road speed; without, 6.6
+  m/s and 3.9. ABS (`abs_keeps_the_wheels_turning`): 28.1 m from 90 km/h, 33.0 m without.
+  No suspension change: its roll moves 56 % of the load to the front on 51 % weight there,
+  the same bias as the Vireo's.
+- The showroom (shot by the Reckendorf dealer, `TAPS="Enter@200;ArrowRight@230"`) shows
+  the Merrow on the turntable; its tire sizes didn't fit beside the label, so `kit::info`
+  puts a value too long for its row on a line of its own under the label.

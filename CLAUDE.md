@@ -865,8 +865,23 @@ ignored). An open car's first opening is its cockpit (`Body::cockpit`): the deck
 there, sills round it, a bulkhead behind the seats, so bonnet and boot lid come off like
 the hatch's; `Body::bulges` (bonnet ridges) and `side_pipes` (protocol 51). Mechanicals:
 a longitudinal V (banks at 90°, low heads, plenum in the valley), gearbox case,
-propeller shaft, differential and half shafts, exhausts to side pipes. Not wired into
-shops, traffic only at weight 0.05, sound still `Layout::V10` (milestone D).
+propeller shaft, differential and half shafts, exhausts to side pipes. **Wired in**
+(milestone D, 2026-11-27): the car dealers in Reckendorf and by the Gewerbepark and both
+used car dealers sell `merrow.r80` (the other showrooms show it only to look at), the car
+workshops its stock body parts, brakes, springs, dampers, bars, the inline gearbox, the
+limited slip and `engine.r80`, the tuning shops its lip, skirts, spoiler, wing,
+diffuser, cut-out bonnet, sport/track springs and dampers and bars, the engine shop the
+`r80` long block. Traffic weight 0.06 (one car in ~50, a test holds 40–60;
+`drivers_follow_the_roads` makes every fifth car the rarest chassis). Its sound is
+`Layout::OddFireV10` (see "Audio"). Handling: `a_power_slide_can_be_caught` is back for
+it, floored on the circle in second and third **with traction control** (6.5° and 9.9°,
+caught); without, the bot spins it in both gears (the rear at 40° before full opposite
+lock), in fourth it doesn't slide (`power_slides` prints gears 2 and 3; `trace_power_slide`
+reads `SLIDE_GEAR`, `SLIDE_TC`). `traction_control_launches_the_roadster` (first gear,
+8.7 m/s after 1.5 s, rear wheels 1.1× the road speed; without TC 3.9×); ABS stops it
+from 90 km/h in 28.1 m (33.0 without). Springs, dampers and bars unchanged (load moved
+56 % front on 51 % weight). Shots: the showroom's second car is `ArrowRight` on its first
+row.
 
 Milestone 3, the body in pieces (2026-11-26): `body.rs` builds the body from a `Dress`
 (the shell's colour and each fitted body part's, `items::dress` from the tree: the first
@@ -1947,7 +1962,8 @@ phasing, VTEC-style cam switching).
   peak 305 kW at 5100, idle 850. 0.86 × 0.78 × 0.60 m, 300 kg (its long block item
   `r80`, 210 kg, comes from the family like every version's; `engine.r80` from the
   Merrow's trim). `the_pushrod_v10_pulls_low_and_broad`. The NA torque range in
-  `every_factory_engine_idles_and_pulls` starts at 75 N·m/l for it.
+  `every_factory_engine_idles_and_pulls` starts at 75 N·m/l for it. Its layout is
+  `Layout::OddFireV10` (milestone D, protocol 52).
 - ECUs are switchable (agreed with the user): `EcuModel` (Stock, Programmable) is chosen
   in the garage like a part; the stock one stays. One `Ecu` struct for all models, the
   model deciding which features it uses (cam control lives in every `Ecu` but only the
@@ -2193,8 +2209,13 @@ Knobs at the top. The sun is 59° up, so it's never in the chase view.
 
 The engine's layout (`families::Layout`) sets how many pulses there are in a cycle and
 which bank's exhaust each goes down (`audio.rs`, `sound`): a cross-plane V8's banks fire
-unevenly, a flat four's pulses bunch up through unequal headers, the rest fire evenly;
-inline engines have one exhaust (no panning).
+unevenly, a flat four's pulses bunch up through unequal headers, an odd-fire V10
+(`Layout::OddFireV10`, the R-series: common crank pins, 2026-11-27) fires 54° and 90°
+apart in turn (`Sound::late`, each firing's lateness in firing intervals: its banks in
+turn, each even at 144°, out of step), the rest fire evenly; inline engines have one
+exhaust (no panning). The R80 rendered at 2500 rpm: the mono sum's order 2.5 is 14 dB
+over order 5 (rendered as an even V10, 5 dB under), order 7.5 +5.5 dB (−14); peak 0.93
+outside, 0.98 inside, nothing over 0.99; never listened to.
 
 The exhaust hardware colours it (`ExhaustSound::of`, parts compared with the stock ones
 for the engine's size): silencer and cat muffle (level, upper resonances; straight pipe
