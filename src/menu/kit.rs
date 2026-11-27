@@ -677,23 +677,27 @@ fn field(ui: &mut Ui, text: &mut String, hint: &str, rows: usize, secret: bool) 
 
 /// A line of text (not focusable), with a value on the right.
 pub fn info(ui: &mut Ui, label: &str, value: &str) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+    let width = ui.available_width();
+    let fonts = (FontId::proportional(16.0), FontId::proportional(15.0));
+    let label = ui.painter().layout_no_wrap(label.into(), fonts.0, TEXT);
+    let value = ui.painter().layout_no_wrap(value.into(), fonts.1, WEAK);
+    // A value too long to go beside its label goes on a line of its own under it.
+    let beside = label.size().x + value.size().x + 3.0 * 14.0 <= width;
+    let height = if beside { 28.0 } else { 48.0 };
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let painter = ui.painter();
-    let y = rect.center().y;
-    painter.text(
-        pos2(rect.left() + 14.0, y),
-        Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(16.0),
-        TEXT,
+    let (top, bottom) = if beside {
+        (rect.center().y, rect.center().y)
+    } else {
+        (rect.top() + 13.0, rect.bottom() - 12.0)
+    };
+    let left = pos2(rect.left() + 14.0, top - label.size().y / 2.0);
+    let right = pos2(
+        rect.right() - 14.0 - value.size().x,
+        bottom - value.size().y / 2.0,
     );
-    painter.text(
-        pos2(rect.right() - 14.0, y),
-        Align2::RIGHT_CENTER,
-        value,
-        FontId::proportional(15.0),
-        WEAK,
-    );
+    painter.galley(left, label, TEXT);
+    painter.galley(right, value, WEAK);
 }
 
 #[cfg(test)]
