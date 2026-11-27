@@ -1182,6 +1182,7 @@ fn window(
     let mut worn = car.setup.car.clone();
     crate::saved::Condition::of(car).put_on(&catalogue.0, &mut worn);
     let ctx = contexts.ctx_mut()?;
+    bay.fitter.refocus(ctx);
     Panel::new("fitting", shop.kind.title())
         .place(Place::Right)
         .width(470.0)

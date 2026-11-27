@@ -97,7 +97,9 @@ as built, in order:
    inline, V or flat; a turbo if it has one), tires like its in a rack at the back;
    workbench with pegboard, tool chest, shelves of boxes, roller door, oil drain. The
    fitting window (`garage::fit`) is on the right. Shots: `TAPS="Enter@200"` onto the lift;
-   the rows are the car's slots by group (Engine first). 10. ✓ **Dyno** (`dyno/`): the career's chassis dyno room back
+   the rows are the car's slots by group (Engine first). Back steps out of a screen, on
+   the row gone into it from (`Fitter::came_from`, as in the central menu; a mouse click
+   counts as that row), and from the first screen back to the car. 10. ✓ **Dyno** (`dyno/`): the career's chassis dyno room back
    (`mod.rs`, `rollers.rs`, `chart.rs`). A copy of the car runs in the room 200 m under
    the marker; the driven car stays parked there, a ghost (`car::Away` holds its input and
    R, `EngineAudio::hushed`); the engine (tune, cam timing, wastegate, wear) and the fuel

@@ -46,6 +46,11 @@ pub enum Screen {
 /// The screens open, and what's picked on them.
 pub struct Fitter {
     screens: Vec<Screen>,
+    /// Per screen under the top one, the row that went on from it: focused again on
+    /// coming back (as in the central menu).
+    came_from: Vec<Option<egui::Id>>,
+    /// Focus this row next pass (coming back to a screen).
+    refocus: Option<egui::Id>,
     /// The screen the picks are for (made afresh for another).
     picks_for: Option<Screen>,
     /// A new part's size (`PartDef::variants`) and paint.
@@ -71,6 +76,8 @@ impl Default for Fitter {
         };
         Self {
             screens: Vec::new(),
+            came_from: Vec::new(),
+            refocus: None,
             picks_for: None,
             variant: 0,
             paint: 0,
@@ -98,11 +105,45 @@ impl Fitter {
     /// Back a screen: false at the first (back to the car).
     pub fn back(&mut self) -> bool {
         if self.screens.len() > 1 {
-            self.screens.pop();
+            self.pop();
             true
         } else {
             false
         }
+    }
+
+    /// Asks for the focus on the row gone on from, when back on a screen: before the
+    /// window's panel claims the focus (it keeps a focus asked for before its widget is
+    /// drawn).
+    pub fn refocus(&mut self, ctx: &egui::Context) {
+        if let Some(id) = self.refocus.take() {
+            ctx.memory_mut(|m| m.request_focus(id));
+        }
+    }
+
+    fn push(&mut self, screen: Screen, ctx: &egui::Context) {
+        let focused = ctx.memory(|m| m.focused());
+        // A click doesn't focus: the row clicked then.
+        let clicked = ctx.interaction_snapshot(|i| i.clicked);
+        self.came_from.push(focused.or(clicked));
+        self.screens.push(screen);
+        // The new screen starts at its first row (rows on different screens can share
+        // egui's ids, which would keep the focus where it was).
+        if let Some(id) = focused {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
+    }
+
+    fn pop(&mut self) {
+        self.screens.pop();
+        self.refocus = self.came_from.pop().flatten();
+    }
+
+    /// Back to the first screen, on the row gone on from there.
+    fn back_to_first(&mut self) {
+        self.screens.truncate(1);
+        self.refocus = self.came_from.first().copied().flatten();
+        self.came_from.clear();
     }
 }
 
@@ -313,13 +354,13 @@ pub fn window(ui: &mut egui::Ui, fitter: &mut Fitter, bench: Bench) {
         });
         if in_loose {
             // Places in the trunk and what's held may change: back to the car.
-            fitter.screens.truncate(1);
+            fitter.back_to_first();
         } else if done_with || screen == Screen::MakeWheel {
             // Back to the slot (or to the car from making a wheel): places in lists change.
-            fitter.screens.pop();
+            fitter.pop();
         }
     } else if let Some(screen) = go {
-        fitter.screens.push(screen);
+        fitter.push(screen, ui.ctx());
     }
 }
 
