@@ -1031,9 +1031,12 @@ The game is about tuning every aspect of a car. Agreed so far (the user's answer
   **alignment shop** and the **dyno** stay; the **paint shop** paints every body part
   fitted; a new body part's colour is picked when buying it, and parts can differ in
   colour. The **engine shop** works only on long blocks (in the car or brought in a
-  trunk), sells nothing, keeps one engine for you (bring it in the van, come back with
+  trunk), sells their internals (the user, 2026-11-27), keeps one engine for you (bring it in the van, come back with
   the car, they swap). Repairs are new parts, except the engine shop's rebore (needing
-  oversize pistons). Shops deliver anything to the garage.
+  oversize pistons). Shops deliver anything to the garage. Before milestones 7–9
+  (2026-11-27): two supercharger kits (Roots through a bonnet cut-out, centrifugal), and
+  a wallet per account in 9 (shops stay 0 €, marketplace prices set by sellers); see
+  the plan's last section.
 - **Showrooms** may later sell only some chassis; **used car dealers** and a **used parts
   shop** (buys and sells; new-part shops only sell); buying a car, the old one goes to the
   garage or is traded in, as the player picks; the used parts shop sells cheaper, worn

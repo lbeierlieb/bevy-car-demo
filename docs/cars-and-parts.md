@@ -264,3 +264,27 @@ chassis, trailers.
 - A guest starts like any new player; everything is erased when they leave.
 - A car traded in or sold goes with what's in its trunk, after a warning.
 - Limits (large, only against endless growth): a garage holds 50 cars and 2000 items.
+
+## Settled before milestones 7–9 (2026-11-27)
+
+The user's answers:
+- **The engine shop sells long-block internals** (pistons in bore sizes, rods, cams,
+  heads, …) itself, by `sells` lines like any shop ("sells nothing" is dropped); it
+  fits them, and those brought in a trunk or held there.
+- **The supercharger comes as two kits**: a belt-driven Roots blower (boost from idle
+  following rpm, belt drag, hot charge, whine, through a bonnet cut-out) and a
+  centrifugal one (boost rising with rpm², under the bonnet).
+- **Money in milestone 9**: every account gets a wallet (saved, shown in the menus,
+  a start amount); shops keep charging 0 €; marketplace sellers set a price, and the
+  used parts shop pays a small amount for what it buys.
+
+Decided by me (the user asleep; to look over):
+- Items get their own condition in milestone 7 (the engine's per-cylinder damage moves
+  onto the long block's parts, so replacing pistons, rods, springs, gasket or bearings
+  repairs that) and in 8 for brakes, clutch and gearbox; a part taken off keeps its
+  wear. Milestone 9's worn parts and cars build on that.
+- The server bakes changed long blocks' maps on a background thread at low priority
+  (the VPS has one slow vCPU: the physics must not stutter); the car keeps its old
+  engine until they're done.
+- New shops (engine shop, used parts shop, used car dealer, marketplace) get places
+  and made-up names near the existing towns.
