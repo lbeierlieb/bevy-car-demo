@@ -41,7 +41,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 40;
+pub const PROTOCOL: u32 = 41;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -794,6 +794,8 @@ impl Wire for CarBuild {
             toe: FACTORY_TOE,
             brake_force: 1.0,
             brake_balance: 0.0,
+            ride_height: [0.0; 2],
+            wing: 0.0,
         };
         let chassis = catalogue.chassis.get(build.chassis)?;
         let fine = build.paint < catalogue.paints.len()

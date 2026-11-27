@@ -6,8 +6,8 @@ use std::sync::Arc;
 use super::{Catalogue, Shared};
 use crate::chassis::CarBuild;
 use crate::items::{
-    Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, Wear, assemble,
-    chassis_knobs, damper_knobs, engine_knobs, knob, tire_knobs,
+    Aero, Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, Wear, assemble,
+    chassis_knobs, damper_knobs, engine_knobs, knob, spring_knobs, tire_knobs, wing_knobs,
 };
 use crate::physics::engine::ecu::EcuModel;
 use crate::physics::tire::STREET;
@@ -220,6 +220,26 @@ fn engine_part_size(name: &str) -> ([f32; 3], f32) {
     }
 }
 
+/// What the hatch's body part `part` (its id after the chassis') does to the air: the
+/// stock pieces nothing (the chassis' drag is with them), a roof spoiler a little
+/// downforce at the back; a lip, skirts and a diffuser more, the nearer the ground they
+/// run.
+fn body_aero(part: &str) -> Aero {
+    let aero = |drag, downforce, ground| Aero {
+        drag,
+        downforce,
+        ground,
+        wing: false,
+    };
+    match part {
+        "front-lip" => aero(0.01, [0.1, 0.0], 0.06),
+        "side-skirt" => aero(0.0, [0.01, 0.01], 0.04),
+        "rear-spoiler" => aero(0.006, [0.0, 0.03], 0.0),
+        "diffuser" => aero(-0.006, [0.0, 0.08], 0.05),
+        _ => Aero::default(),
+    }
+}
+
 fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
     let mut defs = Vec::new();
     let mut add = |def: Def| defs.push(def.done());
@@ -293,12 +313,29 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
                 &format!("{id}.{part}"),
                 title,
                 Kind::Body(panel),
-                Does::Nothing,
+                Does::Body(body_aero(part)),
                 size,
                 mass,
             );
             add(def.fits(name).painted());
         }
+        // A tall rear wing on the hatch, its angle set at alignment shops.
+        add(Def::new(
+            &format!("{id}.wing"),
+            "Rear wing",
+            Kind::Body(Panel::RearSpoiler),
+            Does::Body(Aero {
+                drag: 0.05,
+                downforce: [0.0, 0.32],
+                ground: 0.0,
+                wing: true,
+            }),
+            [1.4, 0.45, 0.35],
+            6.0,
+        )
+        .fits(name)
+        .painted()
+        .knobs(wing_knobs()));
         let brakes = [
             ("front-solid", "Solid front disc brake", 8.0),
             ("front-vented", "Vented front disc brake", 10.0),
@@ -329,6 +366,13 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
         }
         for (kit, suspension) in catalogue.suspensions.iter().enumerate() {
             let s = slug(&suspension.name);
+            // Stock springs sit where they sit; the sport kit's perches lower the body,
+            // the track kit's coilovers more.
+            let knobs = match kit {
+                0 => Vec::new(),
+                1 => spring_knobs(-40.0, 0.0, -25.0),
+                _ => spring_knobs(-70.0, 10.0, -40.0),
+            };
             add(Def::new(
                 &format!("{id}.spring.{s}"),
                 &format!("{} spring", suspension.name),
@@ -337,7 +381,8 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
                 [0.3, 0.15, 0.15],
                 2.0,
             )
-            .fits(name));
+            .fits(name)
+            .knobs(knobs));
             add(Def::new(
                 &format!("{id}.damper.{s}"),
                 &format!("{} damper", suspension.name),
@@ -357,6 +402,14 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
         Does::Nothing,
         [0.6, 0.55, 1.0],
         16.0,
+    ));
+    add(Def::new(
+        "seat.bucket",
+        "Bucket seat",
+        Kind::Seat(Seat::Front),
+        Does::Nothing,
+        [0.6, 0.5, 1.0],
+        6.0,
     ));
     add(Def::new(
         "rear-bench.stock",

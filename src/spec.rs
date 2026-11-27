@@ -53,8 +53,12 @@ impl CarSpec {
             ecu: self.ecu.clone(),
             octane: PUMP_OCTANE,
         };
-        let mut setup = CarSetup::new(self.build.clone(), self.parts.clone(), engine);
-        setup.car = self.car.clone();
+        let mut setup = CarSetup::with_car(
+            self.build.clone(),
+            self.parts.clone(),
+            engine,
+            self.car.clone(),
+        );
         setup.set_cargo(self.cargo.clone());
         setup
     }

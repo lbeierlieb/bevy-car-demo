@@ -6,7 +6,9 @@ use super::{Catalogue, Clutch, Paint, Suspension, TireCompound};
 use crate::body::{Body, Detail, Tone};
 use crate::cargo::{Area, Hold};
 use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars};
-use crate::items::{Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, Wear};
+use crate::items::{
+    Aero, Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, Wear,
+};
 use crate::net::wire::{Reader, Wire};
 use crate::physics::drivetrain::Drive;
 use crate::physics::engine::families::{Family, Layout, Version};
@@ -537,6 +539,10 @@ impl Wire for Does {
                 16u8.put(out);
                 (*slot, *part).put(out);
             }
+            Does::Body(aero) => {
+                17u8.put(out);
+                aero.put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -566,11 +572,18 @@ impl Wire for Does {
                 let (slot, part) = r.get()?;
                 Does::EnginePart { slot, part }
             }
+            17 => Does::Body(r.get()?),
             _ => return None,
         })
     }
 }
 
+fields!(Aero {
+    drag,
+    downforce,
+    ground,
+    wing
+});
 fields!(Knob { low, high, default } text { name });
 fields!(SlotDef { kind, required, needs } text { name });
 fields!(PartDef {

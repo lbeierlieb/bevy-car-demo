@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::catalogue::Shared;
 use crate::chassis::{CarBuild, Chassis};
 use crate::input::WheelInput;
-use crate::items::Item;
+use crate::items::{Aero, Does, Item, Kind, Seat};
 use crate::net::wire::{Reader, Wire, decode, encode};
 use crate::physics::collision::Obb;
 use crate::physics::drivetrain::{Differential, Drive, Drivetrain, EngineSetup, REVERSE_SPEED};
@@ -22,6 +22,16 @@ use crate::wheels::{HUB_INERTIA, Wheel};
 
 /// A tank with less than this in it (L) leaves a car stranded (`Car::stranded`).
 pub const STRANDED_LITRES: f32 = 0.5;
+
+/// Where the seats' masses sit: the front seats and the rear bench this far behind the
+/// driver's eyes (m).
+const FRONT_SEATS: f32 = 0.05;
+const REAR_BENCH: f32 = 0.85;
+
+/// The ground effect's downforce can fall to this share of what it is at the design ride
+/// height (the body high, or in the air) and grow to this (lower, it stalls).
+const GROUND_LEAST: f32 = 0.2;
+const GROUND_MOST: f32 = 1.8;
 
 /// Everything the simulation needs to know about a car, worked out from what it's built
 /// of: a chassis and what's fitted to it (`build`), and an engine.
@@ -54,8 +64,14 @@ pub struct CarSetup {
     pub handbrake_torque: f32,
     /// Drag coefficient times frontal area (m²).
     pub drag_area: f32,
-    /// Downforce coefficient times area (m²) over the front and the rear axle.
+    /// Downforce coefficient times area (m²) over the front and the rear axle, with the
+    /// body at its design ride height.
     pub downforce_area: [f32; 2],
+    /// Of that, what comes from the ground effect (splitter, skirts, diffuser), and how
+    /// much it grows per metre the body comes nearer the ground at the axle (m²/m): see
+    /// `downforce`.
+    pub ground_area: [f32; 2],
+    pub ground_effect: [f32; 2],
     /// Where the body's design frame (its origin on the ground, midway between the
     /// axles) is in the chassis frame, whose origin is the centre of mass.
     pub body_offset: Vec3,
@@ -78,16 +94,37 @@ impl CarSetup {
     pub fn new(build: CarBuild, parts: Parts, engine: EngineBuild) -> Self {
         let car = crate::items::assemble(&build.catalogue, None, &build, &parts)
             .expect("every part of a car is in its catalogue");
+        Self::with_car(build, parts, engine, car)
+    }
+
+    /// The car that `build` and an engine of `parts` (built as `engine`) make, with `car`
+    /// the tree they resolve to (see `items`): what `build` doesn't say comes from it (the
+    /// seats' masses, the body parts' air).
+    pub fn with_car(build: CarBuild, parts: Parts, engine: EngineBuild, car: Item) -> Self {
         let chassis = build.chassis();
         let gearbox = build.gearbox();
         let body = &chassis.body;
         let engine_mass = parts.family().built_mass(&engine.hardware);
-        // Masses and where they are behind the front axle.
-        let masses = [
+        // Masses and where they are behind the front axle: the seats where they sit.
+        let seat_at = |seat: Seat| {
+            let behind_eyes = match seat {
+                Seat::Front => FRONT_SEATS,
+                Seat::RearBench => REAR_BENCH,
+            };
+            chassis.eye[0] + behind_eyes - body.front_overhang
+        };
+        let mut masses = vec![
             (chassis.mass, chassis.mass_at),
             (engine_mass, chassis.bay.engine_at),
             (gearbox.mass, chassis.bay.gearbox_at),
         ];
+        let catalogue = &build.catalogue;
+        let slots = &car.def(catalogue).slots;
+        for (slot, item) in slots.iter().zip(&car.slots) {
+            if let (Kind::Seat(seat), Some(item)) = (slot.kind, item) {
+                masses.push((item.def(catalogue).mass, seat_at(seat)));
+            }
+        }
         let sprung_mass: f32 = masses.iter().map(|(mass, _)| mass).sum();
         let centre = masses.iter().map(|(mass, at)| mass * at).sum::<f32>() / sprung_mass;
         let (front_z, rear_z) = (-centre, chassis.wheelbase - centre);
@@ -151,6 +188,7 @@ impl CarSetup {
             geometry.static_toe = build.toe[i].to_radians();
             let unsprung_mass = unsprung(i);
             let mut axle = AxleSetup {
+                lowered: -build.ride_height[i] / 1000.0,
                 geometry,
                 spring_rate: 0.0,
                 damping: 0.0,
@@ -189,6 +227,31 @@ impl CarSetup {
         } else {
             Differential::OPEN
         };
+        // The air: each body part's (at its knobs), each piece missing.
+        let mut aero = Aero::default();
+        let mut ground = [(0.0, 0.0); 2];
+        for (slot, item) in slots.iter().zip(&car.slots) {
+            let Kind::Body(panel) = slot.kind else {
+                continue;
+            };
+            let Some(item) = item else {
+                aero.drag += panel.missing_drag();
+                continue;
+            };
+            let Does::Body(part) = item.def(catalogue).does else {
+                continue;
+            };
+            let part = part.at(&item.knobs);
+            aero.drag += part.drag;
+            for i in 0..2 {
+                aero.downforce[i] += part.downforce[i];
+                if part.ground > 0.0 {
+                    // Per metre nearer the ground.
+                    ground[i].0 += part.downforce[i];
+                    ground[i].1 += part.downforce[i] * part.ground * 100.0;
+                }
+            }
+        }
         let body_offset = Vec3::new(0.0, -chassis.cg_height, front_z + chassis.wheelbase / 2.0);
         let [eye_x, eye_y, eye_left] = chassis.eye;
         let wheels = chassis.wheels();
@@ -223,8 +286,10 @@ impl CarSetup {
             brake_torque: chassis.brakes * factory_grip * mass * 9.81 * radius * build.brake_force,
             brake_bias: (brake_bias.min(0.9) + build.brake_balance).clamp(0.3, 0.95),
             handbrake_torque: 2.0 * mass,
-            drag_area: chassis.drag_area + tire_drag(&build.wheels, &chassis.wheels),
-            downforce_area: chassis.downforce_area,
+            drag_area: chassis.drag_area + tire_drag(&build.wheels, &chassis.wheels) + aero.drag,
+            downforce_area: [0, 1].map(|i| chassis.downforce_area[i] + aero.downforce[i]),
+            ground_area: ground.map(|(area, _)| area),
+            ground_effect: ground.map(|(_, effect)| effect),
             body_offset,
             eye: body_offset + Vec3::new(-eye_left, eye_y, body.z(eye_x, &wheels)),
             hull,
@@ -251,9 +316,9 @@ impl CarSetup {
     /// The car that `build` and `parts` (built as `engine`) make out of this one: the parts
     /// they say nothing about (body panels, seats…) stay as they are.
     pub fn changed(&self, build: CarBuild, parts: Parts, engine: EngineBuild) -> Self {
-        let car = crate::items::assemble(&build.catalogue, Some(&self.car), &build, &parts);
-        let mut setup = Self::new(build, parts, engine);
-        setup.car = car.expect("every part of a car is in its catalogue");
+        let car = crate::items::assemble(&build.catalogue, Some(&self.car), &build, &parts)
+            .expect("every part of a car is in its catalogue");
+        let mut setup = Self::with_car(build, parts, engine, car);
         setup.set_cargo(self.cargo.clone());
         setup
     }
@@ -270,9 +335,7 @@ impl CarSetup {
     pub fn factory_in(catalogue: &Shared, chassis: usize, option: usize) -> Self {
         let (build, parts, car) = Self::stock(catalogue, chassis, option);
         let engine = EngineBuild::new(parts.hardware(), parts.ecu);
-        let mut setup = Self::new(build, parts, engine);
-        setup.car = car;
-        setup
+        Self::with_car(build, parts, engine, car)
     }
 
     /// What the stock car of `chassis` with its factory engine `option` is built of: its
@@ -305,9 +368,7 @@ impl CarSetup {
             maps: EngineMaps::blank(),
             octane: crate::physics::fuel::PUMP_OCTANE,
         };
-        let mut setup = Self::new(build, parts, engine);
-        setup.car = car;
-        setup
+        Self::with_car(build, parts, engine, car)
     }
 
     /// The car `car` (a car's tree) makes, carrying `cargo`, only to be looked at (in a
@@ -322,14 +383,25 @@ impl CarSetup {
             maps: EngineMaps::blank(),
             octane: crate::physics::fuel::PUMP_OCTANE,
         };
-        let mut setup = Self::new(build, parts, engine);
-        setup.car = car.clone();
+        let mut setup = Self::with_car(build, parts, engine, car.clone());
         setup.set_cargo(cargo.to_vec());
         Some(setup)
     }
 
     pub fn axle(&self, front: bool) -> &AxleSetup {
         if front { &self.front } else { &self.rear }
+    }
+
+    /// Downforce area (m²) over the front and the rear axle with the body `lowered` this
+    /// far below its design ride height at each (m): the ground effect grows as it comes
+    /// nearer, and with the body pitched one end gains on the other.
+    pub fn downforce(&self, lowered: [f32; 2]) -> [f32; 2] {
+        [0, 1].map(|i| {
+            let ground = self.ground_area[i];
+            let change = (self.ground_effect[i] * lowered[i])
+                .clamp((GROUND_LEAST - 1.0) * ground, (GROUND_MOST - 1.0) * ground);
+            self.downforce_area[i] + change
+        })
     }
 
     /// Sprung mass carried by each wheel of the front or the rear axle (kg) with `litres`
@@ -1376,5 +1448,166 @@ mod tests {
             DriverAids::from_text("abs maybe\ntraction_control false\nautomatic true\n"),
             aids
         );
+    }
+}
+
+/// Cars built of other parts than the stock ones, for tests.
+#[cfg(test)]
+pub mod tests_with_parts {
+    use super::*;
+    use crate::catalogue::Catalogue;
+
+    /// The built-in catalogue's stock 1.6 with its tree changed by `change` (and its build
+    /// as the tree resolves to, changed by `tweak`).
+    pub fn changed(
+        change: impl FnOnce(&Catalogue, &mut Item),
+        tweak: impl FnOnce(&mut CarBuild),
+    ) -> CarSetup {
+        let stock = CarSetup::factory(0, 0);
+        let catalogue = stock.build.catalogue.clone();
+        let mut car = stock.car.clone();
+        change(&catalogue, &mut car);
+        let (mut build, parts) = car.resolve(&catalogue).expect("a car");
+        tweak(&mut build);
+        let car = crate::items::assemble(&catalogue, Some(&car), &build, &parts).expect("a car");
+        let (build, parts) = car.resolve(&catalogue).expect("a car");
+        CarSetup::with_car(build, parts, stock.engine.build.clone(), car)
+    }
+
+    /// The definition with the id `id`.
+    pub fn def(catalogue: &Catalogue, id: &str) -> usize {
+        (catalogue.defs.iter())
+            .position(|def| def.id == id)
+            .unwrap_or_else(|| panic!("no part {id}"))
+    }
+
+    /// `car` with a new part `id` (none: nothing) in its slots called `slots`.
+    pub fn fit(catalogue: &Catalogue, car: &mut Item, slots: &[&str], id: Option<&str>) {
+        let names: Vec<String> = (car.def(catalogue).slots.iter())
+            .map(|slot| slot.name.clone())
+            .collect();
+        for name in slots {
+            let place = names
+                .iter()
+                .position(|n| n == name)
+                .unwrap_or_else(|| panic!("no slot {name}"));
+            car.slots[place] = id.map(|id| Item::new(catalogue, def(catalogue, id), 0));
+        }
+    }
+
+    /// A car on flat ground at rest after `seconds` with the brakes on.
+    pub fn settled(setup: CarSetup, seconds: f32) -> Car {
+        let terrain = Terrain::flat();
+        let mut car = Car::spawn_at(0, setup, &terrain, 0.0, 0.0, 0.0);
+        car.controls.brake = 1.0;
+        for _ in 0..(seconds / crate::sim::STEP) as usize {
+            crate::sim::step_car(&mut car, &terrain, crate::sim::STEP);
+        }
+        car
+    }
+
+    #[test]
+    fn the_ground_effect_grows_as_the_body_comes_nearer_the_ground() {
+        let stock = CarSetup::factory(0, 0);
+        assert_eq!(stock.downforce([0.03, 0.03]), [0.0, 0.0]);
+        let aero = changed(
+            |catalogue, car| {
+                fit(catalogue, car, &["Front lip"], Some("vireo.front-lip"));
+                fit(catalogue, car, &["Diffuser"], Some("vireo.diffuser"));
+            },
+            |_| {},
+        );
+        let [front, rear] = aero.downforce([0.0, 0.0]);
+        assert!(front > 0.05 && rear > 0.05, "{front} {rear}");
+        let lower = aero.downforce([0.03, 0.03]);
+        let higher = aero.downforce([-0.03, -0.03]);
+        assert!(lower[0] > front && lower[1] > rear && higher[0] < front);
+        // Pitched nose down, the front gains and the rear loses.
+        let pitched = aero.downforce([0.02, -0.02]);
+        assert!(pitched[0] > front && pitched[1] < rear);
+        // Not without end: the flow stalls.
+        assert!(aero.downforce([0.5, 0.5])[0] < 2.0 * front);
+    }
+
+    #[test]
+    fn lowered_springs_lower_the_body() {
+        let track = |height: f32| {
+            changed(
+                |_, _| {},
+                |build| {
+                    build.set_suspension(2);
+                    build.ride_height = [height; 2];
+                },
+            )
+        };
+        let (design, low) = (settled(track(0.0), 3.0), settled(track(-40.0), 3.0));
+        for (a, b) in design.corners.iter().zip(&low.corners) {
+            let lowered = b.travel - a.travel;
+            assert!((0.03..0.05).contains(&lowered), "{lowered} m");
+        }
+        assert!(low.body.position.y < design.body.position.y - 0.03);
+    }
+
+    #[test]
+    fn a_steeper_wing_pushes_the_rear_down_at_speed() {
+        let terrain = Terrain::flat();
+        let rear_travel = |angle: f32| {
+            let setup = changed(
+                |catalogue, car| fit(catalogue, car, &["Rear spoiler"], Some("vireo.wing")),
+                |build| build.wing = angle,
+            );
+            let mut car = Car::spawn_at(0, setup, &terrain, 0.0, 400.0, 0.0);
+            car.drivetrain.neutral();
+            car.parking_brake = false;
+            let speed = 50.0;
+            car.body.velocity = car.body.rotation * Vec3::new(0.0, 0.0, -speed);
+            for corner in &mut car.corners {
+                corner.omega = speed / car.setup.axle(corner.front).tire.radius;
+            }
+            for _ in 0..120 {
+                crate::sim::step_car(&mut car, &terrain, crate::sim::STEP);
+            }
+            (car.corners[2].travel + car.corners[3].travel) / 2.0
+        };
+        let (flat, steep) = (rear_travel(0.0), rear_travel(16.0));
+        assert!(steep > flat + 0.002, "{flat} {steep}");
+        // And it costs drag.
+        let drag = |angle: f32| {
+            changed(
+                |catalogue, car| fit(catalogue, car, &["Rear spoiler"], Some("vireo.wing")),
+                |build| build.wing = angle,
+            )
+            .drag_area
+        };
+        assert!(drag(16.0) > drag(0.0));
+    }
+
+    #[test]
+    fn missing_body_parts_add_drag_and_mirrors_take_it() {
+        let stock = CarSetup::factory(0, 0).drag_area;
+        let without = |slots: &'static [&'static str]| {
+            changed(|catalogue, car| fit(catalogue, car, slots, None), |_| {}).drag_area
+        };
+        assert!(without(&["Left mirror", "Right mirror"]) < stock);
+        assert!(without(&["Bonnet"]) > stock + 0.02);
+        assert!(without(&["Left door", "Right door"]) > stock);
+    }
+
+    #[test]
+    fn seats_taken_out_or_lighter_save_weight() {
+        let mass = |setup: &CarSetup| setup.mass_with(0.0);
+        let stock = CarSetup::factory(0, 0);
+        let stripped = changed(
+            |catalogue, car| fit(catalogue, car, &["Passenger seat", "Rear bench"], None),
+            |_| {},
+        );
+        assert!((mass(&stock) - mass(&stripped) - 34.0).abs() < 0.01);
+        let bucket = changed(
+            |catalogue, car| fit(catalogue, car, &["Driver's seat"], Some("seat.bucket")),
+            |_| {},
+        );
+        assert!((mass(&stock) - mass(&bucket) - 10.0).abs() < 0.01);
+        // Taking the rear bench out moves the balance forward.
+        assert!(stripped.front_weight_with(0.0) > stock.front_weight_with(0.0));
     }
 }

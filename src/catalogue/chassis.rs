@@ -146,8 +146,9 @@ pub fn chassis() -> Vec<Chassis> {
                 chopped tail, front-wheel drive and eager fours; the 1.8 comes with \
                 alloys, bigger brakes and a limited-slip differential"
             .into(),
-        mass: 820.0,
-        mass_at: 1.28,
+        // Without the seats (see `items`: 50 kg with them, the car's centre where it was).
+        mass: 770.0,
+        mass_at: 1.2665,
         cg_height: 0.5,
         wheelbase: 2.57,
         track: [1.475, 1.465],

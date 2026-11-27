@@ -10,6 +10,7 @@ use bevy_egui::egui;
 use crate::car::{ActiveCar, Car, CarSetup};
 use crate::catalogue::Shared;
 use crate::chassis::{BRAKE_BALANCES, BRAKE_FORCES, CarBuild, PRESSURES, TOES};
+use crate::items::{Kind, Panel};
 use crate::menu::kit;
 
 mod bay;
@@ -92,6 +93,22 @@ pub fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, setup: &CarSetup) {
         kit::slider(ui, "Toe-in", &mut build.toe[axle], TOES, 0.05, |v| {
             format!("{v:.2}°")
         });
+        if let Some(range) = knob_range(setup, Kind::Spring, 2 * axle) {
+            kit::slider(
+                ui,
+                "Ride height",
+                &mut build.ride_height[axle],
+                range,
+                5.0,
+                |v| {
+                    if v.abs() < 0.5 {
+                        "design height".to_string()
+                    } else {
+                        format!("{v:+.0} mm")
+                    }
+                },
+            );
+        }
         let wheel = &build.wheels[axle];
         let suited = wheel
             .tire
@@ -114,6 +131,17 @@ pub fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, setup: &CarSetup) {
          shoulders, too much and on their middle. Toe-in steadies an axle, toe-out makes it \
          keener to turn.",
     );
+    if let Some(range) = knob_range(setup, Kind::Body(Panel::RearSpoiler), 0) {
+        kit::section(ui, "Rear wing");
+        kit::slider(ui, "Angle", &mut build.wing, range, 1.0, |v| {
+            format!("{v:.0}°")
+        });
+        kit::note(
+            ui,
+            "A steeper wing pushes the rear down harder at speed, and holds the car back \
+             more on the straights.",
+        );
+    }
     kit::section(ui, "Brakes");
     let factory_torque = setup.brake_torque / setup.build.brake_force;
     let factory_bias = setup.brake_bias - setup.build.brake_balance;
@@ -147,6 +175,15 @@ pub fn alignment(ui: &mut egui::Ui, build: &mut CarBuild, setup: &CarSetup) {
     build.clamp_alignment();
 }
 
+/// The range of the first knob of the `n`th part in a slot of `kind` of the car, if it has
+/// such a part and the part a knob (a spring's ride height, a wing's angle).
+fn knob_range(setup: &CarSetup, kind: Kind, n: usize) -> Option<std::ops::RangeInclusive<f32>> {
+    let catalogue = &setup.build.catalogue;
+    let item = setup.car.fitted(catalogue, kind).nth(n)?;
+    let knob = item.def(catalogue).knobs.first()?;
+    (knob.low < knob.high).then_some(knob.low..=knob.high)
+}
+
 /// A chassis' page in the showroom: what it is, its engines and paint, and the button
 /// to drive it (true when clicked).
 fn brochure(ui: &mut egui::Ui, catalogue: &Shared, shown: &Showroom) {
@@ -159,10 +196,7 @@ fn brochure(ui: &mut egui::Ui, catalogue: &Shared, shown: &Showroom) {
     let (build, parts) = (&setup.build, &setup.engine.parts);
     kit::note(ui, &parts.family().about);
     let gearbox = build.gearbox();
-    let mass = chassis.mass
-        + parts.family().built_mass(&parts.hardware())
-        + gearbox.mass
-        + 2.0 * (chassis.unsprung(0) + chassis.unsprung(1));
+    let mass = setup.mass_with(0.0);
     kit::info(ui, "Engine", &format!("at the {}", chassis.bay.place));
     kit::info(ui, "Drive", chassis.drive.name());
     kit::info(ui, "Gearbox", &gearbox.name.to_lowercase());

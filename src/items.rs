@@ -93,8 +93,10 @@ pub enum Kind {
 pub enum Does {
     /// The catalogue's chassis (by its place).
     Chassis(usize),
-    /// A body panel or a seat: only there, for now.
+    /// A seat: only there (its mass counts).
     Nothing,
+    /// A body panel, and what it does to the air.
+    Body(Aero),
     /// A wheel: holds a rim and a tire.
     Wheel,
     /// A rim in any of the sizes there are (`Rim::all`, the item's `variant`).
@@ -129,6 +131,63 @@ pub enum Does {
         slot: usize,
         part: usize,
     },
+}
+
+/// What a body part does to the air flowing round the car (see `CarSetup::aero`). The
+/// chassis' own drag is with its stock body; a piece taken off adds its panel's
+/// `Panel::missing_drag`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Aero {
+    /// Drag area it adds (m²; less than nothing: it smooths the flow).
+    pub drag: f32,
+    /// Downforce area (lift coefficient times area, m²) it gives over the front and the
+    /// rear axle, with the body at its design ride height.
+    pub downforce: [f32; 2],
+    /// Ground effect: the share its downforce grows by per centimetre the body comes nearer
+    /// the ground at its axle (a splitter, skirts, a diffuser; none for a wing).
+    pub ground: f32,
+    /// A wing whose angle is its first knob (degrees): `downforce` and `drag` are at
+    /// `WING_REFERENCE` (see `Aero::at_angle`).
+    pub wing: bool,
+}
+
+/// The angle a wing's numbers are given at, and the angle at which it gives no downforce
+/// (degrees).
+pub const WING_REFERENCE: f32 = 10.0;
+pub const WING_ZERO_LIFT: f32 = -4.0;
+
+impl Aero {
+    /// What it does with its knobs at `knobs`: a wing's downforce goes with its angle of
+    /// attack from where it lifts nothing, its drag partly with the square of that (what
+    /// the downforce costs) and partly not (its profile).
+    pub fn at(&self, knobs: &[f32]) -> Self {
+        let Some(&angle) = knobs.first().filter(|_| self.wing) else {
+            return *self;
+        };
+        let share = ((angle - WING_ZERO_LIFT) / (WING_REFERENCE - WING_ZERO_LIFT)).max(0.0);
+        Self {
+            drag: self.drag * (0.4 + 0.6 * share * share),
+            downforce: self.downforce.map(|d| d * share),
+            ..*self
+        }
+    }
+}
+
+impl Panel {
+    /// Drag area a missing piece adds (m²): an open engine bay, a gap where a door was;
+    /// mirrors only add drag, so without them there's less.
+    pub fn missing_drag(self) -> f32 {
+        match self {
+            Panel::FrontBumper => 0.05,
+            Panel::Bonnet => 0.04,
+            Panel::Fender => 0.015,
+            Panel::Door => 0.02,
+            Panel::Mirror => -0.008,
+            Panel::Hatch => 0.04,
+            Panel::RearBumper => 0.02,
+            Panel::FrontLip | Panel::SideSkirt | Panel::RearSpoiler | Panel::Diffuser => 0.0,
+        }
+    }
 }
 
 /// What wears on a part, as the simulation knows wear (`saved::Condition`): the part
@@ -378,6 +437,15 @@ impl Item {
             build.camber[axle] = damper.knobs[0];
             build.toe[axle] = damper.knobs[1];
             build.bars[axle] = self.nth(catalogue, Kind::AntiRollBar, axle)?.variant;
+            let spring = self.nth(catalogue, Kind::Spring, 2 * axle)?;
+            build.ride_height[axle] = spring.knobs.first().copied().unwrap_or(0.0);
+        }
+        if let Some(wing) = self
+            .fitted(catalogue, Kind::Body(Panel::RearSpoiler))
+            .next()
+            && let Does::Body(Aero { wing: true, .. }) = wing.def(catalogue).does
+        {
+            build.wing = wing.knobs.first().copied().unwrap_or(0.0);
         }
         let Does::Spring(kit) = self.nth(catalogue, Kind::Spring, 0)?.def(catalogue).does else {
             return Err(Unfit("not a spring".into()));
@@ -581,9 +649,22 @@ pub fn assemble(
         })?;
         def(Kind::Wheel, Does::Wheel)
     })?;
-    swap(catalogue, &mut car, Kind::Spring, paint, |_, _| {
+    swap(catalogue, &mut car, Kind::Spring, paint, |n, spring| {
+        set_knob(catalogue, spring, build.ride_height[n / 2]);
         def(Kind::Spring, Does::Spring(build.suspension))
     })?;
+    // A wing set to the build's angle.
+    let slots = car.def(catalogue).slots.clone();
+    for (slot, item) in slots.iter().zip(&mut car.slots) {
+        if let (Kind::Body(Panel::RearSpoiler), Some(item)) = (slot.kind, item)
+            && matches!(
+                item.def(catalogue).does,
+                Does::Body(Aero { wing: true, .. })
+            )
+        {
+            set_knob(catalogue, item, build.wing);
+        }
+    }
     swap(catalogue, &mut car, Kind::Damper, paint, |n, damper| {
         if let [camber, toe, ..] = &mut damper.knobs[..] {
             (*camber, *toe) = (build.camber[n / 2], build.toe[n / 2]);
@@ -675,6 +756,19 @@ pub fn assemble(
     Ok(car)
 }
 
+/// `item`'s first knob, if it has one, set to `value` (within its range).
+fn set_knob(catalogue: &Catalogue, item: &mut Item, value: f32) {
+    if let (Some(knob), Some(def)) = (
+        item.knobs.first_mut(),
+        catalogue
+            .defs
+            .get(item.def)
+            .and_then(|def| def.knobs.first()),
+    ) {
+        *knob = value.clamp(def.low, def.high);
+    }
+}
+
 fn engine_does(parts: &Parts, slot: usize) -> Does {
     Does::EnginePart {
         slot,
@@ -709,6 +803,17 @@ pub fn chassis_knobs() -> Vec<Knob> {
             0.0,
         ),
     ]
+}
+
+/// A spring's knob: the ride height its perch sets (mm over the design height; less than
+/// nothing lowers the body), within `low`..`high`, from `default`.
+pub fn spring_knobs(low: f32, high: f32, default: f32) -> Vec<Knob> {
+    vec![knob("Ride height", low, high, default)]
+}
+
+/// A wing's knob: its angle of attack (degrees).
+pub fn wing_knobs() -> Vec<Knob> {
+    vec![knob("Wing angle", 0.0, 16.0, 6.0)]
 }
 
 /// A damper's knobs: its camber (degrees; its range is the kit's) and toe.

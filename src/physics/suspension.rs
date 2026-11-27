@@ -131,6 +131,8 @@ impl CornerPose {
 /// Suspension and wheel parameters shared by the corners of one axle.
 #[derive(Clone, Copy, Debug)]
 pub struct AxleSetup {
+    /// How far below the design ride height the springs' perches have the body (m).
+    pub lowered: f32,
     pub geometry: ArmGeometry,
     /// Coilover spring rate (N/m) and damping (N·s/m), measured along the coilover.
     pub spring_rate: f32,
@@ -182,11 +184,17 @@ impl AxleSetup {
         self.damping = 2.0 * damping_ratio * (wheel_rate * corner_mass).sqrt() / ratio;
     }
 
-    /// Coilover free length that holds the design ride height under `corner_mass` of sprung
-    /// mass: the spring's generalised force balances the tire load at the design angle.
+    /// Coilover free length that holds the design ride height (less `lowered`) under
+    /// `corner_mass` of sprung mass: the spring's generalised force balances the tire load
+    /// at that angle.
     pub fn spring_rest_length(&self, corner_mass: f32) -> f32 {
-        let theta = self.geometry.design_angle();
-        let d = Derivatives::at(self, theta, 0.0, 1.0, 0.0);
+        let mut theta = self.geometry.design_angle();
+        let mut d = Derivatives::at(self, theta, 0.0, 1.0, 0.0);
+        if self.lowered != 0.0 {
+            // Lowered, the wheel sits that much higher against the body.
+            theta += self.lowered / d.center.y;
+            d = Derivatives::at(self, theta, 0.0, 1.0, 0.0);
+        }
         let load = (corner_mass + self.unsprung_mass) * -GRAVITY.y;
         let q_tire = load * d.contact.y + self.unsprung_mass * GRAVITY.y * d.center.y;
         let preload = -q_tire / d.length;
@@ -522,6 +530,7 @@ mod tests {
 
     fn axle() -> AxleSetup {
         AxleSetup {
+            lowered: 0.0,
             geometry: ArmGeometry::default(),
             spring_rate: 80_000.0,
             damping: 5_000.0,

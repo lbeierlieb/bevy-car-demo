@@ -238,7 +238,9 @@ pub fn fits_into(kind: ShopKind, slot: Kind, holder: Option<Kind>) -> bool {
 /// Which kind of shop sets the knobs of a part of `kind`.
 pub fn knobs_at(kind: Kind, shop: ShopKind) -> bool {
     match kind {
-        Kind::Chassis | Kind::Damper | Kind::Tire => shop == ShopKind::Alignment,
+        Kind::Chassis | Kind::Damper | Kind::Tire | Kind::Spring | Kind::Body(_) => {
+            shop == ShopKind::Alignment
+        }
         Kind::Engine => shop == ShopKind::Dyno,
         Kind::FinalDrive => matches!(shop, ShopKind::Car | ShopKind::Tuning),
         _ => false,

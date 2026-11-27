@@ -88,7 +88,7 @@ pub struct Chassis {
     pub name: String,
     pub class: String,
     pub about: String,
-    /// Sprung mass without engine and gearbox (kg), its centre behind the front axle (m),
+    /// Sprung mass without engine, gearbox and seats (kg), its centre behind the front axle (m),
     /// and the height of the whole car's centre of mass (m).
     pub mass: f32,
     pub mass_at: f32,
@@ -272,6 +272,11 @@ pub struct CarBuild {
     /// to the front from the factory's (a share of the braking).
     pub brake_force: f32,
     pub brake_balance: f32,
+    /// The ride height the springs' perches set, front and rear: mm over the design height
+    /// (less than nothing: lower). The springs' knob, where they have one.
+    pub ride_height: [f32; 2],
+    /// The rear wing's angle (degrees), if there's a wing: its knob.
+    pub wing: f32,
 }
 
 impl CarBuild {
@@ -300,6 +305,8 @@ impl CarBuild {
             toe: FACTORY_TOE,
             brake_force: 1.0,
             brake_balance: 0.0,
+            ride_height: [0.0; 2],
+            wing: 0.0,
         }
     }
 

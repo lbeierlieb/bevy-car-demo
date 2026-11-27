@@ -170,10 +170,10 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     let pressure = 0.5 * AIR_DENSITY * body.velocity.length_squared();
     let drag = -body.velocity.normalize_or_zero() * pressure * setup.drag_area;
     let down = body.rotation * Vec3::NEG_Y;
-    for (area, z) in [
-        (setup.downforce_area[0], setup.front_z),
-        (setup.downforce_area[1], setup.rear_z),
-    ] {
+    // How far each end of the body is below its design height: the wheels up against it.
+    let lowered = [0, 2].map(|i| (corners[i].travel + corners[i + 1].travel) / 2.0);
+    let downforce = setup.downforce(lowered);
+    for (area, z) in [(downforce[0], setup.front_z), (downforce[1], setup.rear_z)] {
         let push = down * pressure * area;
         force += push * SUBSTEPS as f32;
         torque += (body.rotation * Vec3::new(0.0, 0.0, z)).cross(push) * SUBSTEPS as f32;
