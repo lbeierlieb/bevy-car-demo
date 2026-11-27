@@ -7,10 +7,12 @@
 use super::hardware::EngineHardware;
 
 /// Most cylinders an engine can have (the per-cylinder state is a fixed array).
-pub const MAX_CYLINDERS: usize = 8;
+pub const MAX_CYLINDERS: usize = 12;
 /// How hard each cylinder has it against the average (cooling, mixture and tolerances
 /// differ), so they don't all fail at once.
-const SPREAD: [f32; MAX_CYLINDERS] = [0.96, 1.03, 1.08, 0.93, 1.01, 0.97, 1.05, 0.99];
+const SPREAD: [f32; MAX_CYLINDERS] = [
+    0.96, 1.03, 1.08, 0.93, 1.01, 0.97, 1.05, 0.99, 1.02, 0.95, 1.06, 0.98,
+];
 /// Wear per second: per degree² of spark past the knock limit at full load, and per
 /// kelvin of coolant (warping the head, lifting the gasket) or oil (thinning it, wearing
 /// the bearings) over its limit.
@@ -288,6 +290,23 @@ mod tests {
             }
         }
         panic!("never wrecked");
+    }
+
+    #[test]
+    fn every_cylinder_of_a_v10_wears() {
+        let catalogue = crate::catalogue::builtin();
+        let (f, v) = catalogue.find_engine("R80").unwrap();
+        let hardware = &catalogue.families[f].versions[v].block;
+        let mut damage = Damage::default();
+        damage.step(hardware, &strain(12.0), 1.0);
+        let worn = damage.cylinders.iter().filter(|c| c.piston > 0.0).count();
+        assert_eq!(worn, 10);
+        let (parts, failures) = (damage.parts(10), damage.failures(10));
+        assert!(
+            parts.iter().any(|(name, _)| name == "Piston 10"),
+            "{parts:?}"
+        );
+        assert!(failures.is_empty());
     }
 
     #[test]

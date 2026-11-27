@@ -244,7 +244,7 @@ pub fn oversize_label(step: usize) -> String {
 }
 
 /// The most wear values an item carries (a cylinder's each, or a tire's ribs).
-pub const MOST_WEAR: usize = 8;
+pub const MOST_WEAR: usize = 12;
 
 /// A setting a part has: what it's called, the range it can be set in and where it
 /// starts.
