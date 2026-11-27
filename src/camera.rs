@@ -44,6 +44,9 @@ const STICK_ORBIT: f32 = std::f32::consts::PI;
 const STICK_PITCH: f32 = 0.6;
 /// How quickly the view follows the stick (1/s): a little smoothing, so a flick doesn't jerk.
 const STICK_RATE: f32 = 12.0;
+/// How far towards the car's centreline the driver's view moves while looking back (1:
+/// all the way), so it looks between the front seats instead of into the headrest.
+const BACK_CENTRE: f32 = 1.0;
 
 #[derive(Component)]
 pub struct ChaseCamera {
@@ -212,10 +215,13 @@ pub fn follow(
 
         if camera.driver {
             // Fixed to the seat: the view moves with every bump and roll of the body.
-            // Looking back, the head turns all the way round, level.
+            // Looking back, the head turns all the way round, level, and leans over to the
+            // centreline to see out between the seats.
             let rotation = drawn.rotation;
             let stick = camera.stick;
+            let mut eye = car.setup.eye;
             let (look_yaw, look_pitch) = if camera.back {
+                eye.x += (car.setup.body_offset.x - eye.x) * BACK_CENTRE;
                 (std::f32::consts::PI, 0.0)
             } else {
                 let up = if stick.y > 0.0 { STICK_UP } else { STICK_DOWN };
@@ -224,7 +230,7 @@ pub fn follow(
                     (camera.look_pitch + stick.y * up).clamp(-0.9, 0.7),
                 )
             };
-            *transform = Transform::from_translation(drawn.translation + rotation * car.setup.eye)
+            *transform = Transform::from_translation(drawn.translation + rotation * eye)
                 .with_rotation(
                     rotation * Quat::from_rotation_y(look_yaw) * Quat::from_rotation_x(look_pitch),
                 );
