@@ -164,7 +164,7 @@ draw at the nicest): `Graphics` (`graphics.cfg`) with shadows (off; low: 1 casca
 1024², 60 m; high: 4 cascades (WebGL 2 has only the first), 2048², 120 m), antialiasing
 (off, FXAA, MSAA 4×), view distance (near: fog 120–320 m; far: 180–480 m; `scenery`
 loads chunks to the fog's end + 80 m and drops them past + 180 m), render resolution
-(50/75/100 %), post-processing and the time of day, and natively vsync and a frame rate limit (a sleep in `Last`). Defaults:
+(50/75/100 %), post-processing and the time of day, and natively vsync and a frame rate limit (a sleep in `Last`). Vsync, the limit and "Show frame rate" (`fps on|off`, off by default; Bevy's `FrameTimeDiagnosticsPlugin`, smoothed fps and ms top right, orange under 50, red under 30; the gizmos' position goes under it) are on the menu's Display screen but kept in `Graphics` (2026-11-27, the user's wish). Defaults:
 web low/FXAA/near/75 % on a display with a scale factor ≥ 1.5 (else 100; settled once
 the window is known), native high/MSAA/far/100 %. No presets (the user's wish). All
 apply live.

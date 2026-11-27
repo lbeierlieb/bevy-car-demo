@@ -7,6 +7,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Car};
+use crate::graphics::{FPS_HEIGHT, FPS_OFFSET, Graphics};
 use crate::physics::suspension::Corner;
 use crate::terrain::Terrain;
 
@@ -131,7 +132,12 @@ fn draw(
 
 /// With the gizmos, top right: where the driven car is on the map (x east, z south, m, as
 /// the server's lists of shops and events have it) and which way it points.
-fn position(mut contexts: EguiContexts, cars: Query<&Car>, active: Res<ActiveCar>) -> Result {
+fn position(
+    mut contexts: EguiContexts,
+    cars: Query<&Car>,
+    active: Res<ActiveCar>,
+    graphics: Option<Res<Graphics>>,
+) -> Result {
     let Some(car) = cars.iter().find(|car| car.index == active.0) else {
         return Ok(());
     };
@@ -143,8 +149,13 @@ fn position(mut contexts: EguiContexts, cars: Query<&Car>, active: Res<ActiveCar
         "x {:.1}   z {:.1}   height {:.1} m   heading {heading:.0}°",
         p.x, p.z, p.y
     );
+    // Under the frame rate when that's shown.
+    let mut offset = FPS_OFFSET;
+    if graphics.is_some_and(|g| g.show_fps) {
+        offset.y += FPS_HEIGHT;
+    }
     egui::Area::new(egui::Id::new("position"))
-        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
+        .anchor(egui::Align2::RIGHT_TOP, offset)
         .interactable(false)
         .show(contexts.ctx_mut()?, |ui| {
             egui::Frame::new()

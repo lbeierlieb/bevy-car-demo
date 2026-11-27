@@ -1,6 +1,7 @@
 //! The graphics settings (central menu, Settings, Graphics), kept in
 //! `~/.config/car-sim/settings/graphics.cfg`: shadows, antialiasing and how far the land
-//! is seen, the 3D view's resolution; natively also vsync and a frame rate limit.
+//! is seen, the 3D view's resolution; natively also vsync and a frame rate limit, and
+//! whether the frame rate is shown (these three are on the menu's Display screen).
 //!
 //! The 3D camera draws into an image of the window's size times the render resolution,
 //! and egui (on a camera of its own) paints it over the whole window, under everything
@@ -17,11 +18,15 @@ use std::sync::{Arc, Mutex};
 
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::camera::{ImageRenderTarget, RenderTarget};
+use bevy::diagnostic::DiagnosticsStore;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureFormat};
 use bevy::window::PrimaryWindow;
-use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiTextureHandle, PrimaryEguiContext, egui};
+use bevy_egui::{
+    EguiContexts, EguiGlobalSettings, EguiPrimaryContextPass, EguiTextureHandle,
+    PrimaryEguiContext, egui,
+};
 
 use crate::car::SETTINGS;
 
@@ -35,8 +40,15 @@ impl Plugin for GraphicsPlugin {
                 auto_create_primary_context: false,
                 ..default()
             })
-            .add_plugins(crate::grade::GradePlugin)
+            .add_plugins((
+                crate::grade::GradePlugin,
+                bevy::diagnostic::FrameTimeDiagnosticsPlugin::default(),
+            ))
             .add_systems(Startup, setup)
+            .add_systems(
+                EguiPrimaryContextPass,
+                frame_rate.run_if(|graphics: Res<Graphics>| graphics.show_fps),
+            )
             .add_systems(Update, (settle_resolution, size_view).chain())
             .add_systems(PostUpdate, (apply, save));
         #[cfg(not(target_arch = "wasm32"))]
@@ -171,6 +183,8 @@ pub struct Graphics {
     pub vsync: bool,
     /// Native only: at most this many frames per second.
     pub frame_cap: Option<u32>,
+    /// The frames per second and the frame time, top right.
+    pub show_fps: bool,
     /// The colour grade pass (`grade`).
     pub post: bool,
     /// Whether the time of day changes the picture and the lights (off: always day).
@@ -210,6 +224,7 @@ impl Graphics {
         resolution: Some(100),
         vsync: true,
         frame_cap: None,
+        show_fps: false,
         post: true,
         day_night: true,
         time_of_day: TimeOfDay::Cycle,
@@ -267,6 +282,8 @@ impl Graphics {
                 }
                 ("vsync", "on") => graphics.vsync = true,
                 ("vsync", "off") => graphics.vsync = false,
+                ("fps", "on") => graphics.show_fps = true,
+                ("fps", "off") => graphics.show_fps = false,
                 ("frame_cap", "off") => graphics.frame_cap = None,
                 ("frame_cap", fps) => {
                     if let Ok(fps) = fps.parse()
@@ -297,6 +314,7 @@ impl Graphics {
             ViewDistance::Far => "far",
         };
         let vsync = if self.vsync { "on" } else { "off" };
+        let fps = if self.show_fps { "on" } else { "off" };
         let post = if self.post { "on" } else { "off" };
         let time = self.time_of_day.key();
         let day_night = if self.day_night { "on" } else { "off" };
@@ -308,7 +326,7 @@ impl Graphics {
             .map_or(String::new(), |p| format!("resolution {p}\n"));
         format!(
             "shadows {shadows}\nantialiasing {antialiasing}\nview {view}\n{resolution}\
-             vsync {vsync}\nframe_cap {cap}\npost {post}\nday_night {day_night}\n\
+             vsync {vsync}\nframe_cap {cap}\nfps {fps}\npost {post}\nday_night {day_night}\n\
              time {time}\nday_length {day}\nparticles {particles}\n"
         )
     }
@@ -552,6 +570,50 @@ fn limit_frame_rate(graphics: Res<Graphics>, mut next: Local<Option<std::time::I
         Some(next.map_or(now, |due| due.max(now.checked_sub(interval).unwrap_or(now))) + interval);
 }
 
+/// Where the frame rate sits: top right (the panel, 2, opens top left). The gizmos' map
+/// position (`debug`) goes under it while it's shown.
+pub const FPS_OFFSET: egui::Vec2 = egui::vec2(-12.0, 12.0);
+/// How far down the next readout in the top right corner starts under the frame rate.
+pub const FPS_HEIGHT: f32 = 26.0;
+
+/// The frames per second and the frame time (smoothed, Bevy's frame time diagnostics),
+/// orange under 50 fps and red under 30.
+fn frame_rate(mut contexts: EguiContexts, diagnostics: Res<DiagnosticsStore>) -> Result {
+    use bevy::diagnostic::FrameTimeDiagnosticsPlugin as Frames;
+    let smoothed = |path| {
+        diagnostics
+            .get(path)
+            .and_then(bevy::diagnostic::Diagnostic::smoothed)
+    };
+    let (Some(fps), Some(ms)) = (smoothed(&Frames::FPS), smoothed(&Frames::FRAME_TIME)) else {
+        return Ok(());
+    };
+    let color = if fps < 30.0 {
+        egui::Color32::from_rgb(240, 70, 60)
+    } else if fps < 50.0 {
+        egui::Color32::from_rgb(255, 160, 60)
+    } else {
+        egui::Color32::WHITE
+    };
+    egui::Area::new(egui::Id::new("frame rate"))
+        .anchor(egui::Align2::RIGHT_TOP, FPS_OFFSET)
+        .interactable(false)
+        .show(contexts.ctx_mut()?, |ui| {
+            egui::Frame::new()
+                .fill(egui::Color32::from_black_alpha(150))
+                .corner_radius(3.0)
+                .inner_margin(egui::Margin::symmetric(6, 2))
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{fps:.0} fps   {ms:.1} ms"))
+                            .color(color)
+                            .monospace(),
+                    )
+                });
+        });
+    Ok(())
+}
+
 fn save(graphics: Res<Graphics>) {
     if graphics.is_changed()
         && !graphics.is_added()
@@ -574,6 +636,7 @@ mod tests {
             vsync: false,
             resolution: Some(75),
             frame_cap: Some(60),
+            show_fps: true,
             post: false,
             day_night: false,
             time_of_day: TimeOfDay::Night,

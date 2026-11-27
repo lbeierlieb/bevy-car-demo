@@ -902,6 +902,22 @@ fn display(ui: &mut egui::Ui, settings: &mut Settings, windows: &mut Query<&mut 
             toggle_fullscreen(windows);
         }
     }
+    // Kept with the graphics settings (`graphics.cfg`), which apply them.
+    let mut new = *settings.graphics;
+    if !cfg!(target_arch = "wasm32") {
+        kit::toggle(ui, "Vsync", &mut new.vsync);
+        kit::pick(
+            ui,
+            "Frame rate limit",
+            &mut new.frame_cap,
+            &FRAME_CAPS,
+            |cap| cap.map_or("Off".into(), |fps| format!("{fps} fps")),
+        );
+    }
+    kit::toggle(ui, "Show frame rate", &mut new.show_fps);
+    if new != *settings.graphics {
+        *settings.graphics = new;
+    }
 }
 
 fn graphics(ui: &mut egui::Ui, graphics: &mut ResMut<Graphics>) {
@@ -956,16 +972,6 @@ fn graphics(ui: &mut egui::Ui, graphics: &mut ResMut<Graphics>) {
         |p| format!("{p} %"),
     ) {
         new.resolution = Some(resolution);
-    }
-    if !cfg!(target_arch = "wasm32") {
-        kit::toggle(ui, "Vsync", &mut new.vsync);
-        kit::pick(
-            ui,
-            "Frame rate limit",
-            &mut new.frame_cap,
-            &FRAME_CAPS,
-            |cap| cap.map_or("Off".into(), |fps| format!("{fps} fps")),
-        );
     }
     kit::pick(
         ui,
