@@ -183,9 +183,23 @@ fn version(
 
 fn none(_: &mut Preset) {}
 
+/// How a manifold is made, for how it looks: cast in iron, or bent of tubes.
+#[derive(Clone, Copy)]
+enum Made {
+    Cast,
+    Tubes,
+}
+
 /// A manifold: its id and name, primaries (mm) into `branches` collectors, or into as many
-/// turbine inlets (`mounts`).
-fn manifold(id: &str, name: &str, primary: f32, branches: u32, mounts: bool) -> ManifoldDef {
+/// turbine inlets (`mounts`), cast or of tubes.
+fn manifold(
+    id: &str,
+    name: &str,
+    primary: f32,
+    branches: u32,
+    mounts: bool,
+    made: Made,
+) -> ManifoldDef {
     ManifoldDef {
         id: id.into(),
         name: name.into(),
@@ -199,12 +213,14 @@ fn manifold(id: &str, name: &str, primary: f32, branches: u32, mounts: bool) -> 
             branches,
         },
         mounts,
+        cast: matches!(made, Made::Cast),
     }
 }
 
 /// The B series' manifolds: the cast 4-into-1 (its primaries the blocks' headers), short
 /// and long-tube headers, and a turbo manifold (the turbo where the cast one's collector is).
 fn b_manifolds() -> Vec<ManifoldDef> {
+    use Made::*;
     vec![
         manifold(
             "b.manifold.stock",
@@ -212,22 +228,32 @@ fn b_manifolds() -> Vec<ManifoldDef> {
             700.0,
             1,
             false,
+            Cast,
         ),
-        manifold("b.headers.short", "Short 4-into-1 headers", 390.0, 1, false),
+        manifold(
+            "b.headers.short",
+            "Short 4-into-1 headers",
+            390.0,
+            1,
+            false,
+            Tubes,
+        ),
         manifold(
             "b.headers.long-tube",
             "Long-tube 4-2-1 headers",
             960.0,
             1,
             false,
+            Tubes,
         ),
-        manifold("b.manifold.turbo", "Turbo manifold", 700.0, 1, true),
+        manifold("b.manifold.turbo", "Turbo manifold", 700.0, 1, true, Cast),
     ]
 }
 
 /// The R series' manifolds, a pair (one per bank) but for the 10-into-1, whose primaries
 /// cross over the valley from the far bank to one big turbo.
 fn r_manifolds() -> Vec<ManifoldDef> {
+    use Made::*;
     vec![
         manifold(
             "r.manifolds.stock",
@@ -235,6 +261,7 @@ fn r_manifolds() -> Vec<ManifoldDef> {
             500.0,
             2,
             false,
+            Cast,
         ),
         manifold(
             "r.headers.long-tube",
@@ -242,6 +269,7 @@ fn r_manifolds() -> Vec<ManifoldDef> {
             690.0,
             2,
             false,
+            Tubes,
         ),
         manifold(
             "r.manifolds.turbo",
@@ -249,6 +277,7 @@ fn r_manifolds() -> Vec<ManifoldDef> {
             500.0,
             2,
             true,
+            Cast,
         ),
         manifold(
             "r.manifold.turbo-crossover",
@@ -256,6 +285,7 @@ fn r_manifolds() -> Vec<ManifoldDef> {
             900.0,
             1,
             true,
+            Tubes,
         ),
     ]
 }

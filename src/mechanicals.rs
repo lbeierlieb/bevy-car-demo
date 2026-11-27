@@ -19,6 +19,8 @@ const ALLOY: [f32; 3] = [0.68, 0.69, 0.7];
 const COVER: [f32; 3] = [0.08, 0.08, 0.09];
 const RED: [f32; 3] = [0.72, 0.08, 0.06];
 const HOT: [f32; 3] = [0.4, 0.31, 0.26];
+/// Cast iron manifolds and turbine housings.
+const IRON: [f32; 3] = [0.24, 0.21, 0.19];
 const BLACK: [f32; 3] = [0.03, 0.03, 0.03];
 const CORE: [f32; 3] = [0.14, 0.14, 0.15];
 const CLOTH: [f32; 3] = [0.16, 0.16, 0.18];
@@ -53,6 +55,75 @@ pub fn key(car: &Item) -> u64 {
     }
     walk(car, &mut hasher);
     hasher.finish()
+}
+
+/// How the exhaust manifold fitted looks: cast (a log with stubs) or bent of tubes, its
+/// primaries' length against the family's own manifold's, how many branches it gathers
+/// the cylinders into, and the turbos on its mounts (their turbine snails' radius, m).
+struct Headers {
+    cast: bool,
+    share: f32,
+    branches: u32,
+    turbos: Vec<f32>,
+}
+
+impl Headers {
+    fn of(
+        catalogue: &Catalogue,
+        manifold: Option<&Item>,
+        family: &crate::physics::engine::families::Family,
+        version: usize,
+    ) -> Self {
+        let made = manifold.and_then(|item| match item.def(catalogue).does {
+            Does::Manifold { manifold, .. } => family.manifolds.get(manifold),
+            _ => None,
+        });
+        let stock = family.manifolds.first();
+        let Some(made) = made.or(stock) else {
+            return Self {
+                cast: true,
+                share: 1.0,
+                branches: if family.layout.is_vee() { 2 } else { 1 },
+                turbos: Vec::new(),
+            };
+        };
+        let length = |m: &crate::physics::engine::families::ManifoldDef| m.manifold.primary_length;
+        let share = length(made) / stock.map_or(length(made), length);
+        // A turbo's snail grows with the displacement behind its mount (a "Medium" on a
+        // V10's bank is sized for 4 litres) and with its size.
+        let displacement = family.versions.get(version).map_or(1.6e-3, |v| {
+            v.block.displacement() / made.manifold.branches.max(1) as f32
+        });
+        let grown = (displacement / 1.6e-3).cbrt().clamp(0.8, 1.6);
+        let turbos = manifold
+            .map(|item| {
+                (item.fitted(catalogue, Kind::Turbo))
+                    .map(|turbo| {
+                        let base = match turbo.def(catalogue).does {
+                            Does::EnginePart { part: 1, .. } => 0.062,
+                            Does::EnginePart { part: 3, .. } => 0.088,
+                            _ => 0.075,
+                        };
+                        base * grown
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            cast: made.cast,
+            share,
+            branches: made.manifold.branches,
+            turbos,
+        }
+    }
+
+    fn short(&self) -> bool {
+        self.share < 0.8
+    }
+
+    fn long(&self) -> bool {
+        self.share > 1.2
+    }
 }
 
 /// Places things in the body's design frame by x from the nose, height, and across
@@ -177,19 +248,10 @@ fn engine_bay(
         Some("Biggest") => 0.045,
         _ => 0.035,
     };
-    // The exhaust manifold: primaries from the head to a collector behind the engine,
-    // lower the longer they are (than the family's own manifold's).
-    let primaries = |item: &Item| match item.def(catalogue).does {
-        Does::Manifold { family, manifold } => (catalogue.families.get(family))
-            .and_then(|f| Some((f.manifolds.get(manifold)?, f.manifolds.first()?)))
-            .map(|(m, stock)| m.manifold.primary_length / stock.manifold.primary_length),
-        _ => None,
-    };
-    let (out, drop) = match manifold.and_then(primaries) {
-        Some(share) if share < 0.8 => (0.4, 0.4),
-        Some(share) if share > 1.2 => (0.5, 0.05),
-        _ => (0.46, 0.22),
-    };
+    // The exhaust manifold as fitted (the family's own without one), and the turbos on its
+    // mounts.
+    let headers = Headers::of(catalogue, manifold, family, version);
+    let mut turbos = Vec::new();
     let (collectors, mouth) = if vee {
         // Oil pan and crankcase, the two banks at 90° with low heads and flat covers
         // (the cam's in the block), the intake's plenum in the valley between them with a
@@ -203,6 +265,9 @@ fn engine_bay(
         b.oriented_box(plenum, axes, size(0.66, 0.14, 0.28), ALLOY);
         let per_bank = cylinders.div_ceil(2);
         let mut collectors = Vec::new();
+        // The 10-into-1's: the far (left) bank's gathered behind the engine and crossing
+        // over to the right bank's collector, where its one turbo sits.
+        let crossover = headers.branches == 1;
         for side in [-1.0f32, 1.0] {
             let (sin, cos) = (side * std::f32::consts::FRAC_PI_4).sin_cos();
             let up = Vec3::Y * cos + axes[2] * sin;
@@ -213,15 +278,78 @@ fn engine_bay(
             b.oriented_box(bank(0.2), bank_axes, s(0.84, 0.24, 0.22), CAST);
             b.oriented_box(bank(0.35), bank_axes, s(0.88, 0.08, 0.27), ALLOY);
             b.oriented_box(bank(0.41), bank_axes, s(0.8, 0.04, 0.21), cover);
-            let collector = to(-0.32, drop, side * (out + 0.1));
-            for j in 0..per_bank {
-                // The banks are offset by a rod's width along the crank.
-                let u = ((j as f32 + 0.5) / per_bank as f32 - 0.5) * 0.72 + side * 0.02;
-                let along_u = axes[0] * (u * along);
-                let port = bank(0.32) + outward * 0.12 + along_u;
-                let bend = port + outward * 0.07 - Vec3::Y * 0.1;
-                b.bar(port, bend, 0.035, HOT);
-                b.bar(bend, collector, 0.035, HOT);
+            // The exhaust ports, rearmost first (the banks are offset by a rod's width
+            // along the crank).
+            let ports: Vec<Vec3> = (0..per_bank)
+                .map(|j| {
+                    let u = ((j as f32 + 0.5) / per_bank as f32 - 0.5) * 0.72 + side * 0.02;
+                    bank(0.32) + outward * 0.12 + axes[0] * (u * along)
+                })
+                .collect();
+            let turbo = (!crossover || side > 0.0)
+                .then(|| headers.turbos.first().copied())
+                .flatten();
+            let collector = if headers.cast {
+                // A log along the bank with a stub from each port; out of its rear end
+                // down to the collector, or into the turbine on its flange, low and
+                // outboard.
+                let log = |port: Vec3| port + outward * 0.07 - Vec3::Y * 0.02;
+                for &port in &ports {
+                    b.bar(port, log(port), 0.05, IRON);
+                }
+                let (first, last) = (log(ports[0]), log(ports[ports.len() - 1]));
+                let rear = first - axes[0] * 0.05;
+                b.bar(rear, last + axes[0] * 0.03, 0.075, IRON);
+                match turbo {
+                    Some(radius) => {
+                        let turbine = rear + outward * (0.04 + radius) - Vec3::Y * 0.05;
+                        b.bar(rear, turbine, 0.07, IRON);
+                        turbos.push((turbine, radius));
+                        turbine
+                    }
+                    None => {
+                        let collector = to(-0.32, 0.22, side * 0.56);
+                        b.bar(rear, collector, 0.065, IRON);
+                        collector
+                    }
+                }
+            } else {
+                // Tubes: a primary from each port out and down to a collector behind the
+                // bank, lower and further back the longer they are; the 10-into-1's
+                // high, by the bulkhead.
+                let collector = if crossover {
+                    to(-0.42, 0.42, side * 0.6)
+                } else if headers.long() {
+                    to(-0.52, 0.04, side * 0.5)
+                } else if headers.short() {
+                    to(-0.3, 0.36, side * 0.6)
+                } else {
+                    to(-0.32, 0.22, side * 0.56)
+                };
+                for &port in &ports {
+                    let bend = port + outward * 0.07 - Vec3::Y * 0.1;
+                    b.bar(port, bend, 0.035, HOT);
+                    b.bar(bend, collector, 0.035, HOT);
+                }
+                if crossover && side < 0.0 {
+                    // Over the bell housing to the other bank's collector.
+                    let behind = to(-0.6, 0.72, -0.25);
+                    let across = to(-0.6, 0.72, 0.25);
+                    b.bar(collector, behind, 0.065, HOT);
+                    b.bar(behind, across, 0.065, HOT);
+                    b.bar(across, to(-0.42, 0.42, 0.6), 0.065, HOT);
+                    continue;
+                }
+                if let Some(radius) = turbo {
+                    let turbine = collector + Vec3::Y * 0.02 + outward * (radius * 0.5);
+                    turbos.push((turbine, radius));
+                    turbine
+                } else {
+                    collector
+                }
+            };
+            for &port in &ports {
+                let along_u = port - bank(0.32) - outward * 0.12;
                 let inlet = bank(0.36) - outward * 0.11 + along_u;
                 let entry = plenum + axes[2] * (side * 0.1) + along_u - Vec3::Y * 0.02;
                 b.bar(inlet, entry, 0.04, ALLOY);
@@ -262,14 +390,73 @@ fn engine_bay(
         let throat = plenum - axes[0] * (0.36 * along);
         let mouth = throat - axes[0] * 0.07;
         b.cylinder(throat, mouth, throttle, 8, ALLOY);
-        let collector = to(0.0, drop, out);
-        for k in 0..cylinders {
-            let u = ((k as f32 + 0.5) / cylinders as f32 - 0.5) * 0.7;
-            let port = to(u, 0.66, 0.22);
-            let bend = to(u * 0.6, 0.55, out - 0.04);
-            b.bar(port, bend, 0.035, HOT);
-            b.bar(bend, collector, 0.035, HOT);
-        }
+        let ports: Vec<(f32, Vec3)> = (0..cylinders)
+            .map(|k| {
+                let u = ((k as f32 + 0.5) / cylinders as f32 - 0.5) * 0.7;
+                (u, to(u, 0.66, 0.22))
+            })
+            .collect();
+        let turbo = headers.turbos.first().copied();
+        let collector = if headers.cast {
+            // A log along the head with a stub from each port, its outlet in the middle:
+            // down to the collector, or the turbine on its flange.
+            let log = |u: f32| to(u, 0.6, 0.3);
+            for &(u, port) in &ports {
+                b.bar(port, log(u), 0.05, IRON);
+            }
+            b.bar(log(-0.38), log(0.38), 0.075, IRON);
+            match turbo {
+                Some(radius) => {
+                    let turbine = log(0.0) + axes[2] * (0.04 + radius) - Vec3::Y * 0.02;
+                    b.bar(log(0.0), turbine, 0.07, IRON);
+                    turbos.push((turbine, radius));
+                    turbine
+                }
+                None => {
+                    let collector = to(0.0, 0.22, 0.46);
+                    b.bar(log(0.0), collector, 0.065, IRON);
+                    collector
+                }
+            }
+        } else if headers.long() && cylinders == 4 {
+            // 4-2-1: the primaries in pairs (the outer two, the inner two) into two
+            // secondaries, low, then one.
+            let collector = to(0.0, 0.05, 0.5);
+            for (pair, (a, c)) in [(0, 3), (1, 2)].into_iter().enumerate() {
+                let merge = to(0.12 * (pair as f32 * 2.0 - 1.0), 0.28, 0.48);
+                for k in [a, c] {
+                    let (u, port) = ports[k];
+                    let bend = to(u * 0.8, 0.55, 0.44);
+                    b.bar(port, bend, 0.035, HOT);
+                    b.bar(bend, merge, 0.035, HOT);
+                }
+                b.bar(merge, collector, 0.045, HOT);
+            }
+            collector
+        } else {
+            // Tubes into a collector behind the engine, lower the longer they are.
+            let (out, drop) = if headers.short() {
+                (0.4, 0.4)
+            } else if headers.long() {
+                (0.5, 0.05)
+            } else {
+                (0.46, 0.22)
+            };
+            let collector = to(0.0, drop, out);
+            for &(u, port) in &ports {
+                let bend = to(u * 0.6, 0.55, out - 0.04);
+                b.bar(port, bend, 0.035, HOT);
+                b.bar(bend, collector, 0.035, HOT);
+            }
+            match turbo {
+                Some(radius) => {
+                    let turbine = collector + Vec3::Y * 0.05;
+                    turbos.push((turbine, radius));
+                    turbine
+                }
+                None => collector,
+            }
+        };
         (vec![collector], mouth)
     };
     // Behind a longitudinal engine its gearbox (the bell housing, then the case), and a
@@ -314,36 +501,37 @@ fn engine_bay(
             }
         }
     }
-    // A turbo at the (first) collector: the turbine's snail, the compressor's beside it
-    // and its pipe up to the throttle (through the intercooler, which the pipes don't
-    // show); a V's other bank crosses over to it.
-    let mut exhaust = collectors.clone();
-    let collector = collectors[0];
+    // A turbo at each turbine inlet: the turbine's snail, the compressor's beside it
+    // (towards the intake's end) and its pipe to the throttle (through the intercooler,
+    // which the pipes don't show).
     let intake_end = if vee { 1.0 } else { -1.0 };
-    let mut intake_from = mouth + axes[0] * (0.05 * intake_end);
-    if turbo {
-        let turbine = collector + Vec3::Y * 0.05;
-        for other in &collectors[1..] {
-            b.bar(*other, turbine, 0.07, HOT);
+    let mut intakes = vec![mouth + axes[0] * (0.05 * intake_end)];
+    let mut exhaust = collectors.clone();
+    if !turbos.is_empty() {
+        exhaust.clear();
+        intakes.clear();
+        for &(turbine, radius) in &turbos {
+            let width = radius * 1.05;
+            b.cylinder(
+                turbine - axes[0] * (width / 2.0),
+                turbine + axes[0] * (width / 2.0),
+                radius,
+                12,
+                IRON,
+            );
+            let compressor = turbine + axes[0] * (intake_end * (width + 0.02));
+            b.cylinder(
+                compressor - axes[0] * (radius * 0.5),
+                compressor + axes[0] * (radius * 0.5),
+                radius * 1.13,
+                12,
+                ALLOY,
+            );
+            b.bar(compressor + Vec3::Y * radius, mouth, 0.06, ALLOY);
+            // The turbine's outlet, down into the exhaust; the compressor's inlet.
+            exhaust.push(turbine - Vec3::Y * (radius + 0.01));
+            intakes.push(compressor + axes[0] * (intake_end * (radius * 0.5 + 0.06)));
         }
-        b.cylinder(
-            turbine - axes[0] * 0.04,
-            turbine + axes[0] * 0.04,
-            0.075,
-            10,
-            HOT,
-        );
-        let compressor = turbine + axes[0] * 0.1;
-        b.cylinder(
-            compressor - axes[0] * 0.035,
-            compressor + axes[0] * 0.035,
-            0.085,
-            10,
-            ALLOY,
-        );
-        b.bar(compressor + Vec3::Y * 0.08, mouth, 0.06, ALLOY);
-        exhaust = vec![turbine - Vec3::Y * 0.08];
-        intake_from = compressor + axes[0] * 0.12;
     }
     // A Roots blower on top of the engine, over the intake, sticking up through the
     // bonnet (its cut-out's frame around it, in the bonnet's paint); its belt from the
@@ -401,7 +589,7 @@ fn engine_bay(
                 b.oriented_box(ring + axes[0] * u + axes[2] * w, axes, size, color);
             }
         }
-        intake_from = base + axes[0] * (0.3 * along * intake_end) + Vec3::Y * 0.04;
+        intakes = vec![base + axes[0] * (0.3 * along * intake_end) + Vec3::Y * 0.04];
     }
     // A centrifugal supercharger at the belt end, low on the intake side: its snail, the
     // belt from the crank, and its pipe up to the throttle.
@@ -423,35 +611,37 @@ fn engine_bay(
         );
         b.bar(snail + axes[0] * 0.07, to(0.47, 0.2, 0.0), 0.02, BLACK);
         b.bar(snail + Vec3::Y * 0.1, mouth, 0.05, ALLOY);
-        intake_from = snail - axes[0] * 0.08;
+        intakes = vec![snail - axes[0] * 0.08];
     }
     // The air filter: the stock box (a panel filter in it, red if it's the sport one)
-    // over the gearbox with a pipe to the throttle (ahead of a longitudinal V, at the
-    // front of its intake), or an open cone on the pipe's end.
+    // over the gearbox with a pipe to the throttle or each turbo's compressor (ahead of a
+    // longitudinal V, at the front of its intake), or an open cone on each pipe's end.
     let filter = if vee {
         let ahead = x - along / 2.0 - 0.22;
         frame.at(ahead, body.deck_height(ahead) - 0.16, 0.0)
     } else {
         frame.at(x - 0.1, under_bonnet - 0.09, -0.34 * body.width)
     };
-    match named("Air filter") {
-        Some("Open cone") => {
-            let end = intake_from.lerp(filter, 0.7);
-            b.bar(intake_from, end, 0.06, BLACK);
+    let filter_part = named("Air filter");
+    for &from in &intakes {
+        if filter_part == Some("Open cone") {
+            let end = from.lerp(filter, 0.7);
+            b.bar(from, end, 0.06, BLACK);
             b.cylinder(
                 end,
-                end + (end - intake_from).normalize_or_zero() * 0.16,
+                end + (end - from).normalize_or_zero() * 0.16,
                 0.07,
                 10,
                 RED,
             );
+        } else {
+            b.bar(from, filter, 0.06, BLACK);
         }
-        filter_part => {
-            b.bar(intake_from, filter, 0.06, BLACK);
-            b.cuboid(filter, Vec3::new(0.26, 0.12, 0.22), BLACK);
-            if filter_part == Some("Sport panel") {
-                b.cuboid(filter + Vec3::Y * 0.065, Vec3::new(0.2, 0.01, 0.16), RED);
-            }
+    }
+    if filter_part != Some("Open cone") {
+        b.cuboid(filter, Vec3::new(0.26, 0.12, 0.22), BLACK);
+        if filter_part == Some("Sport panel") {
+            b.cuboid(filter + Vec3::Y * 0.065, Vec3::new(0.2, 0.01, 0.16), RED);
         }
     }
     Some(exhaust)
@@ -759,5 +949,84 @@ mod tests {
             swap(&mut charged, &catalogue, slot, def);
             assert!(triangles(&mesh(&catalogue, chassis, &charged)) > plain);
         }
+    }
+
+    /// `car` with the manifold `id` on its engine and the turbo `turbo` on every mount.
+    fn with_manifold(catalogue: &Catalogue, car: &Item, id: &str, turbo: Option<&str>) -> Item {
+        let def = |id: &str| (catalogue.defs.iter()).position(|d| d.id == id).unwrap();
+        let mut car = car.clone();
+        let engine_at = (car.def(catalogue).slots.iter())
+            .position(|s| s.kind == Kind::Engine)
+            .unwrap();
+        let engine = car.slots[engine_at].as_mut().unwrap();
+        let at = (engine.def(catalogue).slots.iter())
+            .position(|s| s.kind == Kind::Manifold)
+            .unwrap();
+        let mut manifold = Item::new(catalogue, def(id), 0);
+        let mounts = manifold.def(catalogue).slots.clone();
+        for (slot, mount) in mounts.iter().zip(&mut manifold.slots) {
+            if let (Kind::Turbo, Some(turbo)) = (slot.kind, turbo) {
+                *mount = Some(Item::new(catalogue, def(turbo), 0));
+            }
+        }
+        engine.slots[at] = Some(manifold);
+        assert!(car.fine(catalogue), "{id} with {turbo:?}");
+        car
+    }
+
+    #[test]
+    fn every_manifold_is_drawn_with_a_turbo_on_each_mount() {
+        let catalogue = crate::catalogue::builtin();
+        for trim in &catalogue.trims {
+            let Does::Chassis(c) = trim.car.def(&catalogue).does else {
+                panic!("not a car");
+            };
+            let chassis = &catalogue.chassis[c];
+            let body = &chassis.body;
+            let engine = trim.car.fitted(&catalogue, Kind::Engine).next().unwrap();
+            let block = engine.fitted(&catalogue, Kind::LongBlock).next().unwrap();
+            let Does::Block { family, .. } = block.def(&catalogue).does else {
+                panic!("no block");
+            };
+            let mut seen = Vec::new();
+            for made in &catalogue.families[family].manifolds {
+                let turbo = made.mounts.then_some("turbocharger.medium");
+                let car = with_manifold(&catalogue, &trim.car, &made.id, turbo);
+                let mesh = mesh(&catalogue, chassis, &car);
+                let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+                    mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+                else {
+                    panic!("no positions");
+                };
+                let wide = body.width / 2.0 + if body.side_pipes { 0.12 } else { 0.0 };
+                for p in positions {
+                    let p = Vec3::from_array(*p);
+                    assert!(p.y > 0.0 && p.y < body.height(), "{}: {p}", made.id);
+                    assert!(p.x.abs() < wide, "{}: {p}", made.id);
+                }
+                // Every manifold looks different, and the empty mounts less than full.
+                let count = triangles(&mesh);
+                assert!(!seen.contains(&count), "{}: {count}", made.id);
+                seen.push(count);
+                if made.mounts {
+                    let empty = with_manifold(&catalogue, &trim.car, &made.id, None);
+                    let bare = triangles(&super::mesh(&catalogue, chassis, &empty));
+                    assert!(bare < count, "{}: {bare} {count}", made.id);
+                }
+            }
+        }
+        // The R80's pair of turbo manifolds carries two turbos, the 10-into-1 one: the
+        // pair more to draw (a snail, a compressor and their pipes each).
+        let merrow = (catalogue.trims.iter())
+            .find(|t| t.id == "merrow.r80")
+            .unwrap();
+        let chassis = &catalogue.chassis[1];
+        let [pair, crossover] = ["r.manifolds.turbo", "r.manifold.turbo-crossover"].map(|id| {
+            let car = with_manifold(&catalogue, &merrow.car, id, Some("turbocharger.medium"));
+            let empty = with_manifold(&catalogue, &merrow.car, id, None);
+            triangles(&mesh(&catalogue, chassis, &car))
+                - triangles(&mesh(&catalogue, chassis, &empty))
+        });
+        assert!(pair > crossover, "{pair} {crossover}");
     }
 }

@@ -434,10 +434,20 @@ fn dress_up(setup: &mut crate::car::CarSetup) {
         }
     }
     // FITIDS="vireo.wing,turbocharger.roots-blower": parts by id, each into the first slot
-    // of its kind in the tree (WING="angle" sets a wing's).
+    // of its kind in the tree (WING="angle" sets a wing's); a turbo onto every mount of the
+    // first manifold with mounts (so the manifold goes first: FITIDS="r.manifolds.turbo,
+    // turbocharger.medium").
     fn put(catalogue: &crate::catalogue::Catalogue, item: &mut Item, part: &Item) -> bool {
         let kind = part.def(catalogue).kind;
         let slots = item.def(catalogue).slots.clone();
+        if kind == Kind::Turbo && slots.iter().any(|slot| slot.kind == kind) {
+            for (slot, place) in slots.iter().zip(&mut item.slots) {
+                if slot.kind == kind {
+                    *place = Some(part.clone());
+                }
+            }
+            return true;
+        }
         if let Some(place) = slots.iter().position(|slot| slot.kind == kind) {
             item.slots[place] = Some(part.clone());
             return true;
@@ -465,8 +475,9 @@ fn dress_up(setup: &mut crate::car::CarSetup) {
     }
 }
 
-/// CARCAM="side,height,along": look at the middle of the cars from `side` m to their right
-/// (negative: left), `height` m up and `along` m ahead of them.
+/// CARCAM="side,height,along[,ahead]": look at the middle of the cars (or `ahead` m ahead
+/// of it, e.g. 1.2 at the engine bay) from `side` m to their right (negative: left),
+/// `height` m up and `along` m ahead of them.
 fn car_cam(
     mut cams: Query<&mut Transform, With<Camera3d>>,
     cars: Query<&Transform, (With<crate::car::Car>, Without<Camera3d>)>,
@@ -479,6 +490,8 @@ fn car_cam(
         return;
     };
     let middle = cars.iter().map(|t| t.translation).sum::<Vec3>() / cars.iter().count() as f32;
+    let ahead = first.rotation * Vec3::new(0.0, 0.0, -v.get(3).copied().unwrap_or(0.0));
+    let middle = middle + ahead;
     let eye = middle + first.rotation * Vec3::new(v[0], 0.0, -v[2]) + Vec3::Y * v[1];
     for mut t in &mut cams {
         *t = Transform::from_translation(eye).looking_at(middle + Vec3::Y * 0.3, Vec3::Y);

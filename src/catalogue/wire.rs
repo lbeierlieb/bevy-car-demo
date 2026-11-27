@@ -429,7 +429,7 @@ impl Wire for Manifold {
         fine.then_some(manifold)
     }
 }
-fields!(ManifoldDef { manifold, mounts } text { id, name });
+fields!(ManifoldDef { manifold, mounts, cast } text { id, name });
 
 fields!(Regrind {
     duration,

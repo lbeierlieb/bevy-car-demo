@@ -113,6 +113,9 @@ pub struct ManifoldDef {
     pub name: String,
     pub manifold: Manifold,
     pub mounts: bool,
+    /// Cast in iron (stubby primaries into a log) rather than bent of tubes: only how it
+    /// looks.
+    pub cast: bool,
 }
 
 impl ManifoldDef {
