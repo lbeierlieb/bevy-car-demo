@@ -51,15 +51,27 @@ pub fn read(
     (car, owned)
 }
 
-/// What `peer` owns as it's saved: their car driven (if the server has it) and the rest.
+/// What `peer` owns as it's saved: their car driven and the rest. A car the server is
+/// building anew (it has no state yet) is saved as it's to be (its parts as worn as they
+/// are and its tank full, unless it's to be in another condition).
 pub fn belongings(peer: &Peer, catalogue: &Catalogue) -> Belongings {
     let one = |item: &Item| saved::write_items(catalogue, std::slice::from_ref(item));
     let owned = &peer.owned;
     let held = (owned.held.iter())
         .flat_map(|(shop, items)| items.iter().map(move |item| (held_at(shop), item)));
+    let car = match peer.shadow.kept() {
+        Some((spec, car)) => Some(saved::write(catalogue, spec, &Condition::of(car))),
+        None => (peer.shadow.spec().filter(|_| !peer.shadow.lent())).map(|spec| {
+            let condition = peer.shadow.condition_waiting().cloned().unwrap_or_else(|| {
+                let tank = spec.build.chassis().tank.litres;
+                let octane = crate::physics::fuel::PUMP_OCTANE;
+                Condition::of_parts(catalogue, &spec.car, tank, octane)
+            });
+            saved::write(catalogue, spec, &condition)
+        }),
+    };
     Belongings {
-        car: (peer.shadow.kept())
-            .map(|(spec, car)| saved::write(catalogue, spec, &Condition::of(car))),
+        car,
         garage: (owned.cars.iter())
             .map(|parked| saved::write(catalogue, &parked.spec, &parked.condition))
             .collect(),
@@ -74,7 +86,8 @@ pub fn belongings(peer: &Peer, catalogue: &Catalogue) -> Belongings {
 
 /// Tells `peer` what they own (and why what they asked wasn't done, if it wasn't).
 pub fn tell(peer: &mut Peer, shops: &[Shop], why: Option<String>) {
-    let owned = Box::new(peer.owned.view(shops));
+    let mut owned = Box::new(peer.owned.view(shops));
+    owned.money = peer.money;
     peer.tell(&ToClient::Owned { owned, why });
 }
 

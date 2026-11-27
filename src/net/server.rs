@@ -145,6 +145,9 @@ pub struct Server {
     /// When the players' cars were last saved, and their accounts' locks refreshed (s).
     saved: f64,
     refreshed: f64,
+    /// How many times the server had changed each wallet when the database was last asked
+    /// for them (with the locks' refresh): its answer counts only if that's still so.
+    asked_money: HashMap<AccountId, u32>,
     /// When states, and the map's players, were last sent (s).
     sent: f64,
     map_sent: f64,
@@ -166,6 +169,7 @@ impl Server {
             accounts: None,
             saved: 0.0,
             refreshed: 0.0,
+            asked_money: HashMap::new(),
             sent: 0.0,
             map_sent: f64::NEG_INFINITY,
             pings_sent: f64::NEG_INFINITY,
@@ -277,6 +281,10 @@ pub struct Peer {
     /// What they own besides the car they drive, and its revision last saved.
     pub owned: Owned,
     owned_saved: u32,
+    /// What's in their wallet (cents), and how many times the server changed it (a
+    /// database's word on it from before a change is stale).
+    pub money: i64,
+    money_changes: u32,
 }
 
 /// What a player has been told of a car: its looks' revision and the name it shows, and
@@ -332,6 +340,8 @@ fn accept(
             at_marker: None,
             owned: Owned::default(),
             owned_saved: 0,
+            money: 0,
+            money_changes: 0,
         });
     }
 }
@@ -475,6 +485,7 @@ fn receive(
                                 name: name.trim().to_string(),
                                 account: None,
                                 belongings: Default::default(),
+                                money: crate::trade::START_MONEY,
                             };
                             names.insert(admitted.name.to_lowercase());
                             let (network, catalogue) = (network.as_deref(), &catalogue);
@@ -725,6 +736,7 @@ fn admit(
         name,
         account,
         belongings,
+        money,
     } = admitted;
     info!("{name} joined (player {})", peer.id);
     let id = peer.id;
@@ -751,6 +763,7 @@ fn admit(
     let (saved, owned) = super::stash::read(&catalogue.0, &belongings, &name);
     peer.owned = owned;
     peer.owned_saved = peer.owned.revision;
+    peer.money = money;
     let spec = match saved {
         Some((spec, condition)) => {
             peer.shadow.set_condition(condition);
@@ -793,12 +806,30 @@ fn keep(
 ) {
     let now = now(&time);
     let server = &mut *server;
-    let Some(accounts) = &server.accounts else {
+    let Some(accounts) = &mut server.accounts else {
         return;
     };
+    // The wallets as the database has them (players on other instances may have paid into
+    // them), unless the server changed them since it asked.
+    for balances in accounts.balances() {
+        for (account, money) in balances {
+            let asked = server.asked_money.get(&account).copied();
+            let peer = peers.iter_mut().find(|peer| peer.account == Some(account));
+            if let Some(mut peer) = peer
+                && asked == Some(peer.money_changes)
+                && peer.money != money
+            {
+                peer.money = money;
+                super::stash::tell(&mut peer, &server.shops, None);
+            }
+        }
+    }
     if now - server.refreshed >= super::accounts::REFRESH.as_secs_f64() {
         server.refreshed = now;
         let playing: Vec<AccountId> = peers.iter().filter_map(|peer| peer.account).collect();
+        server.asked_money = (peers.iter())
+            .filter_map(|peer| Some((peer.account?, peer.money_changes)))
+            .collect();
         if !playing.is_empty() {
             accounts.refresh(playing);
         }

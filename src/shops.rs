@@ -237,6 +237,8 @@ pub struct Placed {
 #[derive(Resource, Default)]
 pub struct Shops {
     pub list: Vec<Placed>,
+    /// What's in our wallet (cents), shown in every shop's window.
+    pub money: i64,
 }
 
 /// A glowing disc on the road and a beam above it.
@@ -358,6 +360,7 @@ pub fn shop_window(
         .width(420.0)
         .back(Some("Leave"))
         .show(ctx, |ui| {
+            kit::info(ui, "In your wallet", &crate::trade::euros(shops.money));
             contents(ui, came_in);
             ui.add_space(4.0);
             if kit::submenu(ui, crate::trunk::Screen::List.title()).clicked() {
@@ -433,6 +436,10 @@ fn place(
         Some(c) if matches!(c.status, Status::Joined { .. }) && !c.in_running_round() => &c.shops,
         _ => &[],
     };
+    let money = connection.as_deref().map_or(0, |c| c.owned.money);
+    if shops.money != money {
+        shops.money = money;
+    }
     let current = shops.list.iter().map(|placed| &placed.shop);
     if current.eq(wanted.iter()) {
         return;

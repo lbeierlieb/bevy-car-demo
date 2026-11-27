@@ -68,7 +68,7 @@ macro_rules! number {
         }
     )*};
 }
-number!(u8, u16, u32, u64, i8, i16, i32);
+number!(u8, u16, u32, u64, i8, i16, i32, i64);
 
 impl Wire for f32 {
     fn put(&self, out: &mut Vec<u8>) {

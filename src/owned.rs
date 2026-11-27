@@ -64,6 +64,7 @@ impl Owned {
     /// list; parts held at a shop no longer in it aren't shown).
     pub fn view(&self, shops: &[crate::shops::Shop]) -> OwnedView {
         OwnedView {
+            money: 0,
             cars: (self.cars.iter())
                 .map(|parked| ParkedView {
                     car: parked.spec.car.clone(),
@@ -91,6 +92,8 @@ pub struct ParkedView {
 /// What a player owns as they're told it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OwnedView {
+    /// What's in their wallet (cents).
+    pub money: i64,
     pub cars: Vec<ParkedView>,
     pub parts: Vec<Item>,
     /// Parts held at shops (by their places in the server's list of shops).
@@ -208,6 +211,7 @@ impl Wire for ParkedView {
 
 impl Wire for OwnedView {
     fn put(&self, out: &mut Vec<u8>) {
+        self.money.put(out);
         self.cars.put(out);
         self.parts.put(out);
         (self.held.len() as u16).put(out);
@@ -217,13 +221,19 @@ impl Wire for OwnedView {
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
+        let money = r.get()?;
         let cars = r.get()?;
         let parts = loose(r)?;
         let n: u16 = r.get()?;
         let held = (0..n)
             .map(|_| Some((r.get()?, loose(r)?)))
             .collect::<Option<_>>()?;
-        Some(Self { cars, parts, held })
+        Some(Self {
+            money,
+            cars,
+            parts,
+            held,
+        })
     }
 }
 
@@ -281,6 +291,7 @@ mod tests {
         let car = &catalogue.trims[0].car;
         let wheel = car.fitted(&catalogue, Kind::Wheel).next().unwrap().clone();
         let view = OwnedView {
+            money: 123_456,
             cars: vec![ParkedView {
                 car: car.clone(),
                 cargo: vec![wheel.clone()],

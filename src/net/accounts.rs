@@ -41,6 +41,8 @@ pub struct Admitted {
     pub name: String,
     pub account: Option<AccountId>,
     pub belongings: Belongings,
+    /// What's in their wallet (cents).
+    pub money: i64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -51,7 +53,7 @@ mod native {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::db::{Admission, Database, Login};
+    use crate::db::{Admission, Answer, Database, Login};
 
     /// A server's database and who it lets in.
     pub struct Accounts {
@@ -59,6 +61,8 @@ mod native {
         admission: Admission,
         /// The names given by the players waiting to be let in.
         waiting: HashMap<PlayerId, String>,
+        /// What the database said, but for logins, not yet picked up.
+        said: Vec<Answer>,
     }
 
     impl Accounts {
@@ -68,6 +72,7 @@ mod native {
                 db: Database::open(url, crate::db::instance_name())?,
                 admission: Admission::Accounts { guests },
                 waiting: HashMap::new(),
+                said: Vec::new(),
             })
         }
 
@@ -78,6 +83,7 @@ mod native {
                 db: Database::open(url, "alone".into())?,
                 admission: Admission::Alone,
                 waiting: HashMap::new(),
+                said: Vec::new(),
             })
         }
 
@@ -90,12 +96,21 @@ mod native {
         /// Who was let in since this was last asked, or why not.
         pub fn answers(&mut self) -> Vec<(PlayerId, Result<Admitted, String>)> {
             let alone = self.admission == Admission::Alone;
-            let answers = self.db.answers();
-            answers
+            self.said.extend(self.db.answers());
+            let mut logins = Vec::new();
+            self.said.retain_mut(|answer| match answer {
+                Answer::Login { peer, login } => {
+                    let login = std::mem::replace(login, Err(String::new()));
+                    logins.push((*peer, login));
+                    false
+                }
+                _ => true,
+            });
+            logins
                 .into_iter()
-                .map(|answer| {
-                    let given = self.waiting.remove(&answer.peer).unwrap_or_default();
-                    let admitted = answer.login.map(|login| match login {
+                .map(|(peer, login)| {
+                    let given = self.waiting.remove(&peer).unwrap_or_default();
+                    let admitted = login.map(|login| match login {
                         Login::Account(account) => Admitted {
                             // Alone, by the name the game gives.
                             name: if alone && !given.is_empty() {
@@ -105,16 +120,40 @@ mod native {
                             },
                             account: Some(account.id),
                             belongings: account.belongings,
+                            money: account.money,
                         },
                         Login::Guest(name) => Admitted {
                             name,
                             account: None,
                             belongings: Belongings::default(),
+                            money: crate::trade::START_MONEY,
                         },
                     });
-                    (answer.peer, admitted)
+                    (peer, admitted)
                 })
                 .collect()
+        }
+
+        /// The wallets of the accounts playing here as the database has them, told since
+        /// this was last asked (after `refresh`), in order.
+        pub fn balances(&mut self) -> Vec<Vec<(AccountId, i64)>> {
+            // (Logins that came meanwhile wait for `answers`.)
+            self.said.extend(self.db.answers());
+            let mut balances = Vec::new();
+            self.said.retain_mut(|answer| match answer {
+                Answer::Balances(told) => {
+                    balances.push(std::mem::take(told));
+                    false
+                }
+                _ => true,
+            });
+            balances
+        }
+
+        /// Adds `delta` cents to `account`'s wallet, saving everything it owns
+        /// (`belongings`, if given) with it, in one go.
+        pub fn pay(&self, account: AccountId, delta: i64, belongings: Option<Belongings>) {
+            self.db.pay(account, delta, belongings);
         }
 
         /// Saves `account`'s car driven (text, `saved::write`).
@@ -158,6 +197,10 @@ impl Accounts {
     pub fn save_all(&self, _: AccountId, _: Belongings) {}
     pub fn refresh(&self, _: Vec<AccountId>) {}
     pub fn release(&self, _: AccountId) {}
+    pub fn balances(&mut self) -> Vec<Vec<(AccountId, i64)>> {
+        Vec::new()
+    }
+    pub fn pay(&self, _: AccountId, _: i64, _: Option<Belongings>) {}
     pub fn flush(&self, _: Duration) -> bool {
         true
     }

@@ -60,6 +60,7 @@ pub mod snapshot;
 pub mod spec;
 pub mod storage;
 pub mod terrain;
+pub mod trade;
 pub mod traffic;
 pub mod trees;
 pub mod trunk;

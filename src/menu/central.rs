@@ -350,6 +350,14 @@ fn main(
     // Alone is on the game's own server: no players to list, and joining a real one
     // leaves it.
     let alone = online.start.as_ref().is_some_and(|start| start.alone);
+    if joined && let Some(connection) = &online.connection {
+        kit::section(ui, "Money");
+        kit::info(
+            ui,
+            "In your wallet",
+            &crate::trade::euros(connection.owned.money),
+        );
+    }
     if joined && !alone {
         kit::section(ui, "Online");
         let count = online

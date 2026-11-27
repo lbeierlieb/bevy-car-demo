@@ -53,6 +53,8 @@ pub struct Account {
     pub id: AccountId,
     pub name: String,
     pub belongings: Belongings,
+    /// What's in its wallet (cents).
+    pub money: i64,
 }
 
 /// Who came in.
@@ -168,6 +170,13 @@ const MIGRATIONS: &[Migration] = &[
          BIGINT NOT NULL, place TEXT NOT NULL, data TEXT NOT NULL, saved BIGINT NOT NULL)",
             "CREATE INDEX items_owner ON items (owner)",
         ],
+    },
+    // Every account's wallet (cents), new ones starting with `trade::START_MONEY` (a test
+    // checks they agree).
+    Migration {
+        sqlite: &["ALTER TABLE accounts ADD COLUMN money BIGINT NOT NULL DEFAULT 500000"],
+        mysql: &["ALTER TABLE accounts ADD COLUMN money BIGINT NOT NULL DEFAULT 500000"],
+        postgres: &["ALTER TABLE accounts ADD COLUMN money BIGINT NOT NULL DEFAULT 500000"],
     },
 ];
 
@@ -417,10 +426,12 @@ impl Store {
             );
         }
         let belongings = self.belongings(id).await?;
+        let money = self.money(id).await?;
         Ok(Login::Account(Account {
             id,
             name,
             belongings,
+            money,
         }))
     }
 
@@ -568,15 +579,90 @@ impl Store {
         id: AccountId,
         belongings: &Belongings,
     ) -> Result<(), String> {
-        let now = now_ms();
         let mut tx = self.pool.begin().await.map_err(text)?;
+        self.put_belongings(&mut tx, id, belongings).await?;
+        tx.commit().await.map_err(text)
+    }
+
+    /// What's in account `id`'s wallet (cents).
+    pub async fn money(&self, id: AccountId) -> Result<i64, String> {
+        let row = sqlx::query(self.sql("SELECT money FROM accounts WHERE id = ?"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(text)?;
+        row.ok_or("no such account")?.try_get(0).map_err(text)
+    }
+
+    /// The wallets of the accounts `ids` (those there are).
+    pub async fn balances(&self, ids: &[AccountId]) -> Result<Vec<(AccountId, i64)>, String> {
+        let mut out = Vec::with_capacity(ids.len());
+        for &id in ids {
+            if let Ok(money) = self.money(id).await {
+                out.push((id, money));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Adds `delta` cents to account `id`'s wallet (taking: never below nothing), and saves
+    /// what it owns now (`belongings`, if given) with it, in one go: either both are done or
+    /// neither.
+    pub async fn pay(
+        &self,
+        id: AccountId,
+        delta: i64,
+        belongings: Option<&Belongings>,
+    ) -> Result<(), String> {
+        let mut tx = self.pool.begin().await.map_err(text)?;
+        self.add_money(&mut tx, id, delta).await?;
+        if let Some(belongings) = belongings {
+            self.put_belongings(&mut tx, id, belongings).await?;
+        }
+        tx.commit().await.map_err(text)
+    }
+
+    /// Adds `delta` cents to account `id`'s wallet within `tx`; taking more than there is
+    /// is refused.
+    async fn add_money(
+        &self,
+        tx: &mut sqlx::Transaction<'static, sqlx::Any>,
+        id: AccountId,
+        delta: i64,
+    ) -> Result<(), String> {
+        if delta == 0 {
+            return Ok(());
+        }
+        let done = sqlx::query(
+            self.sql("UPDATE accounts SET money = money + ? WHERE id = ? AND money + ? >= 0"),
+        )
+        .bind(delta)
+        .bind(id)
+        .bind(delta)
+        .execute(&mut **tx)
+        .await
+        .map_err(text)?;
+        if done.rows_affected() == 0 {
+            return Err("Not enough money".into());
+        }
+        Ok(())
+    }
+
+    /// Everything account `id` owns saved within `tx`, in place of what was saved.
+    async fn put_belongings(
+        &self,
+        tx: &mut sqlx::Transaction<'static, sqlx::Any>,
+        id: AccountId,
+        belongings: &Belongings,
+    ) -> Result<(), String> {
+        let now = now_ms();
         for sql in [
             "DELETE FROM cars WHERE owner = ?",
             "DELETE FROM items WHERE owner = ?",
         ] {
             sqlx::query(self.sql(sql))
                 .bind(id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await
                 .map_err(text)?;
         }
@@ -590,7 +676,7 @@ impl Store {
             .bind(car)
             .bind(now)
             .bind(place)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(text)?;
         }
@@ -602,11 +688,11 @@ impl Store {
             .bind(place)
             .bind(item)
             .bind(now)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(text)?;
         }
-        tx.commit().await.map_err(text)
+        Ok(())
     }
 }
 
@@ -647,17 +733,28 @@ enum Job {
         account: AccountId,
         belongings: Belongings,
     },
+    /// Locks refreshed, and the wallets told (`Answer::Balances`): another instance's
+    /// players may have paid into them.
     Refresh(Vec<AccountId>),
     Release(AccountId),
+    Pay {
+        account: AccountId,
+        delta: i64,
+        belongings: Option<Belongings>,
+    },
     /// Answers once everything asked before is done.
     Flush(Sender<()>),
 }
 
-/// The answer to a login: for whom (the server's player number), and who came in or why
-/// not.
-pub struct Answer {
-    pub peer: u32,
-    pub login: Result<Login, String>,
+/// What the database thread says back.
+pub enum Answer {
+    /// To a login: for whom (the server's player number), and who came in or why not.
+    Login {
+        peer: u32,
+        login: Result<Login, String>,
+    },
+    /// What's in the wallets of the accounts playing here (after `refresh`).
+    Balances(Vec<(AccountId, i64)>),
 }
 
 /// The database as a server uses it: a thread of its own runs what it's asked, in order.
@@ -749,7 +846,17 @@ impl Database {
         self.ask(Job::Release(account));
     }
 
-    /// The answers to logins that came since this was last asked.
+    /// Adds `delta` cents to `account`'s wallet, saving `belongings` with it (see
+    /// `Store::pay`).
+    pub fn pay(&self, account: AccountId, delta: i64, belongings: Option<Belongings>) {
+        self.ask(Job::Pay {
+            account,
+            delta,
+            belongings,
+        });
+    }
+
+    /// What the database said since this was last asked.
     pub fn answers(&self) -> Vec<Answer> {
         let answers = self.answers.lock().expect("the answers");
         answers.try_iter().collect()
@@ -775,7 +882,7 @@ async fn run(store: &Store, instance: &str, job: Job, answer: &Sender<Answer>) {
             if let Err(e) = &login {
                 bevy::log::info!("Player {peer} not let in as {name}: {e}");
             }
-            let _ = answer.send(Answer { peer, login });
+            let _ = answer.send(Answer::Login { peer, login });
             Ok(())
         }
         Job::Save { account, car } => store.save_car(account, &car).await,
@@ -783,8 +890,19 @@ async fn run(store: &Store, instance: &str, job: Job, answer: &Sender<Answer>) {
             account,
             belongings,
         } => store.save_belongings(account, &belongings).await,
-        Job::Refresh(accounts) => store.refresh(instance, &accounts).await,
+        Job::Refresh(accounts) => match store.refresh(instance, &accounts).await {
+            Ok(()) => store.balances(&accounts).await.map(|balances| {
+                let _ = answer.send(Answer::Balances(balances));
+            }),
+            Err(e) => Err(e),
+        },
         Job::Release(account) => store.release(instance, account).await,
+        Job::Pay {
+            account,
+            delta,
+            belongings,
+        } => (store.pay(account, delta, belongings.as_ref()).await)
+            .map_err(|e| format!("account {account} paying {delta}: {e}")),
         Job::Flush(done) => {
             let _ = done.send(());
             Ok(())
@@ -932,7 +1050,43 @@ mod tests {
         assert_eq!(after.items, all.items);
     }
 
+    async fn wallet(url: &str) {
+        let store = fresh(url).await;
+        let id = store.add_user("Anna", "pw").await.unwrap();
+        let Ok(Login::Account(anna)) = store.login("Anna", "pw", ACCOUNTS, "a").await else {
+            panic!("not let in");
+        };
+        assert_eq!(anna.money, crate::trade::START_MONEY, "a new account's");
+        // Paid for with what it bought, in one go.
+        let bought = Belongings {
+            car: Some("a car".into()),
+            garage: Vec::new(),
+            items: vec![(GARAGE.into(), "a part bought".into())],
+        };
+        store.pay(id, -100_000, Some(&bought)).await.unwrap();
+        assert_eq!(store.money(id).await.unwrap(), 400_000);
+        assert_eq!(store.belongings(id).await.unwrap(), bought);
+        // Not enough: neither the money nor what it was for.
+        let more = Belongings {
+            items: vec![(GARAGE.into(), "too dear".into())],
+            ..bought.clone()
+        };
+        assert!(store.pay(id, -400_001, Some(&more)).await.is_err());
+        assert_eq!(store.money(id).await.unwrap(), 400_000);
+        assert_eq!(store.belongings(id).await.unwrap(), bought);
+        store.pay(id, 2_500, None).await.unwrap();
+        assert_eq!(
+            store.balances(&[id, id + 99]).await.unwrap(),
+            [(id, 402_500)]
+        );
+    }
+
     const MEMORY: &str = "sqlite::memory:";
+
+    #[test]
+    fn a_wallet_is_kept_and_paid_from() {
+        block(wallet(MEMORY));
+    }
 
     #[test]
     fn accounts_log_in_by_their_password() {
@@ -959,6 +1113,7 @@ mod tests {
             accounts(&url).await;
             instances(&url).await;
             cars(&url).await;
+            wallet(&url).await;
         });
     }
 
@@ -969,7 +1124,10 @@ mod tests {
         assert!(db.flush(Duration::from_secs(10)));
         let answers = db.answers();
         assert_eq!(answers.len(), 1);
-        assert_eq!(answers[0].peer, 7);
-        assert_eq!(answers[0].login, Ok(Login::Guest("Anna".into())));
+        let Answer::Login { peer, login } = &answers[0] else {
+            panic!("not a login's answer");
+        };
+        assert_eq!(*peer, 7);
+        assert_eq!(*login, Ok(Login::Guest("Anna".into())));
     }
 }

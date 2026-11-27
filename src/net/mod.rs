@@ -1162,6 +1162,11 @@ mod tests {
             log_in(&mut server, &mut anna),
             Status::Joined { .. }
         ));
+        assert_eq!(
+            connection(&anna).owned.money,
+            crate::trade::START_MONEY,
+            "a new account's wallet"
+        );
         // Repainted in a shop, the engine worn.
         run(&mut [&mut server, &mut anna], 30);
         let build = repaint(&mut anna);

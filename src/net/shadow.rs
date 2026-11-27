@@ -298,6 +298,11 @@ impl Shadow {
         self.condition = Some(condition);
     }
 
+    /// The condition the car is to be in once it has a state, if it's waiting for one.
+    pub fn condition_waiting(&self) -> Option<&Condition> {
+        self.condition.as_ref()
+    }
+
     /// The player's own car as the server has it, while it has a state: what it's built of
     /// and the car (their own while they drive a lent one), for saving.
     pub fn kept(&self) -> Option<(&CarSpec, &Car)> {
