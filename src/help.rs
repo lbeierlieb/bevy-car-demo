@@ -99,10 +99,14 @@ enum Hint {
     Reverse,
     RevLimit,
     Stuck,
+    Fading,
+    Pads,
+    Slipping,
+    Synchro,
 }
 
 impl Hint {
-    const ALL: [Hint; 8] = [
+    const ALL: [Hint; 12] = [
         Hint::Blown,
         Hint::NoFuel,
         Hint::Stalled,
@@ -111,12 +115,16 @@ impl Hint {
         Hint::Reverse,
         Hint::RevLimit,
         Hint::Stuck,
+        Hint::Fading,
+        Hint::Pads,
+        Hint::Slipping,
+        Hint::Synchro,
     ];
 
     /// How long the situation must last before the hint shows (s).
     fn delay(self) -> f32 {
         match self {
-            Hint::Reverse => 0.0,
+            Hint::Reverse | Hint::Synchro => 0.0,
             Hint::RevLimit => 0.8,
             Hint::Stuck => 3.0,
             _ => 0.6,
@@ -127,7 +135,7 @@ impl Hint {
     /// over at once, the rest end when the driver does something about them.
     fn linger(self) -> f32 {
         match self {
-            Hint::Reverse => 5.0,
+            Hint::Reverse | Hint::Synchro => 5.0,
             _ => 1.5,
         }
     }
@@ -177,6 +185,33 @@ fn hints(
     let (off, cranking) = (drivetrain.switched_off(), drivetrain.cranking());
     let clutch_in = c.clutch.is_some_and(|travel| travel > 0.5);
     let at_limit = drivetrain.rpm >= engine.build.ecu.rev_limit - LIMITER_BAND;
+    // The brakes as hot and worn as they are, braking hard at speed.
+    let braking = c.brake > 0.5 && car.forward_speed().abs() > 5.0;
+    let brakes = |grip: fn(&crate::car::Car, usize) -> bool| (0..4).any(|i| grip(car, i));
+    let fading = braking
+        && brakes(|car, i| {
+            let brake = &car.setup.brakes[i / 2];
+            let state = car.corners[i].brake;
+            state.temperature > brake.fade + 50.0
+        });
+    let pads = braking && brakes(|car, i| car.corners[i].brake.wear > 0.85);
+    // A worn clutch slipping: the engine running away from the wheels in gear.
+    let shares = engine.drive.shares();
+    let driven = (car.corners.iter().zip(shares))
+        .map(|(c, s)| s * c.omega)
+        .sum();
+    let slipping = gas
+        && drivetrain.clutch_wear > 0.6
+        && !clutch_in
+        && gear >= 1
+        && drivetrain.rpm > engine.rpm_in(gear, driven) + 300.0;
+    let synchro = drivetrain.grinding.is_some_and(|gear| {
+        gear >= 1
+            && drivetrain
+                .gear_wear
+                .get(gear as usize - 1)
+                .is_some_and(|&w| w > 0.5)
+    });
     let now = |hint: Hint| match hint {
         Hint::Blown => gas && blown,
         Hint::NoFuel => gas && no_fuel && !blown,
@@ -196,6 +231,10 @@ fn hints(
                 && !clutch_in
                 && c.brake < 0.5
         }
+        Hint::Fading => fading,
+        Hint::Pads => pads,
+        Hint::Slipping => slipping,
+        Hint::Synchro => synchro,
     };
     let mut due = None;
     for (i, hint) in Hint::ALL.into_iter().enumerate() {
@@ -324,6 +363,22 @@ fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (S
                  the car back to the road.",
                 key("R", Action::Reset)
             ),
+        ),
+        Hint::Fading => (
+            "The brakes are fading".into(),
+            "They're too hot: they grip less until the air has cooled them.".into(),
+        ),
+        Hint::Pads => (
+            "The brake pads are worn".into(),
+            "Worn through, the brakes barely stop the car.".into(),
+        ),
+        Hint::Slipping => (
+            "The clutch is slipping".into(),
+            "It's worn: it can't pass the engine's torque any more.".into(),
+        ),
+        Hint::Synchro => (
+            "The gear's synchro is worn".into(),
+            "It grinds when shifted quickly; matching the revs gets it in.".into(),
         ),
     };
     (what, how)

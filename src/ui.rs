@@ -102,6 +102,7 @@ fn panel(mut contexts: EguiContexts, active: Res<ActiveCar>, cars: Query<&Car>) 
                 g => g.to_string(),
             };
             ui.label(format!("Gear {gear}    {:.0} rpm", car.drivetrain.rpm));
+            drivetrain(ui, car);
             engine(ui, car);
             fuel(ui, car);
             ui.label(format!(
@@ -143,6 +144,13 @@ pub fn engine(ui: &mut egui::Ui, car: &Car) {
             engine.charge_temperature - 273.15,
         ));
     }
+    if build.hardware.supercharger.is_some() {
+        ui.label(format!(
+            "boost {:.2} bar    charge {:.0} °C",
+            (engine.boost_pressure - AMBIENT_PRESSURE) / 1e5,
+            engine.charge_temperature - 273.15,
+        ));
+    }
     let thermal = &engine.thermal;
     ui.label(format!(
         "coolant {:.0} °C    oil {:.0} °C{}    knock {:.1}°    wear {:.0} %",
@@ -151,6 +159,23 @@ pub fn engine(ui: &mut egui::Ui, car: &Car) {
         if thermal.fan { "    fan" } else { "" },
         cycle.knock,
         engine.damage.worst(build.hardware.cylinders as usize) * 100.0,
+    ));
+}
+
+/// How worn the clutch and the gears are, and the air's downforce now.
+fn drivetrain(ui: &mut egui::Ui, car: &Car) {
+    let drivetrain = &car.drivetrain;
+    let gears = car.setup.engine.gears.len().min(drivetrain.gear_wear.len());
+    let gears: Vec<String> = (drivetrain.gear_wear[..gears].iter())
+        .map(|wear| format!("{:.0}", wear * 100.0))
+        .collect();
+    let lowered = [0, 2].map(|i| (car.corners[i].travel + car.corners[i + 1].travel) / 2.0);
+    let pressure = 0.6 * car.body.velocity.length_squared();
+    let [front, rear] = car.setup.downforce(lowered).map(|area| area * pressure);
+    ui.label(format!(
+        "clutch wear {:.1} %    gears' wear {} %    downforce {front:.0} / {rear:.0} N",
+        drivetrain.clutch_wear * 100.0,
+        gears.join(" "),
     ));
 }
 
@@ -208,6 +233,8 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
             "bar",
             "Wear %",
             "Grip %",
+            "Brake °C",
+            "Pads %",
         ] {
             ui.label(header);
         }
@@ -239,6 +266,8 @@ fn telemetry(ui: &mut egui::Ui, car: &Car) {
             ui.label(format!("{:.2}", tire.pressure(tread)));
             ui.label(format!("{:.1}", tread.wear() * 100.0));
             ui.label(format!("{:.0}", tire.condition(&corner.tread) * 100.0));
+            ui.label(format!("{:.0}", corner.brake.temperature - 273.15));
+            ui.label(format!("{:.1}", corner.brake.wear * 100.0));
             ui.end_row();
         }
     });
