@@ -1,7 +1,7 @@
 # Owning cars and parts: the plan
 
 Agreed with the user in rounds of questions on 2026-11-26 (the decisions are also short
-in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–7 are built. The milestones are
+in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–8 are built. The milestones are
 in the order they're meant to be built; each ends with clippy and tests passing and the
 game playable.
 
@@ -43,8 +43,9 @@ garage, carried in trunks, and fitted at shops on the map.
   built of. Rare parts come only from multiplayer events (weekly races: later, not
   planned yet) and are what's traded.
 - **Special rescue** for a car that can't drive: to a shop or a gas station.
-- **Wear**: crashes don't damage cars. Engine and tires as now; brakes, clutch and
-  gearbox (too much torque, synchros) to come, each getting worse before it fails.
+- **Wear**: crashes don't damage cars. Engine, tires, brakes (fade, pads), clutch and
+  gearbox (too much torque, synchros), each getting worse before it fails (milestone 8
+  for brakes, clutch and gearbox).
 - **Accounts**: username (the name in the game) and password, made by the server's admin;
   the admin resets a forgotten one. A server option allows guests (kept for the session
   only). Playing alone uses a default user.
@@ -244,7 +245,16 @@ Linux, the dyno's cam changes still baking in the game rather than asking the se
 - Items' own condition: the engine's damage on the long block's parts and the turbo
   (tires' treads on the tires too), kept by a part taken off; saved and sent.
 
-### 8. New parts and physics
+### 8. New parts and physics (done 2026-11-27)
+
+Built as below while the user slept (see `CLAUDE.md`, "Owning cars and parts"; my
+decisions are under "Decided while building milestone 8" at the end). Not done: the dyno's
+boost knob for superchargers (their pulleys are fixed), an intercooler with a
+supercharger, superchargers' own wear, brakes set per corner (the left corner's part
+counts for its axle, as every per-axle part), keeping front and rear brake parts apart,
+re-tuning the ECU when forced induction is fitted (the tune stays as it was, as with turbo
+kits: a dyno's factory tune is safe), the whine, fade and slipping clutch heard or felt on
+a real wheel.
 
 - Aero by ride height and pitch (splitter, diffuser), wing angle as a knob, drag from
   missing pieces; ride height as a knob of springs/dampers.
@@ -326,3 +336,62 @@ Decided by me (the user asleep; to look over):
   server's lifetime (not on disk) and given to games that ask.
 - **Saved cars** (format 3) write the wear on the parts; older saves' wear goes onto the
   parts when read. Protocol 40.
+
+## Decided while building milestone 8 (2026-11-27, the user asleep; to look over)
+
+- **Aero**: body parts carry drag, downforce over each axle and a ground effect (a share
+  more per centimetre the body comes nearer the ground at that axle, from the axle's mean
+  suspension travel, between 0.2 and 1.8 of its design value), so ride height and pitch
+  matter. The lip (0.1 m² at the front), side skirts, diffuser (0.08 m² at the rear) have
+  ground effect; the 1.8's roof spoiler gives a little downforce; a new **rear wing**
+  (0.32 m² at 10°, drag 0.05 m²) has its angle as a knob (0–16°, from 6°): downforce with
+  the angle from −4°, drag partly with its square. A missing piece adds drag: bumper 0.05,
+  bonnet 0.04, hatch 0.04, a door 0.02, a fender 0.015 m²; without mirrors 0.008 m² less.
+  The body's underside makes no lift or downforce of its own.
+- **Ride height** is a knob of the springs (not the dampers): stock springs have none,
+  the sport kit's go −40 to 0 mm (from −25), the track kit's coilovers −70 to +10 (from
+  −40). Lowering shortens the spring's free length, so the body sits lower and the arms
+  sit at a different angle (camber changes with it, the bump stops come sooner). Set at
+  alignment shops, as is the wing's angle.
+- **Brakes**: each part says its torque per wheel (solid front 950, vented 1100, the new
+  big four-piston kit 1400 N·m; rear drum 190, rear disc 230), heat capacity, cooling,
+  fade temperature and pad life; the car's brake torque and balance come from them (no
+  longer from the tires' grip), the alignment shop's force and balance on top. The pads
+  fade from their temperature over 200 K to 45 %; worn past 80 % they grip less, worn
+  through 30 % is left; hot pads wear faster. Pad lives are long (about 2000 stops
+  from 100 km/h on cool pads, a few times fewer hot): it shows after hard track days. Any brake
+  part goes into any corner (a drum at the front is allowed, just weak).
+- **Clutch**: wears by the work it does slipping (pulling away wears a little), lasting
+  about 500 kJ per N·m it passes; past 60 % worn it passes less, down to half just
+  before it's worn out (then 15 %): a worn clutch slips under the engine's full torque.
+- **Gearbox**: a torque limit per gearbox (the stock 5-speed 200 N·m, above the B18's
+  185; the 6-speed 360): more wears the gear in by how far over it is (twice the limit
+  wears a gear out in ten minutes). Each forward gear's synchro wears by the work of
+  bringing the input shaft to its speed (the shaft turns with the gear in gear, with the
+  engine in neutral with the clutch up, and keeps its speed with the clutch pressed).
+  Past half worn a synchro can't bring a gear in from as far off its speed (3000 rpm at
+  half, down to 150 rpm worn out): quick shifts grind and the gear stays out, gentle ones
+  go in; worn out, only rev-matched shifts (double-clutching) work. With the automatic
+  clutch a refused gear leaves the box in neutral, grinding a moment. Reverse has no
+  synchro. One wear value per gear covers its synchro and its teeth.
+- **Seats**: the chassis' mass is now without seats (770 kg), the stock seats 16 kg, the
+  rear bench 18, a new bucket seat 6 kg, each at its place (the balance changes when the
+  rear bench comes out). Insulation unchanged.
+- **Superchargers**: both kits go into the turbo's slot (renamed "Turbo or supercharger":
+  a turbo and a supercharger together isn't possible). The Roots blower (pulleys 1.5:1)
+  gives the 1.6 about 0.5–0.6 bar from 2000 rpm up, the centrifugal one (impeller geared
+  19:1) 0.1 bar at 3000 and 0.4 at 6000; with the stock compression the factory tune is
+  knock-limited, so the gain is about a fifth to a quarter in torque. Both have a bypass
+  valve for part throttle, no intercooler (the Roots blower's charge reaches about 80 °C), and
+  don't wear. They don't change the cylinder side's maps (no bake). The tune isn't
+  changed when one is fitted (as with turbo kits): a dyno's factory tune is safe on it.
+  The Roots blower needs a **bonnet with a cut-out** (a new body part, a little more
+  drag), the first use of parts' `needs`/`provides` tags (an engine part needing a body
+  part). They whine in the engine sound (pitch following the crank, louder with the
+  revs), never listened to.
+- **Shops**: car workshops sell the stock brakes; tuning shops the wing, the bucket seat,
+  the big brake kit, the cut-out bonnet and both superchargers.
+- **Shown**: wear of brakes, clutch and gearbox in every workshop's window (as engine
+  parts'), ride height and wing angle in the alignment window, brake temperatures and
+  pads, clutch and gear wear, downforce and boost in the telemetry panel (2), hints for
+  fading brakes, worn pads, a slipping clutch and a grinding synchro.

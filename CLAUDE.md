@@ -818,7 +818,7 @@ As built:
   only gives the stock engines' maps (not ones it baked); the race editor uses the
   built-in catalogue (biggest car box); a catalogue file.
 
-## Owning cars and parts (planned with the user, 2026-11-26; milestones 1–7 built)
+## Owning cars and parts (planned with the user, 2026-11-26; milestones 1–8 built)
 
 The whole plan, with milestones: `docs/cars-and-parts.md` (keep it up to date).
 
@@ -1041,6 +1041,75 @@ blocks' insides loose (they're only fitted), the engine stand showing the engine
 on, a priority below normal for the bake on other systems than Linux, the dyno's own bakes
 going to the server.
 
+Milestone 8, new parts and physics (2026-11-27, built while the user slept; my decisions
+are in the plan's "Decided while building milestone 8"). **The tree feeds the setup**:
+`CarSetup::with_car(build, parts, engine, car)` works out what `CarBuild` doesn't say from
+the tree (`new` assembles one; the callers that used to overwrite `setup.car` call it).
+**Seats' masses** count where they sit (front row `FRONT_SEATS`, bench `REAR_BENCH` behind
+the eyes); the chassis' mass is without them (770 kg at 1.2665, the car's balance as
+before); a "Bucket seat" (6 kg). **Aero**: body parts `Does::Body(Aero)` (drag, downforce
+front/rear at the design ride height, `ground`: share more per cm nearer the ground; a
+`wing` scales by its angle knob, `Aero::at`, numbers at `WING_REFERENCE` 10°, no lift at
+−4°); a missing piece adds `Panel::missing_drag` (mirrors take drag away);
+`CarSetup::downforce(lowered)` per axle from the axles' mean travel (`GROUND_LEAST`..
+`GROUND_MOST`), so ride height and pitch matter; lip, skirts, diffuser have ground effect,
+the stock roof spoiler a little downforce, "Rear wing" (`vireo.wing`, knob "Wing angle"
+0–16°, drawn on stands, `Dress::wing`). **Ride height**: the sport and track springs' knob
+"Ride height" (mm, sport −40..0 from −25, track −70..+10 from −40; stock springs none),
+`CarBuild::ride_height`/`wing` (resolve/assemble, the left spring per axle),
+`AxleSetup::lowered` shortens the spring's rest length (`spring_rest_length`). Alignment
+shops set springs' and body parts' knobs (`knobs_at`); the alignment window has the ride
+height per axle and the wing's angle. **Brakes** (`physics/brakes.rs`): `Does::Brake(Brake)`
+(torque per wheel at the pedal floored, smallest rim, heat capacity, cooling standing and
+per m/s, fade temperature, the pads' life in MJ); the car's torque and balance from the
+front and rear parts (the chassis' `brakes` share is gone; `hub` without the brake);
+`BrakeState` per corner (temperature, pad wear, the pads' torque this step) in the
+`Corner` snapshot, heated by torque × ω, `grip` fades over `fade` (to `FADED` 200 K
+over) and falls with worn pads (past `WEARING` 0.8, `THROUGH` worn through); a "Big
+front brake kit" needing 15" rims (`fitting::finish` checks each corner). **Clutch and
+gearbox** (`drivetrain.rs`): `clutch_wear` (by the slipping work, `CLUTCH_LIFE` J per N·m of
+the clutch; `clutch_grip` from 0.6 on, `clutch_capacity`), `Gearbox::torque`
+(5-speed 200, 6-speed 360 N·m; more wears the gear in, `OVERLOAD_WEAR`), `gear_wear` per
+forward gear (synchro work ½·`SYNCHRO_INERTIA`·Δω² against the input shaft's speed
+`shaft`: the gear's in gear, the engine's in neutral with the clutch up, kept while
+pressed; `synchro_reach` shrinks from 0.5 to `SYNC_RPM` worn out: refused gears grind
+(`grind` 0.3 s with the automatic clutch) and stay out; double-clutching gets them in).
+Wear kinds `Pads`, `Clutch`, `Gears` on the items; `Condition` has `pads`, `clutch`,
+`gears`; `Car::place` keeps them, `rebuilt` for the same parts. **Superchargers**
+(`physics/engine/supercharger.rs`): `EngineHardware::supercharger` (`Supercharger`:
+Roots' displacement per rotor turn and leak area, or a centrifugal `Compressor`; ratio;
+belt drag; a bypass `Diverter`), `Effect::Supercharger(SuperchargerKit)` (scaled like a
+turbo kit); in the turbo's slot, renamed `catalogue::TURBO_SLOT` "Turbo or supercharger"
+(ids stay `turbocharger.*`; saved parts whose slot name is gone go into a free slot of
+their kind), parts `ROOTS`, `CENTRIFUGAL`. `Engine::tract_inflow` takes the rpm; the charge
+follows the blower's outlet temperature (`CHARGE_LAG`); `Engine::torque` takes the drive
+torque off (`blower_torque`). On the 1.6: Roots ~0.5–0.6 bar from 2000 rpm, centrifugal
+0.05/0.12/0.42 bar at 2000/3000/6000; +20–27 % torque (knock-limited on the stock
+compression). Maps unchanged (not in the fingerprint: no bake); `Ecu::calibrated` reaches
+300 kPa with any forced induction and takes the supercharger's charge temperature
+(`expected_charge`). **Needs/provides**: `PartDef::needs`/`provides` (tags), checked in
+`Item::fine` for whole cars (`items::unmet_need`) and `fitting::needs_missing`: the Roots
+blower needs `BONNET_CUT_OUT`, which "Bonnet with a blower cut-out" (`vireo.bonnet.cut-out`)
+provides. Drawn in `mechanicals.rs` (the blower sticking up through the bonnet with the
+cut-out's frame in the bonnet's paint, the centrifugal snail at the belt end); a whine in
+the engine sound (`EngineCharacter::whine`, orders of the crank: Roots 6 × ratio,
+centrifugal the impeller's; `WHINE*`). Telemetry (2) shows clutch and gear wear, downforce,
+a supercharger's boost, brake temperatures and pads; hints for fading brakes, worn pads, a
+slipping clutch and a grinding synchro. Shops file: car shops the stock brakes, tuning
+shops the wing, bucket seat, big brakes, cut-out bonnet and superchargers. Protocol 41–44.
+Shots: `FITIDS="vireo.bonnet.cut-out,turbocharger.roots-blower,vireo.wing" WING=12` (parts
+by id into the first slot of their kind, the car rebuilt), e.g. with `OFFLINE=1 TRIM=1
+FITPAINT=0 CARCAM="-2.4,2.3,3.2"`. Tests: `car::tests_with_parts` (ground effect, lowered
+springs, the wing, missing parts' drag, seats, brakes fading), `brakes::tests`, the
+drivetrain's `a_worn_clutch_slips_and_wears_on`, `worn_synchros_grind_then_refuse_the_gear`,
+`torque_over_what_the_gearbox_takes_wears_the_gear`, `supercharger::tests`,
+`fitting::tests::a_big_brake_needs_a_big_rim`, `a_roots_blower_needs_a_bonnet_with_a_cut_out`.
+Not done: the dyno's boost knob does nothing for superchargers (fixed pulleys), an
+intercooler with a supercharger, superchargers' wear, brake parts per corner (the left
+one counts, as for every per-axle part), front/rear brake parts kept apart (any brake
+goes in any corner), the tune left as it was after fitting forced induction (as with
+turbo kits: retune at a dyno), the whine and fading never heard or felt here.
+
 The game is about tuning every aspect of a car. Agreed so far (the user's answers):
 - **Parts are items** you own (a definition from the server's catalogue + condition),
   fitted to cars or carried. A car is a chassis with parts in slots; the engine is a
@@ -1092,9 +1161,9 @@ The game is about tuning every aspect of a car. Agreed so far (the user's answer
   there, which locks it, others buy (rare parts are traded; whole cars too). Offered
   engines and cars show what they're built of.
 - A car that can't drive gets a **special rescue**: to a shop or a gas station.
-- Crashes don't damage cars. Wear to come for brakes, clutch and gearbox (too much
-  torque, synchros), as for the engine and tires now: worse before failing (brakes fade,
-  the clutch slips, synchros grind, then refuse).
+- Crashes don't damage cars. Wear for brakes, clutch and gearbox (too much torque,
+  synchros), as for the engine and tires: worse before failing (brakes fade, the clutch
+  slips, synchros grind, then refuse). Built in milestone 8.
 - Lent cars in events: your own car, trunk and all, comes back as it was.
 - Taking an engine out is only a swap (the new one in the trunk or waiting at that shop).
 - Accounts are made by the server's admin for now; the username is the name in the game;
