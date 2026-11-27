@@ -97,7 +97,7 @@ mod native {
         admission: Admission,
         /// The names given by the players waiting to be let in.
         waiting: HashMap<PlayerId, String>,
-        /// What the database said, but for logins, not yet picked up.
+        /// What the database said, not yet picked up.
         said: Vec<Answer>,
     }
 

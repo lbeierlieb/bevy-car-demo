@@ -21,6 +21,8 @@ use crate::trade::{self, Offered, Offering, Origin, Trade, euros};
 
 /// How long the server's word on why something wasn't done stays up (s).
 const REFUSAL: f64 = 8.0;
+/// How often a shop's window asks what it has while nothing came (s).
+const ASK_AGAIN: f64 = 1.0;
 
 /// The screens over a shop's window.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -150,6 +152,7 @@ fn used_cars(
     connection: Option<ResMut<Connection>>,
     catalogue: Option<Res<Current>>,
     time: Res<Time<Real>>,
+    mut asked: Local<f64>,
 ) -> Result {
     let (Some(mut connection), Some(catalogue)) = (connection, catalogue) else {
         return Ok(());
@@ -160,10 +163,12 @@ fn used_cars(
         .filter(|stock| Some(usize::from(stock.shop)) == here)
         .cloned();
     let refused = refusal(&connection, &time);
+    let missing = stock.is_none();
     let (mut look, mut go) = (false, None);
     let ctx = contexts.ctx_mut()?;
     shop_window(ctx, &shops, &mut at, ShopKind::UsedCars, |ui, came_in| {
-        look = came_in;
+        // Asked again while nothing came (the server may not have seen us stop yet).
+        look = came_in || (missing && time.elapsed_secs_f64() - *asked > ASK_AGAIN);
         if let Some(why) = &refused {
             kit::warning(ui, why);
         }
@@ -191,6 +196,7 @@ fn used_cars(
         );
     });
     if look {
+        *asked = time.elapsed_secs_f64();
         connection.refused = None;
         connection.say(&ToServer::Trade(Trade::Look));
     }
@@ -215,6 +221,7 @@ fn market(
     connection: Option<ResMut<Connection>>,
     catalogue: Option<Res<Current>>,
     time: Res<Time<Real>>,
+    mut asked: Local<f64>,
 ) -> Result {
     let (Some(mut connection), Some(catalogue)) = (connection, catalogue) else {
         return Ok(());
@@ -222,10 +229,12 @@ fn market(
     let catalogue = &catalogue.0;
     let market = connection.market.clone();
     let refused = refusal(&connection, &time);
+    let missing = market.is_none();
     let (mut look, mut go) = (false, None);
     let ctx = contexts.ctx_mut()?;
     shop_window(ctx, &shops, &mut at, ShopKind::Market, |ui, came_in| {
-        look = came_in;
+        // Asked again while nothing came (the server may not have seen us stop yet).
+        look = came_in || (missing && time.elapsed_secs_f64() - *asked > ASK_AGAIN);
         if let Some(why) = &refused {
             kit::warning(ui, why);
         }
@@ -265,6 +274,7 @@ fn market(
         );
     });
     if look {
+        *asked = time.elapsed_secs_f64();
         connection.refused = None;
         connection.say(&ToServer::Trade(Trade::Look));
     }
@@ -294,6 +304,7 @@ fn used_parts(
     connection: Option<ResMut<Connection>>,
     catalogue: Option<Res<Current>>,
     time: Res<Time<Real>>,
+    mut asked: Local<f64>,
 ) -> Result {
     let (Some(mut connection), Some(catalogue)) = (connection, catalogue) else {
         return Ok(());
@@ -304,10 +315,12 @@ fn used_parts(
         .filter(|stock| Some(usize::from(stock.shop)) == here)
         .cloned();
     let refused = refusal(&connection, &time);
+    let missing = stock.is_none();
     let (mut look, mut go) = (false, None);
     let ctx = contexts.ctx_mut()?;
     shop_window(ctx, &shops, &mut at, ShopKind::Used, |ui, came_in| {
-        look = came_in;
+        // Asked again while nothing came (the server may not have seen us stop yet).
+        look = came_in || (missing && time.elapsed_secs_f64() - *asked > ASK_AGAIN);
         if let Some(why) = &refused {
             kit::warning(ui, why);
         }
@@ -334,6 +347,7 @@ fn used_parts(
         );
     });
     if look {
+        *asked = time.elapsed_secs_f64();
         connection.refused = None;
         connection.say(&ToServer::Trade(Trade::Look));
     }
