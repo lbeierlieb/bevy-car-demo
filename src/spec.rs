@@ -130,6 +130,7 @@ impl Wire for Parts {
             chosen.put(out);
         }
         self.manifold.put(out);
+        self.head.put(out);
         self.bore.put(out);
         self.intake_timing.put(out);
         self.exhaust_timing.put(out);
@@ -151,6 +152,7 @@ impl Wire for Parts {
             version,
             chosen,
             manifold: r.get()?,
+            head: r.get()?,
             bore: r.get()?,
             intake_timing: r.get()?,
             exhaust_timing: r.get()?,
@@ -158,9 +160,11 @@ impl Wire for Parts {
             ecu: r.get()?,
             header_room: 0.0,
         };
-        let fine = (catalogue.families.get(family))
-            .is_some_and(|f| version < f.versions.len() && parts.manifold < f.manifolds.len())
-            && crate::physics::engine::parts::fits(catalogue, &parts.chosen)
+        let fine = (catalogue.families.get(family)).is_some_and(|f| {
+            version < f.versions.len()
+                && parts.manifold < f.manifolds.len()
+                && parts.head < f.heads.len()
+        }) && crate::physics::engine::parts::fits(catalogue, &parts.chosen)
             && parts.bore < crate::items::OVERSIZES.len()
             && within(parts.intake_timing, &(-10.0..=10.0))
             && within(parts.exhaust_timing, &(-10.0..=10.0))

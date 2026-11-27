@@ -225,7 +225,7 @@ pub fn fits_into(kind: ShopKind, slot: Kind, holder: Option<Kind>) -> bool {
             !matches!(
                 slot,
                 Kind::Rim | Kind::Tire | Kind::LongBlock | Kind::Chassis
-            ) && holder != Some(Kind::LongBlock)
+            ) && !in_long_block(holder)
         }
         ShopKind::Tire => {
             slot == Kind::Wheel && holder.is_none()
@@ -233,11 +233,17 @@ pub fn fits_into(kind: ShopKind, slot: Kind, holder: Option<Kind>) -> bool {
         }
         ShopKind::Engine => {
             slot == Kind::LongBlock
-                || holder == Some(Kind::LongBlock)
+                || in_long_block(holder)
                 || slot == Kind::Engine && holder.is_none()
         }
         _ => false,
     }
+}
+
+/// Whether a part held by one of `holder` kind is inside a long block: in it, or in its
+/// cylinder head.
+fn in_long_block(holder: Option<Kind>) -> bool {
+    matches!(holder, Some(Kind::LongBlock | Kind::Head))
 }
 
 /// Which kind of shop sets the knobs of a part of `kind`.
@@ -648,7 +654,8 @@ impl<'a> Bench<'a> {
             return Err(match slot_kind {
                 Kind::Rim | Kind::Tire => "Rims and tires are fitted at tire shops".into(),
                 Kind::LongBlock => "Long blocks are the engine shop's work".into(),
-                _ if holder == Some(Kind::LongBlock) => {
+                Kind::Head => "Cylinder heads are the engine shop's work".into(),
+                _ if in_long_block(holder) => {
                     "What's inside a long block is the engine shop's work".into()
                 }
                 _ => format!(
@@ -1178,18 +1185,21 @@ mod tests {
         assert!(run(&catalogue, &workshop, &before, &[out]).is_err());
     }
 
-    /// The path of the car's long block's slot holding `id`'s kind of part (from the
-    /// engine's slot down), and the long block's.
+    /// The path of the car's long block's slot holding `id`'s kind of part, or its cylinder
+    /// head's (from the engine's slot down), and the long block's.
     fn in_block(catalogue: &Catalogue, car: &Item, id: &str) -> (Path, Path) {
         let engine = slots_of(catalogue, car, Kind::Engine)[0];
         let kind = catalogue.defs[usize::from(def(catalogue, id))].kind;
         let block = vec![engine, 0];
-        let long = item_at(car, &block).unwrap();
-        let slot = (long.def(catalogue).slots.iter())
-            .position(|slot| slot.kind == kind)
+        let place = |holder: &Path, kind: Kind| {
+            let item = item_at(car, holder).unwrap();
+            (item.def(catalogue).slots.iter())
+                .position(|slot| slot.kind == kind)
+                .map(|slot| [holder.clone(), vec![slot as u8]].concat())
+        };
+        let path = place(&block, kind)
+            .or_else(|| place(&place(&block, Kind::Head).unwrap(), kind))
             .unwrap();
-        let mut path = block.clone();
-        path.push(slot as u8);
         (path, block)
     }
 

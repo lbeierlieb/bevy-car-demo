@@ -430,12 +430,13 @@ pub fn round_to(value: f32, step: f32) -> f32 {
 }
 
 /// What the factory fits to a version of an engine: a part per slot (by its place in the
-/// slot), the exhaust manifold (by its place in the family's), the wastegate's spring and
-/// the ECU.
+/// slot), the exhaust manifold and the cylinder head (by their places in the family's),
+/// the wastegate's spring and the ECU.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Preset {
     pub chosen: Vec<usize>,
     pub manifold: usize,
+    pub head: usize,
     pub boost: f32,
     pub ecu: EcuModel,
 }
@@ -446,6 +447,7 @@ impl Preset {
         Self {
             chosen: vec![0; slots],
             manifold: 0,
+            head: 0,
             boost: 0.6,
             ecu: EcuModel::Stock,
         }
@@ -465,6 +467,8 @@ pub struct Parts {
     pub chosen: Vec<usize>,
     /// The exhaust manifold, by its place in the family's `manifolds`.
     pub manifold: usize,
+    /// The cylinder head, by its place in the family's `heads`.
+    pub head: usize,
     /// How far the block is bored over (a step of `items::OVERSIZES`).
     pub bore: usize,
     /// Cam timing (crank degrees; intake advanced, exhaust retarded).
@@ -487,6 +491,7 @@ impl Parts {
             version,
             chosen: preset.chosen.clone(),
             manifold: preset.manifold,
+            head: preset.head,
             bore: 0,
             intake_timing: 0.0,
             exhaust_timing: 0.0,
@@ -538,7 +543,10 @@ impl Parts {
     /// One cam works both the intake and the exhaust valves (a pushrod engine or a single
     /// overhead cam): its gear timing is one setting.
     pub fn one_cam(&self) -> bool {
-        self.version().block.valvetrain.drive.one_cam()
+        let block = &self.version().block;
+        (self.family().heads.get(self.head))
+            .map_or(block.valvetrain.drive, |head| head.valvetrain.drive)
+            .one_cam()
     }
 
     pub fn family(&self) -> &Family {
@@ -574,6 +582,9 @@ impl Parts {
     pub fn hardware(&self) -> EngineHardware {
         let version = self.version();
         let mut hardware = version.block.clone();
+        if let Some(head) = self.family().heads.get(self.head) {
+            head.fit(&mut hardware);
+        }
         // The manifold first: the turbos go on its branches, sized for them.
         if let Some(manifold) = self.family().manifolds.get(self.manifold) {
             hardware.exhaust.manifold = manifold.manifold;
@@ -663,13 +674,28 @@ mod tests {
         assert!(!parts.one_cam());
         assert_eq!((dohc.intake_timing, dohc.exhaust_timing), (4.0, 2.0));
         parts.catalogue = crate::catalogue::builtin_changed(|c| {
-            c.families[0].versions[0].block.valvetrain =
+            c.families[0].heads[0].valvetrain =
                 crate::physics::engine::hardware::ValveLayout::PUSHROD;
         });
         assert!(parts.one_cam());
         // Advancing the cam advances the exhausts too: they're retarded by minus as much.
         let ohv = parts.hardware();
         assert_eq!((ohv.intake_timing, ohv.exhaust_timing), (4.0, -4.0));
+    }
+
+    #[test]
+    fn a_head_keeps_its_valves_on_another_bore() {
+        let mut parts = Parts::factory("B18").unwrap();
+        let own = parts.hardware();
+        parts.head = 0;
+        let swapped = parts.hardware();
+        let b16 = Parts::stock().hardware();
+        assert_eq!((swapped.bore, swapped.stroke), (own.bore, own.stroke));
+        assert_eq!(swapped.cams, b16.cams);
+        assert_eq!(swapped.port_flow, b16.port_flow);
+        let size = |h: &EngineHardware| h.valvetrain.intake_diameter * h.bore;
+        assert!((size(&swapped) - size(&b16)).abs() < 1e-5);
+        assert!(size(&own) > size(&swapped));
     }
 
     #[test]

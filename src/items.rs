@@ -84,6 +84,9 @@ pub enum Kind {
     Engine,
     /// The block with what's inside it, the engine shop's work.
     LongBlock,
+    /// A cylinder head with its valves and cams, made for an engine family; in a long
+    /// block, the engine shop's work.
+    Head,
     /// One of the catalogue's engine slots (`Catalogue::slots`, by its place).
     EnginePart(usize),
     /// An exhaust manifold, made for an engine family: it decides how the exhaust is
@@ -130,6 +133,12 @@ pub enum Does {
     Block {
         family: usize,
         version: usize,
+    },
+    /// The cylinder head `head` of an engine family (both by their places in the
+    /// catalogue: `Family::heads`).
+    Head {
+        family: usize,
+        head: usize,
     },
     /// Part `part` of the catalogue's engine slot `slot`.
     EnginePart {
@@ -500,7 +509,19 @@ impl Item {
         let Does::Block { family, version } = block.def(catalogue).does else {
             return Err(Unfit("not a block".into()));
         };
+        let head = block.nth(catalogue, Kind::Head, 0)?;
+        let Does::Head {
+            family: head_family,
+            head: h,
+        } = head.def(catalogue).does
+        else {
+            return Err(Unfit("not a cylinder head".into()));
+        };
+        if head_family != family {
+            return Err(Unfit("the cylinder head is made for another engine".into()));
+        }
         let mut parts = Parts::of_version(catalogue, family, version);
+        parts.head = h;
         parts.bore = block.variant.min(OVERSIZES.len() - 1);
         parts.ecu = ecu;
         parts.intake_timing = engine.knobs[0];
@@ -526,7 +547,7 @@ impl Item {
         // The turbos on its mounts (all the same, `engine_misfit` saw to that).
         let turbo = (manifold.fitted(catalogue, Kind::Turbo).next())
             .map(|turbo| &turbo.def(catalogue).does);
-        // Engine parts sit in the long block, on the engine and in the car, turbos on the
+        // Engine parts sit in the long block, its head, on the engine and in the car, turbos on the
         // manifold's mounts (none: the slot's first part, which stands for none).
         for (slot, chosen) in parts.chosen.iter_mut().enumerate() {
             if catalogue.slots[slot].mounted {
@@ -537,7 +558,7 @@ impl Item {
                 continue;
             }
             let kind = Kind::EnginePart(slot);
-            let part = [block, engine, self]
+            let part = [block, head, engine, self]
                 .iter()
                 .find_map(|holder| holder.fitted(catalogue, kind).next())
                 .ok_or_else(|| Unfit(format!("no {}", catalogue.slots[slot].name)))?;
@@ -858,6 +879,18 @@ pub fn assemble(
         }
         swap(catalogue, engine, Kind::LongBlock, paint, |_, block| {
             block.variant = parts.bore;
+            swap(catalogue, block, Kind::Head, paint, |_, head| {
+                for slot in 0..slots {
+                    swap(catalogue, head, Kind::EnginePart(slot), paint, |_, _| {
+                        engine_part(slot)
+                    })?;
+                }
+                let does = Does::Head {
+                    family: parts.family,
+                    head: parts.head,
+                };
+                def(Kind::Head, does)
+            })?;
             for slot in 0..slots {
                 swap(
                     catalogue,

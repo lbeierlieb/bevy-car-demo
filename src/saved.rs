@@ -43,7 +43,7 @@ use crate::spec::CarSpec;
 use crate::wheels::{Rim, TireSize};
 
 /// The format's version.
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 
 /// Before version 4: the exhaust manifolds' ids' start, each one's primaries relative to
 /// the block's headers, and the slot turbos and superchargers shared.
@@ -54,6 +54,9 @@ const OLD_HEADERS: [(&str, f32); 3] = [
     ("long-tube-headers", 1.375),
 ];
 const OLD_TURBO_SLOT: &str = "Turbo or supercharger";
+/// Porting was the long block's "Cylinder head" slot before the heads were parts of their
+/// own (version 5): its parts' ids then.
+const OLD_PORTING: &str = "cylinder-head.";
 
 /// Each part's wear is a field `wear=…` after its knobs.
 const WEAR: &str = "wear";
@@ -329,6 +332,13 @@ impl Parts {
         }
         self.skipping = None;
         self.settle(catalogue, depth);
+        // Old porting keeps its valves' wear until it's in its head (`into_old_head`).
+        let old_porting = id.starts_with(OLD_PORTING);
+        let id = match id.strip_prefix(OLD_PORTING) {
+            Some(part) => format!("porting.{part}"),
+            None => id.to_string(),
+        };
+        let id = id.as_str();
         let found = catalogue.defs.iter().position(|def| def.id == *id);
         let Some(def) = found.or_else(|| self.old_manifold(catalogue, id)) else {
             bevy::log::warn!("A saved part {id} isn't in the catalogue any more");
@@ -348,7 +358,11 @@ impl Parts {
             };
             if name == WEAR && made.knobs.iter().all(|k| k.name != WEAR) {
                 let values = value.split(',').map(|w| w.parse().unwrap_or(0.0)).collect();
-                item.wear = made.wear.map_or_else(Vec::new, |_| trimmed(values));
+                item.wear = if made.wear.is_some() || old_porting {
+                    trimmed(values)
+                } else {
+                    Vec::new()
+                };
                 continue;
             }
             let place = made.knobs.iter().position(|k| k.name == name);
@@ -373,7 +387,7 @@ impl Parts {
             let slots = &catalogue.defs[parent.def].slots;
             // A slot renamed since: the first free one of the part's kind.
             let kind = catalogue.defs[item.def].kind;
-            let named = slots.iter().any(|s| s.name == slot);
+            let named = slots.iter().any(|s| s.name == slot && s.kind == kind);
             let free = (slots.iter().zip(&parent.slots)).position(|(s, fitted)| {
                 fitted.is_none()
                     && if named {
@@ -385,6 +399,7 @@ impl Parts {
             match free {
                 Some(place) => parent.slots[place] = Some(item),
                 None if slot == OLD_TURBO_SLOT && mount_old_turbo(catalogue, parent, &item) => {}
+                None if into_old_head(catalogue, parent, &item) => {}
                 None => bevy::log::warn!(
                     "A saved part {} has no slot \"{slot}\" any more",
                     catalogue.defs[item.def].id
@@ -491,6 +506,43 @@ fn mount_old_turbo(catalogue: &Catalogue, engine: &mut Item, turbo: &Item) -> bo
         }
     }
     true
+}
+
+/// A part saved in a long block that now goes into its cylinder head (before version 5)
+/// into `block`'s head, which is the factory one of its version if it has none yet.
+/// Whether it went in.
+fn into_old_head(catalogue: &Catalogue, block: &mut Item, part: &Item) -> bool {
+    let Does::Block { family, version } = block.def(catalogue).does else {
+        return false;
+    };
+    let kind = part.def(catalogue).kind;
+    let slots = catalogue.defs[block.def].slots.clone();
+    let Some(place) = (slots.iter()).position(|slot| slot.kind == Kind::Head) else {
+        return false;
+    };
+    if block.slots[place].is_none() {
+        let head = catalogue.families[family].versions[version].preset.head;
+        let does = Does::Head { family, head };
+        let Some(def) = catalogue.defs.iter().position(|def| def.does == does) else {
+            return false;
+        };
+        block.slots[place] = Some(Item::new(catalogue, def, 0));
+    }
+    let head = block.slots[place].as_mut().expect("a head");
+    let holes = catalogue.defs[head.def].slots.clone();
+    let free = (holes.iter().zip(&head.slots))
+        .position(|(slot, fitted)| slot.kind == kind && fitted.is_none());
+    match free {
+        Some(free) => {
+            let mut part = part.clone();
+            if part.def(catalogue).wear.is_none() && !part.wear.is_empty() {
+                head.wear = std::mem::take(&mut part.wear);
+            }
+            head.slots[free] = Some(part);
+            true
+        }
+        None => false,
+    }
 }
 
 /// What a size is saved as: rims' and tires' labels (their lists may grow), else its place.
@@ -725,7 +777,7 @@ mod tests {
         };
         assert_eq!(worn("pistons.stock"), [0.0, 0.4]);
         assert_eq!(worn("connecting-rods.stock"), [0.0, 0.0, 0.3]);
-        assert_eq!(worn("cylinder-head.stock"), [0.2]);
+        assert_eq!(worn("b16.head"), [0.2]);
         assert_eq!(worn("crankshaft.stock"), [0.1]);
         assert!(worn("head-gasket.stock").is_empty());
         let back = Condition::of_parts(&catalogue, &tree, condition.fuel, condition.octane);
@@ -795,6 +847,59 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    /// `text` as a game before version 5 wrote it: the cylinder head's parts in the long
+    /// block (its porting the old "Cylinder head" with the valves' wear), no head.
+    fn before_heads(text: &str) -> String {
+        let mut out = Vec::new();
+        let mut wear = None;
+        for line in text.lines() {
+            let fields: Vec<&str> = line.split('\t').collect();
+            match fields.as_slice() {
+                ["version", ..] => out.push("version 4".to_string()),
+                ["part", "3", "Cylinder head", _, rest @ ..] => {
+                    wear = rest.iter().find(|f| f.starts_with(WEAR)).copied();
+                }
+                ["part", "4", "Porting", id, rest @ ..] => {
+                    let id = id.replace("porting.", OLD_PORTING);
+                    let mut line = format!("part\t3\tCylinder head\t{id}\t{}", rest.join("\t"));
+                    if let Some(wear) = wear {
+                        line += &format!("\t{wear}");
+                    }
+                    out.push(line);
+                }
+                ["part", "4", rest @ ..] => out.push(format!("part\t3\t{}", rest.join("\t"))),
+                _ => out.push(line.to_string()),
+            }
+        }
+        out.join("\n")
+    }
+
+    #[test]
+    fn cars_saved_before_the_heads_were_parts_read_as_they_were() {
+        let catalogue = crate::catalogue::builtin();
+        let (mut spec, mut car) = car(0, 0);
+        car.drivetrain.engine.damage.cylinders[0].valves = 0.2;
+        let ported = |c: &Catalogue| c.defs.iter().position(|d| d.id == "porting.ported");
+        let camshafts = |c: &Catalogue| c.defs.iter().position(|d| d.id == "camshafts.sport");
+        let setup = CarSetup::factory(0, 0);
+        let mut parts = setup.engine.parts.clone();
+        parts.chosen[19] = 1;
+        parts.chosen[5] = 1;
+        spec.car =
+            crate::items::assemble(&catalogue, Some(&setup.car), &setup.build, &parts).unwrap();
+        assert!(ported(&catalogue).is_some() && camshafts(&catalogue).is_some());
+        let text = write(&catalogue, &spec, &Condition::of(&car));
+        let old = before_heads(&text);
+        assert!(
+            old.contains("cylinder-head.ported") && !old.contains(".head\t"),
+            "{old}"
+        );
+        let (read, condition) = read(&catalogue, &old).expect("reads");
+        Condition::of(&car).put_on(&catalogue, &mut spec.car);
+        assert_eq!(read.car, spec.car, "{old}");
+        assert_eq!(condition.damage.cylinders[0].valves, 0.2);
     }
 
     /// `text` as a game before version 4 wrote it: the engine's manifold the old part

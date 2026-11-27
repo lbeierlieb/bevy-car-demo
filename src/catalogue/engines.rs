@@ -4,7 +4,9 @@
 use std::f32::consts::PI;
 
 use super::parts::SLOTS;
-use crate::physics::engine::families::{Family, Layout, ManifoldDef, Version, relative_size};
+use crate::physics::engine::families::{
+    Family, HeadDef, Layout, ManifoldDef, Version, relative_size,
+};
 use crate::physics::engine::hardware::{
     BottomEnd, CamProfile, Collector, Cooling, EngineHardware, Exhaust, FLOAT_MARGIN, Intake,
     Manifold, ROD_MARGIN, ValveLayout, ValveTrain,
@@ -290,8 +292,24 @@ fn r_manifolds() -> Vec<ManifoldDef> {
     ]
 }
 
+/// Every version's factory head made one of its family's heads (`<code>.head`), and the
+/// version's preset fitting it.
+fn with_heads(mut family: Family) -> Family {
+    family.heads = (family.versions.iter())
+        .map(|version| {
+            let id = format!("{}.head", version.code.to_lowercase());
+            let name = format!("{} cylinder head", version.code);
+            HeadDef::of(&id, &name, &version.block)
+        })
+        .collect();
+    for (v, version) in family.versions.iter_mut().enumerate() {
+        version.preset.head = v;
+    }
+    family
+}
+
 pub fn families() -> Vec<Family> {
-    vec![
+    [
         Family {
             name: "B-series four".into(),
             about: "A small four: light, simple and willing".into(),
@@ -345,6 +363,7 @@ pub fn families() -> Vec<Family> {
                 ),
             ],
             manifolds: b_manifolds(),
+            heads: Vec::new(),
         },
         Family {
             name: "R-series V10".into(),
@@ -379,8 +398,12 @@ pub fn families() -> Vec<Family> {
                 none,
             )],
             manifolds: r_manifolds(),
+            heads: Vec::new(),
         },
     ]
+    .into_iter()
+    .map(with_heads)
+    .collect()
 }
 
 #[cfg(test)]

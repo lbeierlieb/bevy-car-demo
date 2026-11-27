@@ -107,6 +107,7 @@ fn own_value(catalogue: &Catalogue, item: &Item) -> i64 {
         Kind::Clutch => 160,
         Kind::Ecu => 250,
         Kind::LongBlock => 400,
+        Kind::Head => 300,
         Kind::EnginePart(_) | Kind::Manifold | Kind::Turbo => 150,
     };
     const TUNING: [&str; 14] = [

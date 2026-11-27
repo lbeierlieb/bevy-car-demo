@@ -412,7 +412,7 @@ pub fn slots() -> Vec<Slot> {
             ],
         ),
         slot(
-            "Cylinder head",
+            "Porting",
             "Ported runners and bigger valves flow more air at high rpm",
             Readout::PortFlow,
             vec![

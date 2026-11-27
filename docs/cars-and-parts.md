@@ -94,7 +94,7 @@ Items with slots:
 | Item | Slots | Worked on by |
 |---|---|---|
 | Engine | long block; intake manifold, throttle body, air filter, exhaust manifold (its family's; turbos on its mounts, see `exhaust-manifolds.md`), supercharger, flywheel | bolt-ons at car and tuning shops; comes out of the car whole |
-| Long block | block (family, version, bore oversize), crankshaft, rods, pistons (matching the bore), head gasket, cylinder head, camshafts, valve springs, cam phasers | engine shop only |
+| Long block | block (family, version, bore oversize), crankshaft, rods, pistons (matching the bore), head gasket, cylinder head (its family's: porting, camshafts, valve springs, cam phasers) | engine shop only |
 | Gearbox | gear set, final drive, differential | car and tuning shops |
 | Wheel | rim, tire | tire shop only (rims and tires also loose in trunks and garages) |
 

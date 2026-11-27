@@ -5,7 +5,7 @@
 //! car it fits into. The catalogue says which there are (see `catalogue::engines` for
 //! the built-in ones).
 
-use super::hardware::{EngineHardware, Manifold};
+use super::hardware::{CamProfile, EngineHardware, Manifold, ValveLayout, ValveTrain};
 use super::parts::Preset;
 
 /// How the cylinders are arranged, which is what an engine sounds like.
@@ -101,6 +101,54 @@ pub struct Family {
     pub versions: Vec<Version>,
     /// The exhaust manifolds made for the family (the first is the factory's).
     pub manifolds: Vec<ManifoldDef>,
+    /// The cylinder heads made for the family (each version's factory head is its
+    /// preset's): any goes onto any of its blocks.
+    pub heads: Vec<HeadDef>,
+}
+
+/// A cylinder head made for an engine family: its valves, their springs, the cams over
+/// them (or, on a pushrod engine, the cam working them) and how its ports flow. Its valves
+/// keep their size on a block of another bore: they're relative to the bore it's made for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeadDef {
+    /// Stable, for saved cars and items: e.g. `b16r.head`.
+    pub id: String,
+    pub name: String,
+    /// The bore it's made for (m).
+    pub bore: f32,
+    pub cams: Vec<CamProfile>,
+    pub valves: ValveTrain,
+    pub valvetrain: ValveLayout,
+    pub port_flow: f32,
+}
+
+impl HeadDef {
+    /// The head of `block` (a version's factory hardware).
+    pub fn of(id: &str, name: &str, block: &EngineHardware) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            bore: block.bore,
+            cams: block.cams.clone(),
+            valves: block.valves,
+            valvetrain: block.valvetrain,
+            port_flow: block.port_flow,
+        }
+    }
+
+    /// This head on `hardware`'s block, its valves the size they are on its own bore.
+    pub fn fit(&self, hardware: &mut EngineHardware) {
+        hardware.cams = self.cams.clone();
+        hardware.valves = self.valves;
+        hardware.port_flow = self.port_flow;
+        let mut layout = self.valvetrain;
+        if self.bore != hardware.bore {
+            let k = self.bore / hardware.bore;
+            layout.intake_diameter = super::parts::round_to(layout.intake_diameter * k, 1e-4);
+            layout.exhaust_diameter = super::parts::round_to(layout.exhaust_diameter * k, 1e-4);
+        }
+        hardware.valvetrain = layout;
+    }
 }
 
 /// An exhaust manifold made for an engine family: how it gathers the exhaust, and whether

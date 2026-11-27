@@ -560,3 +560,19 @@ CARCAM="0.4,2.6,-1.6,1.0"`), from the side (`UNFIT=Bonnet,Fender CARCAM="-1.6,0.
 the Vireo's from above (`TRIM=0,0 UNFIT=Bonnet FITIDS="b.manifold.turbo,turbocharger.medium"
 CARCAM="0.5,2.5,0.1,1.3"`); the manifold screen at the tuning shop: `CAR=1
 PLACE="-1950,-3160,150" TAPS="Enter@200;ArrowDown*2@206;Enter@214;ArrowDown*2@222;Enter@230"`.
+
+## Cylinder heads (asked for by the user, 2026-11-27: the Vireo lineup, see `docs/vireo-lineup.md`)
+
+A head is an item of its own (`Kind::Head`, `Does::Head { family, head }`), in the long
+block's "Cylinder head" slot: `Family::heads` (`HeadDef`: id, name, the bore it's made for,
+cams, valve springs, valve layout, port flow), each version's factory head its preset's
+(`Preset::head`; the built-in ones are made from the versions' blocks, `<code>.head`,
+`engines::with_heads`). `Parts::head`; `HeadDef::fit` lays it over the block in
+`Parts::hardware` before the parts: valve sizes stay what they are on its own bore (relative
+diameters rescaled), so a 1.6 head on a 2.0 block has small valves for its bore. The head holds
+`HEAD_SLOTS` (Porting, the old "Cylinder head" slot, ids `porting.*`; Camshafts, Valve springs,
+Cam phasers), wears the valves, and provides overhead cams (not the long block any more). Any
+head of a family fits any of its blocks (`engines` = the family). Engine shop work, like the
+long block's insides (`fitting::in_long_block`). Saved cars before version 5 (the parts in the
+block, `cylinder-head.*`) are read into the version's factory head (`saved::into_old_head`, the
+valves' wear with it). Protocol 60.

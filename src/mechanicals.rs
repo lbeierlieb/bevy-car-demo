@@ -239,7 +239,7 @@ fn engine_bay(
     let block_at = |b: &mut Builder, u: f32, v: f32, w: f32, s: Vec3, color| {
         b.oriented_box(to(u, v, w), axes, s, color);
     };
-    let cover = match named("Cylinder head") {
+    let cover = match named("Porting") {
         Some("Stock") | None => COVER,
         Some(_) => RED,
     };

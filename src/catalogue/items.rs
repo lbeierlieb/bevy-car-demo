@@ -16,10 +16,12 @@ use crate::physics::engine::hardware::CamDrive;
 use crate::physics::tire::STREET;
 use crate::wheels::Wheel;
 
-/// Where the catalogue's engine slots are: in the long block, on the engine (the exhaust
-/// manifold, a slot of its own, after the first), or in the car (by their places in
-/// `slots`). The turbos' slot is none of them: turbos go on the manifold's mounts.
-pub const LONG_BLOCK_SLOTS: [usize; 9] = [0, 1, 2, 3, 4, 5, 6, 7, 19];
+/// Where the catalogue's engine slots are: in the long block (its cylinder head a slot of
+/// its own, last), in the head (porting, cams, springs, phasers), on the engine (the
+/// exhaust manifold, a slot of its own, after the first), or in the car (by their places
+/// in `slots`). The turbos' slot is none of them: turbos go on the manifold's mounts.
+pub const LONG_BLOCK_SLOTS: [usize; 5] = [0, 1, 2, 3, 4];
+pub const HEAD_SLOTS: [usize; 4] = [19, 5, 6, 7];
 pub const ENGINE_SLOTS: [usize; 5] = [8, 9, 10, 12, 18];
 pub const CAR_SLOTS: [usize; 5] = [16, 14, 15, 17, 13];
 
@@ -264,7 +266,7 @@ fn engine_part_size(name: &str) -> ([f32; 3], f32) {
         "Exhaust pipe" => ([1.5, 0.15, 0.15], 6.0),
         "Radiator" => ([0.7, 0.1, 0.45], 6.0),
         "Flywheel" => ([0.3, 0.3, 0.05], 8.0),
-        "Cylinder head" => ([0.6, 0.3, 0.25], 18.0),
+        "Porting" => ([0.3, 0.2, 0.1], 0.5),
         _ => ([0.3, 0.3, 0.3], 3.0),
     }
 }
@@ -685,7 +687,22 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             )
             .bored()
             .slots(LONG_BLOCK_SLOTS.map(engine_slot).to_vec());
-            if version.block.valvetrain.drive != CamDrive::Ohv {
+            def.slots.push(slot("Cylinder head", Kind::Head, true));
+            add(def);
+        }
+        for (h, head) in family.heads.iter().enumerate() {
+            let mut def = Def::new(
+                &head.id,
+                &head.name,
+                Kind::Head,
+                Does::Head { family: f, head: h },
+                [family.length.max(0.5), 0.3, 0.25],
+                0.18 * family.mass,
+            )
+            .engines(&family.name)
+            .wears(Wear::Valves)
+            .slots(HEAD_SLOTS.map(engine_slot).to_vec());
+            if head.valvetrain.drive != CamDrive::Ohv {
                 def = def.provides(OVERHEAD_CAMS);
             }
             add(def);
@@ -758,7 +775,6 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
                 _ if def.absent => None,
                 "Pistons" => Some(Wear::Pistons),
                 "Connecting rods" => Some(Wear::Rods),
-                "Cylinder head" => Some(Wear::Valves),
                 "Head gasket" => Some(Wear::HeadGasket),
                 "Crankshaft" => Some(Wear::Bearings),
                 _ if kind.mounted => Some(Wear::Turbo),

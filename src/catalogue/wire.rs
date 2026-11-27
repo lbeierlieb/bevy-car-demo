@@ -12,7 +12,7 @@ use crate::items::{
 use crate::net::wire::{Reader, Wire};
 use crate::physics::brakes::Brake;
 use crate::physics::drivetrain::Drive;
-use crate::physics::engine::families::{Family, Layout, ManifoldDef, Version};
+use crate::physics::engine::families::{Family, HeadDef, Layout, ManifoldDef, Version};
 use crate::physics::engine::hardware::{
     BottomEnd, CamDrive, CamProfile, Collector, Compressor, Cooling, Diverter, EngineHardware,
     Exhaust, Intake, Intercooler, Manifold, Supercharger, Turbine, Turbo, ValveLayout, ValveTrain,
@@ -397,6 +397,7 @@ fields!(EngineHardware {
 fields!(Preset {
     chosen,
     manifold,
+    head,
     boost,
     ecu
 });
@@ -408,7 +409,8 @@ fields!(Family {
     height,
     mass,
     versions,
-    manifolds
+    manifolds,
+    heads
 } text { name, about });
 
 impl Wire for Manifold {
@@ -430,6 +432,13 @@ impl Wire for Manifold {
     }
 }
 fields!(ManifoldDef { manifold, mounts, cast } text { id, name });
+fields!(HeadDef {
+    bore,
+    cams,
+    valves,
+    valvetrain,
+    port_flow
+} text { id, name });
 
 fields!(Regrind {
     duration,
@@ -571,6 +580,7 @@ impl Wire for Kind {
             Kind::EnginePart(_) => 17,
             Kind::Manifold => 18,
             Kind::Turbo => 19,
+            Kind::Head => 20,
         };
         tag.put(out);
         match self {
@@ -602,6 +612,7 @@ impl Wire for Kind {
             17 => Kind::EnginePart(r.get()?),
             18 => Kind::Manifold,
             19 => Kind::Turbo,
+            20 => Kind::Head,
             _ => return None,
         })
     }
@@ -650,6 +661,10 @@ impl Wire for Does {
                 18u8.put(out);
                 (*family, *manifold).put(out);
             }
+            Does::Head { family, head } => {
+                19u8.put(out);
+                (*family, *head).put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -683,6 +698,10 @@ impl Wire for Does {
             18 => {
                 let (family, manifold) = r.get()?;
                 Does::Manifold { family, manifold }
+            }
+            19 => {
+                let (family, head) = r.get()?;
+                Does::Head { family, head }
             }
             _ => return None,
         })
@@ -886,8 +905,11 @@ impl Catalogue {
         let family = |family: &Family| {
             !family.versions.is_empty()
                 && family.versions.iter().all(version)
-                && (family.versions.iter())
-                    .all(|version| version.preset.manifold < family.manifolds.len())
+                && (family.versions.iter()).all(|version| {
+                    version.preset.manifold < family.manifolds.len()
+                        && version.preset.head < family.heads.len()
+                })
+                && (family.heads.iter()).all(|head| !head.cams.is_empty() && head.bore > 0.0)
         };
         let slot = |slot: &Slot| !slot.parts.is_empty();
         let does = |def: &PartDef| match def.does {
@@ -904,6 +926,9 @@ impl Catalogue {
             }
             Does::Manifold { family, manifold } => {
                 (self.families.get(family)).is_some_and(|f| manifold < f.manifolds.len())
+            }
+            Does::Head { family, head } => {
+                (self.families.get(family)).is_some_and(|f| head < f.heads.len())
             }
             _ => true,
         };
