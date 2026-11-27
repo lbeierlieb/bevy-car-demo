@@ -18,7 +18,6 @@ use std::sync::{Arc, Mutex};
 
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::camera::{ImageRenderTarget, RenderTarget};
-use bevy::diagnostic::DiagnosticsStore;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureFormat};
@@ -40,10 +39,7 @@ impl Plugin for GraphicsPlugin {
                 auto_create_primary_context: false,
                 ..default()
             })
-            .add_plugins((
-                crate::grade::GradePlugin,
-                bevy::diagnostic::FrameTimeDiagnosticsPlugin::default(),
-            ))
+            .add_plugins(crate::grade::GradePlugin)
             .add_systems(Startup, setup)
             .add_systems(
                 EguiPrimaryContextPass,
@@ -576,16 +572,34 @@ pub const FPS_OFFSET: egui::Vec2 = egui::vec2(-12.0, 12.0);
 /// How far down the next readout in the top right corner starts under the frame rate.
 pub const FPS_HEIGHT: f32 = 26.0;
 
-/// The frames per second and the frame time (smoothed, Bevy's frame time diagnostics),
-/// orange under 50 fps and red under 30.
-fn frame_rate(mut contexts: EguiContexts, diagnostics: Res<DiagnosticsStore>) -> Result {
-    use bevy::diagnostic::FrameTimeDiagnosticsPlugin as Frames;
-    let smoothed = |path| {
-        diagnostics
-            .get(path)
-            .and_then(bevy::diagnostic::Diagnostic::smoothed)
-    };
-    let (Some(fps), Some(ms)) = (smoothed(&Frames::FPS), smoothed(&Frames::FRAME_TIME)) else {
+/// How often the frame rate shown is renewed (s): the average over that time, so it's
+/// readable however fast the frames come.
+const FPS_INTERVAL: f32 = 0.5;
+
+/// The frames counted since the frame rate was last renewed, and what's shown (fps, ms).
+#[derive(Default)]
+struct FrameCount {
+    frames: u32,
+    time: f32,
+    shown: Option<(f32, f32)>,
+}
+
+/// The frames per second and the frame time, averaged over `FPS_INTERVAL`, orange under
+/// 50 fps and red under 30.
+fn frame_rate(
+    mut contexts: EguiContexts,
+    time: Res<Time<Real>>,
+    mut count: Local<FrameCount>,
+) -> Result {
+    count.frames += 1;
+    count.time += time.delta_secs();
+    if count.time >= FPS_INTERVAL {
+        let fps = count.frames as f32 / count.time;
+        count.shown = Some((fps, 1000.0 / fps));
+        count.frames = 0;
+        count.time = 0.0;
+    }
+    let Some((fps, ms)) = count.shown else {
         return Ok(());
     };
     let color = if fps < 30.0 {
@@ -605,7 +619,7 @@ fn frame_rate(mut contexts: EguiContexts, diagnostics: Res<DiagnosticsStore>) ->
                 .inner_margin(egui::Margin::symmetric(6, 2))
                 .show(ui, |ui| {
                     ui.label(
-                        egui::RichText::new(format!("{fps:.0} fps   {ms:.1} ms"))
+                        egui::RichText::new(format!("{fps:>4.0} fps {ms:>6.1} ms"))
                             .color(color)
                             .monospace(),
                     )
