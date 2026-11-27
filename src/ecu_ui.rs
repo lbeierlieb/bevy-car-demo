@@ -24,6 +24,8 @@ pub struct EcuPanel {
     /// Whether the saved tunes were listed (when it's first shown).
     listed: bool,
     map: MapKind,
+    /// Editing the second cam profile's fuel, λ and spark maps.
+    high_cam: bool,
     /// Selected cells: the first clicked and the last (shift-)clicked, as (rpm, manifold
     /// pressure) indices.
     selection: Option<[(usize, usize); 2]>,
@@ -76,8 +78,12 @@ impl MapKind {
         !matches!(self, Self::IntakeCam | Self::ExhaustCam) || model.cam_control()
     }
 
-    fn table(self, ecu: &mut Ecu) -> &mut Table {
+    /// The map, on the second cam profile if `high`.
+    fn table(self, ecu: &mut Ecu, high: bool) -> &mut Table {
         match self {
+            Self::Fuel if high => &mut ecu.cams.ve,
+            Self::Lambda if high => &mut ecu.cams.lambda,
+            Self::Spark if high => &mut ecu.cams.spark,
             Self::Fuel => &mut ecu.ve,
             Self::Lambda => &mut ecu.lambda,
             Self::Spark => &mut ecu.spark,
@@ -144,7 +150,7 @@ fn readings(ui: &mut egui::Ui, car: &Car) {
     let engine = &drivetrain.engine;
     let (rpm, map) = (drivetrain.rpm, engine.intake_pressure);
     let cycle = engine.cycle(build, rpm);
-    let target = build.ecu.lambda.get(&[rpm, map]);
+    let target = (build.ecu.maps_on(engine.actuators.cam_profile).1).get(&[rpm, map]);
     kit::info(
         ui,
         &format!("{rpm:.0} rpm    {:.0} kPa", map / 1000.0),
@@ -339,6 +345,20 @@ fn map_editor(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
         kind.name().to_string()
     });
     let kind = panel.map;
+    // Switching cams have maps for each profile.
+    let switching = model.cam_control() && car.setup.engine.build.hardware.cams.len() > 1;
+    let per_cam = switching && !matches!(kind, MapKind::IntakeCam | MapKind::ExhaustCam);
+    if per_cam {
+        kit::pick(ui, "Cam", &mut panel.high_cam, &[false, true], |high| {
+            if high {
+                "Second profile"
+            } else {
+                "First profile"
+            }
+            .to_string()
+        });
+    }
+    let high_cam = per_cam && panel.high_cam;
     let (rpm, map) = (car.drivetrain.rpm, car.drivetrain.engine.intake_pressure);
     let lambda = car
         .drivetrain
@@ -346,8 +366,9 @@ fn map_editor(ui: &mut egui::Ui, panel: &mut EcuPanel, car: &mut Car) {
         .cycle(&car.setup.engine.build, rpm)
         .lambda;
     let ecu = &mut car.setup.engine.build.ecu;
-    let target = ecu.lambda.get(&[rpm, map]);
-    let table = kind.table(ecu);
+    let profile = car.drivetrain.engine.actuators.cam_profile;
+    let target = ecu.maps_on(profile).1.get(&[rpm, map]);
+    let table = kind.table(ecu, high_cam);
     let (low, high) = kind.range();
 
     let operating = [rpm, map];

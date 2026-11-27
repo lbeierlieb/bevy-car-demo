@@ -69,6 +69,15 @@ pub struct EngineMaps {
     /// displacement at intake manifold density) by rpm, intake manifold pressure, exhaust
     /// over intake pressure, intake phase and exhaust phase.
     ve: Vec<Table>,
+    /// The maps by load per cam profile.
+    load: Vec<LoadMaps>,
+    /// Friction mean effective pressure (Pa) with the oil warm, by rpm.
+    friction: Table,
+}
+
+/// What the cylinders do on one cam profile (unphased) by rpm and load.
+#[derive(Clone, Debug)]
+struct LoadMaps {
     /// Spark advance for best torque (degrees before top dead centre) by rpm and load.
     mbt: Table,
     /// Indicated efficiency at MBT spark and λ = 1 by rpm and load.
@@ -82,8 +91,48 @@ pub struct EngineMaps {
     heat_to_coolant: Table,
     /// Highest cylinder pressure at MBT spark (Pa) by rpm and load.
     peak_pressure: Table,
-    /// Friction mean effective pressure (Pa) with the oil warm, by rpm.
-    friction: Table,
+}
+
+impl LoadMaps {
+    const NAMES: [&str; 6] = [
+        "mbt",
+        "efficiency",
+        "knock_limit",
+        "exhaust_temperature",
+        "heat_to_coolant",
+        "peak_pressure",
+    ];
+
+    fn tables(&self) -> [&Table; 6] {
+        [
+            &self.mbt,
+            &self.efficiency,
+            &self.knock_limit,
+            &self.exhaust_temperature,
+            &self.heat_to_coolant,
+            &self.peak_pressure,
+        ]
+    }
+
+    fn from_tables(
+        [
+            mbt,
+            efficiency,
+            knock_limit,
+            exhaust_temperature,
+            heat_to_coolant,
+            peak_pressure,
+        ]: [Table; 6],
+    ) -> Self {
+        Self {
+            mbt,
+            efficiency,
+            knock_limit,
+            exhaust_temperature,
+            heat_to_coolant,
+            peak_pressure,
+        }
+    }
 }
 
 impl EngineMaps {
@@ -93,12 +142,7 @@ impl EngineMaps {
         let table = |axes: usize| Table::bake(vec![vec![0.0]; axes], |_| 0.0);
         Self {
             ve: vec![table(5)],
-            mbt: table(2),
-            efficiency: table(2),
-            knock_limit: table(2),
-            exhaust_temperature: table(2),
-            heat_to_coolant: table(2),
-            peak_pressure: table(2),
+            load: vec![LoadMaps::from_tables(std::array::from_fn(|_| table(2)))],
             friction: table(1),
         }
     }
@@ -125,9 +169,12 @@ impl EngineMaps {
         for (i, ve) in self.ve.iter().enumerate() {
             table::write_table(&mut text, &format!("ve{i}"), ve);
         }
-        for (name, table) in self.named() {
-            table::write_table(&mut text, name, table);
+        for (i, load) in self.load.iter().enumerate() {
+            for (name, table) in LoadMaps::NAMES.iter().zip(load.tables()) {
+                table::write_table(&mut text, &format!("{name}{i}"), table);
+            }
         }
+        table::write_table(&mut text, "friction", &self.friction);
         text
     }
 
@@ -153,31 +200,26 @@ impl EngineMaps {
             tables.swap_remove(i).1
         };
         let ve: Vec<Table> = (0..).map_while(|i| take(&format!("ve{i}"))).collect();
+        let mut load = Vec::new();
+        for i in 0..ve.len() {
+            let tables: Vec<Table> = (LoadMaps::NAMES.iter())
+                .map(|name| take(&format!("{name}{i}")))
+                .collect::<Option<_>>()?;
+            load.push(LoadMaps::from_tables(tables.try_into().ok()?));
+        }
         if ve.is_empty() {
             return None;
         }
         Some(Self {
             ve,
-            mbt: take("mbt")?,
-            efficiency: take("efficiency")?,
-            knock_limit: take("knock_limit")?,
-            exhaust_temperature: take("exhaust_temperature")?,
-            heat_to_coolant: take("heat_to_coolant")?,
-            peak_pressure: take("peak_pressure")?,
+            load,
             friction: take("friction")?,
         })
     }
 
-    fn named(&self) -> [(&'static str, &Table); 7] {
-        [
-            ("mbt", &self.mbt),
-            ("efficiency", &self.efficiency),
-            ("knock_limit", &self.knock_limit),
-            ("exhaust_temperature", &self.exhaust_temperature),
-            ("heat_to_coolant", &self.heat_to_coolant),
-            ("peak_pressure", &self.peak_pressure),
-            ("friction", &self.friction),
-        ]
+    /// The maps by load on cam profile `profile`.
+    fn on(&self, profile: usize) -> &LoadMaps {
+        &self.load[profile.min(self.load.len() - 1)]
     }
 
     pub fn ve(
@@ -193,30 +235,30 @@ impl EngineMaps {
         table.get(&[rpm, intake, ratio, intake_phase, exhaust_phase])
     }
 
-    pub fn mbt(&self, rpm: f32, load: f32) -> f32 {
-        self.mbt.get(&[rpm, load])
+    pub fn mbt(&self, profile: usize, rpm: f32, load: f32) -> f32 {
+        self.on(profile).mbt.get(&[rpm, load])
     }
 
-    pub fn efficiency(&self, rpm: f32, load: f32) -> f32 {
-        self.efficiency.get(&[rpm, load])
+    pub fn efficiency(&self, profile: usize, rpm: f32, load: f32) -> f32 {
+        self.on(profile).efficiency.get(&[rpm, load])
     }
 
     /// Spark advance where knock starts at the reference conditions.
-    pub fn knock_limit(&self, rpm: f32, load: f32) -> f32 {
-        self.knock_limit.get(&[rpm, load])
+    pub fn knock_limit(&self, profile: usize, rpm: f32, load: f32) -> f32 {
+        self.on(profile).knock_limit.get(&[rpm, load])
     }
 
-    pub fn exhaust_temperature(&self, rpm: f32, load: f32) -> f32 {
-        self.exhaust_temperature.get(&[rpm, load])
+    pub fn exhaust_temperature(&self, profile: usize, rpm: f32, load: f32) -> f32 {
+        self.on(profile).exhaust_temperature.get(&[rpm, load])
     }
 
-    pub fn heat_to_coolant(&self, rpm: f32, load: f32) -> f32 {
-        self.heat_to_coolant.get(&[rpm, load])
+    pub fn heat_to_coolant(&self, profile: usize, rpm: f32, load: f32) -> f32 {
+        self.on(profile).heat_to_coolant.get(&[rpm, load])
     }
 
     /// Highest cylinder pressure at MBT spark (Pa).
-    pub fn peak_pressure(&self, rpm: f32, load: f32) -> f32 {
-        self.peak_pressure.get(&[rpm, load])
+    pub fn peak_pressure(&self, profile: usize, rpm: f32, load: f32) -> f32 {
+        self.on(profile).peak_pressure.get(&[rpm, load])
     }
 
     /// Friction mean effective pressure (Pa) at `rpm` with the oil at `oil` (K).
@@ -235,9 +277,9 @@ pub struct Bake {
     ve_values: Vec<f32>,
     /// The VE tables once they're done.
     ve: Vec<Table>,
-    /// Grid points of the maps by load, and their values so far (MBT, efficiency, knock
-    /// limit, exhaust temperature, heat to coolant, peak pressure).
-    load_points: Vec<Vec<f32>>,
+    /// Grid points of the maps by load (cam profile and point), and their values so far
+    /// (MBT, efficiency, knock limit, exhaust temperature, heat to coolant, peak pressure).
+    load_points: Vec<(usize, Vec<f32>)>,
     load_values: Vec<[f32; 6]>,
 }
 
@@ -252,7 +294,9 @@ impl Bake {
             ve_points,
             ve_values: Vec::new(),
             ve: Vec::new(),
-            load_points: grid(&load_axes()),
+            load_points: (0..hardware.cams.len())
+                .flat_map(|profile| grid(&load_axes()).into_iter().map(move |p| (profile, p)))
+                .collect(),
             load_values: Vec::new(),
         }
     }
@@ -289,9 +333,9 @@ impl Bake {
         }
         let done = self.load_values.len();
         let end = self.load_points.len().min(done.saturating_add(count));
-        let ve = &self.ve[0];
-        let values = parallel(&self.load_points[done..end], |point| {
-            load_point(hardware, ve, point)
+        let ve = &self.ve;
+        let values = parallel(&self.load_points[done..end], |(profile, point)| {
+            load_point(hardware, *profile, &ve[*profile], point)
         });
         self.load_values.extend(values);
         (self.load_values.len() == self.load_points.len()).then(|| self.finish())
@@ -299,10 +343,15 @@ impl Bake {
 
     fn finish(&mut self) -> EngineMaps {
         let hardware = &self.hardware;
-        let column = |i: usize| {
-            let values = self.load_values.iter().map(|values| values[i]).collect();
-            Table::from_parts(load_axes(), values).expect("finite maps")
-        };
+        let size = self.load_values.len() / hardware.cams.len();
+        let load = (self.load_values.chunks(size))
+            .map(|values| {
+                LoadMaps::from_tables(std::array::from_fn(|i| {
+                    let values = values.iter().map(|values| values[i]).collect();
+                    Table::from_parts(load_axes(), values).expect("finite maps")
+                }))
+            })
+            .collect();
         // Rings and skirts by mean piston speed, more side thrust with shorter rods.
         let rod = 1.0 + 0.5 * (hardware.stroke / (2.0 * hardware.rod_length) - 0.3);
         let friction = Table::bake(vec![rpm_axis()], |p| {
@@ -311,12 +360,7 @@ impl Bake {
         });
         EngineMaps {
             ve: std::mem::take(&mut self.ve),
-            mbt: column(0),
-            efficiency: column(1),
-            knock_limit: column(2),
-            exhaust_temperature: column(3),
-            heat_to_coolant: column(4),
-            peak_pressure: column(5),
+            load,
             friction,
         }
     }
@@ -359,9 +403,9 @@ fn ve_point(hardware: &EngineHardware, profile: usize, point: &[f32]) -> f32 {
 }
 
 /// The maps by load at a point of `load_axes` (MBT, efficiency, knock limit, exhaust
-/// temperature, heat to coolant, peak pressure), on the first cam profile, unphased, finding the intake
-/// pressure for the load in `ve`, the first profile's VE.
-fn load_point(hardware: &EngineHardware, ve: &Table, point: &[f32]) -> [f32; 6] {
+/// temperature, heat to coolant, peak pressure) on cam profile `profile`, unphased, finding
+/// the intake pressure for the load in `ve`, that profile's VE.
+fn load_point(hardware: &EngineHardware, profile: usize, ve: &Table, point: &[f32]) -> [f32; 6] {
     let (rpm, load) = (point[0], point[1]);
     // The exhaust pressure the engine would about have: a little over ambient, or over
     // the boost.
@@ -387,7 +431,7 @@ fn load_point(hardware: &EngineHardware, ve: &Table, point: &[f32]) -> [f32; 6] 
     }
     let intake = f64::from(low + high) / 2.0;
     let conditions = conditions(rpm, intake, exhaust(intake));
-    let cylinder = Cylinder::new(hardware, &hardware.cams[0], 0.0, 0.0);
+    let cylinder = Cylinder::new(hardware, &hardware.cams[profile], 0.0, 0.0);
     let result = cylinder.run(&conditions, None);
     let mbt = cylinder.mbt(&result.trapped, &conditions);
     let knock_limit = cylinder.knock_limit(&result.trapped, &conditions);
@@ -594,18 +638,18 @@ mod tests {
         let ve = |rpm, intake, ratio| maps.ve(0, rpm, intake, ratio, 0.0, 0.0);
         assert!((0.85..1.05).contains(&ve(4500.0, 100e3, 1.05)));
         assert!(ve(850.0, 30e3, 3.4) < ve(850.0, 100e3, 1.05));
-        let efficiency = maps.efficiency(4000.0, 1.0);
+        let efficiency = maps.efficiency(0, 4000.0, 1.0);
         assert!((0.35..0.45).contains(&efficiency), "{efficiency}");
-        assert!(maps.efficiency(2000.0, 0.2) < efficiency);
-        let exhaust = maps.exhaust_temperature(5000.0, 1.0);
+        assert!(maps.efficiency(0, 2000.0, 0.2) < efficiency);
+        let exhaust = maps.exhaust_temperature(0, 5000.0, 1.0);
         assert!((1050.0..1350.0).contains(&exhaust), "{exhaust} K");
-        let heat = maps.heat_to_coolant(3000.0, 0.8);
+        let heat = maps.heat_to_coolant(0, 3000.0, 0.8);
         assert!((0.15..0.35).contains(&heat), "{heat}");
         // Full load knocks short of MBT at low rpm; the spark has room at high rpm.
-        let margin = |rpm, load| maps.knock_limit(rpm, load) - maps.mbt(rpm, load);
+        let margin = |rpm, load| maps.knock_limit(0, rpm, load) - maps.mbt(0, rpm, load);
         assert!(margin(1500.0, 0.9) < -1.0);
         assert!(margin(6500.0, 0.9) > 0.0);
         assert!(margin(3000.0, 0.4) > 0.0);
-        assert!((15.0..40.0).contains(&maps.mbt(4000.0, 0.9)));
+        assert!((15.0..40.0).contains(&maps.mbt(0, 4000.0, 0.9)));
     }
 }

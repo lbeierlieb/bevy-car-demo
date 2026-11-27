@@ -294,7 +294,8 @@ impl Engine {
         let cylinders = hardware.cylinders as usize;
         let fuel_power = cycle.fuel * FUEL_ENERGY * cycles * self.damage.firing(cylinders);
         let friction_power = cycle.friction * cycles;
-        let walls = build.maps.heat_to_coolant(rpm.abs(), cycle.load);
+        let profile = self.actuators.cam_profile;
+        let walls = build.maps.heat_to_coolant(profile, rpm.abs(), cycle.load);
         let to_coolant =
             (walls + self.damage.extra_coolant_heat()) * fuel_power + 0.7 * friction_power;
         let to_oil = 0.3 * friction_power + 0.02 * fuel_power;
@@ -484,23 +485,24 @@ impl Engine {
         let motored = p * hardware.compression_ratio.powf(1.3);
         let (lambda, indicated, exhaust_temperature, knock, peak) = if fuel > 0.0 && firing > 0.0 {
             let lambda = air / (fuel * STOICHIOMETRIC);
-            let offset = a.spark - maps.mbt(rpm, load);
+            let profile = a.cam_profile;
+            let offset = a.spark - maps.mbt(profile, rpm, load);
             let indicated = air / STOICHIOMETRIC
                 * FUEL_ENERGY
-                * maps.efficiency(rpm, load)
+                * maps.efficiency(profile, rpm, load)
                 * maps::spark_efficiency(offset)
                 * maps::lambda_efficiency(lambda)
                 * self.damage.efficiency(cylinders)
                 * firing;
             // The dead cylinders pump their charge through unburnt.
-            let burnt = maps.exhaust_temperature(rpm, load)
+            let burnt = maps.exhaust_temperature(profile, rpm, load)
                 + maps::exhaust_temperature_shift(offset, lambda);
             let temperature = firing * burnt + (1.0 - firing) * self.charge_temperature;
             let (charge, coolant) = (self.charge_temperature, self.thermal.coolant);
             let shift = maps::knock_limit_shift(charge, coolant, build.octane);
-            let knock = (a.spark - maps.knock_limit(rpm, load) - shift).max(0.0);
+            let knock = (a.spark - maps.knock_limit(profile, rpm, load) - shift).max(0.0);
             let rise = PEAK_MOST * (PEAK_PER_DEGREE * offset / PEAK_MOST).tanh();
-            let peak = maps.peak_pressure(rpm, load) * (1.0 + rise);
+            let peak = maps.peak_pressure(profile, rpm, load) * (1.0 + rise);
             (lambda, indicated, temperature, knock, peak.max(motored))
         } else {
             (f32::INFINITY, 0.0, AMBIENT_TEMPERATURE, 0.0, motored)

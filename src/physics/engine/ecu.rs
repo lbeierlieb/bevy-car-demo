@@ -148,6 +148,11 @@ pub struct CamControl {
     /// pressure.
     pub intake_phase: Table,
     pub exhaust_phase: Table,
+    /// The fuel (VE), target λ and spark maps on the second cam profile (the ECU's own on
+    /// the first).
+    pub ve: Table,
+    pub lambda: Table,
+    pub spark: Table,
 }
 
 /// The ECU's memory between steps.
@@ -184,6 +189,9 @@ impl Ecu {
                 switch_map: f32::INFINITY,
                 intake_phase: table(),
                 exhaust_phase: table(),
+                ve: table(),
+                lambda: table(),
+                spark: table(),
             },
         }
     }
@@ -227,57 +235,66 @@ impl Ecu {
             })
         };
         let displacement = hardware.displacement();
-        let cams = CamControl::calibrated(hardware, maps, axes);
+        let mut cams = CamControl::calibrated(hardware, maps, axes);
         let control = model.cam_control();
-        // The cams where the ECU puts them.
-        let cam_at = |rpm: f32, map: f32| {
+        // The phasers where the ECU puts them.
+        let phases = |rpm: f32, map: f32| {
             if !control {
-                return (0, 0.0, 0.0);
+                return (0.0, 0.0);
             }
-            let high = rpm > cams.switch_rpm && map > cams.switch_map;
             let point = [rpm, map];
-            let (intake, exhaust) = (
+            (
                 cams.intake_phase.get(&point),
                 cams.exhaust_phase.get(&point),
-            );
-            (usize::from(high), intake, exhaust)
+            )
         };
         let load = |ve: f32, map: f32| ve * map / (R_AIR * charge(map)) / super::ambient_density();
-        let ve = Table::bake(axes(), |p| {
-            let (rpm, map) = (p[0], p[1]);
-            let (profile, intake, exhaust_phase) = cam_at(rpm, map);
-            let mut exhaust = AMBIENT_PRESSURE;
-            let mut ve = 0.0;
-            for _ in 0..3 {
-                ve = maps.ve(profile, rpm, map, exhaust / map, intake, exhaust_phase);
-                let air = load(ve, map) * super::ambient_density() * displacement;
-                let flow = air * (1.0 + 1.0 / (STOICHIOMETRIC * lambda(map))) * rpm / 120.0;
-                let temperature = maps.exhaust_temperature(rpm, load(ve, map));
-                exhaust = super::exhaust_pressure(hardware, flow, temperature, wastegate(map));
-            }
-            ve
-        });
-        let spark = Table::bake(axes(), |p| {
-            let (rpm, map) = (p[0], p[1]);
-            let load = load(ve.get(p), map);
-            let shift = maps::knock_limit_shift(charge(map), 363.0, octane);
-            let knock = maps.knock_limit(rpm, load) + shift;
-            maps.mbt(rpm, load).min(knock) - 2.0
-        });
-        let lambda = Table::bake(axes(), |p| {
-            let (rpm, map) = (p[0], p[1]);
-            let lambda = lambda(map);
-            if hardware.turbo.is_none() {
-                return lambda;
-            }
-            let load = load(ve.get(p), map);
-            let offset = spark.get(p) - maps.mbt(rpm, load);
-            let hot = maps.exhaust_temperature(rpm, load)
-                + maps::exhaust_temperature_shift(offset, lambda);
-            // Each hundredth richer takes 4 K off.
-            let over = hot - (TURBINE_LIMIT - TURBINE_MARGIN);
-            (lambda - over.max(0.0) / 400.0).max(RICHEST)
-        });
+        // The fuel, spark and λ maps for cam profile `profile`.
+        let tables = |profile: usize| {
+            let ve = Table::bake(axes(), |p| {
+                let (rpm, map) = (p[0], p[1]);
+                let (intake, exhaust_phase) = phases(rpm, map);
+                let mut exhaust = AMBIENT_PRESSURE;
+                let mut ve = 0.0;
+                for _ in 0..3 {
+                    ve = maps.ve(profile, rpm, map, exhaust / map, intake, exhaust_phase);
+                    let air = load(ve, map) * super::ambient_density() * displacement;
+                    let flow = air * (1.0 + 1.0 / (STOICHIOMETRIC * lambda(map))) * rpm / 120.0;
+                    let temperature = maps.exhaust_temperature(profile, rpm, load(ve, map));
+                    exhaust = super::exhaust_pressure(hardware, flow, temperature, wastegate(map));
+                }
+                ve
+            });
+            let spark = Table::bake(axes(), |p| {
+                let (rpm, map) = (p[0], p[1]);
+                let load = load(ve.get(p), map);
+                let shift = maps::knock_limit_shift(charge(map), 363.0, octane);
+                let knock = maps.knock_limit(profile, rpm, load) + shift;
+                maps.mbt(profile, rpm, load).min(knock) - 2.0
+            });
+            let lambda = Table::bake(axes(), |p| {
+                let (rpm, map) = (p[0], p[1]);
+                let lambda = lambda(map);
+                if hardware.turbo.is_none() {
+                    return lambda;
+                }
+                let load = load(ve.get(p), map);
+                let offset = spark.get(p) - maps.mbt(profile, rpm, load);
+                let hot = maps.exhaust_temperature(profile, rpm, load)
+                    + maps::exhaust_temperature_shift(offset, lambda);
+                // Each hundredth richer takes 4 K off.
+                let over = hot - (TURBINE_LIMIT - TURBINE_MARGIN);
+                (lambda - over.max(0.0) / 400.0).max(RICHEST)
+            });
+            (ve, spark, lambda)
+        };
+        let (ve, spark, lambda) = tables(0);
+        // The second profile's maps where the ECU can switch to one (else the first's).
+        (cams.ve, cams.spark, cams.lambda) = if control && hardware.cams.len() > 1 {
+            tables(1)
+        } else {
+            (ve.clone(), spark.clone(), lambda.clone())
+        };
         Self {
             model,
             cams,
@@ -290,6 +307,15 @@ impl Ecu {
             rev_limit: rev_limit(hardware, model),
             limiter_cut: 0.08,
             limiter_fuel: 0.04,
+        }
+    }
+
+    /// The fuel (VE), target λ and spark maps on cam profile `profile`.
+    pub fn maps_on(&self, profile: usize) -> (&Table, &Table, &Table) {
+        if profile > 0 {
+            (&self.cams.ve, &self.cams.lambda, &self.cams.spark)
+        } else {
+            (&self.ve, &self.lambda, &self.spark)
         }
     }
 
@@ -341,16 +367,17 @@ impl Ecu {
         };
 
         let point = [rpm, map];
-        let air = self.ve.get(&point) * map * self.displacement
+        let (ve, lambda, spark) = self.maps_on(cam_profile);
+        let air = ve.get(&point) * map * self.displacement
             / (R_AIR * intake_temperature * self.cylinders as f32);
         let fuel = if cut {
             0.0
         } else {
-            air / (STOICHIOMETRIC * self.lambda.get(&point))
+            air / (STOICHIOMETRIC * lambda.get(&point))
         };
         Actuators {
             fuel,
-            spark: self.spark.get(&point),
+            spark: spark.get(&point),
             idle_valve,
             cam_profile,
             intake_phase,
@@ -400,11 +427,16 @@ impl CamControl {
             let share = ((map - PHASE_FROM) / (PHASE_TO - PHASE_FROM)).clamp(0.0, 1.0);
             share * if exhaust { exhaust_phase } else { intake_phase }
         };
+        let none = || Table::bake(vec![vec![0.0]; 2], |_| 0.0);
         Self {
             switch_rpm,
             switch_map: SWITCH_MAP,
             intake_phase: Table::bake(axes(), |p| phase(p, false)),
             exhaust_phase: Table::bake(axes(), |p| phase(p, true)),
+            // Made by `Ecu::calibrated`.
+            ve: none(),
+            lambda: none(),
+            spark: none(),
         }
     }
 }
@@ -441,7 +473,7 @@ impl Ecu {
             }
         }
         for (name, table) in self.tables() {
-            if cams || !name.ends_with("_phase") {
+            if cams || !(name.ends_with("_phase") || name.ends_with("_high")) {
                 table::write_table(&mut text, name, table);
             }
         }
@@ -503,13 +535,16 @@ impl Ecu {
         }
     }
 
-    fn tables(&self) -> [(&'static str, &Table); 5] {
+    fn tables(&self) -> [(&'static str, &Table); 8] {
         [
             ("ve", &self.ve),
             ("lambda", &self.lambda),
             ("spark", &self.spark),
             ("intake_phase", &self.cams.intake_phase),
             ("exhaust_phase", &self.cams.exhaust_phase),
+            ("ve_high", &self.cams.ve),
+            ("lambda_high", &self.cams.lambda),
+            ("spark_high", &self.cams.spark),
         ]
     }
 
@@ -520,6 +555,9 @@ impl Ecu {
             "spark" => Some(&mut self.spark),
             "intake_phase" => Some(&mut self.cams.intake_phase),
             "exhaust_phase" => Some(&mut self.cams.exhaust_phase),
+            "ve_high" => Some(&mut self.cams.ve),
+            "lambda_high" => Some(&mut self.cams.lambda),
+            "spark_high" => Some(&mut self.cams.spark),
             _ => None,
         }
     }
@@ -545,6 +583,33 @@ mod tests {
     use super::*;
     use crate::physics::engine::EngineBuild;
     use crate::physics::engine::hardware::EngineHardware;
+
+    /// Each cam profile has its own maps by load, and an ECU that switches its own fuel,
+    /// λ and spark maps for each.
+    #[test]
+    fn switching_cams_have_maps_of_their_own() {
+        let mut parts = crate::physics::engine::parts::Parts::stock();
+        parts.chosen[5] = 3;
+        let hardware = parts.hardware();
+        assert_eq!(hardware.cams.len(), 2);
+        let build = EngineBuild::new(hardware.clone(), EcuModel::Programmable);
+        let maps = &build.maps;
+        let (rpm, load) = (7000.0, 0.9);
+        let differs = |a: f32, b: f32| (a - b).abs() > 1e-3 * a.abs().max(1.0);
+        assert!(differs(maps.mbt(0, rpm, load), maps.mbt(1, rpm, load)));
+        assert!(differs(
+            maps.exhaust_temperature(0, rpm, load),
+            maps.exhaust_temperature(1, rpm, load)
+        ));
+        let ecu = &build.ecu;
+        let point = [rpm, 100e3];
+        assert!(differs(ecu.ve.get(&point), ecu.cams.ve.get(&point)));
+        assert!(differs(ecu.spark.get(&point), ecu.cams.spark.get(&point)));
+        // Without cam control the cams stay on the first profile: both the same.
+        let stock = Ecu::calibrated(&hardware, maps, 95.0, EcuModel::Stock);
+        assert_eq!(stock.ve, stock.cams.ve);
+        assert_eq!(stock.spark, stock.cams.spark);
+    }
 
     #[test]
     fn tunes_survive_text() {

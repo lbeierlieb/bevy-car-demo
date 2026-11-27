@@ -283,7 +283,9 @@ phasing, VTEC-style cam switching).
   pressure ratio, cam profile (discrete slices), intake and exhaust phase (coarse axes,
   length 1 without phasers); residual gas fraction (same axes); MBT spark, indicated
   efficiency at MBT and λ=1, knock-limited spark at reference conditions, exhaust
-  temperature, heat to coolant, all by rpm and load; friction by rpm (and oil
+  temperature, heat to coolant, peak pressure, all by rpm and load, per cam profile
+  (unphased; `LoadMaps`, tables `mbt0`, `mbt1`, …, since 2026-11-27, the user's wish);
+  friction by rpm (and oil
   temperature). Load is air per cycle relative to filling the displacement at ambient.
 - **Universal curves:** torque vs. spark offset from MBT, efficiency vs. λ, exhaust
   temperature shift with spark retard and λ, knock-limit corrections (intake temp,
@@ -398,6 +400,9 @@ phasing, VTEC-style cam switching).
   cam switch-over (rpm and MAP, hysteresis) and intake/exhaust phase maps; its factory
   tune switches where the second profile breathes better all the way to the redline,
   and phases for the most air from 45 to 75 kPa up (at rest below, for the idle).
+  The second profile has fuel, λ and spark maps of its own (`CamControl::ve`, `lambda`,
+  `spark`, tune tables `*_high`, `Ecu::maps_on`; the tuning's "Cam" choice); saved cars
+  without them get the first profile's.
   Parts: a switching cam (236°/264°) and phasers (intake 40°, exhaust 30°); with the
   stock ECU they stay on the first profile, at rest. Phase axes have 3 points and the
   ratio axis is coarser with phasers (bake: intake phaser about 2 s, both 6 s, with the

@@ -667,6 +667,12 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
         .map_err(|e| format!("not a car: {}", e.0))?;
     let mut ecu = Ecu::blank(&parts.hardware(), parts.ecu);
     ecu.read_text(tune);
+    // Saved before the second cam profile had maps of its own: the first's.
+    if !tune.contains("table ve_high") {
+        ecu.cams.ve = ecu.ve.clone();
+        ecu.cams.lambda = ecu.lambda.clone();
+        ecu.cams.spark = ecu.spark.clone();
+    }
     ecu.model = parts.ecu;
     let spec = CarSpec {
         car,

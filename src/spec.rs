@@ -199,6 +199,9 @@ impl Wire for Ecu {
         self.cams.switch_map.put(out);
         self.cams.intake_phase.put(out);
         self.cams.exhaust_phase.put(out);
+        self.cams.ve.put(out);
+        self.cams.lambda.put(out);
+        self.cams.spark.put(out);
     }
 
     fn get(r: &mut Reader) -> Option<Self> {
@@ -218,6 +221,9 @@ impl Wire for Ecu {
                 switch_map: r.get()?,
                 intake_phase: r.get()?,
                 exhaust_phase: r.get()?,
+                ve: r.get()?,
+                lambda: r.get()?,
+                spark: r.get()?,
             },
         };
         // The tables' axes are rpm and pressure, so more than two is nonsense.
@@ -227,6 +233,9 @@ impl Wire for Ecu {
             &ecu.spark,
             &ecu.cams.intake_phase,
             &ecu.cams.exhaust_phase,
+            &ecu.cams.ve,
+            &ecu.cams.lambda,
+            &ecu.cams.spark,
         ];
         let fine = tables.iter().all(|table| table.axes().len() <= 2)
             && ecu.displacement > 0.0
