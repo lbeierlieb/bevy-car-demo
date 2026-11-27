@@ -103,6 +103,12 @@ pub struct Body {
     /// their top edge.
     pub bumpers: [f32; 2],
     pub bumper_top: f32,
+    /// Bulges in the bonnet (over a tall engine's intake): from x, to x, half-width and
+    /// how high they rise over the deck.
+    pub bulges: Vec<[f32; 4]>,
+    /// The exhaust leaves at the sides, ahead of the rear wheels (else under the rear
+    /// bumper).
+    pub side_pipes: bool,
 }
 
 /// The wheels the body is built around: front and rear.
@@ -279,6 +285,15 @@ impl Builder {
         if let Some(color) = inside {
             self.triangle(a, c, b, color);
             self.triangle(a, d, c, color);
+        }
+    }
+
+    /// A quad turned to face `out`.
+    pub(crate) fn quad_facing(&mut self, [a, b, c, d]: [Vec3; 4], out: Vec3, color: [f32; 3]) {
+        if (b - a).cross(c - a).dot(out) >= 0.0 {
+            self.quad(a, b, c, d, color);
+        } else {
+            self.quad(d, c, b, a, color);
         }
     }
 
@@ -483,6 +498,22 @@ impl Body {
         }
     }
 
+    /// Where the lower body is open on top: under a greenhouse, or an open car's cockpit
+    /// (its first opening).
+    pub fn cockpit(&self) -> Option<(f32, f32)> {
+        (self.greenhouse()).or_else(|| self.openings.first().map(|o| (o[0], o[1])))
+    }
+
+    /// Half the width of the cockpit's opening at `x`: the greenhouse's base, or an open
+    /// car's cockpit.
+    pub fn cockpit_half_width(&self, x: f32) -> f32 {
+        let width = self.cabin_half_width(x);
+        match (self.greenhouse(), self.openings.first()) {
+            (None, Some(opening)) => opening[2].min(width),
+            _ => width,
+        }
+    }
+
     /// Where the wheel arches are: each axle's x and the arch's radius (none with open
     /// wheels).
     fn arches(&self, wheels: &Wheels) -> Option<[(f32, f32); 2]> {
@@ -500,15 +531,23 @@ impl Body {
     fn piece_at(&self, x: f32, y: f32, across: f32) -> Option<(Panel, Side)> {
         let side = Side::of(across);
         let outer = across.abs() > 0.6 * self.half_width(x);
+        let cockpit = self.cockpit();
         if y < self.bumper_top && x < self.bumpers[0] {
             Some((Panel::FrontBumper, Side::Middle))
         } else if y < self.bumper_top && x > self.length - self.bumpers[1] {
             Some((Panel::RearBumper, Side::Middle))
         } else if outer && self.in_door(x) {
             Some((Panel::Door, side))
-        } else if !outer && y > self.bumper_top && self.greenhouse().is_some_and(|(_, end)| x > end)
-        {
+        } else if outer && y > self.bumper_top && x > self.bumpers[0] && x < self.door[0] {
+            Some((Panel::Fender, side))
+        } else if !outer && y > self.bumper_top && cockpit.is_some_and(|(_, end)| x > end) {
             Some((Panel::Hatch, Side::Middle))
+        } else if !outer
+            && y > self.bumper_top
+            && x > self.bumpers[0]
+            && cockpit.is_some_and(|(start, _)| x < start)
+        {
+            Some((Panel::Bonnet, Side::Middle))
         } else {
             None
         }
@@ -530,7 +569,9 @@ impl Body {
             _ => self.greenhouse_mesh(&mut builder, wheels, dress),
         }
         let at = |x: f32, y: f32, across: f32| Vec3::new(across, y, self.z(x, wheels));
-        for opening in &self.openings {
+        // An open car's first opening is its cockpit, open to the lower body.
+        let skip = usize::from(self.greenhouse().is_none() && self.cockpit().is_some());
+        for opening in &self.openings[skip.min(self.openings.len())..] {
             let [from, to, half_width] = *opening;
             let mut xs: Vec<f32> = self.deck.iter().map(|p| p[0]).collect();
             xs.retain(|&x| x > from && x < to);
@@ -569,6 +610,7 @@ impl Body {
             }
         }
         self.add_ons(&mut builder, wheels, dress);
+        self.bulges_mesh(&mut builder, wheels, dress);
         builder.build()
     }
 
@@ -676,7 +718,7 @@ impl Body {
 
     /// The colours of the lower body's `segment` (see `section`) at `x` on `side`.
     fn lower_skin(&self, x: f32, segment: usize, side: Side, dress: &Dress) -> Skin {
-        let cabin = self.greenhouse();
+        let cabin = self.cockpit();
         let in_cabin = cabin.is_some_and(|(start, _)| x > start);
         let piece = match segment {
             0 => return (Some(DARK), Some(CARPET)),
@@ -689,7 +731,7 @@ impl Body {
             _ => match cabin {
                 Some((start, _)) if x < start => Some((Panel::Bonnet, Side::Middle)),
                 Some((_, end)) if x > end => Some((Panel::Hatch, Side::Middle)),
-                // Open to the greenhouse.
+                // Open to the cabin.
                 Some(_) => return (None, None),
                 None => None,
             },
@@ -710,7 +752,7 @@ impl Body {
     /// The body below the windows: floor, wheel wells, sides, wings and deck, and inside
     /// the bulkhead between the engine bay and the cabin.
     fn lower_body(&self, builder: &mut Builder, wheels: &Wheels, dress: &Dress) {
-        let cabin = self.greenhouse();
+        let cabin = self.cockpit();
         // Stations: where the deck bends, a few to round the plan off, where the pieces
         // part, and around the wheel arches. Each is (x, the axle whose arch it's in).
         let mut xs: Vec<f32> = self.deck.iter().map(|p| p[0]).collect();
@@ -788,7 +830,7 @@ impl Body {
             }
             for side in [1.0f32, -1.0] {
                 let inner = |z: f32, edge: Vec2| {
-                    let width = self.cabin_half_width(self.x(z, wheels));
+                    let width = self.cockpit_half_width(self.x(z, wheels));
                     Vec3::new(side * width, edge.y + 0.002, z)
                 };
                 let outer = |z: f32, edge: Vec2| Vec3::new(side * edge.x, edge.y, z);
@@ -807,18 +849,70 @@ impl Body {
                 }
             }
         }
-        // The bulkhead at the windscreen's base, dark towards the bay, trim inside.
-        let half = self.section(start, self.arch_at(start, wheels), wheels);
-        let z = self.z(start, wheels);
-        let at = |p: Vec2, side: f32| Vec3::new(side * p.x, p.y, z);
-        for pair in half.windows(2) {
-            let quad = [
-                at(pair[1], 1.0),
-                at(pair[0], 1.0),
-                at(pair[0], -1.0),
-                at(pair[1], -1.0),
-            ];
-            builder.skinned(quad, (Some(DARK), Some(TRIM)));
+        // The bulkhead at the windscreen's base, dark towards the bay, trim inside; an open
+        // car's behind the seats too, trim towards them.
+        let mut walls = vec![(start, (Some(DARK), Some(TRIM)))];
+        if self.greenhouse().is_none() {
+            walls.push((end, (Some(TRIM), Some(DARK))));
+        }
+        for (x, skin) in walls {
+            let half = self.section(x, self.arch_at(x, wheels), wheels);
+            let z = self.z(x, wheels);
+            let at = |p: Vec2, side: f32| Vec3::new(side * p.x, p.y, z);
+            for pair in half.windows(2) {
+                let quad = [
+                    at(pair[1], 1.0),
+                    at(pair[0], 1.0),
+                    at(pair[0], -1.0),
+                    at(pair[1], -1.0),
+                ];
+                builder.skinned(quad, skin);
+            }
+        }
+    }
+
+    /// The bonnet's bulges (with the bonnet): a flat-topped ridge rising from the deck
+    /// over the first half of its length, standing full height at its rear end.
+    fn bulges_mesh(&self, builder: &mut Builder, wheels: &Wheels, dress: &Dress) {
+        let Some(color) = dress.get(Panel::Bonnet, Side::Middle) else {
+            return;
+        };
+        let at = |x: f32, y: f32, across: f32| Vec3::new(across, y, self.z(x, wheels));
+        for &[from, to, half, rise] in &self.bulges {
+            let mut xs: Vec<f32> = (0..=8)
+                .map(|k| from + (to - from) * k as f32 / 8.0)
+                .collect();
+            xs.extend(
+                self.deck
+                    .iter()
+                    .map(|p| p[0])
+                    .filter(|&x| x > from && x < to),
+            );
+            xs.sort_by(f32::total_cmp);
+            xs.dedup_by(|a, b| (*a - *b).abs() < 1e-3);
+            let up = |x: f32| {
+                let t = ((x - from) / (0.5 * (to - from))).clamp(0.0, 1.0);
+                rise * (t * (2.0 - t))
+            };
+            // Each station's corners: base right, top right, top left, base left.
+            let corners = |x: f32| {
+                let base = self.deck_height(x) + 0.005;
+                let top = base + up(x);
+                [
+                    at(x, base, half),
+                    at(x, top, 0.7 * half),
+                    at(x, top, -0.7 * half),
+                    at(x, base, -half),
+                ]
+            };
+            for pair in xs.windows(2) {
+                let (a, b) = (corners(pair[0]), corners(pair[1]));
+                builder.quad_facing([a[0], a[1], b[1], b[0]], Vec3::X, color);
+                builder.quad_facing([a[1], a[2], b[2], b[1]], Vec3::Y, color);
+                builder.quad_facing([a[2], a[3], b[3], b[2]], -Vec3::X, color);
+            }
+            let end = corners(to);
+            builder.quad_facing(end, Vec3::Z, color);
         }
     }
 
@@ -1023,7 +1117,7 @@ impl Body {
         } else if let (Some(color), Some(_), Some(cabin)) = (
             has(Panel::RearSpoiler),
             has(Panel::Hatch),
-            self.cabin.len().checked_sub(2).map(|k| self.cabin[k]),
+            (self.greenhouse()).map(|_| self.cabin[self.cabin.len() - 2]),
         ) {
             // On the roof's rear edge, over the rear window, tipped down a little.
             let x = cabin[0];
@@ -1032,6 +1126,14 @@ impl Body {
             let axes = [tilt * Vec3::X, tilt * Vec3::Y, tilt * Vec3::Z];
             let centre = at(x + 0.04, cabin[1] + 0.035, 0.0);
             builder.oriented_box(centre, axes, size(0.26, 0.035, width), color);
+        } else if let (Some(color), Some(_)) = (has(Panel::RearSpoiler), has(Panel::Hatch)) {
+            // Without a roof, a lip on the boot lid's rear edge, rising to the back.
+            let x = self.length - 0.16;
+            let width = 2.0 * 0.8 * self.half_width(x);
+            let tilt = Quat::from_rotation_x(-0.25);
+            let axes = [tilt * Vec3::X, tilt * Vec3::Y, tilt * Vec3::Z];
+            let centre = at(x, self.deck_height(x) + 0.035, 0.0);
+            builder.oriented_box(centre, axes, size(0.2, 0.03, width), color);
         }
         if let (Some(color), Some(_)) = (has(Panel::Diffuser), has(Panel::RearBumper)) {
             let length = self.bumpers[1];

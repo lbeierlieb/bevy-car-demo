@@ -52,6 +52,14 @@ impl Layout {
         }
     }
 
+    /// Whether its cylinders stand in two banks in a V.
+    pub fn is_vee(self) -> bool {
+        matches!(
+            self,
+            Layout::V6 | Layout::V8 | Layout::FlatPlaneV8 | Layout::V10 | Layout::V12
+        )
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Layout::Inline3 => "inline three",

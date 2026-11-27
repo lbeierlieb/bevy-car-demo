@@ -151,7 +151,9 @@ fields!(Body {
     details,
     door,
     bumpers,
-    bumper_top
+    bumper_top,
+    bulges,
+    side_pipes
 });
 fields!(Gearbox {
     kind,

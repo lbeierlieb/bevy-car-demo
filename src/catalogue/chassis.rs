@@ -245,6 +245,8 @@ pub fn chassis() -> Vec<Chassis> {
             door: [1.22, 2.45],
             bumpers: [0.3, 0.3],
             bumper_top: 0.44,
+            bulges: vec![],
+            side_pipes: false,
         },
         eye: [2.0, 1.1, 0.36],
         insulation: 0.4,

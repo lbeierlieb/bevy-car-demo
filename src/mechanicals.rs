@@ -12,6 +12,7 @@ use crate::body::{Body, Builder, CARPET, DARK, METAL, TRIM, Wheels};
 use crate::catalogue::Catalogue;
 use crate::chassis::{Chassis, Orientation};
 use crate::items::{BONNET_CUT_OUT, Does, Item, Kind, Panel, Seat};
+use crate::physics::drivetrain::Drive;
 
 const CAST: [f32; 3] = [0.42, 0.43, 0.45];
 const ALLOY: [f32; 3] = [0.68, 0.69, 0.7];
@@ -80,15 +81,16 @@ pub fn mesh(catalogue: &Catalogue, chassis: &Chassis, car: &Item) -> Mesh {
     b.build()
 }
 
-/// The engine (with its gearbox beside it), radiator, intercooler and battery. Returns
-/// where the exhaust leaves the engine (the manifold's collector or the turbine).
+/// The engine (with its gearbox beside or behind it, and a rear-wheel drive's shafts and
+/// differential), radiator, intercooler and battery. Returns where the exhaust leaves the
+/// engine (the manifolds' collectors or the turbine).
 fn engine_bay(
     b: &mut Builder,
     frame: &Frame,
     catalogue: &Catalogue,
     chassis: &Chassis,
     car: &Item,
-) -> Option<Vec3> {
+) -> Option<Vec<Vec3>> {
     let body = frame.body;
     let bay = &chassis.bay;
     let named = |slot: &str| part(catalogue, car, slot);
@@ -139,8 +141,10 @@ fn engine_bay(
 
     // The engine's own frame: u along the crank, v up, w towards the exhaust side; a
     // transverse engine's crank runs across the car (exhaust towards the bulkhead),
-    // with the gearbox on the end of it, on the left.
+    // with the gearbox on the end of it, on the left. A longitudinal V's u points
+    // forwards (its belt end at the front), w to the right.
     let transverse = bay.orientation == Orientation::Transverse;
+    let vee = !transverse && family.layout.is_vee();
     let (along, across) = (family.length, family.width);
     let x = body.front_overhang + bay.engine_at;
     let bottom = body.floor + 0.03;
@@ -149,6 +153,8 @@ fn engine_bay(
     let (centre, axes) = if transverse {
         let side = 0.18;
         (frame.at(x, bottom, side), [Vec3::X, Vec3::Y, Vec3::Z])
+    } else if vee {
+        (frame.at(x, bottom, 0.0), [-Vec3::Z, Vec3::Y, Vec3::X])
     } else {
         (frame.at(x, bottom, 0.0), [Vec3::Z, Vec3::Y, -Vec3::X])
     };
@@ -159,43 +165,15 @@ fn engine_bay(
     let block_at = |b: &mut Builder, u: f32, v: f32, w: f32, s: Vec3, color| {
         b.oriented_box(to(u, v, w), axes, s, color);
     };
-    // Oil pan, block, head and cam cover (red on a reworked head).
-    block_at(b, 0.0, 0.07, 0.0, size(0.76, 0.14, 0.36), DARK);
-    block_at(b, 0.0, 0.38, 0.0, size(0.84, 0.48, 0.42), CAST);
-    block_at(b, 0.0, 0.7, 0.0, size(0.86, 0.16, 0.44), ALLOY);
     let cover = match named("Cylinder head") {
         Some("Stock") | None => COVER,
         Some(_) => RED,
     };
-    block_at(b, 0.0, 0.84, 0.0, size(0.8, 0.12, 0.34), cover);
-    // The belt cover on the crank's far end, the flywheel's housing towards the gearbox.
-    block_at(b, 0.47, 0.5, 0.0, size(0.06, 0.7, 0.32), DARK);
-    if transverse {
-        let gearbox = frame.at(x + 0.04, bottom + 0.28 * height, -along / 2.0);
-        b.cuboid(gearbox, Vec3::new(0.36, 0.42 * height, 0.35 * across), CAST);
-    }
-    // The intake: a runner per cylinder from the head out to the plenum in front, longer
-    // or shorter as the manifold is, and the throttle body on its left end.
-    let reach = match named("Intake manifold") {
-        Some("Long runners") => 0.56,
-        Some("Short runners") => 0.36,
-        _ => 0.45,
-    };
-    let plenum = to(0.0, 0.55, -reach);
-    for k in 0..cylinders {
-        let u = ((k as f32 + 0.5) / cylinders as f32 - 0.5) * 0.7;
-        let port = to(u, 0.68, -0.22);
-        b.bar(port, to(u, 0.6, -reach + 0.04), 0.045, ALLOY);
-    }
-    b.oriented_box(plenum, axes, size(0.66, 0.16, 0.14), ALLOY);
     let throttle = match named("Throttle body") {
         Some("Bigger") => 0.04,
         Some("Biggest") => 0.045,
         _ => 0.035,
     };
-    let throat = plenum - axes[0] * (0.36 * along);
-    let mouth = throat - axes[0] * 0.07;
-    b.cylinder(throat, mouth, throttle, 8, ALLOY);
     // The exhaust manifold: primaries from the head to a collector behind the engine,
     // lower the longer they are.
     let (out, drop) = match named("Exhaust manifold") {
@@ -203,20 +181,142 @@ fn engine_bay(
         Some("Long-tube headers") => (0.5, 0.05),
         _ => (0.46, 0.22),
     };
-    let collector = to(0.0, drop, out);
-    for k in 0..cylinders {
-        let u = ((k as f32 + 0.5) / cylinders as f32 - 0.5) * 0.7;
-        let port = to(u, 0.66, 0.22);
-        let bend = to(u * 0.6, 0.55, out - 0.04);
-        b.bar(port, bend, 0.035, HOT);
-        b.bar(bend, collector, 0.035, HOT);
+    let (collectors, mouth) = if vee {
+        // Oil pan and crankcase, the two banks at 90° with low heads and flat covers
+        // (the cam's in the block), the intake's plenum in the valley between them with a
+        // runner down to each cylinder, the throttle at its front end.
+        block_at(b, 0.0, 0.06, 0.0, size(0.74, 0.12, 0.44), DARK);
+        block_at(b, 0.0, 0.27, 0.0, size(0.86, 0.3, 0.56), CAST);
+        block_at(b, 0.48, 0.45, 0.0, size(0.05, 0.7, 0.5), DARK);
+        let scale = height / 0.6;
+        let crank = to(0.0, 0.32, 0.0);
+        let plenum = to(0.0, 0.84, 0.0);
+        b.oriented_box(plenum, axes, size(0.66, 0.14, 0.28), ALLOY);
+        let per_bank = cylinders.div_ceil(2);
+        let mut collectors = Vec::new();
+        for side in [-1.0f32, 1.0] {
+            let (sin, cos) = (side * std::f32::consts::FRAC_PI_4).sin_cos();
+            let up = Vec3::Y * cos + axes[2] * sin;
+            let bank_axes = [axes[0], up, axes[0].cross(up)];
+            let outward = side * axes[0].cross(up);
+            let bank = |d: f32| crank + up * (d * scale);
+            let s = |u: f32, v: f32, w: f32| Vec3::new(u * along, v * scale, w);
+            b.oriented_box(bank(0.2), bank_axes, s(0.84, 0.24, 0.22), CAST);
+            b.oriented_box(bank(0.35), bank_axes, s(0.88, 0.08, 0.27), ALLOY);
+            b.oriented_box(bank(0.41), bank_axes, s(0.8, 0.04, 0.21), cover);
+            let collector = to(-0.32, drop, side * (out + 0.1));
+            for j in 0..per_bank {
+                // The banks are offset by a rod's width along the crank.
+                let u = ((j as f32 + 0.5) / per_bank as f32 - 0.5) * 0.72 + side * 0.02;
+                let along_u = axes[0] * (u * along);
+                let port = bank(0.32) + outward * 0.12 + along_u;
+                let bend = port + outward * 0.07 - Vec3::Y * 0.1;
+                b.bar(port, bend, 0.035, HOT);
+                b.bar(bend, collector, 0.035, HOT);
+                let inlet = bank(0.36) - outward * 0.11 + along_u;
+                let entry = plenum + axes[2] * (side * 0.1) + along_u - Vec3::Y * 0.02;
+                b.bar(inlet, entry, 0.04, ALLOY);
+            }
+            collectors.push(collector);
+        }
+        let throat = plenum + axes[0] * (0.36 * along);
+        let mouth = throat + axes[0] * 0.07;
+        b.cylinder(throat, mouth, throttle, 8, ALLOY);
+        (collectors, mouth)
+    } else {
+        // Oil pan, block, head and cam cover (red on a reworked head).
+        block_at(b, 0.0, 0.07, 0.0, size(0.76, 0.14, 0.36), DARK);
+        block_at(b, 0.0, 0.38, 0.0, size(0.84, 0.48, 0.42), CAST);
+        block_at(b, 0.0, 0.7, 0.0, size(0.86, 0.16, 0.44), ALLOY);
+        block_at(b, 0.0, 0.84, 0.0, size(0.8, 0.12, 0.34), cover);
+        // The belt cover on the crank's far end, the flywheel's housing towards the
+        // gearbox.
+        block_at(b, 0.47, 0.5, 0.0, size(0.06, 0.7, 0.32), DARK);
+        if transverse {
+            let gearbox = frame.at(x + 0.04, bottom + 0.28 * height, -along / 2.0);
+            b.cuboid(gearbox, Vec3::new(0.36, 0.42 * height, 0.35 * across), CAST);
+        }
+        // The intake: a runner per cylinder from the head out to the plenum in front,
+        // longer or shorter as the manifold is, and the throttle body on its left end.
+        let reach = match named("Intake manifold") {
+            Some("Long runners") => 0.56,
+            Some("Short runners") => 0.36,
+            _ => 0.45,
+        };
+        let plenum = to(0.0, 0.55, -reach);
+        for k in 0..cylinders {
+            let u = ((k as f32 + 0.5) / cylinders as f32 - 0.5) * 0.7;
+            let port = to(u, 0.68, -0.22);
+            b.bar(port, to(u, 0.6, -reach + 0.04), 0.045, ALLOY);
+        }
+        b.oriented_box(plenum, axes, size(0.66, 0.16, 0.14), ALLOY);
+        let throat = plenum - axes[0] * (0.36 * along);
+        let mouth = throat - axes[0] * 0.07;
+        b.cylinder(throat, mouth, throttle, 8, ALLOY);
+        let collector = to(0.0, drop, out);
+        for k in 0..cylinders {
+            let u = ((k as f32 + 0.5) / cylinders as f32 - 0.5) * 0.7;
+            let port = to(u, 0.66, 0.22);
+            let bend = to(u * 0.6, 0.55, out - 0.04);
+            b.bar(port, bend, 0.035, HOT);
+            b.bar(bend, collector, 0.035, HOT);
+        }
+        (vec![collector], mouth)
+    };
+    // Behind a longitudinal engine its gearbox (the bell housing, then the case), and a
+    // shaft to the differential at the driven rear axle, with a shaft out to each wheel.
+    if !transverse {
+        let start = x + along / 2.0;
+        let end = (body.front_overhang + bay.gearbox_at + 0.35).max(start + 0.4);
+        let y = bottom + 0.3 * height;
+        b.cylinder(
+            frame.at(start, y, 0.0),
+            frame.at(start + 0.16, y, 0.0),
+            0.19,
+            10,
+            CAST,
+        );
+        let case = Vec3::new(0.24, 0.24, end - start - 0.16);
+        b.cuboid(
+            frame.at((start + 0.16 + end) / 2.0, y - 0.02, 0.0),
+            case,
+            CAST,
+        );
+        if chassis.drive != Drive::Front {
+            let wheels = &frame.wheels;
+            let axle = body.front_overhang + wheels.wheelbase;
+            let hub = wheels.radius[1];
+            b.bar(
+                frame.at(end, y, 0.0),
+                frame.at(axle - 0.15, hub, 0.0),
+                0.07,
+                DARK,
+            );
+            b.cuboid(frame.at(axle, hub, 0.0), Vec3::new(0.3, 0.24, 0.3), CAST);
+            let reach = wheels.track[1] / 2.0 - wheels.width[1] / 2.0 - 0.04;
+            for side in [-1.0, 1.0] {
+                let (from, to) = (side * 0.15, side * reach);
+                b.bar(
+                    frame.at(axle, hub, from),
+                    frame.at(axle, hub, to),
+                    0.05,
+                    DARK,
+                );
+            }
+        }
     }
-    // A turbo at the collector: the turbine's snail, the compressor's beside it and its
-    // pipe up to the throttle (through the intercooler, which the pipes don't show).
-    let mut exhaust = collector;
-    let mut intake_from = mouth - axes[0] * 0.05;
+    // A turbo at the (first) collector: the turbine's snail, the compressor's beside it
+    // and its pipe up to the throttle (through the intercooler, which the pipes don't
+    // show); a V's other bank crosses over to it.
+    let mut exhaust = collectors.clone();
+    let collector = collectors[0];
+    let intake_end = if vee { 1.0 } else { -1.0 };
+    let mut intake_from = mouth + axes[0] * (0.05 * intake_end);
     if turbo {
         let turbine = collector + Vec3::Y * 0.05;
+        for other in &collectors[1..] {
+            b.bar(*other, turbine, 0.07, HOT);
+        }
         b.cylinder(
             turbine - axes[0] * 0.04,
             turbine + axes[0] * 0.04,
@@ -233,14 +333,14 @@ fn engine_bay(
             ALLOY,
         );
         b.bar(compressor + Vec3::Y * 0.08, mouth, 0.06, ALLOY);
-        exhaust = turbine - Vec3::Y * 0.08;
+        exhaust = vec![turbine - Vec3::Y * 0.08];
         intake_from = compressor + axes[0] * 0.12;
     }
     // A Roots blower on top of the engine, over the intake, sticking up through the
     // bonnet (its cut-out's frame around it, in the bonnet's paint); its belt from the
     // crank's pulley at the belt end, the air filter's pipe to its inlet.
     if roots {
-        let base = to(0.0, 0.92, -0.18);
+        let base = to(0.0, 0.92, if vee { 0.0 } else { -0.18 });
         let top = under_bonnet + 0.16;
         let rise = (top - base.y).max(0.12);
         let centre = base + Vec3::Y * (rise / 2.0);
@@ -292,7 +392,7 @@ fn engine_bay(
                 b.oriented_box(ring + axes[0] * u + axes[2] * w, axes, size, color);
             }
         }
-        intake_from = base - axes[0] * (0.3 * along) + Vec3::Y * 0.04;
+        intake_from = base + axes[0] * (0.3 * along * intake_end) + Vec3::Y * 0.04;
     }
     // A centrifugal supercharger at the belt end, low on the intake side: its snail, the
     // belt from the crank, and its pipe up to the throttle.
@@ -317,8 +417,14 @@ fn engine_bay(
         intake_from = snail - axes[0] * 0.08;
     }
     // The air filter: the stock box (a panel filter in it, red if it's the sport one)
-    // over the gearbox with a pipe to the throttle, or an open cone on the pipe's end.
-    let filter = frame.at(x - 0.1, under_bonnet - 0.09, -0.34 * body.width);
+    // over the gearbox with a pipe to the throttle (ahead of a longitudinal V, at the
+    // front of its intake), or an open cone on the pipe's end.
+    let filter = if vee {
+        let ahead = x - along / 2.0 - 0.22;
+        frame.at(ahead, body.deck_height(ahead) - 0.16, 0.0)
+    } else {
+        frame.at(x - 0.1, under_bonnet - 0.09, -0.34 * body.width)
+    };
     match named("Air filter") {
         Some("Open cone") => {
             let end = intake_from.lerp(filter, 0.7);
@@ -345,7 +451,7 @@ fn engine_bay(
 /// The seats fitted and a dashboard across the cabin's front.
 fn cabin(b: &mut Builder, frame: &Frame, catalogue: &Catalogue, chassis: &Chassis, car: &Item) {
     let body = frame.body;
-    let Some((start, _)) = body.greenhouse() else {
+    let Some((start, _)) = body.cockpit() else {
         return;
     };
     let deck = body.deck_height(start + 0.2);
@@ -355,8 +461,10 @@ fn cabin(b: &mut Builder, frame: &Frame, catalogue: &Catalogue, chassis: &Chassi
         Vec3::new(width, 0.16, 0.4),
         TRIM,
     );
-    let [eye, _, left] = chassis.eye;
+    let [eye, eye_height, left] = chassis.eye;
     let floor = body.floor + 0.08;
+    // The cushions' middle: off the floor, lower for a driver sitting low.
+    let cushion = (floor + 0.2).min(eye_height - 0.68);
     // Carpet over the floor pan, between the wells.
     let rear = body.front_overhang + chassis.wheelbase - 0.4;
     b.cuboid(
@@ -382,13 +490,13 @@ fn cabin(b: &mut Builder, frame: &Frame, catalogue: &Catalogue, chassis: &Chassi
             let across = if fronts == 1 { -left } else { left };
             let x = eye + 0.1;
             b.cuboid(
-                frame.at(x, floor + 0.2, across),
+                frame.at(x, cushion, across),
                 Vec3::new(0.48, 0.12, 0.5),
                 CLOTH,
             );
             let lean = Quat::from_rotation_x(-0.25);
             let axes = [lean * Vec3::X, lean * Vec3::Y, lean * Vec3::Z];
-            let back = frame.at(x + 0.3, floor + 0.55, across);
+            let back = frame.at(x + 0.3, cushion + 0.35, across);
             b.oriented_box(back, axes, Vec3::new(0.48, 0.62, 0.1), CLOTH);
             let head = back + axes[1] * 0.38;
             b.oriented_box(head, axes, Vec3::new(0.24, 0.16, 0.08), CLOTH);
@@ -396,13 +504,13 @@ fn cabin(b: &mut Builder, frame: &Frame, catalogue: &Catalogue, chassis: &Chassi
             let x = eye + 1.0;
             let bench = 2.0 * 0.85 * body.cabin_half_width(x);
             b.cuboid(
-                frame.at(x, floor + 0.2, 0.0),
+                frame.at(x, cushion, 0.0),
                 Vec3::new(bench, 0.12, 0.45),
                 CLOTH,
             );
             let lean = Quat::from_rotation_x(-0.3);
             let axes = [lean * Vec3::X, lean * Vec3::Y, lean * Vec3::Z];
-            let back = frame.at(x + 0.28, floor + 0.48, 0.0);
+            let back = frame.at(x + 0.28, cushion + 0.28, 0.0);
             b.oriented_box(back, axes, Vec3::new(bench, 0.55, 0.1), CLOTH);
         }
     }
@@ -416,7 +524,7 @@ fn underneath(
     catalogue: &Catalogue,
     chassis: &Chassis,
     car: &Item,
-    from: Option<Vec3>,
+    from: Option<Vec<Vec3>>,
 ) {
     let body = frame.body;
     let floor = body.floor;
@@ -430,7 +538,7 @@ fn underneath(
     let tank_at = frame.at(tank, floor + 0.04, -0.4 * width + 0.05);
     b.cuboid(tank_at, Vec3::new(width, depth, length), DARK);
 
-    let Some(from) = from else {
+    let Some(starts) = from.filter(|starts| !starts.is_empty()) else {
         return;
     };
     let named = |slot: &str| part(catalogue, car, slot);
@@ -439,14 +547,66 @@ fn underneath(
         _ => 0.024,
     };
     let low = floor - HANG;
+    let pipe = |b: &mut Builder, a: Vec3, c: Vec3| b.bar(a, c, 2.0 * radius, HOT);
+    let catalyst = |b: &mut Builder, from: Vec3, to: Vec3| match named("Catalyst") {
+        Some("None") | None => pipe(b, from, to),
+        Some(kind) => {
+            let size = if kind == "High-flow" { 0.14 } else { 0.12 };
+            let length = (to - from).length();
+            let axes = [Vec3::X, Vec3::Y, Vec3::Z];
+            let turned = Quat::from_rotation_arc(Vec3::Z, (to - from).normalize_or(Vec3::Z));
+            let axes = axes.map(|axis| turned * axis);
+            let box_size = Vec3::new(size + 0.04, size, length);
+            b.oriented_box((from + to) / 2.0, axes, box_size, METAL);
+        }
+    };
+    if body.side_pipes {
+        // Out at the sides: from each bank's collector down and back past the catalyst,
+        // out under the sill, and along it in a pipe outside the body (the silencer's
+        // in it) that ends just ahead of the rear wheel.
+        let wheels = &frame.wheels;
+        let arch = body.front_overhang + wheels.wheelbase - wheels.radius[1] - 0.07;
+        let (first, last) = (arch - 1.0, arch - 0.06);
+        let sides: Vec<(Vec3, f32)> = match starts.as_slice() {
+            [one] => vec![(*one, -1.0), (*one, 1.0)],
+            all => (all.iter()).map(|p| (*p, p.x.signum())).collect(),
+        };
+        for (start, side) in sides {
+            let x = body.x(start.z, wheels);
+            let cat_in = frame.at(x + 0.25, low + 0.02, side * 0.34);
+            let cat_out = frame.at(x + 0.75, low + 0.02, side * 0.38);
+            pipe(b, start, cat_in);
+            catalyst(b, cat_in, cat_out);
+            let out = body.half_width(first) + 0.04;
+            let under = frame.at(first - 0.12, floor + 0.04, side * (out - 0.18));
+            pipe(b, cat_out, under);
+            let y = floor + 0.09;
+            let (front, back) = (
+                frame.at(first, y, side * out),
+                frame.at(last, y, side * out),
+            );
+            pipe(b, under, front);
+            match named("Silencer") {
+                Some(name) if !name.starts_with("None") => {
+                    let fat = if name == "Sport" { 0.06 } else { 0.052 };
+                    b.cylinder(front, back, fat, 10, METAL);
+                    b.cylinder(back, back + Vec3::Z * 0.03, 0.7 * fat, 8, DARK);
+                }
+                _ => b.cylinder(front, back, 1.4 * radius, 8, METAL),
+            }
+        }
+        return;
+    }
     let side = (tank_at.x + width / 2.0 + radius + 0.04).max(0.12);
+    let from = starts[0];
     let start = body.x(from.z, &frame.wheels);
     let tail = body.length;
     let silencer = tail - 0.62;
     let down = frame.at(start + 0.35, low, 0.06);
     let cat = [down.z + 0.05, down.z + 0.5];
-    let pipe = |b: &mut Builder, a: Vec3, c: Vec3| b.bar(a, c, 2.0 * radius, HOT);
-    pipe(b, from, down);
+    for &from in &starts {
+        pipe(b, from, down);
+    }
     let cat_in = down + Vec3::Z * 0.05;
     let cat_out = Vec3::new(0.06, low, cat[1]);
     match named("Catalyst") {
@@ -518,8 +678,11 @@ mod tests {
     #[test]
     fn what_is_fitted_is_drawn() {
         let catalogue = crate::catalogue::builtin();
-        let chassis = &catalogue.chassis[0];
         for trim in &catalogue.trims {
+            let Does::Chassis(c) = trim.car.def(&catalogue).does else {
+                panic!("not a car");
+            };
+            let chassis = &catalogue.chassis[c];
             let mesh = mesh(&catalogue, chassis, &trim.car);
             let count = triangles(&mesh);
             assert!((300..4000).contains(&count), "{}: {count}", trim.name);
@@ -529,11 +692,13 @@ mod tests {
             else {
                 panic!("no positions");
             };
+            // Side pipes stand out of the body.
             let body = &chassis.body;
+            let wide = body.width / 2.0 + if body.side_pipes { 0.12 } else { 0.0 };
             for p in positions {
                 let p = Vec3::from_array(*p);
                 assert!(p.y > 0.0 && p.y < body.height(), "{p}");
-                assert!(p.x.abs() < body.width / 2.0, "{p}");
+                assert!(p.x.abs() < wide, "{}: {p}", trim.name);
             }
             // Seats out, fewer triangles; another key.
             let mut stripped = trim.car.clone();
@@ -547,6 +712,7 @@ mod tests {
             assert_ne!(key(&stripped), key(&trim.car));
         }
         // A turbo shows.
+        let chassis = &catalogue.chassis[0];
         let car = &catalogue.trims[0].car;
         let mut turbo = car.clone();
         let slot = (catalogue.slots.iter())
