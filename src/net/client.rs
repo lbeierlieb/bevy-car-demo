@@ -322,6 +322,8 @@ pub struct Connection {
     /// asked of it wasn't done (with when that came, s on `Time<Real>`).
     pub owned: OwnedView,
     pub refused: Option<(String, f64)>,
+    /// What the shop that trades we're at has, as the server last said.
+    pub stock: Option<crate::trade::Stock>,
     /// Engine maps asked the server for (by fingerprint), and those it hasn't got.
     maps_asked: HashSet<u64>,
     maps_missing: HashSet<u64>,
@@ -431,6 +433,7 @@ impl Connection {
             your_car: None,
             owned: OwnedView::default(),
             refused: None,
+            stock: None,
             maps_asked: HashSet::new(),
             maps_missing: HashSet::new(),
             inputs: VecDeque::new(),
@@ -828,6 +831,7 @@ fn receive(
                 connection.owned = *owned;
                 connection.refused = why.map(|why| (why, now));
             }
+            ToClient::Stock(stock) => connection.stock = Some(*stock),
             ToClient::Maps { fingerprint, text } => {
                 let text = text.and_then(|text| crate::physics::engine::store::unpack(&text.0));
                 // Kept with the maps baked here, if they're what was asked for.

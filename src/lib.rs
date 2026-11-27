@@ -17,6 +17,7 @@ pub mod chat;
 pub mod cockpit;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod db;
+pub mod dealers;
 pub mod debug;
 pub mod dyno;
 pub mod ecu_ui;

@@ -33,6 +33,8 @@ pub enum Screen {
     /// The cars in the garage, and one of them.
     Cars,
     Car(usize),
+    /// A screen of a shop that trades (drawn by `dealers`).
+    Deal(crate::dealers::Screen),
 }
 
 impl Screen {
@@ -43,6 +45,7 @@ impl Screen {
             Screen::ShipTo(_) => "Ship it to",
             Screen::Cars => "Your cars",
             Screen::Car(_) => "Car",
+            Screen::Deal(screen) => screen.title(),
         }
     }
 }
@@ -92,7 +95,7 @@ fn window(
     cars: Query<&Car>,
     time: Res<Time<Real>>,
 ) -> Result {
-    let Some(&screen) = at.stash.last() else {
+    let Some(&screen) = at.stash.last().filter(|s| !matches!(s, Screen::Deal(_))) else {
         return Ok(());
     };
     let (Some(mut connection), Some(catalogue)) = (connection, catalogue) else {
@@ -284,6 +287,8 @@ fn window(
                         "The car you drive goes into the garage, with what's in its trunk.",
                     );
                 }
+                // (Drawn by `dealers`.)
+                Screen::Deal(_) => {}
             }
         });
     if let Some(stash) = ask {

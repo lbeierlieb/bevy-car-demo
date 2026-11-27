@@ -93,7 +93,7 @@ pub fn tell(peer: &mut Peer, shops: &[Shop], why: Option<String>) {
 
 /// `peer`'s car is built as `spec` from now on: the server's copy is built anew, and the
 /// player told.
-fn drive(peer: &mut Peer, spec: CarSpec, baked: &mut BakedMaps) {
+pub(super) fn drive(peer: &mut Peer, spec: CarSpec, baked: &mut BakedMaps) {
     peer.shadow.set_spec(spec, baked);
     if let Some(spec) = peer.shadow.driven().cloned() {
         peer.tell(&ToClient::YourCar(Box::new(spec)));

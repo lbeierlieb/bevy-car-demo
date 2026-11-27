@@ -145,6 +145,8 @@ pub struct Server {
     /// When the players' cars were last saved, and their accounts' locks refreshed (s).
     saved: f64,
     refreshed: f64,
+    /// What the used parts shops have.
+    stocks: super::trading::Stocks,
     /// How many times the server had changed each wallet when the database was last asked
     /// for them (with the locks' refresh): its answer counts only if that's still so.
     asked_money: HashMap<AccountId, u32>,
@@ -170,6 +172,12 @@ impl Server {
             saved: 0.0,
             refreshed: 0.0,
             asked_money: HashMap::new(),
+            stocks: super::trading::Stocks::new({
+                use std::hash::{BuildHasher, Hasher};
+                let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+                hasher.write_u8(0);
+                hasher.finish()
+            }),
             sent: 0.0,
             map_sent: f64::NEG_INFINITY,
             pings_sent: f64::NEG_INFINITY,
@@ -304,6 +312,19 @@ impl Peer {
     /// it's still near.
     pub fn at_shop(&self) -> Option<usize> {
         self.at_marker.and_then(|(_, shop)| shop)
+    }
+
+    /// Adds `delta` cents to their wallet (taking: the server has checked there's enough),
+    /// and with an account saves it with everything they own now, in one go: what changed
+    /// with it is what the money paid for.
+    pub(super) fn pay(&mut self, delta: i64, accounts: Option<&Accounts>, catalogue: &Catalogue) {
+        self.money += delta;
+        self.money_changes = self.money_changes.wrapping_add(1);
+        if let (Some(accounts), Some(account)) = (accounts, self.account) {
+            let belongings = super::stash::belongings(self, catalogue);
+            accounts.pay(account, delta, Some(belongings));
+            self.owned_saved = self.owned.revision;
+        }
     }
 }
 
@@ -555,6 +576,18 @@ fn receive(
                 }
                 ToServer::Stash(stash) => {
                     super::stash::act(&mut peer, stash, &server.shops, &catalogue, &mut baked);
+                }
+                ToServer::Trade(trade) => {
+                    let server = &mut *server;
+                    let mut desk = super::trading::Desk {
+                        shops: &server.shops,
+                        stocks: &mut server.stocks,
+                        accounts: server.accounts.as_ref(),
+                        catalogue: &catalogue,
+                        baked: &mut baked,
+                        now,
+                    };
+                    super::trading::trade(&mut peer, trade, &mut desk);
                 }
                 ToServer::Rescue { to } => {
                     let to = server.shops.get(usize::from(to));

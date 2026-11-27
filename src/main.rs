@@ -19,6 +19,8 @@ fn main() {
             // the parts kept there (the garage's at the garage park).
             shops::ShopsPlugin,
             trunk::TrunkPlugin,
+            // The shops that trade: used parts.
+            dealers::DealersPlugin,
             // The events a server puts on the map: a car hunt (none alone).
             events::EventsPlugin,
             // (The car is the server's to give: `net::client::take_your_car`.)

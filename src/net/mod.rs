@@ -16,6 +16,7 @@ pub mod quic;
 pub mod server;
 pub mod shadow;
 pub mod stash;
+pub mod trading;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 pub mod wire;
@@ -1343,6 +1344,80 @@ mod tests {
         let owned = &connection(&back).owned;
         assert_eq!(owned.cars.len(), 1);
         assert_eq!(ids(owned.held_at(1)), ["clutch.stock"]);
+        let _ = std::fs::remove_file(file);
+    }
+
+    /// A player at a used parts shop: what it has, a part bought (paid for, into the
+    /// trunk) and sold back (for less, gone); one that's gone or too dear isn't sold. Her
+    /// wallet is as it was left when she comes back.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_used_parts_shop_sells_and_buys_parts() {
+        use crate::shops::{Shop, ShopKind};
+        use crate::trade::{START_MONEY, Trade, buying_price};
+        let listener = LoopbackListener::default();
+        let (file, mut server) = server_with_accounts(&listener, false);
+        let shop = Shop {
+            kind: ShopKind::Used,
+            name: "Altteile".into(),
+            at: Vec2::ZERO,
+            sells: vec!["tire.*".into()],
+        };
+        let with = server.world_mut().remove_resource::<Server>().unwrap();
+        server.insert_resource(with.with_shops(vec![shop]));
+        let mut anna = account_driver(&listener, "Anna", "secret");
+        assert!(matches!(
+            log_in(&mut server, &mut anna),
+            Status::Joined { .. }
+        ));
+        let ask = |anna: &mut App, trade: Trade| {
+            anna.world_mut()
+                .resource_mut::<Connection>()
+                .say(&protocol::ToServer::Trade(trade));
+        };
+        ask(&mut anna, Trade::Look);
+        run(&mut [&mut server, &mut anna], 30);
+        let stock = connection(&anna).stock.clone().expect("what the shop has");
+        assert!(!stock.parts.is_empty());
+        let ware = stock.parts[0].clone();
+        assert!(ware.price > 0 && ware.price < START_MONEY);
+        // Bought: paid for, in the trunk, gone from the shop.
+        ask(&mut anna, Trade::BuyPart { ware: ware.id });
+        run(&mut [&mut server, &mut anna], 30);
+        assert_eq!(connection(&anna).owned.money, START_MONEY - ware.price);
+        assert_eq!(car(&mut anna).setup.cargo, std::slice::from_ref(&ware.item));
+        let stock = connection(&anna).stock.clone().unwrap();
+        assert!(stock.parts.iter().all(|w| w.id != ware.id));
+        // Not twice.
+        ask(&mut anna, Trade::BuyPart { ware: ware.id });
+        run(&mut [&mut server, &mut anna], 30);
+        assert!(connection(&anna).refused.is_some());
+        assert_eq!(connection(&anna).owned.money, START_MONEY - ware.price);
+        // Sold back, for less.
+        let catalogue = car(&mut anna).setup.build.catalogue.clone();
+        let paid = buying_price(&catalogue, &ware.item);
+        assert!(paid < ware.price);
+        ask(
+            &mut anna,
+            Trade::Sell {
+                from: crate::owned::Source::Trunk,
+                item: 0,
+            },
+        );
+        run(&mut [&mut server, &mut anna], 30);
+        assert!(car(&mut anna).setup.cargo.is_empty());
+        let money = START_MONEY - ware.price + paid;
+        assert_eq!(connection(&anna).owned.money, money);
+        // Kept as it is.
+        anna.world_mut().resource_mut::<Connection>().close();
+        run(&mut [&mut server], 5);
+        let mut back = account_driver(&listener, "Anna", "secret");
+        assert!(matches!(
+            log_in(&mut server, &mut back),
+            Status::Joined { .. }
+        ));
+        assert_eq!(connection(&back).owned.money, money);
+        assert!(car(&mut back).setup.cargo.is_empty());
         let _ = std::fs::remove_file(file);
     }
 

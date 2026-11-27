@@ -60,10 +60,12 @@ pub enum ShopKind {
     Garage,
     /// Long blocks: what's inside them, rebores, engines swapped (one kept for you).
     Engine,
+    /// Buys anything brought, sells worn parts (see `trade`).
+    Used,
 }
 
 impl ShopKind {
-    pub const ALL: [ShopKind; 10] = [
+    pub const ALL: [ShopKind; 11] = [
         Self::Showroom,
         Self::Car,
         Self::Tuning,
@@ -74,6 +76,7 @@ impl ShopKind {
         Self::Dyno,
         Self::Garage,
         Self::Engine,
+        Self::Used,
     ];
 
     /// Its word in a list of shops.
@@ -89,6 +92,7 @@ impl ShopKind {
             Self::Dyno => "dyno",
             Self::Garage => "garage",
             Self::Engine => "engine",
+            Self::Used => "used",
         }
     }
 
@@ -105,6 +109,7 @@ impl ShopKind {
             Self::Dyno => "Dyno",
             Self::Garage => "Garage park",
             Self::Engine => "Engine shop",
+            Self::Used => "Used parts shop",
         }
     }
 
@@ -126,6 +131,7 @@ impl ShopKind {
             Self::Dyno => [255, 120, 30],
             Self::Garage => [230, 230, 230],
             Self::Engine => [190, 160, 90],
+            Self::Used => [140, 200, 90],
         }
     }
 }
@@ -605,7 +611,7 @@ mod tests {
         assert_eq!(
             parse("gas 1 2 Pumps\n# a comment\n\nbakery 3 4 Bread").unwrap_err(),
             "line 4: not a kind of shop (showroom, car, tuning, tire, alignment, paint, gas, \
-             dyno, garage, engine): bakery 3 4 Bread"
+             dyno, garage, engine, used): bakery 3 4 Bread"
         );
         assert!(parse("gas 1 Pumps").is_err());
         assert!(parse("gas 1 2").is_err());
@@ -644,6 +650,7 @@ mod tests {
                         | ShopKind::Tuning
                         | ShopKind::Tire
                         | ShopKind::Engine
+                        | ShopKind::Used
                 ),
                 "{}",
                 shop.name
@@ -665,6 +672,7 @@ mod tests {
     #[test]
     fn every_shop_is_by_a_road() {
         let terrain = Terrain::baked();
+        let mut markers: Vec<(Vec2, String)> = Vec::new();
         for shop in parse(LIST).unwrap() {
             let (marker, _) = kerb(&terrain, shop.at);
             assert!(
@@ -673,6 +681,15 @@ mod tests {
                 shop.name,
                 marker.distance(shop.at)
             );
+            // Never on another's marker.
+            for (other, name) in &markers {
+                assert!(
+                    other.distance(marker) > 4.0 * MARKER_RADIUS,
+                    "{} and {name} share a marker",
+                    shop.name
+                );
+            }
+            markers.push((marker, shop.name));
         }
     }
 }

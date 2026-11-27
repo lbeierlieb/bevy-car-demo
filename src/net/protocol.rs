@@ -38,10 +38,11 @@ use crate::physics::suspension::ArmGeometry;
 use crate::shops::Shop;
 use crate::spec::CarSpec;
 use crate::terrain::Spawn;
+use crate::trade::{Stock, Trade};
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 45;
+pub const PROTOCOL: u32 = 46;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -126,6 +127,9 @@ pub enum ToServer {
     Rescue {
         to: u16,
     },
+    /// Something asked of the shop that trades we're at (see `trade`): answered with what
+    /// it has (`Stock`) and what we own (`Owned`).
+    Trade(Trade),
 }
 
 /// Server to client.
@@ -215,6 +219,8 @@ pub enum ToClient {
     Done {
         id: u32,
     },
+    /// What the shop that trades we're at has, after we asked (`ToServer::Trade`).
+    Stock(Box<Stock>),
 }
 
 /// A player's car's whole state as the server drives it: after their step `step`, which
@@ -386,6 +392,10 @@ impl Wire for ToServer {
                 12u8.put(out);
                 to.put(out);
             }
+            ToServer::Trade(trade) => {
+                14u8.put(out);
+                trade.put(out);
+            }
         }
     }
 
@@ -426,6 +436,7 @@ impl Wire for ToServer {
             },
             11 => ToServer::Stash(r.get()?),
             12 => ToServer::Rescue { to: r.get()? },
+            14 => ToServer::Trade(r.get()?),
             _ => return None,
         })
     }
@@ -545,6 +556,10 @@ impl Wire for ToClient {
                 22u8.put(out);
                 id.put(out);
             }
+            ToClient::Stock(stock) => {
+                23u8.put(out);
+                stock.put(out);
+            }
         }
     }
 
@@ -603,6 +618,7 @@ impl Wire for ToClient {
                 why: r.get()?,
             },
             22 => ToClient::Done { id: r.get()? },
+            23 => ToClient::Stock(Box::new(r.get()?)),
             _ => return None,
         })
     }
