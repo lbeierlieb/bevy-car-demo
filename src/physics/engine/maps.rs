@@ -423,7 +423,7 @@ fn load_point(hardware: &EngineHardware, ve: &Table, point: &[f32]) -> [f32; 6] 
 pub fn fingerprint(hardware: &EngineHardware) -> u64 {
     let h = hardware;
     let key = format!(
-        "{} {} {} {} {} {:?} {} {} {} {} {} {} {} {}",
+        "{} {} {} {} {} {:?} {} {} {} {} {} {} {} {} {:?}",
         h.cylinders,
         h.bore,
         h.stroke,
@@ -438,6 +438,7 @@ pub fn fingerprint(hardware: &EngineHardware) -> u64 {
         h.exhaust.header_length,
         h.turbo.is_some(),
         h.port_flow,
+        h.valvetrain,
     );
     // FNV-1a over the code without its tests, and without line ends so a checkout's
     // don't matter.

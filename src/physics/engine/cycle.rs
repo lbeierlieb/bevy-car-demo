@@ -122,8 +122,8 @@ fn wrap(angle: f64) -> f64 {
 impl Cylinder {
     /// One cylinder of `hardware` on cam profile `cam`, the phasers advancing the intake cam
     /// and retarding the exhaust cam by the given phases (crank degrees), on top of the
-    /// hardware's cam timing. Valves, runner and header diameters scale with the bore (four
-    /// valves per cylinder), and their flow areas with the head's port flow.
+    /// hardware's cam timing. Valves (as many and as big as the head's), runner and header
+    /// diameters scale with the bore, and their flow areas with the head's port flow.
     pub fn new(hardware: &EngineHardware, cam: &CamProfile, intake: f32, exhaust: f32) -> Self {
         let bore = f64::from(hardware.bore);
         let stroke = f64::from(hardware.stroke);
@@ -133,6 +133,10 @@ impl Cylinder {
         let separation = f64::from(cam.lobe_separation);
         let lift = f64::from(cam.lift);
         let flow = f64::from(hardware.port_flow);
+        let layout = hardware.valvetrain;
+        // Valve sizes to a ten-thousandth of the bore (so 0.36 is 0.36 here, not the f32's
+        // nearest).
+        let diameter = |share: f32| (f64::from(share) * 1e4).round() / 1e4 * bore;
         let pipe = |length: f32, diameter: f64| Pipe {
             length: f64::from(length),
             area: flow * PI / 4.0 * diameter * diameter,
@@ -148,15 +152,15 @@ impl Cylinder {
                 centre: -360.0 + separation - f64::from(intake + hardware.intake_timing),
                 half_duration: f64::from(cam.intake_duration) / 2.0,
                 lift,
-                diameter: 0.36 * bore,
-                count: 2.0 * flow,
+                diameter: diameter(layout.intake_diameter),
+                count: f64::from(layout.intakes()) * flow,
             },
             exhaust: Valve {
                 centre: 360.0 - separation + f64::from(exhaust + hardware.exhaust_timing),
                 half_duration: f64::from(cam.exhaust_duration) / 2.0,
                 lift,
-                diameter: 0.3 * bore,
-                count: 2.0 * flow,
+                diameter: diameter(layout.exhaust_diameter),
+                count: f64::from(layout.exhausts()) * flow,
             },
             runner: pipe(hardware.intake.runner_length, 0.45 * bore),
             header: pipe(hardware.exhaust.header_length, 0.42 * bore),
@@ -794,6 +798,19 @@ mod tests {
         assert!(cylinder.exhaust.area(250.0) > 4e-4);
         // Overlap around the top dead centre of the gas exchange.
         assert!(cylinder.intake.area(360.0) > 0.0 && cylinder.exhaust.area(-360.0) > 0.0);
+    }
+
+    #[test]
+    fn two_big_valves_breathe_well_low_and_run_out_high() {
+        let four = EngineHardware::default();
+        let two = EngineHardware {
+            valvetrain: crate::physics::engine::hardware::ValveLayout::PUSHROD,
+            ..four.clone()
+        };
+        let share = |rpm| wide_open_ve(&two, rpm) / wide_open_ve(&four, rpm);
+        let (low, high) = (share(2500.0), share(7000.0));
+        assert!(low > 0.93, "{low} at 2500 rpm");
+        assert!(high < low - 0.05, "{high} at 7000 rpm, {low} at 2500");
     }
 
     #[test]

@@ -69,7 +69,8 @@ const CHARGE_LAG: f32 = 0.5;
 const FLOAT_LOSS: f32 = 2.5;
 const FLOAT_LEAST: f32 = 0.1;
 /// Friction mean effective pressure per newton of valve spring force over the stock
-/// springs' (Pa/N), which the friction map includes.
+/// springs' (Pa/N), which the friction map includes: the force as on four valves with
+/// flat tappets (`EngineHardware::spring_drag`), so two valves or rollers drag less.
 const SPRING_FRICTION: f32 = 20.0;
 const STOCK_SPRING_FORCE: f32 = 370.0;
 /// Rise of the highest cylinder pressure per degree of spark advance from MBT (relative),
@@ -500,7 +501,7 @@ impl Engine {
             (f32::INFINITY, 0.0, AMBIENT_TEMPERATURE, 0.0, motored)
         };
         let pumping = (self.exhaust_pressure - p) * displacement;
-        let springs = hardware.valves.force(self.cam(hardware).lift) - STOCK_SPRING_FORCE;
+        let springs = hardware.spring_drag(self.cam(hardware).lift) - STOCK_SPRING_FORCE;
         let friction =
             (maps.friction(rpm, self.thermal.oil) + SPRING_FRICTION * springs) * displacement;
         Cycle {

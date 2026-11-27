@@ -14,8 +14,8 @@ use crate::physics::brakes::Brake;
 use crate::physics::drivetrain::Drive;
 use crate::physics::engine::families::{Family, Layout, Version};
 use crate::physics::engine::hardware::{
-    BottomEnd, CamProfile, Compressor, Cooling, Diverter, EngineHardware, Exhaust, Intake,
-    Intercooler, Supercharger, Turbine, Turbo, ValveTrain, Wastegate,
+    BottomEnd, CamDrive, CamProfile, Compressor, Cooling, Diverter, EngineHardware, Exhaust,
+    Intake, Intercooler, Supercharger, Turbine, Turbo, ValveLayout, ValveTrain, Wastegate,
 };
 use crate::physics::engine::parts::{
     Change, Effect, Field, Part, Preset, Readout, Regrind, Slot, SuperchargerKit, TurboKit,
@@ -113,6 +113,7 @@ listed!(
 listed!(Field, Field::ALL);
 listed!(Readout, Readout::ALL);
 listed!(Layout, Layout::ALL);
+listed!(CamDrive, CamDrive::ALL);
 
 fields!(Detail { at, size, tone });
 fields!(Tank { litres, at, height });
@@ -263,11 +264,49 @@ fields!(BottomEnd {
     rod_strength,
     piston_toughness
 });
-fields!(ValveTrain {
-    seat_force,
-    rate,
-    mass
-});
+impl Wire for ValveTrain {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.seat_force.put(out);
+        self.rate.put(out);
+        self.mass.put(out);
+        self.rocker_ratio.put(out);
+        self.cam_side_mass.put(out);
+        self.rollers.put(out);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        let valves = Self {
+            seat_force: r.get()?,
+            rate: r.get()?,
+            mass: r.get()?,
+            rocker_ratio: r.get()?,
+            cam_side_mass: r.get()?,
+            rollers: r.get()?,
+        };
+        // Something moves, and the rockers pass the lift on.
+        let fine = valves.mass > 0.0
+            && valves.cam_side_mass >= 0.0
+            && (0.5..=3.0).contains(&valves.rocker_ratio);
+        fine.then_some(valves)
+    }
+}
+
+impl Wire for ValveLayout {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.drive.put(out);
+        self.valves.put(out);
+        self.intake_diameter.put(out);
+        self.exhaust_diameter.put(out);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        let layout = Self {
+            drive: r.get()?,
+            valves: r.get()?,
+            intake_diameter: r.get()?,
+            exhaust_diameter: r.get()?,
+        };
+        layout.fine().then_some(layout)
+    }
+}
 fields!(Intake {
     filter_area,
     throttle_diameter,
@@ -341,6 +380,7 @@ fields!(EngineHardware {
     intake_timing,
     exhaust_timing,
     valves,
+    valvetrain,
     port_flow,
     intake,
     turbo,

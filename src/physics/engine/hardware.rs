@@ -41,6 +41,8 @@ pub struct EngineHardware {
     pub intake_timing: f32,
     pub exhaust_timing: f32,
     pub valves: ValveTrain,
+    /// Where the cams sit and how many valves each cylinder has, how big.
+    pub valvetrain: ValveLayout,
     /// How much the head's ports and valves flow, relative to the stock 2-litre four's
     /// (for its bore): bigger valves and ported runners flow more.
     pub port_flow: f32,
@@ -80,6 +82,69 @@ pub struct BottomEnd {
     pub piston_toughness: f32,
 }
 
+/// Where the cams sit: in the block, working the valves through lifters, pushrods and
+/// rockers (one cam for both rows of valves), or over the valves in the head (one cam or
+/// one for the intakes and one for the exhausts).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CamDrive {
+    Ohv,
+    Sohc,
+    Dohc,
+}
+
+impl CamDrive {
+    pub const ALL: [CamDrive; 3] = [CamDrive::Ohv, CamDrive::Sohc, CamDrive::Dohc];
+
+    /// One cam turns both the intake and the exhaust lobes: its timing moves them together.
+    pub fn one_cam(self) -> bool {
+        self != CamDrive::Dohc
+    }
+}
+
+/// The head's valves: where their cams are, how many per cylinder (2, 3 or 4: the odd one
+/// an intake), and their diameters relative to the bore.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ValveLayout {
+    pub drive: CamDrive,
+    pub valves: u8,
+    pub intake_diameter: f32,
+    pub exhaust_diameter: f32,
+}
+
+impl ValveLayout {
+    /// The 2-litre four's: two cams over four valves.
+    pub const FOUR_VALVE: Self = Self {
+        drive: CamDrive::Dohc,
+        valves: 4,
+        intake_diameter: 0.36,
+        exhaust_diameter: 0.3,
+    };
+    /// Pushrods to two big valves: about two thirds of the four valves' curtain area.
+    pub const PUSHROD: Self = Self {
+        drive: CamDrive::Ohv,
+        valves: 2,
+        intake_diameter: 0.48,
+        exhaust_diameter: 0.39,
+    };
+
+    /// Intake and exhaust valves per cylinder.
+    pub fn intakes(&self) -> u8 {
+        self.valves.div_ceil(2)
+    }
+
+    pub fn exhausts(&self) -> u8 {
+        self.valves / 2
+    }
+
+    /// It makes sense: 2 to 4 valves, of sizes that fit in a bore.
+    pub fn fine(&self) -> bool {
+        (2..=4).contains(&self.valves)
+            && [self.intake_diameter, self.exhaust_diameter]
+                .iter()
+                .all(|d| (0.15..=0.6).contains(d))
+    }
+}
+
 /// The valve springs and what they move. Above the speed where the spring can no longer
 /// pull the valve after the cam's closing flank, the valve floats: it lofts off the cam
 /// and bounces on its seat, and in an interference engine it can meet the piston.
@@ -88,9 +153,16 @@ pub struct ValveTrain {
     /// Spring force with the valve closed (N), and its rise with lift (N/m).
     pub seat_force: f32,
     pub rate: f32,
-    /// Moving mass per valve as the spring sees it: valve, retainer, follower and a third
-    /// of the spring (kg).
+    /// Moving mass per valve on the valve's side: valve, retainer, follower (or the
+    /// rocker's share) and a third of the spring (kg).
     pub mass: f32,
+    /// Valve lift over the lifter's (a pushrod engine's rockers; 1 with the cam over the
+    /// valve), and what moves on the cam's side of the rocker: lifter and pushrod (kg;
+    /// none with overhead cams).
+    pub rocker_ratio: f32,
+    pub cam_side_mass: f32,
+    /// Roller followers or lifters, which drag about half what flat tappets do.
+    pub rollers: bool,
 }
 
 impl ValveTrain {
@@ -99,13 +171,20 @@ impl ValveTrain {
         self.seat_force + self.rate * lift
     }
 
+    /// Mass the spring moves as seen at the valve (kg): the cam side moves slower by the
+    /// rocker ratio, so it counts with its square less.
+    pub fn moving_mass(&self) -> f32 {
+        self.mass + self.cam_side_mass / (self.rocker_ratio * self.rocker_ratio)
+    }
+
     /// Engine speed (rpm) where the valves start to float on `cam`. The lift curve
     /// L·(1 - x²)^1.5 over the duration D decelerates the valve at most by 12·L·ω²/D² over
     /// the nose, which the spring's force at full lift has to provide.
     pub fn float_rpm(&self, cam: &CamProfile) -> f32 {
         let duration = cam.intake_duration.min(cam.exhaust_duration).to_radians();
-        let omega =
-            (self.force(cam.lift) * duration * duration / (12.0 * self.mass * cam.lift)).sqrt();
+        let omega = (self.force(cam.lift) * duration * duration
+            / (12.0 * self.moving_mass() * cam.lift))
+            .sqrt();
         omega * 60.0 / (2.0 * PI)
     }
 }
@@ -281,6 +360,13 @@ impl EngineHardware {
         self.cams.len() > 1 || self.intake_phasing > 0.0 || self.exhaust_phasing > 0.0
     }
 
+    /// The valve spring force the cams work against per cylinder, as on four valves with
+    /// flat tappets (N) at full `lift`: what the valvetrain's friction follows.
+    pub fn spring_drag(&self, lift: f32) -> f32 {
+        let followers = if self.valves.rollers { 0.5 } else { 1.0 };
+        self.valves.force(lift) * (f32::from(self.valvetrain.valves) / 4.0) * followers
+    }
+
     /// Highest speed the engine is made for on cam profile `profile` (rpm): clear of
     /// valve float, and with the rods' pull well within their strength; rounded down to
     /// 100 rpm.
@@ -376,7 +462,11 @@ impl Default for EngineHardware {
                 seat_force: 180.0,
                 rate: 20e3,
                 mass: 0.1,
+                rocker_ratio: 1.0,
+                cam_side_mass: 0.0,
+                rollers: false,
             },
+            valvetrain: ValveLayout::FOUR_VALVE,
             port_flow: 1.0,
             intake: Intake {
                 filter_area: 2.5e-3,
@@ -397,5 +487,38 @@ impl Default for EngineHardware {
             cooling: Cooling::default(),
             inertia: 0.18,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pushrods_float_the_valves_earlier() {
+        let ohc = EngineHardware::default();
+        let cam = &ohc.cams[0];
+        // The same valve and spring, worked through a lifter, a pushrod and a rocker.
+        let pushrod = ValveTrain {
+            rocker_ratio: 1.6,
+            cam_side_mass: 0.15,
+            ..ohc.valves
+        };
+        let (overhead, block) = (ohc.valves.float_rpm(cam), pushrod.float_rpm(cam));
+        assert!(block < 0.85 * overhead, "{block} vs {overhead} rpm");
+        // Without a cam side the mass is the valve side's.
+        assert_eq!(ohc.valves.moving_mass(), ohc.valves.mass);
+    }
+
+    #[test]
+    fn two_valves_and_rollers_drag_less() {
+        let dohc = EngineHardware::default();
+        let lift = dohc.cams[0].lift;
+        assert_eq!(dohc.spring_drag(lift), dohc.valves.force(lift));
+        let mut ohv = dohc.clone();
+        ohv.valvetrain = ValveLayout::PUSHROD;
+        assert!(ohv.spring_drag(lift) < dohc.spring_drag(lift));
+        ohv.valves.rollers = true;
+        assert_eq!(ohv.spring_drag(lift), 0.25 * dohc.spring_drag(lift));
     }
 }

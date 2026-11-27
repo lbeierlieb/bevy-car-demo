@@ -501,6 +501,12 @@ impl Parts {
         parts
     }
 
+    /// One cam works both the intake and the exhaust valves (a pushrod engine or a single
+    /// overhead cam): its gear timing is one setting.
+    pub fn one_cam(&self) -> bool {
+        self.version().block.valvetrain.drive.one_cam()
+    }
+
     pub fn family(&self) -> &Family {
         &self.catalogue.families[self.family]
     }
@@ -551,6 +557,10 @@ impl Parts {
         hardware.exhaust.header_length = hardware.exhaust.header_length.min(room);
         hardware.intake_timing = self.intake_timing;
         hardware.exhaust_timing = self.exhaust_timing;
+        // One cam in the block: its gear advances the exhaust lobes with the intake ones.
+        if hardware.valvetrain.drive.one_cam() {
+            hardware.exhaust_timing = -self.intake_timing;
+        }
         if let Some(turbo) = &mut hardware.turbo {
             turbo.wastegate.spring = (self.boost * 1e5).round();
         }
@@ -595,6 +605,24 @@ pub fn fits(catalogue: &Catalogue, chosen: &[usize]) -> bool {
 mod tests {
     use super::*;
     use crate::catalogue::{HEADERS, INTERCOOLER, TURBO, builtin};
+
+    #[test]
+    fn one_cam_in_the_block_moves_both_rows_of_valves() {
+        let mut parts = Parts::stock();
+        parts.intake_timing = 4.0;
+        parts.exhaust_timing = 2.0;
+        let dohc = parts.hardware();
+        assert!(!parts.one_cam());
+        assert_eq!((dohc.intake_timing, dohc.exhaust_timing), (4.0, 2.0));
+        parts.catalogue = crate::catalogue::builtin_changed(|c| {
+            c.families[0].versions[0].block.valvetrain =
+                crate::physics::engine::hardware::ValveLayout::PUSHROD;
+        });
+        assert!(parts.one_cam());
+        // Advancing the cam advances the exhausts too: they're retarded by minus as much.
+        let ohv = parts.hardware();
+        assert_eq!((ohv.intake_timing, ohv.exhaust_timing), (4.0, -4.0));
+    }
 
     #[test]
     fn the_presets_are_the_stock_engines() {
