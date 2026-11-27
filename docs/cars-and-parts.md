@@ -93,7 +93,7 @@ Items with slots:
 
 | Item | Slots | Worked on by |
 |---|---|---|
-| Engine | long block; intake manifold, throttle body, air filter, exhaust manifold, turbo or supercharger, flywheel | bolt-ons at car and tuning shops; comes out of the car whole |
+| Engine | long block; intake manifold, throttle body, air filter, exhaust manifold (its family's; turbos on its mounts, see `exhaust-manifolds.md`), supercharger, flywheel | bolt-ons at car and tuning shops; comes out of the car whole |
 | Long block | block (family, version, bore oversize), crankshaft, rods, pistons (matching the bore), head gasket, cylinder head, camshafts, valve springs, cam phasers | engine shop only |
 | Gearbox | gear set, final drive, differential | car and tuning shops |
 | Wheel | rim, tire | tire shop only (rims and tires also loose in trunks and garages) |
@@ -385,7 +385,8 @@ Decided by me (the user asleep; to look over):
   rear bench 18, a new bucket seat 6 kg, each at its place (the balance changes when the
   rear bench comes out). Insulation unchanged.
 - **Superchargers**: both kits go into the turbo's slot (renamed "Turbo or supercharger":
-  a turbo and a supercharger together isn't possible). The Roots blower (pulleys 1.5:1)
+  a turbo and a supercharger together isn't possible; since the exhaust manifolds'
+  milestone 1 the "Supercharger" slot, turbos on the manifold's mounts). The Roots blower (pulleys 1.5:1)
   gives the 1.6 about 0.5–0.6 bar from 2000 rpm up, the centrifugal one (impeller geared
   19:1) 0.1 bar at 3000 and 0.4 at 6000; with the stock compression the factory tune is
   knock-limited, so the gain is about a fifth to a quarter in torque. Both have a bypass

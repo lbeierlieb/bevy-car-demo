@@ -829,7 +829,8 @@ in cents, painted, `Knob`s, `SlotDef`s), `Item` (definition by place in
 `Catalogue::defs`, paint, `variant` (rim and tire sizes index `Rim::all`/
 `TireSize::all`, anti-roll bars the chassis' sizes), knob values, slots), `Trim` (a
 stock car's tree; one per chassis × factory engine). Engine slots sit in the long
-block (`LONG_BLOCK_SLOTS`), on the engine (`ENGINE_SLOTS`) or in the car (`CAR_SLOTS`);
+block (`LONG_BLOCK_SLOTS`), on the engine (`ENGINE_SLOTS`, and its exhaust manifold:
+`Kind::Manifold`, turbos on its mounts, see "Exhaust manifolds") or in the car (`CAR_SLOTS`);
 cam gear timing and boost are the engine item's knobs, brake force and balance the
 chassis', camber and toe each damper's, pressure each tire's. **The bridge**: the
 simulation and the shops still use `CarBuild` + `Parts`; `Item::resolve` works them
@@ -1111,7 +1112,8 @@ Wear kinds `Pads`, `Clutch`, `Gears` on the items; `Condition` has `pads`, `clut
 (`physics/engine/supercharger.rs`): `EngineHardware::supercharger` (`Supercharger`:
 Roots' displacement per rotor turn and leak area, or a centrifugal `Compressor`; ratio;
 belt drag; a bypass `Diverter`), `Effect::Supercharger(SuperchargerKit)` (scaled like a
-turbo kit); in the turbo's slot, renamed `catalogue::TURBO_SLOT` "Turbo or supercharger"
+turbo kit); in the turbo's slot, renamed "Turbo or supercharger", since exhaust
+manifolds' milestone 1 a slot of their own, `catalogue::SUPERCHARGER_SLOT` "Supercharger"
 (ids stay `turbocharger.*`; saved parts whose slot name is gone go into a free slot of
 their kind), parts `ROOTS`, `CENTRIFUGAL`. `Engine::tract_inflow` takes the rpm; the charge
 follows the blower's outlet temperature (`CHARGE_LAG`); `Engine::torque` takes the drive
@@ -1276,6 +1278,28 @@ The game is about tuning every aspect of a car. Agreed so far (the user's answer
   garages), put together only at the tire shop. Springs, dampers, brakes, wheels per
   corner. Doors are parts. Gearboxes (gear set, final drive, differential) are worked on
   by car and tuning shops, not the engine shop.
+
+## Exhaust manifolds (planned with the user, 2026-11-27; milestone 1 built)
+
+The plan, with milestones: `docs/exhaust-manifolds.md` (keep it up to date; its last
+section lists what was decided while building). **The manifold decides the layout,
+turbos sit in its mounts.** Milestone 1 (data, no physics change): `Family::manifolds`
+(`ManifoldDef`: id, name, `hardware::Manifold` (primary length, `Collector`, branches),
+`mounts`), `Parts::manifold`/`Preset::manifold` (its place in the family's; sets
+`header_length`), items `Kind::Manifold` (`Does::Manifold`, the engine's "Exhaust
+manifold" slot, `PartDef::engines` = the family's name) and `Kind::Turbo` (the old
+`turbocharger.small|medium|large`, `Does::EnginePart` of the catalogue's `mounted` slot
+`TURBO`, 11) on the manifold's mounts; the old turbo slot is `SUPERCHARGER` (12). Rules
+in `items::engine_misfit` (family, every mount the same turbo and knobs or none, no turbo
+with a supercharger), used by `Item::fine`, `resolve` and `Bench::finish`;
+`fitting::mounts`, `engine_on`, `made_for_engine` for the workshop window ("Fit one on
+every mount"). B series: `b.manifold.stock`, `b.headers.short`, `b.headers.long-tube`,
+`b.manifold.turbo` (1 mount); R80: `r.manifolds.stock`, `r.headers.long-tube`,
+`r.manifolds.turbo` (2), `r.manifold.turbo-crossover` (1). Saved cars format 4 (old ids
+converted, `saved::mount_old_turbo`). Protocol 53. Every factory engine and old part
+combination comes out the same hardware (no re-bake). Shots: `FITIDS` puts a turbo on
+the first mount only, so `FITIDS="b.manifold.turbo,turbocharger.medium"` (the manifold
+first); a pair can't be dressed that way.
 
 ## Multiplayer (agreed with the user, 2026-11-19)
 

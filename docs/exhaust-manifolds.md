@@ -161,3 +161,76 @@ N ways, at no extra cost: that's what's built.
 Different turbos per side; sequential turbos, twin-scroll; pulse interference by firing
 order within a collector (the odd-fire V10, 3-cylinder groups); an inline six family;
 dual-exhaust parts; turbos checked against the bay's room.
+
+## Decided while building milestone 1
+
+Built 2026-11-27. Where the plan was silent:
+
+1. **Manifolds are family data, not engine-slot parts.** `Family::manifolds` holds
+   `ManifoldDef { id, name, manifold: hardware::Manifold { primary_length, collector,
+   branches }, mounts }`; `Parts::manifold` and `Preset::manifold` are its place in the
+   family's list (every factory version's is 0). `Parts::hardware` sets
+   `header_length` from it (then `header_room` cuts it, as before). The catalogue's old
+   "Exhaust manifold" engine slot with its three generic multipliers is gone from
+   `Catalogue::slots`. `hardware::Manifold` and `Collector` exist already, unused by the
+   physics until milestone 2.
+2. **The old turbo slot split in two at the `Parts` level**: "Turbo" (`TURBO`, 11: None,
+   Small, Medium, Large; `Slot::mounted`, so its parts are `Kind::Turbo` items and its
+   first part stands for an empty mount) and "Supercharger" (`SUPERCHARGER`, 12: None,
+   Roots, centrifugal), next to each other so the effects apply in the same order. With
+   the manifold slot gone there are still 20 slots; air filter and throttle moved up
+   (9, 10), the intercooler and the rest kept their places. The engine item's slots:
+   long block, intake manifold, exhaust manifold, air filter, throttle, supercharger,
+   flywheel (`ENGINE_SLOTS` = 8, 9, 10, 12, 18 with the manifold put in after the
+   intake).
+3. **Ids**: turbos keep `turbocharger.small|medium|large`, superchargers
+   `turbocharger.roots-blower`, `turbocharger.centrifugal-supercharger` and the absent
+   `turbocharger.none`; there's no "None" turbo item (an empty mount is none).
+4. **The manifolds**: the B series' `b.manifold.stock` (700 mm), `b.headers.short` (390),
+   `b.headers.long-tube` (960), `b.manifold.turbo` (700, one mount); the R80's
+   `r.manifolds.stock` (500, two branches), `r.headers.long-tube` (690),
+   `r.manifolds.turbo` (500, two mounts), `r.manifold.turbo-crossover` (900 mm, made up:
+   the far bank's primaries cross the valley; one branch, one mount). Turbo manifolds
+   have the cast ones' primaries, so a turbo engine is the same hardware as with the
+   old slot (the B16T's baked maps still match). The R80 had short headers through the
+   generic part (280 mm); the plan's table has none, so old saves get its stock pair.
+   Collector `Turbine` for manifolds with mounts, else `Tuned`.
+5. **Family restriction**: `PartDef::engines` (families' names or versions' codes,
+   none: any); manifolds name their family. `items::engine_misfit` checks it, the mounts
+   (all empty, or all the same definition with the same knobs) and the exclusion of a
+   turbo and a supercharger anywhere in an engine. `Item::fine` calls it on every tree
+   (cars, loose parts, the wire), `resolve` refuses such a car, `Bench::finish` says why
+   for the car, the trunk and what's held. Turbos have no knobs: the wastegate's spring
+   stays the engine item's "Boost" knob, set at dynos as before.
+6. **Fitting**: a new turbo goes on several mounts in one `Work::Fit` (as "both on the
+   axle"); a turbo brought fits one mount, so a pair needs two in one request (the rules
+   are checked on the result). `fitting::mounts` gives every mount of the manifold a
+   mount's path is on, `engine_on` the engine family on a path, `made_for_engine` whether
+   a definition suits it. The workshop window (a little of milestone 3, to keep the game
+   playable) offers only the engine's family's manifolds and fits a new turbo with "Fit
+   one on every mount" where there are several. Engine shops don't fit turbos (they're
+   not inside a long block).
+7. **`assemble`** keeps the manifold item when it's the same, puts the turbo wanted on
+   every mount (keeping turbo items of the same definition) or clears them, and refuses a
+   turbo on a manifold without mounts rather than swapping the manifold. `Parts::turbo`
+   (tests) fits the B series' turbo manifold.
+8. **Items**: a manifold weighs 1.5 kg per cylinder (the B series' 6 kg as before), ×1.3
+   with turbine flanges; mounts are "Turbo" (one), "Turbo, left bank"/"right bank" (a V's
+   two), "Turbo, front"/"rear" (an inline engine's two), else "Turbo N". Used-part values
+   are 150 € like other engine parts (×2.5 for ids with "turbo").
+9. **Wear**: every turbo gets the engine's turbo wear (`Condition::put_on`); read back,
+   the worst turbo's counts (any one failing kills the boost).
+10. **Shops file**: car workshops sell `b.manifold.stock r.manifolds.stock`, tuning shops
+    `b.* r.*` (they sold every exhaust manifold before, stock ones too) and
+    `turbocharger.*` (turbos and superchargers); the engine shop as before.
+11. **Saved cars, format 4**, converted by ids (loose parts and marketplace offers carry
+    no version): an old `exhaust-manifold.*` becomes its engine's family's manifold
+    without mounts whose primaries are nearest what the old part made of the block's
+    headers (loose: the first family's); a turbo in the old "Turbo or supercharger" slot
+    goes on every mount of the family's turbo manifold nearest the manifold it had
+    (replacing it if it has no mounts: on the R80 long tubes, the pair, not the
+    crossover), and the empty supercharger slot gets "None"; superchargers land in the
+    supercharger slot by their kind.
+12. `mechanicals` draws short or long headers by the primaries against the family's
+    first manifold, and a turbo when one is on a mount (one turbo, as before, for a pair
+    too, until milestone 3). Protocol 53.
