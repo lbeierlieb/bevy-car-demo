@@ -54,6 +54,8 @@ pub enum Effect {
     },
     /// A turbo kit (see `TurboKit`).
     Turbo(TurboKit),
+    /// A supercharger kit (see `SuperchargerKit`).
+    Supercharger(SuperchargerKit),
 }
 
 /// A number in the hardware a part can change.
@@ -246,6 +248,40 @@ impl TurboKit {
     }
 }
 
+/// A supercharger kit for a 2-litre engine, scaled to the engine's displacement like a
+/// turbo kit: a Roots blower's volume per turn of its rotors (m³) and its leak area (m²),
+/// or a centrifugal one's impeller diameter (m); the pulleys' (and step-up gear's) ratio;
+/// the belt's drag (N·m, and per 1000 rpm). The piping adds volume ahead of the throttle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SuperchargerKit {
+    pub roots: bool,
+    pub displacement: f32,
+    pub leak: f32,
+    pub impeller: f32,
+    pub ratio: f32,
+    pub drag: [f32; 2],
+}
+
+impl SuperchargerKit {
+    fn fit(&self, hardware: &mut EngineHardware) {
+        let size = relative_size(hardware);
+        hardware.intake.tract_volume *= if self.roots { 1.5 } else { 2.5 };
+        hardware.supercharger = Some(super::hardware::Supercharger {
+            roots: self.roots,
+            displacement: self.displacement * size,
+            leak: self.leak * size,
+            compressor: super::supercharger::impeller(self.impeller * size.sqrt()),
+            ratio: self.ratio,
+            drag: self.drag.map(|drag| drag * size),
+            bypass: Diverter {
+                area: 6e-4 * size,
+                opens: 0.3e5,
+                span: 0.2e5,
+            },
+        });
+    }
+}
+
 impl Effect {
     pub fn apply(&self, h: &mut EngineHardware) {
         match self {
@@ -281,6 +317,7 @@ impl Effect {
                 };
             }
             Effect::Turbo(kit) => kit.fit(h),
+            Effect::Supercharger(kit) => kit.fit(h),
         }
     }
 }
@@ -522,6 +559,8 @@ impl Parts {
         } else {
             let kind = if hardware.turbo.is_some() {
                 " turbo"
+            } else if hardware.supercharger.is_some() {
+                " supercharged"
             } else {
                 ""
             };

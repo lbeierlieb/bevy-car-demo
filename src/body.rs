@@ -146,6 +146,8 @@ impl Side {
 pub struct Dress {
     pub shell: [f32; 3],
     pub pieces: Vec<(Panel, Side, [f32; 3])>,
+    /// The rear spoiler is a wing on stands (else a lip on the roof's edge).
+    pub wing: bool,
 }
 
 impl Dress {
@@ -169,6 +171,7 @@ impl Dress {
         Self {
             shell: color,
             pieces,
+            wing: false,
         }
     }
 
@@ -211,6 +214,7 @@ impl Dress {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         let bits = |color: &[f32; 3]| color.map(f32::to_bits);
         bits(&self.shell).hash(&mut hasher);
+        self.wing.hash(&mut hasher);
         for (panel, side, color) in &self.pieces {
             (*panel as u8, side, bits(color)).hash(&mut hasher);
         }
@@ -990,7 +994,33 @@ impl Body {
                 }
             }
         }
-        if let (Some(color), Some(_), Some(cabin)) = (
+        if let (Some(color), Some(_), true) =
+            (has(Panel::RearSpoiler), has(Panel::Hatch), dress.wing)
+        {
+            // A wing on two stands from the hatch's top edge, end plates at its tips.
+            let x = self.length - 0.22;
+            let top = self.deck_height(x);
+            let width = 2.0 * 0.86 * self.half_width(x);
+            let rise = 0.3;
+            for across in [-0.3 * width, 0.3 * width] {
+                builder.cuboid(
+                    at(x, top + rise / 2.0, across),
+                    size(0.12, rise, 0.02),
+                    DARK,
+                );
+            }
+            let tilt = Quat::from_rotation_x(-0.2);
+            let axes = [tilt * Vec3::X, tilt * Vec3::Y, tilt * Vec3::Z];
+            let centre = at(x + 0.02, top + rise + 0.02, 0.0);
+            builder.oriented_box(centre, axes, size(0.3, 0.025, width), color);
+            for across in [-width / 2.0, width / 2.0] {
+                builder.cuboid(
+                    at(x + 0.02, top + rise, across),
+                    size(0.34, 0.14, 0.012),
+                    color,
+                );
+            }
+        } else if let (Some(color), Some(_), Some(cabin)) = (
             has(Panel::RearSpoiler),
             has(Panel::Hatch),
             self.cabin.len().checked_sub(2).map(|k| self.cabin[k]),

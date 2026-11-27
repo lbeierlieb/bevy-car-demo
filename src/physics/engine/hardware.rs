@@ -47,6 +47,9 @@ pub struct EngineHardware {
     pub intake: Intake,
     /// A turbocharger between the air filter and the throttle, and in the exhaust.
     pub turbo: Option<Turbo>,
+    /// A supercharger between the air filter and the throttle, driven by the crank (see
+    /// `supercharger`).
+    pub supercharger: Option<Supercharger>,
     pub exhaust: Exhaust,
     pub cooling: Cooling,
     /// Flywheel and crank inertia (kg·m²).
@@ -175,6 +178,26 @@ pub struct Wastegate {
     /// Boost (above ambient, Pa) where it starts to open, and how much more opens it fully.
     pub spring: f32,
     pub span: f32,
+}
+
+/// A supercharger: a Roots blower (positive displacement) or a centrifugal compressor,
+/// driven by a belt from the crank.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Supercharger {
+    /// A Roots blower; else centrifugal.
+    pub roots: bool,
+    /// A Roots blower's volume carried per revolution of its rotors (m³), and the
+    /// effective area air leaks back through between them and the case (m²).
+    pub displacement: f32,
+    pub leak: f32,
+    /// A centrifugal one's compressor.
+    pub compressor: Compressor,
+    /// The rotors' (or the impeller's) speed over the crank's.
+    pub ratio: f32,
+    /// What the belt and bearings drag at the crank (N·m), and more per 1000 rpm.
+    pub drag: [f32; 2],
+    /// The valve letting the boost back round when the throttle shuts on it.
+    pub bypass: Diverter,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -364,6 +387,7 @@ impl Default for EngineHardware {
                 tract_volume: 2.0e-3,
             },
             turbo: None,
+            supercharger: None,
             exhaust: Exhaust {
                 header_length: 0.8,
                 pipe_area: 1.9e-3,

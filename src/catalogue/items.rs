@@ -6,8 +6,9 @@ use std::sync::Arc;
 use super::{Catalogue, Shared};
 use crate::chassis::CarBuild;
 use crate::items::{
-    Aero, Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, Wear, assemble,
-    chassis_knobs, damper_knobs, engine_knobs, knob, spring_knobs, tire_knobs, wing_knobs,
+    Aero, Assembly, BONNET_CUT_OUT, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim,
+    Wear, assemble, chassis_knobs, damper_knobs, engine_knobs, knob, spring_knobs, tire_knobs,
+    wing_knobs,
 };
 use crate::physics::brakes::Brake;
 use crate::physics::engine::ecu::EcuModel;
@@ -56,6 +57,8 @@ struct Def {
     absent: bool,
     wear: Option<Wear>,
     bores: bool,
+    needs: Vec<String>,
+    provides: Vec<String>,
     knobs: Vec<Knob>,
     slots: Vec<SlotDef>,
 }
@@ -74,9 +77,16 @@ impl Def {
             absent: false,
             wear: None,
             bores: false,
+            needs: Vec::new(),
+            provides: Vec::new(),
             knobs: Vec::new(),
             slots: Vec::new(),
         }
+    }
+
+    fn provides(mut self, what: &str) -> Self {
+        self.provides.push(what.into());
+        self
     }
 
     fn fits(mut self, chassis: &str) -> Self {
@@ -123,6 +133,8 @@ impl Def {
             absent: self.absent,
             wear: self.wear,
             bores: self.bores,
+            needs: self.needs,
+            provides: self.provides,
             knobs: self.knobs,
             slots: self.slots,
         }
@@ -209,7 +221,7 @@ fn engine_part_size(name: &str) -> ([f32; 3], f32) {
         "Exhaust manifold" => ([0.5, 0.3, 0.3], 6.0),
         "Air filter" => ([0.3, 0.3, 0.2], 1.0),
         "Throttle body" => ([0.15, 0.15, 0.15], 1.0),
-        "Turbocharger" => ([0.35, 0.3, 0.3], 9.0),
+        super::TURBO_SLOT => ([0.35, 0.3, 0.3], 9.0),
         "Intercooler" => ([0.7, 0.2, 0.1], 5.0),
         "Catalyst" => ([0.5, 0.2, 0.2], 5.0),
         "Silencer" => ([0.6, 0.35, 0.2], 7.0),
@@ -320,6 +332,21 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             );
             add(def.fits(name).painted());
         }
+        // A bonnet with a cut-out for a Roots blower to stick through.
+        add(Def::new(
+            &format!("{id}.bonnet.cut-out"),
+            "Bonnet with a blower cut-out",
+            Kind::Body(Panel::Bonnet),
+            Does::Body(Aero {
+                drag: 0.01,
+                ..Aero::default()
+            }),
+            [1.2, 1.4, 0.12],
+            11.0,
+        )
+        .fits(name)
+        .painted()
+        .provides(BONNET_CUT_OUT));
         // A tall rear wing on the hatch, its angle set at alignment shops.
         add(Def::new(
             &format!("{id}.wing"),
@@ -599,8 +626,13 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
     for (s, kind) in catalogue.slots.iter().enumerate() {
         let (size, mass) = engine_part_size(&kind.name);
         for (p, part) in kind.parts.iter().enumerate() {
+            // The turbo's slot keeps its parts' old ids (saved cars have them).
+            let prefix = match kind.name.as_str() {
+                super::TURBO_SLOT => "turbocharger".to_string(),
+                name => slug(name),
+            };
             let mut def = Def::new(
-                &format!("{}.{}", slug(&kind.name), slug(&part.name)),
+                &format!("{prefix}.{}", slug(&part.name)),
                 &format!("{} ({})", part.name, kind.name.to_lowercase()),
                 Kind::EnginePart(s),
                 Does::EnginePart { slot: s, part: p },
@@ -617,15 +649,25 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
                 "Cylinder head" => Some(Wear::Valves),
                 "Head gasket" => Some(Wear::HeadGasket),
                 "Crankshaft" => Some(Wear::Bearings),
-                "Turbocharger" => Some(Wear::Turbo),
+                super::TURBO_SLOT if !is_supercharger(part) => Some(Wear::Turbo),
                 _ => None,
             };
             // Pistons come in the bore sizes.
             def.bores = kind.name == "Pistons";
+            // A Roots blower sticks up through the bonnet.
+            if part.name == super::ROOTS {
+                def.needs.push(BONNET_CUT_OUT.into());
+            }
             add(def);
         }
     }
     defs
+}
+
+/// Whether `part` is a supercharger.
+fn is_supercharger(part: &crate::physics::engine::parts::Part) -> bool {
+    use crate::physics::engine::parts::Effect;
+    (part.effects.iter()).any(|effect| matches!(effect, Effect::Supercharger(_)))
 }
 
 /// What sets a stock car apart: its factory engine, wheels (the same all round), rims,

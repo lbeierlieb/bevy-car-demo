@@ -1,8 +1,8 @@
 //! The built-in catalogue's engine parts and tire compounds.
 
-use super::TireCompound;
+use super::{CENTRIFUGAL, ROOTS, TURBO_SLOT, TireCompound};
 use crate::physics::engine::parts::{
-    Change, Effect, Field, Part, Readout, Regrind, Slot, TurboKit,
+    Change, Effect, Field, Part, Readout, Regrind, Slot, SuperchargerKit, TurboKit,
 };
 use crate::physics::tire::{COMPOUNDS, RACE, SPORT, STREET, TOURING};
 
@@ -293,15 +293,39 @@ pub fn slots() -> Vec<Slot> {
             ],
         ),
         slot(
-            "Turbocharger",
-            "A small turbo spools early; a big one can hold more boost at high rpm. Big \
-             engines get two, sized to match",
+            TURBO_SLOT,
+            "A small turbo spools early; a big one can hold more boost at high rpm. A \
+             Roots blower boosts from idle, takes power off the crank and heats the charge \
+             (it sticks up through a bonnet with a cut-out); a centrifugal supercharger's \
+             boost rises with the revs",
             Readout::Nothing,
             vec![
                 part("None", &[]),
                 part("Small", &[turbo(0.044, 0.048, 4.5e-4, 1.6e-5, 6e-4)]),
                 part("Medium", &[turbo(0.05, 0.054, 6e-4, 2.5e-5, 3e-4)]),
                 part("Large", &[turbo(0.058, 0.062, 8e-4, 4.2e-5, 3e-4)]),
+                part(
+                    ROOTS,
+                    &[Effect::Supercharger(SuperchargerKit {
+                        roots: true,
+                        displacement: 0.9e-3,
+                        leak: 3e-5,
+                        impeller: 0.05,
+                        ratio: 1.5,
+                        drag: [3.0, 0.8],
+                    })],
+                ),
+                part(
+                    CENTRIFUGAL,
+                    &[Effect::Supercharger(SuperchargerKit {
+                        roots: false,
+                        displacement: 0.0,
+                        leak: 0.0,
+                        impeller: 0.05,
+                        ratio: 19.0,
+                        drag: [1.5, 0.4],
+                    })],
+                ),
             ],
         ),
         Slot {

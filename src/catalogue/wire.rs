@@ -15,10 +15,10 @@ use crate::physics::drivetrain::Drive;
 use crate::physics::engine::families::{Family, Layout, Version};
 use crate::physics::engine::hardware::{
     BottomEnd, CamProfile, Compressor, Cooling, Diverter, EngineHardware, Exhaust, Intake,
-    Intercooler, Turbine, Turbo, ValveTrain, Wastegate,
+    Intercooler, Supercharger, Turbine, Turbo, ValveTrain, Wastegate,
 };
 use crate::physics::engine::parts::{
-    Change, Effect, Field, Part, Preset, Readout, Regrind, Slot, TurboKit,
+    Change, Effect, Field, Part, Preset, Readout, Regrind, Slot, SuperchargerKit, TurboKit,
 };
 use crate::physics::fuel::Tank;
 use crate::physics::tire::Compound;
@@ -301,6 +301,15 @@ fields!(Turbo {
     intercooler,
     diverter
 });
+fields!(Supercharger {
+    roots,
+    displacement,
+    leak,
+    compressor,
+    ratio,
+    drag,
+    bypass
+});
 fields!(Exhaust {
     header_length,
     pipe_area,
@@ -335,6 +344,7 @@ fields!(EngineHardware {
     port_flow,
     intake,
     turbo,
+    supercharger,
     exhaust,
     cooling,
     inertia
@@ -354,6 +364,14 @@ fields!(Regrind {
     duration,
     separation,
     lift
+});
+fields!(SuperchargerKit {
+    roots,
+    displacement,
+    leak,
+    impeller,
+    ratio,
+    drag
 });
 fields!(TurboKit {
     compressor,
@@ -420,6 +438,10 @@ impl Wire for Effect {
                 4u8.put(out);
                 kit.put(out);
             }
+            Effect::Supercharger(kit) => {
+                5u8.put(out);
+                kit.put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -437,6 +459,7 @@ impl Wire for Effect {
                 wilder: r.get()?,
             },
             4 => Effect::Turbo(r.get()?),
+            5 => Effect::Supercharger(r.get()?),
             _ => return None,
         })
     }
@@ -609,6 +632,8 @@ fields!(PartDef {
     absent,
     wear,
     bores,
+    needs,
+    provides,
     knobs,
     slots
 } text { id, name });
@@ -710,7 +735,9 @@ impl Item {
                 }
                 None => !slot.required || !whole,
             });
-        knobs && paint && slots && self.variant < def.variants(catalogue, chassis).max(1)
+        let needs = !(whole && def.kind == Kind::Chassis)
+            || crate::items::unmet_need(catalogue, self).is_none();
+        knobs && paint && slots && needs && self.variant < def.variants(catalogue, chassis).max(1)
     }
 }
 

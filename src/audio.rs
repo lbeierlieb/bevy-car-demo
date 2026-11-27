@@ -223,6 +223,15 @@ const WHISTLE_PITCH: f32 = 1.0;
 const WHISTLE_Q: f32 = 4.0;
 const WHISTLE: f32 = 0.007;
 const WHISTLE_IDLE: f32 = 0.3;
+/// A supercharger's whine: how loud at `WHINE_RPM` (on load; `WHINE_IDLE` of it off
+/// throttle, rising with the square of the revs), its highest pitch (Hz), how much of its
+/// second harmonic is in it, and a Roots blower's pockets per turn of its rotors.
+const WHINE: f32 = 0.02;
+const WHINE_RPM: f32 = 6000.0;
+const WHINE_IDLE: f32 = 0.35;
+const WHINE_MAX: f32 = 9000.0;
+const WHINE_SECOND: f32 = 0.35;
+const ROOTS_POCKETS: f32 = 6.0;
 /// Lowest and highest centre of the whistle (Hz).
 const WHISTLE_MIN: f32 = 100.0;
 const WHISTLE_MAX: f32 = 6000.0;
@@ -257,6 +266,8 @@ pub struct EngineCharacter {
     pub turbo_limit: f32,
     /// Swept volume of all cylinders (m³).
     pub displacement: f32,
+    /// A supercharger's whine: its pitch in orders of the crank's speed (0 without one).
+    pub whine: f32,
 }
 
 impl EngineCharacter {
@@ -267,6 +278,15 @@ impl EngineCharacter {
             exhaust: ExhaustSound::of(hardware),
             turbo_limit: hardware.turbo.map_or(0.0, |turbo| turbo.max_speed()),
             displacement: hardware.displacement(),
+            whine: hardware.supercharger.map_or(0.0, |charger| {
+                // A Roots blower's lobes sweep past the outlet six times a turn of its
+                // rotors; a centrifugal one's step-up gear whines at its impeller's speed.
+                if charger.roots {
+                    ROOTS_POCKETS * charger.ratio
+                } else {
+                    charger.ratio
+                }
+            }),
         }
     }
 }
@@ -433,6 +453,8 @@ struct Targets {
     exhaust: [AtomicU32; 4],
     /// Turbo shaft speed (revolutions per second), and that relative to its limit.
     turbo: [AtomicU32; 2],
+    /// A supercharger's whine in orders of the crank's speed.
+    whine: AtomicU32,
     /// Where another car is heard from: the pan (-1 left to 1 right), the low-pass's
     /// cutoff (Hz; 0 for our own car: stereo, unfiltered) and the Doppler factor.
     place: [AtomicU32; 3],
@@ -779,6 +801,8 @@ struct EngineVoice {
     turbo_share: f32,
     whistle: Resonator,
     whistle_tuned: f32,
+    /// The supercharger's whine: where in its cycle it is (0..1).
+    whine: f32,
     /// Where it's heard from (see `Targets::place`), gliding, and the low-pass's state.
     pan: f32,
     cutoff: f32,
@@ -817,6 +841,7 @@ impl EngineVoice {
             turbo_share: 0.0,
             whistle: Resonator::default(),
             whistle_tuned: 0.0,
+            whine: 0.0,
             pan,
             cutoff,
             doppler,
@@ -985,6 +1010,20 @@ impl EngineVoice {
             * (WHISTLE_IDLE + (1.0 - WHISTLE_IDLE) * load)
             * self.whistle.process(hiss)
             / band;
+        // A supercharger whines at a pitch following the crank, louder with the revs.
+        let orders = read(&self.targets.whine).clamp(0.0, 100.0);
+        let pitch = (doppler * orders * self.rpm / 60.0).min(WHINE_MAX);
+        self.whine = (self.whine + pitch / rate).fract();
+        let angle = TAU * self.whine;
+        let whine = if orders > 0.0 {
+            WHINE
+                * (self.rpm / WHINE_RPM).powi(2).min(1.5)
+                * (WHINE_IDLE + (1.0 - WHINE_IDLE) * load)
+                * (angle.sin() + WHINE_SECOND * (2.0 * angle).sin())
+        } else {
+            0.0
+        };
+        let whistle = whistle + whine;
 
         // Fewer cylinders pulse less often: level them out somewhat.
         let exhaust_level = (MUFFLED_LEVEL + (OPEN_LEVEL - MUFFLED_LEVEL) * open)
@@ -1064,6 +1103,7 @@ impl Targets {
         let volume = if run.running { volume } else { 0.0 };
         self.set(run.rpm, run.fill, volume);
         store(&self.displacement, voice.displacement);
+        store(&self.whine, voice.whine);
         self.set_layout(voice.layout);
         self.set_exhaust(voice.exhaust);
         let share = if voice.turbo_limit > 0.0 {
@@ -1316,6 +1356,7 @@ mod tests {
                     exhaust: ExhaustSound::of(&hardware),
                     turbo_limit: hardware.turbo.map_or(0.0, |turbo| turbo.max_speed()),
                     displacement: hardware.displacement(),
+                    whine: 0.0,
                 };
                 // A turbo spooling with engine speed and load, lagging a little.
                 let mut spool = 0.0;
@@ -1541,7 +1582,10 @@ mod tests {
         assert!(big_bore.bore > 1.1);
         let [short, long] = [1, 2].map(|part| ExhaustSound::of(&with("Exhaust manifold", part)));
         assert!(short.header > stock.header && stock.header > long.header);
-        assert_eq!(ExhaustSound::of(&with("Turbocharger", 2)).turbine, 1.0);
+        assert_eq!(
+            ExhaustSound::of(&with(crate::catalogue::TURBO_SLOT, 2)).turbine,
+            1.0
+        );
         // Every factory engine has a silencer and its pipes sized for it.
         let catalogue = crate::catalogue::builtin();
         for family in 0..catalogue.families.len() {

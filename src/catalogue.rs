@@ -34,6 +34,12 @@ pub use chassis::DEFAULT_CHASSIS;
 #[cfg(any(test, not(target_arch = "wasm32")))]
 pub use parts::{HEADERS, INTERCOOLER, PISTONS, TURBO};
 
+/// The built-in catalogue's slot for a turbo or a supercharger, and its superchargers (the
+/// game draws them by these names).
+pub const TURBO_SLOT: &str = "Turbo or supercharger";
+pub const ROOTS: &str = "Roots blower";
+pub const CENTRIFUGAL: &str = "Centrifugal supercharger";
+
 /// A catalogue shared by the cars built from it.
 pub type Shared = Arc<Catalogue>;
 

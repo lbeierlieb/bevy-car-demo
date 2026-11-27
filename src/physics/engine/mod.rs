@@ -20,6 +20,7 @@ pub mod hardware;
 pub mod maps;
 pub mod parts;
 pub mod store;
+pub mod supercharger;
 pub mod table;
 pub mod thermal;
 pub mod turbo;
@@ -61,6 +62,8 @@ const TURBO_LIMIT: f32 = 1.2;
 const WASTEGATE_LAG: f32 = 0.05;
 const INTERCOOLER_LAG: f32 = 2.0;
 const INTERCOOLER_FLOW: f32 = 0.05;
+/// Time constant of the charge's temperature after a supercharger (s).
+const CHARGE_LAG: f32 = 0.5;
 /// Volumetric efficiency lost per unit of valve float (spring force short of what the
 /// valves' inertia needs, relative to it), and the least that's left.
 const FLOAT_LOSS: f32 = 2.5;
@@ -239,13 +242,13 @@ impl Engine {
         for _ in 0..SUBSTEPS {
             let (pt, pm) = (self.boost_pressure, self.intake_pressure);
             let through = |pt, pm| orifice_flow(area, pt, pm, temperature);
-            let (compressed, vented) = self.tract_inflow(hardware, pt);
+            let (compressed, vented) = self.tract_inflow(hardware, pt, rpm);
             let (fill, pass, draw) = (
                 compressed - vented,
                 through(pt, pm),
                 self.cylinder_flow(build, rpm, pm),
             );
-            let (compressed_up, vented_up) = self.tract_inflow(hardware, pt + d);
+            let (compressed_up, vented_up) = self.tract_inflow(hardware, pt + d, rpm);
             let fill_slope = (compressed_up - vented_up - fill) / d;
             let pass_up = (through(pt + d, pm) - pass) / d;
             let pass_down = (through(pt, pm + d) - pass) / d;
@@ -268,6 +271,20 @@ impl Engine {
         self.exhaust_pressure = exhaust_pressure(hardware, flow, gas, self.wastegate);
         if let Some(turbo) = &hardware.turbo {
             self.step_turbo(turbo, hardware, flow, gas, dt);
+        }
+        if let Some(charger) = &hardware.supercharger {
+            // The charge follows what the supercharger heats it to (no intercooler).
+            let inlet = self.filtered(hardware);
+            let blown = supercharger::point(
+                charger,
+                rpm.abs(),
+                inlet,
+                self.boost_pressure,
+                AMBIENT_TEMPERATURE,
+            );
+            let rate = (blown.flow / INTERCOOLER_FLOW).min(1.0) * dt / CHARGE_LAG;
+            self.charge_temperature +=
+                (blown.temperature - self.charge_temperature) * rate.min(1.0);
         }
 
         // The cylinder walls heat the coolant; friction heats the coolant (mostly through
@@ -304,8 +321,18 @@ impl Engine {
     /// Air into the ducts ahead of the throttle with them at `pressure` (Pa): through the
     /// filter, or through the filter, compressor and intercooler; and air vented from them
     /// by the diverter valve (both kg/s).
-    fn tract_inflow(&self, hardware: &EngineHardware, pressure: f32) -> (f32, f32) {
+    fn tract_inflow(&self, hardware: &EngineHardware, pressure: f32, rpm: f32) -> (f32, f32) {
         let filter = hardware.intake.filter_area;
+        if let Some(charger) = &hardware.supercharger {
+            let inlet = self.filtered(hardware);
+            let temperature = AMBIENT_TEMPERATURE;
+            let flow = supercharger::point(charger, rpm.abs(), inlet, pressure, temperature).flow;
+            let valve = charger.bypass;
+            let open = (pressure - self.intake_pressure - valve.opens) / valve.span;
+            let area = valve.area * open.clamp(0.0, 1.0);
+            let bypassed = orifice_flow(area, pressure, inlet, self.charge_temperature);
+            return (flow, bypassed);
+        }
         let Some(turbo) = &hardware.turbo else {
             let flow = orifice_flow(filter, AMBIENT_PRESSURE, pressure, AMBIENT_TEMPERATURE);
             return (flow, 0.0);
@@ -320,6 +347,21 @@ impl Engine {
             orifice_flow(area, pressure, inlet, self.charge_temperature)
         });
         (flow, vented)
+    }
+
+    /// Pressure after the air filter, with the air through it as it was (Pa).
+    fn filtered(&self, hardware: &EngineHardware) -> f32 {
+        let area = hardware.intake.filter_area;
+        AMBIENT_PRESSURE - self.compressor_flow.powi(2) / (2.0 * ambient_density() * area * area)
+    }
+
+    /// What driving the supercharger takes at the crank at `rpm` (N·m; none without one).
+    fn blower_torque(&self, hardware: &EngineHardware, rpm: f32) -> f32 {
+        hardware.supercharger.map_or(0.0, |charger| {
+            let inlet = self.filtered(hardware);
+            let (outlet, temperature) = (self.boost_pressure, AMBIENT_TEMPERATURE);
+            supercharger::point(&charger, rpm.abs(), inlet, outlet, temperature).torque
+        })
     }
 
     /// Pressures at the compressor's inlet and outlet with the ducts at `pressure`: less
@@ -372,10 +414,11 @@ impl Engine {
     /// turned (fading out over the last few rpm, so it holds still rather than chattering).
     pub fn torque(&self, build: &EngineBuild, rpm: f32) -> f32 {
         let cycle = self.cycle(build, rpm);
+        let blower = self.blower_torque(&build.hardware, rpm) * rpm.signum();
         if self.firing {
-            (cycle.indicated - cycle.losses) / (4.0 * PI)
+            (cycle.indicated - cycle.losses) / (4.0 * PI) - blower
         } else {
-            -cycle.losses / (4.0 * PI) * (rpm / 30.0).clamp(-1.0, 1.0)
+            -cycle.losses / (4.0 * PI) * (rpm / 30.0).clamp(-1.0, 1.0) - blower
         }
     }
 

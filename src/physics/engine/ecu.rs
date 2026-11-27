@@ -187,8 +187,10 @@ impl Ecu {
 
     /// A factory tune of a `model` ECU for the hardware: its VE table matches the engine,
     /// it runs λ = 1 at part load and richer towards full load, and the spark just short
-    /// of MBT or of the knock limit on `octane` fuel, whichever comes first. With a turbo,
-    /// the maps reach 300 kPa and go richer still on boost, and richer again where the
+    /// of MBT or of the knock limit on `octane` fuel (with the charge as hot as the turbo's
+    /// or supercharger's compressor leaves it), whichever comes first. With a turbo or a
+    /// supercharger, the maps reach 300 kPa and go richer still on boost; with a turbo
+    /// richer again where the
     /// turbine inlet would come near its limit (`TURBINE_MARGIN`). With cam control, it switches
     /// cams where the second profile breathes better, and phases the cams for the most air
     /// under load (at rest at light load).
@@ -198,7 +200,8 @@ impl Ecu {
         octane: f32,
         model: EcuModel,
     ) -> Self {
-        let top = if hardware.turbo.is_some() { 30 } else { 11 };
+        let boosted = hardware.turbo.is_some() || hardware.supercharger.is_some();
+        let top = if boosted { 30 } else { 11 };
         let axes = || {
             let rpm = (0..19).map(|i| i as f32 * 500.0).collect();
             let map = (1..=top).map(|i| i as f32 * 10e3).collect();
@@ -210,13 +213,10 @@ impl Ecu {
         };
         // On the dyno: the charge as warm as the intercooler leaves it, the exhaust
         // pressure whatever the turbo and exhaust make with the wastegate on its spring.
-        let charge = |map| {
-            hardware
-                .turbo
-                .as_ref()
-                .map_or(AMBIENT_TEMPERATURE, |turbo| {
-                    turbo::expected_charge(turbo, map)
-                })
+        let charge = |map| match (&hardware.turbo, &hardware.supercharger) {
+            (Some(turbo), _) => turbo::expected_charge(turbo, map),
+            (None, Some(charger)) => super::supercharger::expected_charge(charger, map),
+            (None, None) => AMBIENT_TEMPERATURE,
         };
         let wastegate = |map: f32| {
             hardware.turbo.as_ref().map_or(0.0, |turbo| {

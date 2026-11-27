@@ -41,7 +41,7 @@ use crate::terrain::Spawn;
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 43;
+pub const PROTOCOL: u32 = 44;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -890,6 +890,7 @@ impl Wire for EngineCharacter {
         self.exhaust.turbine.put(out);
         self.turbo_limit.put(out);
         self.displacement.put(out);
+        self.whine.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         let layout = *Layout::ALL.get(r.get::<usize>()?)?;
@@ -904,6 +905,7 @@ impl Wire for EngineCharacter {
             exhaust,
             turbo_limit: r.get()?,
             displacement: r.get()?,
+            whine: r.get::<f32>()?.clamp(0.0, 100.0),
         })
     }
 }

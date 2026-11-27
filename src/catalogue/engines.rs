@@ -72,6 +72,7 @@ fn block(b: Block) -> EngineHardware {
         port_flow: b.flow,
         intake: reference.intake,
         turbo: None,
+        supercharger: None,
         exhaust: reference.exhaust,
         cooling: reference.cooling,
         inertia: b.inertia,

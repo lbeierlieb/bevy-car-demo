@@ -737,6 +737,11 @@ fn shifted(path: &[u8], supply: &Supply) -> Result<Path, String> {
 
 /// Why `car` lacks a part one of its parts needs, if it does.
 pub fn needs_missing(catalogue: &Catalogue, car: &Item) -> Option<String> {
+    if car.def(catalogue).kind == Kind::Chassis
+        && let Some((part, need)) = crate::items::unmet_need(catalogue, car)
+    {
+        return Some(format!("The {} needs a {need}", part.to_lowercase()));
+    }
     let slots = &car.def(catalogue).slots;
     for (slot, item) in slots.iter().zip(&car.slots) {
         let Some(item) = item else {
@@ -1162,6 +1167,57 @@ mod tests {
         assert_eq!(done.spec.parts.version, 1);
         let swapped = crate::saved::Condition::of_parts(&catalogue, &done.spec.car, 30.0, 95.0);
         assert_eq!(swapped.damage.cylinders[0].rod, 0.2);
+    }
+
+    #[test]
+    fn a_roots_blower_needs_a_bonnet_with_a_cut_out() {
+        let catalogue = builtin();
+        let before = spec(0);
+        let workshop = shop(ShopKind::Tuning, &["turbocharger.*", "vireo.bonnet*"]);
+        let engine = slots_of(&catalogue, &before.car, Kind::Engine)[0];
+        let engine_def = before.car.slots[engine as usize]
+            .as_ref()
+            .unwrap()
+            .def(&catalogue);
+        let turbo = (engine_def.slots.iter())
+            .position(|slot| slot.kind == Kind::EnginePart(crate::catalogue::TURBO))
+            .unwrap() as u8;
+        let blower = Work::Fit {
+            slots: vec![vec![engine, turbo]],
+            supply: new(&catalogue, "turbocharger.roots-blower"),
+        };
+        let err = run(
+            &catalogue,
+            &workshop,
+            &before,
+            std::slice::from_ref(&blower),
+        )
+        .unwrap_err();
+        assert!(err.contains("bonnet with a cut-out"), "{err}");
+        let bonnet = Work::Fit {
+            slots: vec![slots_of(
+                &catalogue,
+                &before.car,
+                Kind::Body(crate::items::Panel::Bonnet),
+            )],
+            supply: new(&catalogue, "vireo.bonnet.cut-out"),
+        };
+        let done = run(&catalogue, &workshop, &before, &[bonnet, blower]).unwrap();
+        let hardware = done.spec.parts.hardware();
+        assert!(hardware.supercharger.is_some_and(|s| s.roots));
+        // The centrifugal one goes under the plain bonnet.
+        let centrifugal = Work::Fit {
+            slots: vec![vec![engine, turbo]],
+            supply: new(&catalogue, "turbocharger.centrifugal-supercharger"),
+        };
+        let done = run(&catalogue, &workshop, &before, &[centrifugal]).unwrap();
+        assert!(
+            done.spec
+                .parts
+                .hardware()
+                .supercharger
+                .is_some_and(|s| !s.roots)
+        );
     }
 
     #[test]

@@ -340,8 +340,8 @@ impl Parts {
     }
 
     /// Puts every item on the stack at `depth` or deeper into its parent's slot (by the
-    /// slot's name: the first free one called so), a tree's root among the roots. An item
-    /// without a slot for it is dropped.
+    /// slot's name: the first free one called so, else of its kind), a tree's root among the
+    /// roots. An item without a slot for it is dropped.
     fn settle(&mut self, catalogue: &Catalogue, depth: usize) {
         while self.stack.last().is_some_and(|(d, ..)| *d >= depth) {
             let (_, slot, item) = self.stack.pop().expect("an item");
@@ -350,8 +350,17 @@ impl Parts {
                 continue;
             };
             let slots = &catalogue.defs[parent.def].slots;
-            let free = (slots.iter().zip(&parent.slots))
-                .position(|(s, fitted)| s.name == slot && fitted.is_none());
+            // A slot renamed since: the first free one of the part's kind.
+            let kind = catalogue.defs[item.def].kind;
+            let named = slots.iter().any(|s| s.name == slot);
+            let free = (slots.iter().zip(&parent.slots)).position(|(s, fitted)| {
+                fitted.is_none()
+                    && if named {
+                        s.name == slot
+                    } else {
+                        s.kind == kind
+                    }
+            });
             match free {
                 Some(place) => parent.slots[place] = Some(item),
                 None => bevy::log::warn!(

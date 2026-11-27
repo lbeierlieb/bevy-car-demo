@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use crate::body::{Body, Builder, CARPET, DARK, METAL, TRIM, Wheels};
 use crate::catalogue::Catalogue;
 use crate::chassis::{Chassis, Orientation};
-use crate::items::{Does, Item, Kind, Seat};
+use crate::items::{BONNET_CUT_OUT, Does, Item, Kind, Panel, Seat};
 
 const CAST: [f32; 3] = [0.42, 0.43, 0.45];
 const ALLOY: [f32; 3] = [0.68, 0.69, 0.7];
@@ -123,7 +123,11 @@ fn engine_bay(
     };
     let family = &catalogue.families[family];
     let cylinders = family.versions[version].block.cylinders.max(1) as usize;
-    let turbo = named("Turbocharger").is_some_and(|turbo| turbo != "None");
+    use crate::catalogue::{CENTRIFUGAL, ROOTS, TURBO_SLOT};
+    let charger = named(TURBO_SLOT);
+    let roots = charger == Some(ROOTS);
+    let centrifugal = charger == Some(CENTRIFUGAL);
+    let turbo = charger.is_some_and(|turbo| turbo != "None") && !roots && !centrifugal;
     if turbo && named("Intercooler").is_some_and(|cooler| cooler != "None") {
         let y = body.floor + 0.12;
         b.cuboid(
@@ -231,6 +235,86 @@ fn engine_bay(
         b.bar(compressor + Vec3::Y * 0.08, mouth, 0.06, ALLOY);
         exhaust = turbine - Vec3::Y * 0.08;
         intake_from = compressor + axes[0] * 0.12;
+    }
+    // A Roots blower on top of the engine, over the intake, sticking up through the
+    // bonnet (its cut-out's frame around it, in the bonnet's paint); its belt from the
+    // crank's pulley at the belt end, the air filter's pipe to its inlet.
+    if roots {
+        let base = to(0.0, 0.92, -0.18);
+        let top = under_bonnet + 0.16;
+        let rise = (top - base.y).max(0.12);
+        let centre = base + Vec3::Y * (rise / 2.0);
+        b.oriented_box(centre, axes, Vec3::new(0.58 * along, rise, 0.24), ALLOY);
+        for k in 0..5 {
+            let u = (k as f32 / 4.0 - 0.5) * 0.5 * along;
+            b.oriented_box(
+                centre + axes[0] * u + Vec3::Y * 0.02,
+                axes,
+                Vec3::new(0.015, rise - 0.02, 0.26),
+                CAST,
+            );
+        }
+        // The scoop on top, and the pulley and belt down to the crank.
+        b.oriented_box(
+            Vec3::new(centre.x, top + 0.04, centre.z),
+            axes,
+            Vec3::new(0.32 * along, 0.08, 0.2),
+            BLACK,
+        );
+        let pulley = centre + axes[0] * (0.34 * along);
+        b.cylinder(
+            pulley - axes[0] * 0.02,
+            pulley + axes[0] * 0.02,
+            0.06,
+            10,
+            DARK,
+        );
+        b.bar(pulley, to(0.47, 0.25, 0.0), 0.02, BLACK);
+        if let Some(bonnet) = car.fitted(catalogue, Kind::Body(Panel::Bonnet)).next()
+            && (bonnet.def(catalogue).provides.iter()).any(|p| p == BONNET_CUT_OUT)
+        {
+            let paint = bonnet.paint.or(car.paint).unwrap_or(0);
+            let color = catalogue.paints.get(paint).map_or([0.5; 3], |p| p.color);
+            let y = under_bonnet + 0.05;
+            let (half_u, half_w) = (0.32 * along + 0.04, 0.16);
+            let ring = Vec3::new(centre.x, y, centre.z);
+            for (u, w, long) in [
+                (0.0, half_w, true),
+                (0.0, -half_w, true),
+                (half_u, 0.0, false),
+                (-half_u, 0.0, false),
+            ] {
+                let size = if long {
+                    Vec3::new(2.0 * half_u + 0.04, 0.04, 0.04)
+                } else {
+                    Vec3::new(0.04, 0.04, 2.0 * half_w)
+                };
+                b.oriented_box(ring + axes[0] * u + axes[2] * w, axes, size, color);
+            }
+        }
+        intake_from = centre - axes[0] * (0.3 * along) + Vec3::Y * 0.02;
+    }
+    // A centrifugal supercharger at the belt end, low on the intake side: its snail, the
+    // belt from the crank, and its pipe up to the throttle.
+    if centrifugal {
+        let snail = to(0.42, 0.42, -0.42);
+        b.cylinder(
+            snail - axes[0] * 0.05,
+            snail + axes[0] * 0.05,
+            0.1,
+            12,
+            ALLOY,
+        );
+        b.cylinder(
+            snail + axes[0] * 0.05,
+            snail + axes[0] * 0.09,
+            0.05,
+            10,
+            DARK,
+        );
+        b.bar(snail + axes[0] * 0.07, to(0.47, 0.2, 0.0), 0.02, BLACK);
+        b.bar(snail + Vec3::Y * 0.1, mouth, 0.05, ALLOY);
+        intake_from = snail - axes[0] * 0.08;
     }
     // The air filter: the stock box (a panel filter in it, red if it's the sport one)
     // over the gearbox with a pipe to the throttle, or an open cone on the pipe's end.
@@ -466,7 +550,7 @@ mod tests {
         let car = &catalogue.trims[0].car;
         let mut turbo = car.clone();
         let slot = (catalogue.slots.iter())
-            .position(|s| s.name == "Turbocharger")
+            .position(|s| s.name == crate::catalogue::TURBO_SLOT)
             .unwrap();
         let def = (catalogue.defs.iter())
             .position(|d| d.does == Does::EnginePart { slot, part: 2 })
@@ -484,11 +568,23 @@ mod tests {
             }
         }
         swap(&mut turbo, &catalogue, slot, def);
-        assert_eq!(part(&catalogue, &turbo, "Turbocharger"), Some("Medium"));
+        assert_eq!(
+            part(&catalogue, &turbo, crate::catalogue::TURBO_SLOT),
+            Some("Medium")
+        );
         let (plain, boosted) = (
             triangles(&mesh(&catalogue, chassis, car)),
             triangles(&mesh(&catalogue, chassis, &turbo)),
         );
         assert!(boosted > plain, "{boosted} vs {plain}");
+        // So do the superchargers.
+        for part in [4, 5] {
+            let def = (catalogue.defs.iter())
+                .position(|d| d.does == Does::EnginePart { slot, part })
+                .unwrap();
+            let mut charged = car.clone();
+            swap(&mut charged, &catalogue, slot, def);
+            assert!(triangles(&mesh(&catalogue, chassis, &charged)) > plain);
+        }
     }
 }

@@ -292,6 +292,10 @@ pub struct PartDef {
     pub wear: Option<Wear>,
     /// Comes in the bore sizes (`OVERSIZES`): a block, and the pistons for it.
     pub bores: bool,
+    /// What it needs another part of the car to provide (a Roots blower, a bonnet with a
+    /// cut-out to stick through), and what it provides.
+    pub needs: Vec<String>,
+    pub provides: Vec<String>,
     pub knobs: Vec<Knob>,
     pub slots: Vec<SlotDef>,
 }
@@ -506,6 +510,21 @@ impl Item {
     }
 }
 
+/// What a Roots blower needs (and a bonnet with a cut-out provides).
+pub const BONNET_CUT_OUT: &str = "bonnet with a cut-out";
+
+/// A part of `car` (a car's tree) that needs what no part of it provides: the part's name
+/// and what it needs.
+pub fn unmet_need<'a>(catalogue: &'a Catalogue, car: &Item) -> Option<(&'a str, &'a str)> {
+    let all = car.all();
+    let defs = || all.iter().filter_map(|item| catalogue.defs.get(item.def));
+    let provided = |need: &String| defs().any(|def| def.provides.contains(need));
+    defs().find_map(|def| {
+        let need = def.needs.iter().find(|need| !provided(need))?;
+        Some((def.name.as_str(), need.as_str()))
+    })
+}
+
 /// What's seen of a car's body: the colours of the body parts fitted to `car` (a car's
 /// tree), each by its slot (the first of a pair of slots is the left one), and the
 /// shell's.
@@ -537,9 +556,17 @@ pub fn dress(catalogue: &Catalogue, car: &Item) -> crate::body::Dress {
             pieces.push((panel, side, color(item.paint)));
         }
     }
+    let wing =
+        (car.fitted(catalogue, Kind::Body(Panel::RearSpoiler)).next()).is_some_and(|spoiler| {
+            matches!(
+                spoiler.def(catalogue).does,
+                Does::Body(Aero { wing: true, .. })
+            )
+        });
     crate::body::Dress {
         shell: color(car.paint),
         pieces,
+        wing,
     }
 }
 
