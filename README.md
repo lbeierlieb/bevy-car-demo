@@ -94,6 +94,17 @@ is `nix build .#server`, the editors are run from the dev shell). The web build 
 targets and runs clippy, rustfmt, nixfmt and deadnix. GitHub Actions runs it on every
 pull request.
 
+### Windows
+
+`nix build .#windows` (on x86_64 Linux) cross-compiles the game for 64-bit Windows with
+mingw: `result/bin/car-sim.exe` runs on its own (everything is compiled in, no DLLs), and
+`result/car-sim-windows.zip` is that with a README and the font's licence, to hand out.
+It has the wheel icon (`assets/icon/car-sim.ico`, drawn by `src/icon.rs` and put in by
+`build.rs` with mingw's `windres`) and no console window. Settings go to
+`%APPDATA%\car-sim`, the engine maps' cache to `%LOCALAPPDATA%\car-sim`. Force feedback
+is Linux only; wheels and pedals still work as controls. It isn't part of `nix flake
+check` (another full build of Bevy).
+
 ## Multiplayer
 
 The game starts with a menu: **Play alone**, or **Join server** with your name, password

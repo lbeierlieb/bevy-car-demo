@@ -62,6 +62,7 @@
               ./assets
               ./src
               ./web
+              ./build.rs
             ];
           };
 
@@ -165,6 +166,68 @@
                 remove-references-to -t ${toolchain} -t "$cargoVendorDir" $out/*
               '';
               dontFixup = true;
+            }
+          );
+
+          # The game for Windows (x86_64), cross-compiled with mingw: `car-sim.exe` stands
+          # alone (the map, fonts, shops and events are compiled in; no DLLs), and
+          # `car-sim-windows.zip` holds it with a README and the font's licence. A toolchain
+          # of its own, so the other packages' dependencies aren't built again for it.
+          mingw = pkgs.pkgsCross.mingwW64;
+          mingwBin = "${mingw.stdenv.cc}/bin/${mingw.stdenv.cc.targetPrefix}";
+          windowsCraneLib = (crane.mkLib pkgs).overrideToolchain (
+            p: p.rust-bin.stable.latest.minimal.override { targets = [ "x86_64-pc-windows-gnu" ]; }
+          );
+          windowsArgs = {
+            pname = "${pname}-windows";
+            inherit version src;
+            strictDeps = true;
+            doCheck = false;
+            depsBuildBuild = [ mingw.stdenv.cc ];
+            CARGO_BUILD_TARGET = "x86_64-pc-windows-gnu";
+            CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "${mingwBin}cc";
+            # Rust links `libpthread.a` statically (no libwinpthread DLL to ship).
+            CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-L native=${mingw.windows.pthreads}/lib";
+            # For the C in ring and SQLite, and the icon (`build.rs`).
+            CC_x86_64_pc_windows_gnu = "${mingwBin}cc";
+            AR_x86_64_pc_windows_gnu = "${mingwBin}ar";
+            WINDRES = "${mingwBin}windres";
+          };
+          windowsDeps = windowsCraneLib.buildDepsOnly windowsArgs;
+          windowsReadme = pkgs.writeText "README.txt" ''
+            Car Sim for Windows (64-bit)
+
+            Start car-sim.exe. It isn't signed, so Windows may warn the first time: "More
+            info", then "Run anyway".
+
+            It needs a graphics card with DirectX 12 or Vulkan. Steering wheels, pedals and
+            gamepads work as controls (Esc, Settings, Controls); force feedback is only on
+            Linux for now.
+
+            Settings and playing alone's garage are kept in %APPDATA%\car-sim, worked out
+            engine maps in %LOCALAPPDATA%\car-sim (can be deleted).
+
+            The menus' font is Ubuntu, under the Ubuntu Font Licence
+            (UBUNTU-FONT-LICENCE.txt).
+          '';
+          windows = windowsCraneLib.buildPackage (
+            windowsArgs
+            // {
+              cargoArtifacts = windowsDeps;
+              cargoExtraArgs = "--locked --bin ${pname}";
+              nativeBuildInputs = [ pkgs.zip ];
+              # The host's strip doesn't know Windows executables.
+              dontStrip = true;
+              postInstall = ''
+                ${mingwBin}strip $out/bin/${pname}.exe
+                mkdir -p zip/${pname}
+                cp $out/bin/${pname}.exe zip/${pname}/
+                cp ${windowsReadme} zip/${pname}/README.txt
+                cp ${./assets/fonts/LICENCE.txt} zip/${pname}/UBUNTU-FONT-LICENCE.txt
+                find zip -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+                (cd zip && zip -9 -X -r $out/${pname}-windows.zip ${pname})
+              '';
+              meta.description = "Car Sim for Windows (x86_64), cross-compiled";
             }
           );
 
@@ -280,6 +343,9 @@
               server
               serve-wasm
               ;
+          }
+          // lib.optionalAttrs (system == "x86_64-linux") {
+            inherit windows;
           };
 
           apps = {

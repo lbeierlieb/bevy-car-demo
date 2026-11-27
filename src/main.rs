@@ -1,6 +1,12 @@
 //! The sandbox: every car and part for free, with the developer tools; alone or on a
 //! server.
 
+// No console window on Windows (release builds: the log goes nowhere there).
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 use bevy::prelude::*;
 use car_sim::*;
 
