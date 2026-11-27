@@ -818,7 +818,7 @@ As built:
   only gives the stock engines' maps (not ones it baked); the race editor uses the
   built-in catalogue (biggest car box); a catalogue file.
 
-## Owning cars and parts (planned with the user, 2026-11-26; milestones 1–8 built)
+## Owning cars and parts (planned with the user, 2026-11-26; milestones 1–9 built)
 
 The whole plan, with milestones: `docs/cars-and-parts.md` (keep it up to date).
 
@@ -1109,6 +1109,66 @@ intercooler with a supercharger, superchargers' wear, brake parts per corner (th
 one counts, as for every per-axle part), front/rear brake parts kept apart (any brake
 goes in any corner), the tune left as it was after fitting forced induction (as with
 turbo kits: retune at a dyno), the whine and fading never heard or felt here.
+
+Milestone 9, trading (2026-11-27, built while the user slept; my decisions are in the
+plan's "Decided while building milestone 9"). **Wallet** (`trade.rs`: `START_MONEY`
+5 000 €, cents everywhere, `euros` formats "5 000 €"): `accounts.money` (migration 3,
+default 500000, a test checks it equals the constant), `Account::money` → `Admitted::money`
+→ `Peer::money` (guests and servers without a database: the start amount, for the
+session). Money changes only on the server: `Peer::pay(delta, accounts, catalogue)` adds
+it and, with an account, sends `Job::Pay` (`Store::pay`: `add_money` (`WHERE money + ? >=
+0`) and the whole belongings in one transaction); `Peer::paid` when the database did it
+already. The memory's wallet is a lower bound (only other instances' sales add to it): the
+lock refresh also reads the wallets (`Answer::Balances`), taken only if the server didn't
+change that wallet since asking (`money_changes`, `Server::asked_money`). Told in
+`OwnedView::money`; the central menu ("Money") and every `shop_window` show it (`Shops::money`).
+`stash::belongings` saves a car being built anew (no state yet) from its spec and waiting
+condition instead of dropping it. `db::Answer` is an enum now (logins, balances, market),
+`Accounts` sorts them (`answers`, `balances`, `market`). **Used parts shops** (kind `used`):
+`trade::used_parts` makes up `USED_PARTS` (12) wares from the `sells` lines every
+`STOCK_PERIOD` (30 min; seeded by shop name, period and a per-server number,
+`net::trading::Stocks`), worn at random (`wear_out`; rims/tires in the trims' sizes, any
+paint), sold at `selling_price` (half of `worn_value`, at least 5 €), into the trunk or
+held there; anything brought (trunk or held) bought at `buying_price` (15 %, at least 1 €)
+and gone. While catalogue prices are 0, `new_value` is a guess per `Kind` (×2.5 for tuning
+ids). **Used car dealers** (kind `usedcars`): `used_cars` (`USED_CARS` 4 of the sold
+trims, any paint, `wear_by_mileage` 25–240k km: tires/pads anyhow, clutch, gears, engine by
+mileage, nothing failed), `car_price` (40 % of worn value, less up to 45 % by mileage, in
+fifties), `Trade::BuyCar { trade_in }` like the showroom (`stash::bought` takes a
+condition; `spec_of_trim` builds the worn tree), the trade-in paid at `trade_in_price` (15
+% of car and trunk). **Marketplace** (kind `market`, "Marktplatz Baunach" (100, 2450);
+needs a database): table `offers` (migration 4: seller, seller_name, what `part`/`car`,
+data as saved text, price, made); `Store::offer` (at most `MOST_OFFERS` 20 each, the
+seller's belongings without it saved in the same transaction), `offers` (newest 300),
+`withdraw` (into the seller's garage), `buy_offer` (in one transaction: the offer must still
+be there at that price, `DELETE` counting rows decides between two buyers, buyer debited
+(not for a guest), seller credited, into the buyer's garage). The server asks through
+`Accounts::offers/offer/withdraw/buy_offer` and answers in the `market` system
+(`trading::answered`: tells `ToClient::Market`, a refused offer goes back into the garage,
+a seller here is paid at once and told in the chat, the offers re-listed);
+`Peer::market_waiting` stops `save_all` overwriting what the database did meanwhile, and
+a player leaving waits for those answers (`flush`). Guests buy, never offer. Protocol:
+`ToServer::Trade(Trade)` (`Look`, `BuyPart`, `Sell`, `BuyCar`, `Offer { what: Offering,
+price }`, `Withdraw`, `BuyOffer { offer, price }`), `ToClient::Stock` (wares and cars),
+`ToClient::Market` (`OfferView`: seller, mine, price, `Offered::Part`/`Car(ParkedView)`);
+protocols 45–48. **Game** (`dealers.rs`, `DealersPlugin`): window-only shops (no 3D
+scenes): the used parts list and "Sell a part", the cars with a car screen (mileage,
+condition, trade-in toggle), the marketplace (offers, your offers, "Offer something" → a
+price slider over `trade::price_steps`, 1 € to 1 000 000 €), and `dealers::inspect` (every
+part in its slot with its wear, focusable rows) for used cars, offers and the garage's
+cars (trunk's car screen). Screens go on `AtShop::stash` as `trunk::Screen::Deal`; a window
+asks `Look` again every second until something came. Shops file: `used` in Gerach
+(−2560, −1700) and Rattelsdorf (3000, −500) selling `*`, `usedcars` in Reckendorf (−1380,
+−1150) and Baunach (450, 2330), the marketplace; `every_shop_is_by_a_road` also checks no
+two share a marker. Shots: `PLACE="-2560,-1700,150"` (used parts), `"-1380,-1150,150"`
+(used cars), `"100,2450,150"` (marketplace), 300 frames. Tests: `db::tests` (`wallet`,
+`market`, also in `on_another_database`: passed on PostgreSQL 18 and MariaDB 11.4),
+`trade::tests`, `a_used_parts_shop_sells_and_buys_parts` (and the wallet kept),
+`a_used_car_dealer_sells_worn_cars`, `players_trade_at_the_marketplace` (offer locked,
+wrong price, bought once, paid, withdrawn, paid while away, a guest). Not done: 3D scenes
+for the three, shipping straight to the marketplace from a shop, money earned otherwise,
+prices at the other shops (so new free parts sold to a used parts shop, or a free new car
+traded in at a used car dealer, make money).
 
 The game is about tuning every aspect of a car. Agreed so far (the user's answers):
 - **Parts are items** you own (a definition from the server's catalogue + condition),

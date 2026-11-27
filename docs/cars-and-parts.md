@@ -1,7 +1,7 @@
 # Owning cars and parts: the plan
 
 Agreed with the user in rounds of questions on 2026-11-26 (the decisions are also short
-in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–8 are built. The milestones are
+in `CLAUDE.md`, "Owning cars and parts"). Milestones 1–9 are built. The milestones are
 in the order they're meant to be built; each ends with clippy and tests passing and the
 game playable.
 
@@ -263,8 +263,15 @@ a real wheel.
 - Seats' masses (out and lighter seats save weight; insulation unchanged).
 - The supercharger (new engine physics) with the bonnet cut-out it needs.
 
-### 9. Trading
+### 9. Trading (done 2026-11-27)
 
+Built as below while the user slept (see `CLAUDE.md`, "Owning cars and parts"; my
+decisions are under "Decided while building milestone 9" at the end). Not done: 3D scenes
+for the three new places (they're windows at the marker), money earned any other way,
+prices at the other shops (see the decisions: free new parts and cars can be sold for
+money meanwhile), shipping from a shop straight to the marketplace (only from the garage).
+
+- Wallet: every account's money in the database, shown in the menu and shop windows.
 - Used parts shop (buys; sells made-up worn parts), used car dealer (worn trims).
 - Marketplace: offers locked there, buying, an offer's parts inspected (the same view as
   the garage's).
@@ -395,3 +402,50 @@ Decided by me (the user asleep; to look over):
   parts'), ride height and wing angle in the alignment window, brake temperatures and
   pads, clutch and gear wear, downforce and boost in the telemetry panel (2), hints for
   fading brakes, worn pads, a slipping clutch and a grinding synchro.
+
+## Decided while building milestone 9 (2026-11-27, the user asleep; to look over)
+
+- **Wallet**: a new account (and every existing one, by the migration) starts with
+  **5 000 €**; a guest gets that for the session, as does everyone on a server without a
+  database. Money is kept in cents. It's shown in the central menu ("Money") and at the top
+  of every shop's window. The server changes it only together with what it pays for, in one
+  database transaction with the player's whole belongings; another instance's sale reaches
+  a seller's wallet with the next lock refresh (10 s), one on the same instance at once.
+- **What a part is worth** while every catalogue price is 0: a guess per kind of part
+  (chassis 3 000 €, a body panel 250 €, mirror 60 €, gearbox 700 €, long block 400 € plus
+  its insides at 150 € each, rim 80 €, tire 70 €, …; ×2.5 for tuning parts by their ids),
+  with what's fitted into it. A stock Vireo comes to about 12 000 € new. "Worn" value takes
+  each part's worst wear off its own value.
+- **Used parts shops** ("Teilekiste Gerach" (−2560, −1700), "Altteile am Mühlgraben" in
+  Rattelsdorf (3000, −500), both `sells *`): 12 things at a time, changing every half hour,
+  each worn at random (5–80 % of a level; the engine's insides at most half worn, nothing
+  failed), sold for half of what they're worth worn (at least 5 €). They buy anything
+  brought in the trunk or held there for 15 % of what it's worth worn (at least 1 €); it's
+  gone. A part bought goes into the trunk, else the shop holds it.
+- **Used car dealers** ("Gebrauchtwagen Reckendorf" (−1380, −1150), "Gebrauchtwagen am
+  Brückla" in Baunach (450, 2330), selling the Vireo trims): four cars at a time, changing
+  every half hour, in any paint (a resprayed look), with 25 000–240 000 km: tires and pads
+  worn at random (10–80 %), clutch, synchros and the engine by the mileage (never failed),
+  a 30 % full tank. Price: 40 % of the worn value, less up to 45 % by mileage (about
+  2 500–4 300 €: a new player can afford one). Trading in the car driven there is worth
+  15 % of it and its trunk (it's always less than buying the same car back). The car
+  dealers' trade-in stays free (their cars cost nothing).
+- **Known loophole until prices come**: new parts at workshops and new cars at car dealers
+  are free, so selling them to a used parts shop or trading a new car in at a used car
+  dealer makes money. Left as it is (the user's "shops keep charging 0 €"); it goes away
+  with prices.
+- **Marketplace**: one, "Marktplatz Baunach" (100, 2450), a kind of shop (`market`). It
+  needs the server's database (a server without one says it keeps no marketplace). Parts
+  from the trunk, held there or in the garage, and cars from the garage (never the car
+  driven) are offered at 1 € to 1 000 000 €, picked with left/right in steps (1, 1.2, 1.5,
+  2, 2.5, 3, 4, 5, 6, 8 × tenfold), starting at what a dealer would ask. At most 20 offers
+  each. What's offered is gone from what the player owns (locked) until bought or taken
+  back; taken back and bought things go into the garage (shipped, free). Withdrawing and
+  buying happen at the marketplace. A refused offer (too many) goes into the garage too.
+  Guests can buy, not offer (nothing of theirs is kept). Buying at a stale price is refused.
+  The seller hears of a sale in the chat if playing on the same instance.
+- **The three new places have no 3D scenes**: their windows open on the marker like the
+  garage park's (the menus work with the six buttons; an offer's or used car's parts and
+  wear are a list of rows, "What it's built of", also on the garage's cars).
+- Protocol 45–48; no save format change (money is a column, offers a table: migrations 3
+  and 4 for every dialect, tried on SQLite, PostgreSQL 18 and MariaDB 11.4).
