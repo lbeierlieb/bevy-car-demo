@@ -534,7 +534,7 @@ fn engine_bay(
         }
     }
     // A Roots blower on top of the engine, over the intake, sticking up through the
-    // bonnet (its cut-out's frame around it, in the bonnet's paint); its belt from the
+    // bonnet's cut-out; its belt from the
     // crank's pulley at the belt end, the air filter's pipe to its inlet.
     if roots {
         let base = to(0.0, 0.92, if vee { 0.0 } else { -0.18 });
@@ -567,29 +567,36 @@ fn engine_bay(
             DARK,
         );
         b.bar(pulley, to(0.47, 0.25, 0.0), 0.02, BLACK);
-        if let Some(bonnet) = car.fitted(catalogue, Kind::Body(Panel::Bonnet)).next()
-            && (bonnet.def(catalogue).provides.iter()).any(|p| p == BONNET_CUT_OUT)
-        {
-            let paint = bonnet.paint.or(car.paint).unwrap_or(0);
-            let color = catalogue.paints.get(paint).map_or([0.5; 3], |p| p.color);
-            let y = under_bonnet + 0.05;
-            let (half_u, half_w) = (0.32 * along + 0.04, 0.16);
-            let ring = Vec3::new(centre.x, y, centre.z);
-            for (u, w, long) in [
-                (0.0, half_w, true),
-                (0.0, -half_w, true),
-                (half_u, 0.0, false),
-                (-half_u, 0.0, false),
-            ] {
-                let size = if long {
-                    Vec3::new(2.0 * half_u + 0.04, 0.04, 0.04)
-                } else {
-                    Vec3::new(0.04, 0.04, 2.0 * half_w)
-                };
-                b.oriented_box(ring + axes[0] * u + axes[2] * w, axes, size, color);
-            }
-        }
         intakes = vec![base + axes[0] * (0.3 * along * intake_end) + Vec3::Y * 0.04];
+    }
+    // A bonnet with a cut-out: the opening over the intake (where a Roots blower sticks
+    // through) framed in the bonnet's paint, dark down into the engine bay when there's no
+    // blower in it.
+    if let Some(bonnet) = car.fitted(catalogue, Kind::Body(Panel::Bonnet)).next()
+        && (bonnet.def(catalogue).provides.iter()).any(|p| p == BONNET_CUT_OUT)
+    {
+        let paint = bonnet.paint.or(car.paint).unwrap_or(0);
+        let color = catalogue.paints.get(paint).map_or([0.5; 3], |p| p.color);
+        let middle = to(0.0, 0.92, if vee { 0.0 } else { -0.18 });
+        let ring = Vec3::new(middle.x, under_bonnet + 0.05, middle.z);
+        let (half_u, half_w) = (0.32 * along + 0.04, 0.16);
+        for (u, w, long) in [
+            (0.0, half_w, true),
+            (0.0, -half_w, true),
+            (half_u, 0.0, false),
+            (-half_u, 0.0, false),
+        ] {
+            let size = if long {
+                Vec3::new(2.0 * half_u + 0.04, 0.04, 0.04)
+            } else {
+                Vec3::new(0.04, 0.04, 2.0 * half_w)
+            };
+            b.oriented_box(ring + axes[0] * u + axes[2] * w, axes, size, color);
+        }
+        if !roots {
+            let size = Vec3::new(2.0 * half_u, 0.02, 2.0 * half_w);
+            b.oriented_box(ring + Vec3::Y * 0.005, axes, size, BLACK);
+        }
     }
     // A centrifugal supercharger at the belt end, low on the intake side: its snail, the
     // belt from the crank, and its pipe up to the throttle.
