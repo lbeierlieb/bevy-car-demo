@@ -21,8 +21,10 @@ Shops need `PLACE` at the building's point
 (the car lands on the marker and goes in): gas `-2603,-1736`, car dealer
 `-1476,-1213`, alignment `-1480,-1305`, paint `3500,-63`, car workshop `-1566,-1329`,
 tuning shop `-1950,-3160`, tire shop `-2502,-1763`, engine shop `120,2700`, dyno
-`-2601,-3784`, garage park `-2680,-1793` (the shop's window takes the focus on its first row, so
-`TAPS="Enter@200"` goes into the scene: onto the rollers, up to the pump…; older click
+`-2601,-3784`, garage park `-2680,-1793`. Since 2026-11-27 the car stopped on a marker
+only offers the shop ("Press Enter to go into …"): **put `Enter@190;` before every
+shop's `TAPS` in these notes** (frames after it as they are), which opens the shop's
+window (the focus on its first row, so `TAPS="Enter@190;Enter@200"` goes into the scene: onto the rollers, up to the pump…; older click
 coordinates in these notes are from before the menus, 2026-11-23, and are wrong now;
 the car hunt's marker `-95,2341`, its lobby window opens
 at once; a race marker exactly (the repo list has none since 2026-11-24: add one with a

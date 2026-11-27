@@ -16,7 +16,13 @@ the building's side (`kerb`); names float above within 500 m. Free (no money). T
 as built, in order:
 
 1. ✓ server list, protocol, markers and names. 2. ✓ Stop on a marker to go in (window opens,
-   parking brake; drive off or Esc leaves). 3. ✓ **Ghosts**: a car stopped on a marker,
+   parking brake; drive off or Esc leaves). Since 2026-11-27 (the user's wish: leaving and
+   driving out and in again was annoying, and the window kept the central menu away)
+   stopped on a marker only offers it: "Press Enter to go into …" at the bottom middle
+   (`shops::offer`, the button named for the device: Enter, A, the wheel's bound choose),
+   choose goes in (`arrive`, unless a menu has the focus or the map is open), back leaves
+   to the offer again, Esc on the marker is the central menu. No "Leave" row. Shots: see
+   the screenshots skill (`Enter@190` first). 3. ✓ **Ghosts**: a car stopped on a marker,
    in a shop or in the dyno is a ghost (a flag in its state): no collisions with players'
    cars or traffic (the server's traffic ignores it), drawn half transparent; it stays a
    ghost after leaving until it overlaps nobody. So several players use a shop at once.

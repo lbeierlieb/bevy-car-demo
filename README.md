@@ -122,7 +122,7 @@ drives their own car (physics and
 force feedback stay on your machine) and sees the others near them (within 600 m), with
 their names over the cars; the list of players (top left) has **Leave the server**.
 
-The server puts **shops** on the map (M shows them): stop on a marker to go in. Gas
+The server puts **shops** on the map (M shows them): stop on a marker and press Enter (a pad's A, the wheel's choose button) to go in. Gas
 stations take the car up to a pump under their canopy, with 95, 98 and 102 octane
 (pumped at 1 L/s; grades mix by volume in the tank, and the engine's knock limit follows); alignment shops put the car on an alignment lift with laser
 heads on its wheels, to set camber, toe, tire pressures and the brakes against the

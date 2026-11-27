@@ -16,9 +16,11 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car};
 use crate::chassis::CarBuild;
-use crate::map::{MapLegend, MapMark, MapMarks};
+use crate::input::{Action, Nav, WheelConfig};
+use crate::map::{MapLegend, MapMark, MapMarks, MapView};
+use crate::menu::ACCENT;
 use crate::menu::kit::{self, Panel, Place};
-use crate::menu::nav::{MenuInput, MenuSet};
+use crate::menu::nav::{Device, MenuFocus, MenuInput, MenuSet};
 use crate::net::wire::{Reader, Wire};
 use crate::net::{Connection, Status, WantsGhost};
 use crate::terrain::Terrain;
@@ -274,7 +276,7 @@ impl Plugin for ShopsPlugin {
                 Update,
                 (place, (scene_back, arrive).chain().in_set(MenuSet::Windows)).chain(),
             )
-            .add_systems(EguiPrimaryContextPass, labels);
+            .add_systems(EguiPrimaryContextPass, (labels, offer));
     }
 }
 
@@ -282,9 +284,9 @@ impl Plugin for ShopsPlugin {
 #[derive(Resource, Default)]
 pub struct AtShop {
     pub shop: Option<usize>,
-    /// A shop left with Esc (or the button) while still on its marker: not gone into
-    /// again until the car has moved off it.
-    left: Option<usize>,
+    /// The shop whose marker the car is stopped on, not in it: choose goes in (the prompt
+    /// says so, `offer`).
+    offered: Option<usize>,
     /// Per kind of shop, whether the car just came into one (until its window is shown).
     came_in: [bool; ShopKind::ALL.len()],
     /// The trunk and parts screens open over the shop's window, if any (see `trunk`).
@@ -293,23 +295,27 @@ pub struct AtShop {
 
 impl AtShop {
     fn leave(&mut self) {
-        self.left = self.shop.take();
+        self.shop = None;
         self.stash.clear();
     }
 }
 
-/// Stopping on a marker is going into its shop (with the parking brake pulled); moving
-/// off it, leaving. A car stopped on a marker, or in a shop, is a ghost (see
-/// `WantsGhost`), so several can use a shop at once.
+/// Stopped on a marker, choose (Enter, a pad's A, the wheel's choose button) goes into its
+/// shop (with the parking brake pulled); back or moving off it, leaving. A car stopped on
+/// a marker, or in a shop, is a ghost (see `WantsGhost`), so several can use a shop at
+/// once.
+#[allow(clippy::too_many_arguments)]
 pub fn arrive(
     shops: Res<Shops>,
     mut at: ResMut<AtShop>,
     mut ghost: ResMut<WantsGhost>,
     active: Res<ActiveCar>,
     mut cars: Query<&mut Car>,
-    mut input: ResMut<MenuInput>,
+    (mut input, focus, keys): (ResMut<MenuInput>, Res<MenuFocus>, Res<ButtonInput<KeyCode>>),
     away: Res<Away>,
+    map: Option<Res<MapView>>,
 ) {
+    at.offered = None;
     if away.0 && at.shop.is_some() {
         // In the dyno's room: the car stays in the shop (a ghost) until it comes out.
         ghost.0 = true;
@@ -326,9 +332,6 @@ pub fn arrive(
         i.and_then(|i| shops.list.get(i))
             .is_some_and(|placed| placed.marker.distance(p) < LEAVE)
     };
-    if !near(at.left) {
-        at.left = None;
-    }
     if !near(at.shop) {
         at.stash.clear();
     }
@@ -340,18 +343,24 @@ pub fn arrive(
     }
     let stopped = car.body.velocity.length() < STOPPED;
     let on = (shops.list.iter()).position(|placed| placed.marker.distance(p) < MARKER_RADIUS);
-    if at.shop.is_none() && stopped && on.is_some() && on != at.left {
-        at.shop = on;
-        if let Some(placed) = on.and_then(|i| shops.list.get(i)) {
-            at.came_in[placed.shop.kind as usize] = true;
+    if at.shop.is_none() && stopped && on.is_some() {
+        // Choose goes in, unless a menu or the map has it.
+        let free = !focus.active && !map.is_some_and(|map| map.open);
+        if free && (input.confirm || keys.just_pressed(KeyCode::Enter)) {
+            at.shop = on;
+            if let Some(placed) = on.and_then(|i| shops.list.get(i)) {
+                at.came_in[placed.shop.kind as usize] = true;
+            }
+            car.parking_brake = true;
+        } else {
+            at.offered = on;
         }
-        car.parking_brake = true;
     }
     ghost.0 = at.shop.is_some() || (stopped && on.is_some());
 }
 
 /// The window of the shop the car is in, if it's of `kind`: `contents` (told whether the
-/// car just came in), then a button to leave. Shops whose contents are elsewhere (the
+/// car just came in), then the trunk and parts (back leaves). Shops whose contents are elsewhere (the
 /// showroom, the parts shop, the dyno) show theirs with it too. Returns whether it's shown.
 pub fn shop_window(
     ctx: &egui::Context,
@@ -373,7 +382,7 @@ pub fn shop_window(
     let came_in = std::mem::take(&mut at.came_in[kind as usize]);
     let title = format!("{} ({})", placed.shop.name, kind.title());
     let mut stash = false;
-    let leave = Panel::new("shop", &title)
+    Panel::new("shop", &title)
         .place(Place::Right)
         .width(420.0)
         .back(Some("Leave"))
@@ -384,16 +393,55 @@ pub fn shop_window(
             if kit::submenu(ui, crate::trunk::Screen::List.title()).clicked() {
                 stash = true;
             }
-            let leave = kit::button(ui, "Leave").clicked();
-            kit::note(ui, "Or leave and drive off the marker.");
-            leave
         });
-    if leave {
-        at.leave();
-    } else if stash {
+    if stash {
         at.stash.push(crate::trunk::Screen::List);
     }
     true
+}
+
+/// "Press Enter to go into …" while stopped on a marker, at the bottom middle, the button
+/// named for the device in use.
+fn offer(
+    mut contexts: EguiContexts,
+    at: Res<AtShop>,
+    shops: Res<Shops>,
+    input: Res<MenuInput>,
+    config: Res<WheelConfig>,
+) -> Result {
+    let Some(placed) = at.offered.and_then(|i| shops.list.get(i)) else {
+        return Ok(());
+    };
+    let button = match input.device {
+        Device::Keyboard | Device::Mouse => "Enter".to_string(),
+        Device::Pad => "A".to_string(),
+        Device::Wheel => (config.profile().labels(Action::Menu(Nav::Confirm)))
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "choose".into()),
+    };
+    let key = egui::TextFormat::simple(FontId::proportional(20.0), ACCENT);
+    let text = egui::TextFormat::simple(FontId::proportional(20.0), Color32::WHITE);
+    let mut job = egui::text::LayoutJob::default();
+    job.append("Press ", 0.0, text.clone());
+    job.append(&button, 0.0, key);
+    let place = format!(
+        " to go into {} ({})",
+        placed.shop.name,
+        placed.shop.kind.title()
+    );
+    job.append(&place, 0.0, text);
+    egui::Area::new(egui::Id::new("shop offer"))
+        .anchor(Align2::CENTER_BOTTOM, egui::vec2(0.0, -150.0))
+        .interactable(false)
+        .show(contexts.ctx_mut()?, |ui| {
+            egui::Frame::new()
+                .fill(Color32::from_rgba_premultiplied(10, 12, 16, 210))
+                .corner_radius(8.0)
+                .inner_margin(12.0)
+                .show(ui, |ui| ui.label(job));
+        });
+    Ok(())
 }
 
 /// "Back" while in a shop's scene (the pump, a lift, the booth, the showroom, the dyno's
