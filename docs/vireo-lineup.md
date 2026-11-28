@@ -45,7 +45,7 @@ block should be the swap players want (a "Frankenstein" engine).
    around stoichiometric; open loop elsewhere. Wideband (programmable ECUs only): closed
    loop to the target everywhere, with a settable authority; a stock ECU reads it as a
    narrowband. The trim is physics state (`snapshot!`).
-6. **Shops, looks and notes**: heads, long blocks and programmable ECUs at the engine
+6. **Shops, looks and notes** (done; programmable ECUs at the tuning shops): heads, long blocks and programmable ECUs at the engine
    shop, programmable ECUs and the wideband sensor at tuning shops, stock ECUs at car
    workshops; cam covers by head (one narrow cover for one cam, a wide one for two).
 

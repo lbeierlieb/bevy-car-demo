@@ -13,6 +13,7 @@ use crate::catalogue::Catalogue;
 use crate::chassis::{Chassis, Orientation};
 use crate::items::{BONNET_CUT_OUT, Does, Item, Kind, Panel, Seat};
 use crate::physics::drivetrain::Drive;
+use crate::physics::engine::hardware::CamDrive;
 
 const CAST: [f32; 3] = [0.42, 0.43, 0.45];
 const ALLOY: [f32; 3] = [0.68, 0.69, 0.7];
@@ -197,6 +198,17 @@ fn engine_bay(
     };
     let family = &catalogue.families[family];
     let cylinders = family.versions[version].block.cylinders.max(1) as usize;
+    // Its head's cams: one cover over a single cam, a wide one with a ridge over each of
+    // two.
+    let twin_cam = match block.fitted(catalogue, Kind::Head).next() {
+        Some(head) => match head.def(catalogue).does {
+            Does::Head { head, .. } => {
+                (family.heads.get(head)).is_some_and(|head| head.valvetrain.drive == CamDrive::Dohc)
+            }
+            _ => false,
+        },
+        None => true,
+    };
     use crate::catalogue::{CENTRIFUGAL, ROOTS, SUPERCHARGER_SLOT};
     let charger = named(SUPERCHARGER_SLOT);
     let roots = charger == Some(ROOTS);
@@ -365,7 +377,15 @@ fn engine_bay(
         block_at(b, 0.0, 0.07, 0.0, size(0.76, 0.14, 0.36), DARK);
         block_at(b, 0.0, 0.38, 0.0, size(0.84, 0.48, 0.42), CAST);
         block_at(b, 0.0, 0.7, 0.0, size(0.86, 0.16, 0.44), ALLOY);
-        block_at(b, 0.0, 0.84, 0.0, size(0.8, 0.12, 0.34), cover);
+        if twin_cam {
+            block_at(b, 0.0, 0.84, 0.0, size(0.8, 0.12, 0.34), cover);
+            for w in [-0.09, 0.09] {
+                block_at(b, 0.0, 0.93, w, size(0.74, 0.08, 0.1), cover);
+            }
+        } else {
+            block_at(b, 0.0, 0.84, 0.0, size(0.8, 0.12, 0.24), cover);
+            block_at(b, 0.0, 0.92, 0.0, size(0.72, 0.05, 0.16), cover);
+        }
         // The belt cover on the crank's far end, the flywheel's housing towards the
         // gearbox.
         block_at(b, 0.47, 0.5, 0.0, size(0.06, 0.7, 0.32), DARK);

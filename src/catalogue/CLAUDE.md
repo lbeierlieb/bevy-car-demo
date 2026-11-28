@@ -610,3 +610,7 @@ The engine slot "Lambda sensor" (place 20, on the engine: `ENGINE_SLOTS`; `lambd
 stock, `lambda-sensor.wideband` at the tuning shops, `Effect::Wideband`): saved cars from before
 get the narrowband one (`saved::fill_new_slots` fills any required engine part slot left empty
 with its first part). Protocol 64.
+
+Looks: `mechanicals` draws an inline engine's cam cover by its head (one narrow hump over a
+single cam, a wide cover with a ridge over each of two). Shots of the bay: `OFFLINE=1 TRIM="0,2"
+UNFIT="Bonnet" CARCAM="-0.9,1.9,1.5,1.5"` (`TRIM` 0,0 the B16, 0,1 the B20, 0,2 the B16R).

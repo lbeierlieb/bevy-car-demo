@@ -470,7 +470,7 @@ fn dress_up(setup: &mut crate::car::CarSetup) {
     }
     if !ids.is_empty() {
         let (build, parts) = setup.car.resolve(&catalogue).expect("a car");
-        let engine = crate::physics::engine::EngineBuild::new(parts.hardware(), parts.ecu);
+        let engine = crate::physics::engine::EngineBuild::of_parts(&parts);
         *setup = crate::car::CarSetup::with_car(build, parts, engine, setup.car.clone());
     }
 }
