@@ -706,3 +706,26 @@ engine options. Protocol 70. Tests: `the_hatch_is_made_all_wheel_drive_a_piece_a
 `the_saloon_converts_at_the_shops_and_drives_all_four`,
 `the_roadsters_prop_shaft_stays_and_the_vireo_takes_none`,
 `cars_saved_before_rear_subframes_get_their_factory_one`, `sim::all_wheel_drive`.
+
+## Drive shafts (2026-11-28, `docs/k-lineup.md` step 5)
+
+`Does::DriveShafts { torque }` and `Does::PropShaft { torque }` (N·m each shaft takes for
+good; the prop shaft's counted before the final drive), `Wear::Shaft` (one value), all from
+`shaft_defs` in `catalogue/items.rs`: per chassis `<id>.drive-shafts` (front, a required car
+slot "Front drive shafts" on chassis whose factory gearbox is transverse),
+`<id>.rear-drive-shafts` and `<id>.prop-shaft` (where a tunnel can be), each also `.uprated`
+(1.5×) and `.race` (2.2×; prop shafts no race), same masses (no mass bookkeeping needed).
+Stock ratings `stock_shafts`: Vireo 1400, Merrow rear 2600 / prop 1700, Tessel 1850, Aldine
+1800, Bothy 2100 (rear as the front, prop half), each about 1.2× the most a factory car of
+the chassis passes floored (`factory_cars_keep_their_shafts`; `shaft_torques_of_the_stock_cars`,
+ignored, prints them, `shaft_torques_of_a_power_build` the turbo Vireo's). `items::shafts`
+finds the three (front in the car, rear in the subframe, prop), `Driveline::shafts` their
+ratings into `EngineSetup::shafts`. Condition: `Condition::shafts` (from and to
+`Drivetrain::shaft_wear`, onto the items by `shaft_mut`); `Car::rebuilt` keeps a shaft's
+wear while it's the same part, `place` (R, rescues) always: a broken one stays broken until a
+workshop fits another. Saved cars without front shafts get new stock ones
+(`saved::fill_front_shafts`). Shops: car workshops the stock ones, tuning shops
+`*.drive-shafts.*`, `*.rear-drive-shafts.*`, `*.prop-shaft.uprated` (prices: "uprated" is a
+tuning word now). The fitting window shows "Takes … N·m". Tests:
+`a_workshop_mends_broken_drive_shafts`, `shaft_wear_reads_back_and_old_cars_get_front_shafts`,
+`sim::shafts`.

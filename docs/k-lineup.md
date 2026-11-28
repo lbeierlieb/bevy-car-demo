@@ -230,8 +230,39 @@ items with no limit (or don't exist yet), so steps 4 and 5 can ship apart.
    | … one side on grass | 7.2 m/s | 11.0 m/s |
 
    (With traction control. The Aldine 2.4 converted with limited slips front and rear:
-   11.3 m/s on the meadow against 7.8.) Rear drive shafts are plain items for step 5.
+   11.3 m/s on the meadow against 7.8.) Rear drive shafts were plain items until step 5.
 5. **Drive shafts** with torque ratings, wear and breaking.
+
+   **Done** (2026-11-28; protocol 71). Details in `src/catalogue/CLAUDE.md`, "Drive shafts".
+   Front drive shafts became a required car slot on the transverse chassis (saved cars get
+   new stock ones); rear drive shafts (in the mount) and prop shafts got ratings. Each
+   comes stock, uprated (1.5×) and race (2.2×; prop shafts stock and uprated), per
+   chassis. The sim takes the torque through each shaft (drive torque less what spins the
+   locked engine's inertia), so with the clutch locked a shaft carries about what its tire
+   grips, and the big loads are clutch dumps (the clutch's capacity through first gear).
+   Decided: wear goes with the **square** of the share over the rating (`SHAFT_WEAR` 3/s),
+   not linearly like the gears: the shocks last hundredths of a second, linear wear made
+   even a race clutch's 170 % overload harmless. Broken: that axle goes undriven (an
+   all-wheel-drive car drives the other one, all of the torque, a simplification of the
+   coupling slipping), nothing driven leaves the gearbox turning freely and the car
+   stranded (the special rescue takes it); R keeps it broken, like engine damage; a new
+   shaft at a workshop mends it. Ratings (N·m per shaft; prop shaft before the final
+   drive) against the most measured floored from standing, with and without traction
+   control, asphalt and meadow, 8 s through the gears:
+
+   | Chassis | Front | Rear | Prop | Most measured (trim) | Clutch dumped |
+   |---|---|---|---|---|---|
+   | Vireo | 1400 | – | – | 1134 (2.0) | 1512 |
+   | Merrow | – | 2600 | 1700 | rear 2133, prop 1389 | 2947, 1915 |
+   | Tessel | 1850 | 1850 | 925 | 1524 (2.0R) | 2336 |
+   | Aldine | 1800 | 1800 | 900 | 1462 (2.4) | 2105 |
+   | Bothy | 2100 | 2100 | 1050 | 1705 (2.4); AWD rear 750, prop 315 | 2436 (AWD 3186) |
+
+   A stock clutch dumped wears its shafts at most about 1 % (Tessel R); the turbo Vireo
+   with race tires and limited slip breaks its stock fronts in 5 dumps with a race clutch
+   (a sport clutch ~5 % each), the AWD Bothy with a race clutch in 4, then drives on its
+   rears. Floored with the clutch locked even the power build only reaches about 1.6 kN·m
+   (tire-limited), so launches break shafts through the clutch, not the engine's torque.
 6. **Rear-engine subframe** (aftermarket, planned in detail when we get there): a rear
    subframe that carries an engine and a transverse gearbox at the rear axle, like the
    real mid-engine Civic swaps. Engine bays then come from subframes instead of one

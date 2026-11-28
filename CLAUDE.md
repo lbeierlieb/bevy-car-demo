@@ -94,7 +94,7 @@ that does: reverse asked for while rolling
 (`car::ReverseRefused`, a message from `drive`), on the rev limiter in first gear (only
 there, at the user's wish, 2026-11-22), and
 gas without moving for 3 s (R). (The parking brake hint went when gas started releasing it, 2026-11-24.) Added alone: in neutral, stalled, wrecked engine, empty
-tank (stating the problem only, since 2026-11-22). R (a press in the step's input, for the server) puts the car on the nearest road, as it is, (`Terrain::drive_spot_along`: the
+tank, a broken drive shaft or prop shaft (2026-11-28) (stating the problem only, since 2026-11-22). R (a press in the step's input, for the server) puts the car on the nearest road, as it is, (`Terrain::drive_spot_along`: the
 right-hand lane on roads with traffic lanes; 8–25 m along the road from the nearest point,
 either way at random (`rescue::ALONG_ROAD`, hashed from the step and the car's place), the other way
 if the road ends first, so a car stuck on a road isn't put back into the trap; 2026-11-26), carried there by the rescue helicopter (see

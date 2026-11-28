@@ -43,6 +43,18 @@ catalogue entries, and things like swap subframes are named so they can be price
   N·m·s / 1500 N·m (`catalogue/items.rs`'s `CENTRES`; stable in the air from 150 to 500,
   at 500 cruising got a limit cycle on the rears); the open and viscous centres split
   50/50 (viscous 60 / 600). Tests: `sim::all_wheel_drive`.
+  **Shafts** (k-lineup step 5): `EngineSetup::shafts` (what each front drive shaft, rear
+  one and the prop shaft takes) and `Drivetrain::shaft_wear` (`FRONT_SHAFTS`, `REAR_SHAFTS`,
+  `PROP_SHAFT`; in the snapshot). `sim::shaft_torques` takes each step's torque through them
+  from the corners: `drive_torque − drive_inertia × Δω/dt` (the locked engine's inertia
+  spun up or slowed through the shaft: a wheel catching grip is a shock), the more of each
+  pair, the rear pair's sum ÷ final drive for the prop shaft. `Drivetrain::load_shafts`
+  wears each by `SHAFT_WEAR` (3/s) × (share over)²; at 1 it's broken and
+  `Drivetrain::drive` leaves that axle out (all-wheel drive becomes the other axle's drive;
+  none: the gearbox turns freely, ratio 0, and `Car::stranded`). `apply_controls` drives by
+  that drive. With the clutch locked shafts carry about what the tires grip, so it's clutch
+  dumps (the clutch's capacity × first × final drive ÷ 2) that break them. Hints
+  (`help.rs`): "A front/rear drive shaft has broken", "The prop shaft has broken".
   `CarSetup::new` works everything the simulation needs out of them: the engine's and
   the gearbox's masses sit where the chassis' bay has them, which gives the balance and
   the inertia; springs and dampers come from ride frequencies and the weight on each
