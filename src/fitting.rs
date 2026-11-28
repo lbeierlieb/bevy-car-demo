@@ -1145,6 +1145,50 @@ mod tests {
         bench.finish()
     }
 
+    /// Broken front drive shafts replaced at a car workshop: the car's are new (it drives
+    /// again), the broken ones come off as they are; a tuning shop has stronger ones.
+    #[test]
+    fn a_workshop_mends_broken_drive_shafts() {
+        let catalogue = builtin();
+        let before = spec(1);
+        let at = slots_of(&catalogue, &before.car, Kind::DriveShafts);
+        assert_eq!(at.len(), 1);
+        let mut broken = before.clone();
+        let mut condition = crate::saved::Condition::of_parts(&catalogue, &broken.car, 40.0, 95.0);
+        condition.shafts[0] = 1.0;
+        condition.put_on(&catalogue, &mut broken.car);
+        let workshop = shop(ShopKind::Car, &["vireo.drive-shafts"]);
+        let fit = |id: &str| Work::Fit {
+            slots: vec![at.clone()],
+            supply: new(&catalogue, id),
+        };
+        let done = run(&catalogue, &workshop, &broken, &[fit("vireo.drive-shafts")]).unwrap();
+        let now = crate::saved::Condition::of_parts(&catalogue, &done.spec.car, 40.0, 95.0);
+        assert_eq!(now.shafts, [0.0; 3]);
+        let off: Vec<&Item> = done.spec.cargo.iter().chain(&done.held).collect();
+        assert!(off.iter().any(|shafts| shafts.wear == [1.0]), "{off:?}");
+        assert!(
+            run(
+                &catalogue,
+                &workshop,
+                &broken,
+                &[fit("vireo.drive-shafts.race")]
+            )
+            .is_err()
+        );
+        let tuning = shop(ShopKind::Tuning, &["vireo.drive-shafts.*"]);
+        let done = run(
+            &catalogue,
+            &tuning,
+            &broken,
+            &[fit("vireo.drive-shafts.race")],
+        )
+        .unwrap();
+        let line = crate::items::driveline(&catalogue, &done.spec.car);
+        let stock = crate::items::driveline(&catalogue, &before.car);
+        assert!(line.shafts[0] > 2.0 * stock.shafts[0], "{:?}", line.shafts);
+    }
+
     #[test]
     fn a_workshop_fits_what_it_sells_and_the_old_part_goes_into_the_trunk() {
         let catalogue = builtin();

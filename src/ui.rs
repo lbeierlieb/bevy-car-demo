@@ -169,7 +169,8 @@ pub fn engine(ui: &mut egui::Ui, car: &Car) {
     ));
 }
 
-/// How worn the clutch and the gears are, and the air's downforce now.
+/// How worn the clutch, the gears and the shafts (front, rear, prop) are, and the air's
+/// downforce now.
 fn drivetrain(ui: &mut egui::Ui, car: &Car) {
     let drivetrain = &car.drivetrain;
     let gears = car.setup.engine.gears.len().min(drivetrain.gear_wear.len());
@@ -179,8 +180,10 @@ fn drivetrain(ui: &mut egui::Ui, car: &Car) {
     let lowered = [0, 2].map(|i| (car.corners[i].travel + car.corners[i + 1].travel) / 2.0);
     let pressure = 0.6 * car.body.velocity.length_squared();
     let [front, rear] = car.setup.downforce(lowered).map(|area| area * pressure);
+    let [shafts_front, shafts_rear, prop] = drivetrain.shaft_wear.map(|wear| wear * 100.0);
     ui.label(format!(
-        "clutch wear {:.1} %    gears' wear {} %    downforce {front:.0} / {rear:.0} N",
+        "clutch wear {:.1} %    gears' wear {} %    shafts' wear {shafts_front:.0} {shafts_rear:.0} \
+         {prop:.0} %    downforce {front:.0} / {rear:.0} N",
         drivetrain.clutch_wear * 100.0,
         gears.join(" "),
     ));

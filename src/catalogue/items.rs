@@ -11,7 +11,7 @@ use crate::items::{
     spring_knobs, tire_knobs, wing_knobs,
 };
 use crate::physics::brakes::Brake;
-use crate::physics::drivetrain::Differential;
+use crate::physics::drivetrain::{Differential, FRONT_SHAFTS, PROP_SHAFT, REAR_SHAFTS, SHAFTS};
 use crate::physics::engine::hardware::CamDrive;
 use crate::physics::tire::STREET;
 use crate::wheels::Wheel;
@@ -281,8 +281,12 @@ fn chassis_slots(catalogue: &Catalogue, made: &Chassis) -> Vec<SlotDef> {
         slot("Rear anti-roll bar", Kind::AntiRollBar, true),
         slot("Gearbox", Kind::Gearbox, true),
         slot("Clutch", Kind::Clutch, true),
-        slot("Rear subframe", Kind::RearSubframe, true),
     ]);
+    // The front drive shafts, where the gearbox sits across the car and drives the front.
+    if catalogue.gearboxes[made.gearbox].kind == GearboxKind::Transverse {
+        slots.push(slot("Front drive shafts", Kind::DriveShafts, true));
+    }
+    slots.push(slot("Rear subframe", Kind::RearSubframe, true));
     // A prop shaft along the floor's tunnel (a kit's, where the floor has none).
     if made.tunnel == Tunnel::Kit {
         slots.push(slot("Tunnel", Kind::Tunnel, false));
@@ -342,6 +346,94 @@ const PROP_SHAFT_MASS: f32 = 14.0;
 const DRIVE_SHAFTS_MASS: f32 = 12.0;
 const TUNNEL_KIT_MASS: f32 = 8.0;
 
+/// How much more than the stock shafts the stronger ones take: name, id's ending, share.
+const SHAFT_GRADES: [(&str, &str, f32); 3] = [
+    ("", "", 1.0),
+    ("Uprated ", ".uprated", 1.5),
+    ("Race ", ".race", 2.2),
+];
+
+/// What the stock front drive shafts, rear drive shafts and prop shaft of a chassis take
+/// (N·m each): its factory engines with a margin (measured: `factory_cars_keep_their_shafts`).
+fn stock_shafts(chassis: &str) -> [f32; SHAFTS] {
+    // The rear ones (for an all-wheel-drive conversion) like the front ones, the prop
+    // shaft as strong for the rear axle's torque before its final drive.
+    let [front, rear, prop] = match chassis {
+        "Vireo" => [1400.0; 3],
+        "Merrow" => [0.0, 2600.0, 1700.0],
+        "Tessel" => [1850.0, 1850.0, 925.0],
+        "Aldine" => [1800.0, 1800.0, 900.0],
+        "Bothy" => [2100.0, 2100.0, 1050.0],
+        _ => [2000.0, 2000.0, 1000.0],
+    };
+    [front, rear, prop]
+}
+
+/// `chassis`' drive shafts and prop shafts, stock, uprated and race (`SHAFT_GRADES`; prop
+/// shafts stock and uprated): front ones where its gearbox sits across it (`<id>.drive-
+/// shafts…`), rear ones and prop shafts where its floor has or can take a tunnel
+/// (`<id>.rear-drive-shafts…`, `<id>.prop-shaft…`).
+fn shaft_defs(chassis: &Chassis, gearboxes: &[Gearbox], add: &mut impl FnMut(Def)) {
+    let name = &chassis.name;
+    let id = name.to_lowercase();
+    let stock = stock_shafts(name);
+    let front = gearboxes[chassis.gearbox].kind == GearboxKind::Transverse;
+    let rear = chassis.tunnel != Tunnel::Never;
+    // "Front drive shafts", "Uprated front drive shafts".
+    let title = |grade: &str, what: &str| {
+        let whole = format!("{grade}{what}");
+        let mut chars = whole.chars();
+        chars.next().map_or_else(String::new, |first| {
+            first.to_uppercase().chain(chars).collect()
+        })
+    };
+    for (grade, ending, share) in SHAFT_GRADES {
+        if front {
+            add(Def::new(
+                &format!("{id}.drive-shafts{ending}"),
+                &title(grade, "front drive shafts"),
+                Kind::DriveShafts,
+                Does::DriveShafts {
+                    torque: (stock[FRONT_SHAFTS] * share).round(),
+                },
+                [0.8, 0.3, 0.15],
+                DRIVE_SHAFTS_MASS,
+            )
+            .fits(name)
+            .wears(Wear::Shaft));
+        }
+        if rear {
+            add(Def::new(
+                &format!("{id}.rear-drive-shafts{ending}"),
+                &title(grade, "rear drive shafts"),
+                Kind::DriveShafts,
+                Does::DriveShafts {
+                    torque: (stock[REAR_SHAFTS] * share).round(),
+                },
+                [0.8, 0.3, 0.15],
+                DRIVE_SHAFTS_MASS,
+            )
+            .fits(name)
+            .wears(Wear::Shaft));
+        }
+        if rear && share < 2.0 {
+            add(Def::new(
+                &format!("{id}.prop-shaft{ending}"),
+                &title(grade, "prop shaft"),
+                Kind::PropShaft,
+                Does::PropShaft {
+                    torque: (stock[PROP_SHAFT] * share).round(),
+                },
+                [1.8, 0.15, 0.15],
+                PROP_SHAFT_MASS,
+            )
+            .fits(name)
+            .needs(TUNNEL)
+            .wears(Wear::Shaft));
+        }
+    }
+}
+
 /// `chassis`' rear driveline parts: its factory rear subframe (`<id>.rear-subframe`: with a
 /// mount for a differential if its factory gearbox (in `gearboxes`) is inline, else plain),
 /// and where its floor has or can take a tunnel a prop shaft, rear drive shafts, a rear
@@ -389,25 +481,6 @@ fn rear_defs(chassis: &Chassis, gearboxes: &[Gearbox], add: &mut impl FnMut(Def)
             true,
         ));
     }
-    add(Def::new(
-        &format!("{id}.prop-shaft"),
-        "Prop shaft",
-        Kind::PropShaft,
-        Does::PropShaft,
-        [1.8, 0.15, 0.15],
-        PROP_SHAFT_MASS,
-    )
-    .fits(name)
-    .needs(TUNNEL));
-    add(Def::new(
-        &format!("{id}.rear-drive-shafts"),
-        "Rear drive shafts",
-        Kind::DriveShafts,
-        Does::DriveShafts,
-        [0.8, 0.3, 0.15],
-        DRIVE_SHAFTS_MASS,
-    )
-    .fits(name));
     if chassis.tunnel == Tunnel::Kit {
         add(Def::new(
             &format!("{id}.tunnel-kit"),
@@ -492,6 +565,7 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
         }
         add(shell);
         rear_defs(chassis, &catalogue.gearboxes, &mut add);
+        shaft_defs(chassis, &catalogue.gearboxes, &mut add);
         let layout = layout(name);
         let panels = [
             (
@@ -1308,6 +1382,7 @@ fn trims(catalogue: &Shared) -> Vec<Trim> {
                     Kind::Body(Panel::RearBumper) => format!("{id}.rear-bumper"),
                     Kind::Seat(Seat::Front) => "seat.stock".into(),
                     Kind::Seat(Seat::RearBench) => "rear-bench.stock".into(),
+                    Kind::DriveShafts => format!("{id}.drive-shafts"),
                     Kind::Brake => {
                         let front = slot.name.contains("front");
                         format!("{id}.brake.{}", spec.brakes[usize::from(!front)])

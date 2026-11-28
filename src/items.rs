@@ -14,7 +14,7 @@ use crate::catalogue::{Bolting, Catalogue};
 use crate::chassis::{
     BRAKE_BALANCES, BRAKE_FORCES, CarBuild, GearboxKind, Misfit, PRESSURES, TOES,
 };
-use crate::physics::drivetrain::{Differential, Drive};
+use crate::physics::drivetrain::{Differential, Drive, SHAFTS};
 use crate::physics::engine::parts::{Effect, Parts};
 use crate::wheels::{Rim, TireSize, Wheel};
 
@@ -108,7 +108,9 @@ pub enum Kind {
     /// The shaft from a gearbox's output (inline) or transfer output (all-wheel drive) to
     /// the rear differential, along the floor's tunnel.
     PropShaft,
-    /// The pair of shafts from the rear differential to the rear wheels.
+    /// A pair of drive shafts: from the gearbox's differential to the front wheels (in the
+    /// car, on a chassis whose gearbox sits across it), or from the rear differential to
+    /// the rear wheels (in a rear subframe's mount).
     DriveShafts,
     /// The centre coupling of an all-wheel-drive gearbox, splitting the torque between
     /// the axles.
@@ -179,8 +181,14 @@ pub enum Does {
     RearSubframe {
         mount: bool,
     },
-    PropShaft,
-    DriveShafts,
+    /// A prop shaft, and the most torque it takes for good (N·m).
+    PropShaft {
+        torque: f32,
+    },
+    /// A pair of drive shafts, and the most torque each takes for good (N·m).
+    DriveShafts {
+        torque: f32,
+    },
     /// A centre coupling: the share of the torque it sends to the front axle, and how it
     /// moves torque from the faster axle to the slower one (a reactive coupling sends
     /// everything to the front and only moves torque once the fronts spin faster).
@@ -273,10 +281,12 @@ pub enum Wear {
     Clutch,
     /// A gearbox's gears and synchros, each forward gear's.
     Gears,
+    /// A pair of drive shafts' or a prop shaft's twist (torque over what it takes).
+    Shaft,
 }
 
 impl Wear {
-    pub const ALL: [Wear; 10] = [
+    pub const ALL: [Wear; 11] = [
         Wear::Pistons,
         Wear::Rods,
         Wear::Valves,
@@ -287,6 +297,7 @@ impl Wear {
         Wear::Pads,
         Wear::Clutch,
         Wear::Gears,
+        Wear::Shaft,
     ];
 }
 
@@ -761,6 +772,9 @@ pub struct Driveline {
     pub differentials: [Differential; 2],
     /// The centre coupling (open without one).
     pub centre: Differential,
+    /// What each front drive shaft, each rear one and the prop shaft take (N·m; infinite
+    /// where none is fitted, or it says nothing).
+    pub shafts: [f32; SHAFTS],
     /// Why the parts don't make a driveline, if they don't: a prop shaft with nothing to
     /// turn it or nothing to drive, a gearbox driving no wheels.
     pub problem: Option<String>,
@@ -787,6 +801,7 @@ pub fn driveline(catalogue: &Catalogue, car: &Item) -> Driveline {
         drive: Drive::Front,
         differentials: [Differential::OPEN; 2],
         centre: Differential::OPEN,
+        shafts: [f32::INFINITY; SHAFTS],
         problem: None,
     };
     let Some(gearbox) = car.fitted(catalogue, Kind::Gearbox).next() else {
@@ -836,6 +851,12 @@ pub fn driveline(catalogue: &Catalogue, car: &Item) -> Driveline {
         }
     }
     let rear = rear.filter(|_| output && prop.is_some());
+    let [front_shafts, rear_shafts, prop_shaft] = shafts(catalogue, car);
+    let takes = |item: Option<&Item>| match item.map(|item| &item.def(catalogue).does) {
+        Some(Does::DriveShafts { torque } | Does::PropShaft { torque }) => *torque,
+        _ => f32::INFINITY,
+    };
+    line.shafts = [takes(front_shafts), takes(rear_shafts), takes(prop_shaft)];
     match (made.kind, rear) {
         (GearboxKind::Transverse, None) => line.differentials[0] = own,
         (GearboxKind::Transverse, Some(rear)) => {
@@ -864,6 +885,19 @@ pub fn driveline(catalogue: &Catalogue, car: &Item) -> Driveline {
         }
     }
     line
+}
+
+/// A car's (a car's tree) shafts, as the simulation counts them (`drivetrain::SHAFTS`): the
+/// front drive shafts (in the car), the rear ones (in the rear subframe's mount) and the
+/// prop shaft.
+pub fn shafts<'a>(catalogue: &'a Catalogue, car: &'a Item) -> [Option<&'a Item>; SHAFTS] {
+    let rear = (car.fitted(catalogue, Kind::RearSubframe).next())
+        .and_then(|subframe| subframe.fitted(catalogue, Kind::DriveShafts).next());
+    [
+        car.fitted(catalogue, Kind::DriveShafts).next(),
+        rear,
+        car.fitted(catalogue, Kind::PropShaft).next(),
+    ]
 }
 
 /// The rear subframe `chassis` leaves the factory with (`<chassis>.rear-subframe`), with

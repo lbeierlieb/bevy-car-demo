@@ -10,6 +10,7 @@ use crate::car::{ActiveCar, Car, ReverseRefused};
 use crate::input::{Action, WheelConfig, WheelInput};
 use crate::menu::kit::{self, Panel, rank};
 use crate::menu::nav::{MenuInput, MenuSet};
+use crate::physics::drivetrain::{FRONT_SHAFTS, PROP_SHAFT, REAR_SHAFTS};
 
 /// The key that brings the quick start back.
 const KEY: KeyCode = KeyCode::KeyH;
@@ -93,6 +94,9 @@ fn intro(mut contexts: EguiContexts, mut intro: ResMut<Intro>) -> Result {
 enum Hint {
     Blown,
     NoFuel,
+    FrontShafts,
+    RearShafts,
+    PropShaft,
     Stalled,
     Off,
     Neutral,
@@ -106,9 +110,12 @@ enum Hint {
 }
 
 impl Hint {
-    const ALL: [Hint; 12] = [
+    const ALL: [Hint; 15] = [
         Hint::Blown,
         Hint::NoFuel,
+        Hint::FrontShafts,
+        Hint::RearShafts,
+        Hint::PropShaft,
         Hint::Stalled,
         Hint::Off,
         Hint::Neutral,
@@ -212,8 +219,14 @@ fn hints(
                 .get(gear as usize - 1)
                 .is_some_and(|&w| w > 0.5)
     });
+    // A broken shaft on the way to an axle the car drives.
+    let broken =
+        |shaft: usize, axle: usize| gas && drivetrain.broken(shaft) && engine.drive.drives(axle);
     let now = |hint: Hint| match hint {
         Hint::Blown => gas && blown,
+        Hint::FrontShafts => broken(FRONT_SHAFTS, 0),
+        Hint::RearShafts => broken(REAR_SHAFTS, 1),
+        Hint::PropShaft => broken(PROP_SHAFT, 1) && !drivetrain.broken(REAR_SHAFTS),
         Hint::NoFuel => gas && no_fuel && !blown,
         Hint::Stalled => gas && !running && !off && !cranking && !blown && !no_fuel,
         Hint::Off => gas && off && !cranking && !blown,
@@ -290,6 +303,18 @@ fn text(hint: Hint, config: &WheelConfig, wheel: &WheelInput, pedal: bool) -> (S
         Hint::NoFuel => (
             "The tank is empty".into(),
             "Without fuel the engine stops.".into(),
+        ),
+        Hint::FrontShafts => (
+            "A front drive shaft has broken".into(),
+            "It took more torque than it's made for: nothing drives the front wheels.".into(),
+        ),
+        Hint::RearShafts => (
+            "A rear drive shaft has broken".into(),
+            "It took more torque than it's made for: nothing drives the rear wheels.".into(),
+        ),
+        Hint::PropShaft => (
+            "The prop shaft has broken".into(),
+            "It took more torque than it's made for: nothing drives the rear wheels.".into(),
         ),
         Hint::Stalled if pedal => (
             "The engine has stalled".into(),

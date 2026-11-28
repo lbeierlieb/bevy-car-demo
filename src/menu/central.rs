@@ -480,8 +480,9 @@ fn actions(
     }
     kit::note(
         ui,
-        "For a car that can't drive on (its engine wrecked, its tank empty): the rescue \
-         helicopter takes it to the nearest gas station or parts shop.",
+        "For a car that can't drive on (its engine wrecked, its tank empty, its drive \
+         shafts broken): the rescue helicopter takes it to the nearest gas station or parts \
+         shop.",
     );
 }
 

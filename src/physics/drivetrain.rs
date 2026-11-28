@@ -109,6 +109,18 @@ const SYNCHRO_WEARING: f32 = 0.5;
 const SYNCHRO_REACH: f32 = 3000.0;
 /// A gear passing more than the gearbox takes wears this much a second per share over.
 const OVERLOAD_WEAR: f32 = 1.0 / 600.0;
+/// The drive shafts and the prop shaft (`Drivetrain::shaft_wear`, `EngineSetup::shafts`):
+/// the front axle's pair, the rear axle's pair, the prop shaft to the rear differential.
+pub const FRONT_SHAFTS: usize = 0;
+pub const REAR_SHAFTS: usize = 1;
+pub const PROP_SHAFT: usize = 2;
+pub const SHAFTS: usize = 3;
+/// A shaft passing more than it takes wears this much a second times the square of the
+/// share over (twisting past its yield, a little more each time). What breaks shafts are
+/// shocks of hundredths of a second (a clutch let up at high revs with grippy tires), so
+/// the wear grows steeply with the overload: a stock clutch dumped 25 % over wears a
+/// shaft about a hundredth, a race clutch's 170 % over a quarter. Worn out (1), it breaks.
+const SHAFT_WEAR: f32 = 3.0;
 /// A gear refused grinds this long (s).
 const GRIND_TIME: f32 = 0.3;
 
@@ -262,6 +274,9 @@ pub struct EngineSetup {
     /// axle), and the centre coupling between the axles with all-wheel drive.
     pub differentials: [Differential; 2],
     pub centre: Differential,
+    /// Most torque each of the front drive shafts, each of the rear ones and the prop shaft
+    /// take for good (N·m; infinite where nothing limits it).
+    pub shafts: [f32; SHAFTS],
 }
 
 #[cfg(any(test, not(target_arch = "wasm32")))]
@@ -281,6 +296,7 @@ impl Default for EngineSetup {
             drive: Drive::Rear,
             differentials: [Differential::OPEN; 2],
             centre: Differential::OPEN,
+            shafts: [f32::INFINITY; SHAFTS],
         }
     }
 }
@@ -393,6 +409,9 @@ pub struct Drivetrain {
     shaft: f32,
     /// Time left grinding after a shift a worn synchro refused (s).
     grind: f32,
+    /// How worn the front drive shafts, the rear ones and the prop shaft are (0 new, 1
+    /// broken: what it carried to its axle doesn't get there any more).
+    pub shaft_wear: [f32; SHAFTS],
 }
 
 /// What the drivetrain does to the driven wheels this step (shared by both).
@@ -432,6 +451,42 @@ impl Drivetrain {
             last_gear: 1,
             shaft: engine.idle_rpm(),
             grind: 0.0,
+            shaft_wear: [0.0; SHAFTS],
+        }
+    }
+
+    /// Whether the shaft `shaft` (`FRONT_SHAFTS`, …) has broken.
+    pub fn broken(&self, shaft: usize) -> bool {
+        self.shaft_wear[shaft] >= 1.0
+    }
+
+    /// The wheels the engine still drives, its shafts as broken as they are (the axle
+    /// beyond a broken pair of drive shafts or prop shaft goes undriven; with all-wheel
+    /// drive the other one takes everything): none if nothing gets to any wheel.
+    pub fn drive(&self, engine: &EngineSetup) -> Option<Drive> {
+        let front = !self.broken(FRONT_SHAFTS);
+        let rear = !self.broken(REAR_SHAFTS) && !self.broken(PROP_SHAFT);
+        match engine.drive {
+            Drive::Front => front.then_some(Drive::Front),
+            Drive::Rear => rear.then_some(Drive::Rear),
+            Drive::All { front: share } => match (front, rear) {
+                (true, true) => Some(Drive::All { front: share }),
+                (true, false) => Some(Drive::Front),
+                (false, true) => Some(Drive::Rear),
+                (false, false) => None,
+            },
+        }
+    }
+
+    /// What the step put through the shafts (each front drive shaft's most, each rear
+    /// one's most, the prop shaft's; N·m): over what one takes, it wears, and worn out it
+    /// breaks.
+    pub fn load_shafts(&mut self, engine: &EngineSetup, torque: [f32; SHAFTS], dt: f32) {
+        for ((wear, torque), takes) in (self.shaft_wear.iter_mut()).zip(torque).zip(engine.shafts) {
+            let over = torque.abs() / takes - 1.0;
+            if over > 0.0 {
+                *wear = (*wear + over * over * SHAFT_WEAR * dt).min(1.0);
+            }
         }
     }
 
@@ -669,7 +724,13 @@ impl Drivetrain {
                     self.cut = (self.cut + dt / CUT_FADE).min(1.0);
                 }
             }
-            (engine.ratio(self.gear), throttle * self.cut)
+            // Nothing driven beyond broken shafts: the gearbox turns freely.
+            let ratio = if self.drive(engine).is_some() {
+                engine.ratio(self.gear)
+            } else {
+                0.0
+            };
+            (ratio, throttle * self.cut)
         };
         let build = &engine.build;
         // While shifting it doesn't fire (with the automatic clutch the ECU's overrun cut
@@ -908,6 +969,7 @@ crate::snapshot::snapshot!(Drivetrain {
     last_gear,
     shaft,
     grind,
+    shaft_wear,
 });
 
 #[cfg(test)]

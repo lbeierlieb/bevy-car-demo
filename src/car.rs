@@ -308,6 +308,7 @@ impl CarSetup {
                 drive: line.drive,
                 differentials: line.differentials,
                 centre: line.centre,
+                shafts: line.shafts,
             },
             brake_torque: 2.0 * (front + rear) * build.brake_force,
             brake_bias,
@@ -633,6 +634,7 @@ impl Car {
             .engine
             .blown(&self.setup.engine.build.hardware)
             || self.fuel.litres() < STRANDED_LITRES
+            || self.drivetrain.drive(&self.setup.engine).is_none()
     }
 
     /// Fills (or drains) the tank to `fill` (a share of it).
@@ -664,6 +666,8 @@ impl Car {
         placed.drivetrain.engine.damage = self.drivetrain.engine.damage;
         placed.drivetrain.clutch_wear = self.drivetrain.clutch_wear;
         placed.drivetrain.gear_wear = self.drivetrain.gear_wear;
+        // A broken shaft stays broken: only a workshop mends it.
+        placed.drivetrain.shaft_wear = self.drivetrain.shaft_wear;
         placed.drivetrain.engine.thermal = self.drivetrain.engine.thermal;
         for (corner, old) in placed.corners.iter_mut().zip(&self.corners) {
             corner.tread = old.tread;
@@ -695,6 +699,19 @@ impl Car {
         }
         if new.gearbox == old.gearbox {
             car.drivetrain.gear_wear = self.drivetrain.gear_wear;
+        }
+        // Each shaft keeps its wear if it's the same shaft.
+        let shafts = |setup: &CarSetup| {
+            crate::items::shafts(&setup.build.catalogue, &setup.car).map(|s| s.map(|s| s.def))
+        };
+        for (i, (new, old)) in shafts(&car.setup)
+            .iter()
+            .zip(shafts(&self.setup))
+            .enumerate()
+        {
+            if *new == old {
+                car.drivetrain.shaft_wear[i] = self.drivetrain.shaft_wear[i];
+            }
         }
         // Each axle keeps its tires' state if they're the same tires.
         let same_tires = |front: bool| {

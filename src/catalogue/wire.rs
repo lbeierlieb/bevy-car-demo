@@ -691,8 +691,8 @@ impl Wire for Does {
                 21u8.put(out);
                 mount.put(out);
             }
-            Does::PropShaft => 22u8.put(out),
-            Does::DriveShafts => 23u8.put(out),
+            Does::PropShaft { torque } => (22u8, *torque).put(out),
+            Does::DriveShafts { torque } => (23u8, *torque).put(out),
             Does::Centre { front, coupling } => {
                 24u8.put(out);
                 front.put(out);
@@ -739,8 +739,12 @@ impl Wire for Does {
             }
             20 => Does::Adapter(r.get()?),
             21 => Does::RearSubframe { mount: r.get()? },
-            22 => Does::PropShaft,
-            23 => Does::DriveShafts,
+            22 => Does::PropShaft {
+                torque: r.get::<f32>()?.max(0.0),
+            },
+            23 => Does::DriveShafts {
+                torque: r.get::<f32>()?.max(0.0),
+            },
             24 => Does::Centre {
                 front: r.get::<f32>()?.clamp(0.0, 1.0),
                 coupling: r.get()?,

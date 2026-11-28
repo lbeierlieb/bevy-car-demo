@@ -6,10 +6,10 @@
 
 use bevy::prelude::*;
 
-use crate::car::Car;
+use crate::car::{Car, CarSetup};
 use crate::physics::collision::{self, GROUND, OBSTACLE};
 use crate::physics::drivetrain::Drive;
-use crate::physics::suspension::ChassisFrame;
+use crate::physics::suspension::{ChassisFrame, Corner};
 use crate::terrain::Terrain;
 
 pub mod steering;
@@ -123,8 +123,10 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
         corners,
         rack,
         knocks,
+        drivetrain,
         ..
     } = car;
+    let spun = corners.each_ref().map(|corner| corner.omega);
     let h = dt / SUBSTEPS as f32;
     let (mut force, mut torque) = (Vec3::ZERO, Vec3::ZERO);
     let mut sum = steering::Rack::default();
@@ -171,6 +173,7 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     }
     // What the front wheels do to the steering, averaged over the substeps.
     *rack = sum.scaled(1.0 / SUBSTEPS as f32);
+    drivetrain.load_shafts(&setup.engine, shaft_torques(setup, corners, spun, dt), dt);
     // The air: drag against the motion, and downforce over each axle, both with the
     // square of the speed.
     let pressure = 0.5 * AIR_DENSITY * body.velocity.length_squared();
@@ -207,6 +210,25 @@ pub fn step_car(car: &mut Car, terrain: &Terrain, dt: f32) {
     car.load_fuel();
 }
 
+/// The torque the step put through each front drive shaft (the more of the two), each rear
+/// one and the prop shaft (N·m), from the wheels' spin before it (`spun`): what drove each
+/// wheel less what spun up the engine's inertia carried with it (with the clutch locked a
+/// wheel catching grip after spinning slows the whole engine through its shaft: the shock
+/// that breaks shafts). The prop shaft carries the rear axle's torque before the final
+/// drive.
+fn shaft_torques(setup: &CarSetup, corners: &[Corner; 4], spun: [f32; 4], dt: f32) -> [f32; 3] {
+    let through = |i: usize| {
+        let corner = &corners[i];
+        corner.drive_torque - corner.drive_inertia * (corner.omega - spun[i]) / dt
+    };
+    let [a, b, c, d] = [0, 1, 2, 3].map(through);
+    [
+        a.abs().max(b.abs()),
+        c.abs().max(d.abs()),
+        (c + d).abs() / setup.engine.final_drive.max(1.0),
+    ]
+}
+
 /// Engine torque to the driven wheels through the differentials (less what traction
 /// control holds back), biased brakes (less what ABS holds back), rear handbrake, and
 /// steering.
@@ -228,7 +250,9 @@ fn apply_controls(car: &mut Car, dt: f32) {
     } = car;
 
     let engine = &setup.engine;
-    let shares = engine.drive.shares();
+    // What still drives the wheels, past broken shafts.
+    let driving = drivetrain.drive(engine);
+    let shares = driving.map_or([0.0; 4], Drive::shares);
     // Traction control eases the throttle while a driven wheel spins the way the gear
     // drives it (the slip ratio is positive spinning forwards, negative backwards).
     let way = if drivetrain.gear < 0 { -1.0 } else { 1.0 };
@@ -257,13 +281,13 @@ fn apply_controls(car: &mut Car, dt: f32) {
     // Limited-slip differentials move torque from the faster side to the slower one, on
     // every driven axle (one driven only through the centre coupling too).
     for (axle, (left, right)) in [(0, 1), (2, 3)].into_iter().enumerate() {
-        if engine.drive.drives(axle) {
+        if driving.is_some_and(|drive| drive.drives(axle)) {
             let moved = engine.differentials[axle].transfer(omega[left], omega[right]);
             torque[left] -= moved;
             torque[right] += moved;
         }
     }
-    if matches!(engine.drive, Drive::All { .. }) {
+    if matches!(driving, Some(Drive::All { .. })) {
         let (front, rear) = ((omega[0] + omega[1]) / 2.0, (omega[2] + omega[3]) / 2.0);
         let moved = engine.centre.transfer(front, rear) / 2.0;
         for (i, torque) in torque.iter_mut().enumerate() {
@@ -949,5 +973,277 @@ mod all_wheel_drive {
                 assert!(all > front + 2.0, "{name}: {all} against {front}");
             }
         }
+    }
+}
+
+/// Drive shafts and prop shafts: what goes through them, wear over what they take, and an
+/// axle left undriven when they break.
+#[cfg(test)]
+mod shafts {
+    use super::*;
+    use crate::car::{Car, CarSetup, Controls};
+    use crate::physics::drivetrain::{FRONT_SHAFTS, PROP_SHAFT, REAR_SHAFTS, SHAFTS};
+
+    /// How `setup` is driven from standing on `terrain` (at `x`) with its shafts worn
+    /// `wear` (with a clutch pedal let up from `dump` rpm in first, else floored with the
+    /// automatic gearbox), traction control `tc`, for `seconds`: the car, and the most each
+    /// shaft passed.
+    fn launch(
+        setup: CarSetup,
+        (terrain, x): (&Terrain, f32),
+        (tc, dump): (bool, Option<f32>),
+        wear: [f32; SHAFTS],
+        seconds: f32,
+    ) -> (Car, [f32; SHAFTS]) {
+        let mut car = Car::spawn_at(0, setup, terrain, x, 300.0, std::f32::consts::PI);
+        car.drivetrain.shaft_wear = wear;
+        car.warm_tires();
+        car.parking_brake = false;
+        car.traction_control = tc;
+        car.drivetrain.automatic = dump.is_none();
+        car.drivetrain.shift_to(&car.setup.engine, 1);
+        let mut most = [0.0f32; SHAFTS];
+        let mut held = 0;
+        for i in 0..((seconds + 1.0) / STEP) as usize {
+            let gas = i >= 120;
+            car.controls = Controls {
+                throttle: if gas { 1.0 } else { 0.0 },
+                clutch: dump.map(|rpm| {
+                    // Pressed until the engine has held `rpm` a moment, then let up at once.
+                    if held < 30 {
+                        if gas && car.drivetrain.rpm > rpm {
+                            held += 1;
+                        }
+                        1.0
+                    } else {
+                        0.0
+                    }
+                }),
+                ..Default::default()
+            };
+            let spun = car.corners.each_ref().map(|corner| corner.omega);
+            step_car(&mut car, terrain, STEP);
+            if gas {
+                let through = shaft_torques(&car.setup, &car.corners, spun, STEP);
+                for (most, through) in most.iter_mut().zip(through) {
+                    *most = most.max(through);
+                }
+            }
+        }
+        (car, most)
+    }
+
+    /// The trim `trim` with race tires on the front and the clutch `clutch` (by its
+    /// place), its engine turbocharged and boosted hard if it's the Vireo's B series.
+    fn power_build(trim: &str, clutch: usize) -> CarSetup {
+        let catalogue = crate::catalogue::builtin();
+        let trim = (catalogue.trims.iter())
+            .find(|t| t.id == trim)
+            .expect("the trim");
+        let (mut build, mut parts) = trim.car.resolve(&catalogue).expect("a car");
+        build.wheels[0].compound = crate::physics::tire::RACE;
+        build.clutch = clutch;
+        if trim.id.starts_with("vireo") {
+            parts = build
+                .install(crate::physics::engine::parts::Parts::turbo())
+                .unwrap();
+            parts.chosen[crate::catalogue::TURBO] = 2;
+            parts.boost = 1.2;
+        }
+        let engine = crate::physics::engine::EngineBuild::of_parts(&parts);
+        let car = crate::items::assemble(&catalogue, Some(&trim.car), &build, &parts).unwrap();
+        CarSetup::with_car(build, parts, engine, car)
+    }
+
+    #[test]
+    #[ignore]
+    fn shaft_torques_of_a_power_build() {
+        for clutch in 0..3 {
+            let setup = power_build("vireo.2-0", clutch);
+            println!(
+                "clutch {clutch}: diff {:?} takes {:?}",
+                setup.engine.differentials, setup.engine.shafts
+            );
+            let flat = Terrain::flat();
+            for (name, dump) in [
+                ("floored", None),
+                ("dump 4000", Some(4000.0)),
+                ("dump 6000", Some(6000.0)),
+            ] {
+                let (car, most) = launch(setup.clone(), (&flat, 0.0), (false, dump), [0.0; 3], 8.0);
+                println!(
+                    "  {name:10} front {:5.0}  wear {:?}  {:.1} m/s",
+                    most[0],
+                    car.drivetrain.shaft_wear,
+                    car.forward_speed()
+                );
+            }
+        }
+    }
+
+    /// Each stock car's shafts' most torque and what they take, launched floored with and
+    /// without traction control, on asphalt and on a meadow, and with the clutch dumped
+    /// at 70 and 95 % of the rev limit. `cargo test --profile release-dev shaft_torques_of_the_stock_cars --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn shaft_torques_of_the_stock_cars() {
+        let catalogue = crate::catalogue::builtin();
+        for trim in &catalogue.trims {
+            let setup = CarSetup::of_trim(&catalogue, &trim.id).expect("a trim");
+            println!("{}: takes {:?}", trim.id, setup.engine.shafts);
+            let limit = setup.engine.build.ecu.rev_limit;
+            let (flat, meadow) = (Terrain::flat(), Terrain::flat_meadow());
+            for (name, ground, tc, dump) in [
+                ("tc", (&flat, 0.0), true, None),
+                ("no tc", (&flat, 0.0), false, None),
+                ("meadow", (&meadow, 50.0), false, None),
+                ("dump 70 %", (&flat, 0.0), false, Some(0.7 * limit)),
+                ("dump 95 %", (&flat, 0.0), false, Some(0.95 * limit)),
+            ] {
+                let (car, most) = launch(setup.clone(), ground, (tc, dump), [0.0; 3], 8.0);
+                println!(
+                    "  {name:10} front {:5.0}  rear {:5.0}  prop {:5.0}  wear {:?}  {:.1} m/s",
+                    most[0],
+                    most[1],
+                    most[2],
+                    car.drivetrain.shaft_wear,
+                    car.forward_speed()
+                );
+            }
+        }
+    }
+
+    /// The race clutch.
+    const RACE_CLUTCH: usize = 2;
+
+    /// Every stock car floored from standing, with traction control and without, on
+    /// asphalt and on a meadow, through the gears for 8 s: no shaft wears, and the most
+    /// any passes is well within what it takes.
+    #[test]
+    fn factory_cars_keep_their_shafts() {
+        let catalogue = crate::catalogue::builtin();
+        let (flat, meadow) = (Terrain::flat(), Terrain::flat_meadow());
+        for trim in &catalogue.trims {
+            let setup = CarSetup::of_trim(&catalogue, &trim.id).expect("a trim");
+            let takes = setup.engine.shafts;
+            for (ground, tc) in [
+                ((&flat, 0.0), true),
+                ((&flat, 0.0), false),
+                ((&meadow, 50.0), false),
+            ] {
+                let (car, most) = launch(setup.clone(), ground, (tc, None), [0.0; 3], 8.0);
+                assert_eq!(car.drivetrain.shaft_wear, [0.0; 3], "{}", trim.id);
+                for (most, takes) in most.iter().zip(takes) {
+                    assert!(
+                        most * 1.15 < takes,
+                        "{}: {most} through, takes {takes}",
+                        trim.id
+                    );
+                }
+                // (On the meadow without traction control the roadster hardly gets going.)
+                assert!(ground.1 > 0.0 || car.forward_speed() > 9.0, "{}", trim.id);
+            }
+        }
+    }
+
+    /// Clutch dumps of `setup` at 6000 rpm (each from standing, the shafts as worn as the
+    /// last left them) until shaft `shaft` breaks: how many it took, and the wear.
+    fn dump_until_broken(setup: &CarSetup, shaft: usize) -> (usize, [f32; SHAFTS]) {
+        let flat = Terrain::flat();
+        let mut wear = [0.0; SHAFTS];
+        for dumps in 1..=20 {
+            let (car, _) = launch(
+                setup.clone(),
+                (&flat, 0.0),
+                (false, Some(6000.0)),
+                wear,
+                2.0,
+            );
+            wear = car.drivetrain.shaft_wear;
+            if wear[shaft] >= 1.0 {
+                return (dumps, wear);
+            }
+        }
+        panic!("never broke: {wear:?}");
+    }
+
+    /// The front-drive hatch turbocharged hard, with a race clutch and race tires (and its
+    /// limited slip): a few clutch dumps break its stock front drive shafts, and then
+    /// nothing drives the wheels (the engine revs freely), R doesn't mend them, and the
+    /// car is stranded.
+    #[test]
+    fn a_power_build_breaks_its_front_shafts_and_then_stands() {
+        let setup = power_build("vireo.2-0", RACE_CLUTCH);
+        assert_ne!(
+            setup.engine.differentials[0],
+            crate::physics::drivetrain::Differential::OPEN
+        );
+        let (dumps, wear) = dump_until_broken(&setup, FRONT_SHAFTS);
+        println!("broken after {dumps} dumps");
+        assert!((2..=10).contains(&dumps), "{dumps} dumps");
+        let flat = Terrain::flat();
+        let (mut car, most) = launch(setup.clone(), (&flat, 0.0), (false, None), wear, 4.0);
+        assert_eq!(car.drivetrain.drive(&car.setup.engine), None);
+        assert!(car.stranded());
+        assert!(
+            car.forward_speed().abs() < 0.3,
+            "{} m/s",
+            car.forward_speed()
+        );
+        assert!(most[0] < 1.0, "{most:?}");
+        assert!(car.drivetrain.rpm > 3000.0, "{} rpm", car.drivetrain.rpm);
+        let p = car.body.position.xz();
+        car.place(&flat, p, 0.0);
+        assert!(car.drivetrain.broken(FRONT_SHAFTS));
+        // The stock car's clutch dumped wears the same shafts only a little.
+        let stock = CarSetup::of_trim(&crate::catalogue::builtin(), "vireo.2-0").unwrap();
+        let (car, _) = launch(stock, (&flat, 0.0), (false, Some(6000.0)), [0.0; 3], 2.0);
+        assert!(
+            car.drivetrain.shaft_wear[0] < 0.005,
+            "{:?}",
+            car.drivetrain.shaft_wear
+        );
+    }
+
+    /// The AWD box with a race clutch and race tires at the front: clutch dumps break its
+    /// front drive shafts, and then it drives on with the rear wheels alone.
+    #[test]
+    fn the_awd_box_drives_on_with_its_rear_wheels_when_the_fronts_break() {
+        let setup = power_build("bothy.2-4-awd", RACE_CLUTCH);
+        let (dumps, wear) = dump_until_broken(&setup, FRONT_SHAFTS);
+        println!("broken after {dumps} dumps: {wear:?}");
+        assert!(wear[REAR_SHAFTS] < 1.0 && wear[PROP_SHAFT] < 1.0);
+        let flat = Terrain::flat();
+        let (car, most) = launch(setup, (&flat, 0.0), (true, None), wear, 5.0);
+        assert_eq!(car.drivetrain.drive(&car.setup.engine), Some(Drive::Rear));
+        assert!(!car.stranded());
+        assert!(most[0] < 1.0 && most[1] > 100.0, "{most:?}");
+        assert!(car.forward_speed() > 10.0, "{} m/s", car.forward_speed());
+    }
+
+    /// A car with a worn and a broken shaft saved and loaded drives on to the bit as the
+    /// saved one.
+    #[test]
+    fn broken_shafts_are_in_the_snapshot() {
+        use crate::snapshot::{load, save};
+        let flat = Terrain::flat();
+        let setup = CarSetup::of_trim(&crate::catalogue::builtin(), "bothy.2-4-awd").unwrap();
+        let (mut car, _) = launch(
+            setup.clone(),
+            (&flat, 0.0),
+            (false, None),
+            [1.0, 0.4, 0.0],
+            2.0,
+        );
+        let bytes = save(&car);
+        let mut loaded = Car::spawn_at(0, setup, &flat, 30.0, 0.0, 0.0);
+        assert!(load(&mut loaded, &bytes));
+        assert_eq!(loaded.drivetrain.shaft_wear, [1.0, 0.4, 0.0]);
+        for _ in 0..240 {
+            step_car(&mut car, &flat, STEP);
+            step_car(&mut loaded, &flat, STEP);
+        }
+        assert_eq!(save(&loaded), save(&car));
     }
 }

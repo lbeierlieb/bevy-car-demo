@@ -891,6 +891,12 @@ fn ware_screen(
                         );
                     }
                 }
+                Does::DriveShafts { torque } => {
+                    kit::info(ui, "Takes", &format!("{torque:.0} N·m each"));
+                }
+                Does::PropShaft { torque } => {
+                    kit::info(ui, "Takes", &format!("{torque:.0} N·m"));
+                }
                 Does::Adapter(a) => {
                     let adapter = &catalogue.adapters[a];
                     kit::info(

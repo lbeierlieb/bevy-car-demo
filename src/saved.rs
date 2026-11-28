@@ -34,7 +34,7 @@ use crate::car::Car;
 use crate::catalogue::{Catalogue, Shared};
 use crate::items::{Does, Item, Kind, Wear};
 use crate::net::wire::{decode_with, encode};
-use crate::physics::drivetrain::MAX_GEARS;
+use crate::physics::drivetrain::{FRONT_SHAFTS, MAX_GEARS, REAR_SHAFTS, SHAFTS};
 use crate::physics::engine::damage::{Damage, MAX_CYLINDERS};
 use crate::physics::engine::ecu::Ecu;
 use crate::physics::fuel::Fuel;
@@ -87,6 +87,8 @@ pub struct Condition {
     /// The clutch's wear, and each forward gear's (0 new, 1 worn out).
     pub clutch: f32,
     pub gears: [f32; MAX_GEARS],
+    /// The front drive shafts', the rear ones' and the prop shaft's wear (0 new, 1 broken).
+    pub shafts: [f32; SHAFTS],
 }
 
 impl Condition {
@@ -99,6 +101,7 @@ impl Condition {
             pads: car.corners.each_ref().map(|corner| corner.brake.wear),
             clutch: car.drivetrain.clutch_wear,
             gears: car.drivetrain.gear_wear,
+            shafts: car.drivetrain.shaft_wear,
         }
     }
 
@@ -116,12 +119,13 @@ impl Condition {
         car.drivetrain.engine.damage = self.damage;
         car.drivetrain.clutch_wear = self.clutch;
         car.drivetrain.gear_wear = self.gears;
+        car.drivetrain.shaft_wear = self.shafts;
     }
 
     /// Puts the wear on the parts of `car` (a car's tree) that carry it (`Item::wear`): the
     /// engine's on the parts of it each kind of wear is in (pistons, rods, the head's
     /// valves, the head gasket, the crank's bearings, the turbo), each tire's tread on the
-    /// tire at its corner.
+    /// tire at its corner, each shaft's on that shaft (`items::shafts`).
     pub fn put_on(&self, catalogue: &Catalogue, car: &mut Item) {
         let damage = &self.damage;
         each_mut(car, &mut |item| {
@@ -140,8 +144,8 @@ impl Condition {
                 Wear::Turbo => vec![damage.turbo],
                 Wear::Clutch => vec![self.clutch],
                 Wear::Gears => self.gears.to_vec(),
-                // By the corner (below).
-                Wear::Tread | Wear::Pads => return,
+                // By the corner or the shaft's place (below).
+                Wear::Tread | Wear::Pads | Wear::Shaft => return,
             };
             item.wear = trimmed(values);
         });
@@ -153,6 +157,11 @@ impl Condition {
         for (corner, brake) in brakes_mut(catalogue, car).into_iter().enumerate() {
             if let Some(&wear) = self.pads.get(corner) {
                 brake.wear = trimmed(vec![wear]);
+            }
+        }
+        for (shaft, wear) in self.shafts.iter().enumerate() {
+            if let Some(item) = shaft_mut(catalogue, car, shaft) {
+                item.wear = trimmed(vec![*wear]);
             }
         }
     }
@@ -200,6 +209,11 @@ impl Condition {
                 *wear = brake.wear.first().copied().unwrap_or(0.0);
             }
         }
+        let shafts = crate::items::shafts(catalogue, &car).map(|shaft| {
+            shaft
+                .and_then(|item| item.wear.first().copied())
+                .unwrap_or(0.0)
+        });
         Self {
             fuel,
             octane,
@@ -208,6 +222,33 @@ impl Condition {
             pads,
             clutch,
             gears,
+            shafts,
+        }
+    }
+}
+
+/// The shaft at `shaft`'s place (`drivetrain::SHAFTS`) in a car's tree: see
+/// `items::shafts`.
+fn shaft_mut<'a>(catalogue: &Catalogue, car: &'a mut Item, shaft: usize) -> Option<&'a mut Item> {
+    let slot_of = |item: &Item, kind: Kind| {
+        (catalogue.defs[item.def].slots.iter())
+            .zip(&item.slots)
+            .position(|(slot, fitted)| slot.kind == kind && fitted.is_some())
+    };
+    match shaft {
+        FRONT_SHAFTS => {
+            let at = slot_of(car, Kind::DriveShafts)?;
+            car.slots[at].as_mut()
+        }
+        REAR_SHAFTS => {
+            let at = slot_of(car, Kind::RearSubframe)?;
+            let subframe = car.slots[at].as_mut()?;
+            let at = slot_of(subframe, Kind::DriveShafts)?;
+            subframe.slots[at].as_mut()
+        }
+        _ => {
+            let at = slot_of(car, Kind::PropShaft)?;
+            car.slots[at].as_mut()
         }
     }
 }
@@ -580,6 +621,21 @@ fn fill_rear(catalogue: &Catalogue, car: &mut Item, orphans: &mut Vec<Item>) {
     }
 }
 
+/// A car saved before front drive shafts were parts (protocol 71) given its chassis'
+/// stock ones (`<chassis>.drive-shafts`), new.
+fn fill_front_shafts(catalogue: &Catalogue, car: &mut Item) {
+    let slots = catalogue.defs[car.def].slots.clone();
+    let id = format!("{}.drive-shafts", catalogue.defs[car.def].id);
+    for (slot, place) in slots.iter().zip(&mut car.slots) {
+        if slot.kind == Kind::DriveShafts
+            && place.is_none()
+            && let Some(def) = crate::items::by_id(catalogue, &id)
+        {
+            *place = Some(Item::new(catalogue, def, 0));
+        }
+    }
+}
+
 /// What an ECU saved before version 5 (`ecu.stock`, `ecu.programmable`) is now, on a car
 /// whose engine is `engine`'s family and version (the first's if not known): the version's
 /// own stock ECU, or the programmable one for its cylinders.
@@ -708,6 +764,7 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
         pads: [0.0; 4],
         clutch: 0.0,
         gears: [0.0; MAX_GEARS],
+        shafts: [0.0; SHAFTS],
     };
     let mut fuel = None;
     let mut version = 1;
@@ -766,6 +823,7 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
     let mut car = cars.into_iter().next().ok_or("no chassis")?;
     fill_new_slots(catalogue, &mut car);
     fill_rear(catalogue, &mut car, &mut orphans);
+    fill_front_shafts(catalogue, &mut car);
     let mut cargo = cargo_parts.map_or_else(Vec::new, |parts| {
         let (cargo, loose) = parts.finish(catalogue);
         orphans.extend(loose);
@@ -901,6 +959,42 @@ mod tests {
     /// Cars saved before the rear driveline was made of parts get their chassis' factory
     /// rear subframe; the roadster's limited slip, saved in its inline gearbox, goes into
     /// the rear subframe's mount, and its prop shaft comes with it.
+    /// The shafts' wear comes back as saved, on the shafts; a car saved before front drive
+    /// shafts were parts gets new stock ones.
+    #[test]
+    fn shaft_wear_reads_back_and_old_cars_get_front_shafts() {
+        let catalogue = crate::catalogue::builtin();
+        let bothy = (catalogue.trims.iter())
+            .find(|t| t.id == "bothy.2-4-awd")
+            .unwrap();
+        let setup = CarSetup::of_trim(&catalogue, &bothy.id).unwrap();
+        let spec = CarSpec::of(&setup);
+        let mut car = Car::spawn_at(0, setup, &Terrain::flat(), 0.0, 0.0, 0.0);
+        car.drivetrain.shaft_wear = [1.0, 0.25, 0.5];
+        let text = write(&catalogue, &spec, &Condition::of(&car));
+        // Read with the wear on the parts.
+        let worn = |shafts| {
+            let mut worn = spec.clone();
+            let condition = Condition {
+                shafts,
+                ..Condition::of(&car)
+            };
+            condition.put_on(&catalogue, &mut worn.car);
+            worn
+        };
+        let (back, condition) = read(&catalogue, &text).expect("reads back");
+        assert_eq!(back, worn([1.0, 0.25, 0.5]));
+        assert_eq!(condition.shafts, [1.0, 0.25, 0.5]);
+        let old: String = (text.lines())
+            .filter(|line| !line.contains("\tFront drive shafts\t"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert!(old.len() < text.len());
+        let (back, condition) = read(&catalogue, &old).expect("reads back");
+        assert_eq!(back, worn([0.0, 0.25, 0.5]));
+        assert_eq!(condition.shafts, [0.0, 0.25, 0.5]);
+    }
+
     #[test]
     fn cars_saved_before_rear_subframes_get_their_factory_one() {
         let catalogue = crate::catalogue::builtin();

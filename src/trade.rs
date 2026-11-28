@@ -116,7 +116,7 @@ fn own_value(catalogue: &Catalogue, item: &Item) -> i64 {
         Kind::Head => 300,
         Kind::EnginePart(_) | Kind::Manifold | Kind::Turbo => 150,
     };
-    const TUNING: [&str; 14] = [
+    const TUNING: [&str; 15] = [
         "sport",
         "race",
         "track",
@@ -131,6 +131,7 @@ fn own_value(catalogue: &Catalogue, item: &Item) -> i64 {
         "cut-out",
         "close-ratio",
         "roots",
+        "uprated",
     ];
     let tuning = TUNING.iter().any(|word| def.id.contains(word));
     let euros = if tuning { euros * 5 / 2 } else { euros };
@@ -282,6 +283,7 @@ fn wear_scale(wear: Wear) -> (f32, f32) {
         Wear::Gears => (0.5, 0.6),
         Wear::Tread | Wear::Pads => (1.0, 0.9),
         Wear::Clutch => (0.9, 0.85),
+        Wear::Shaft => (0.3, 0.4),
     }
 }
 
@@ -397,6 +399,7 @@ pub fn wear_by_mileage(catalogue: &Catalogue, car: &mut Item, km: f32, dice: &mu
             Wear::Pistons | Wear::Rods | Wear::HeadGasket | Wear::Bearings => (miles * 0.4, 0.5),
             Wear::Valves => (miles * 0.05, 0.1),
             Wear::Turbo => (miles * 0.5, 0.6),
+            Wear::Shaft => (miles * 0.1, 0.2),
         };
         let values = (0..wear_values(wear))
             .map(|_| match wear {
