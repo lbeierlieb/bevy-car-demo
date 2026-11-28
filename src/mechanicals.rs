@@ -10,7 +10,7 @@ use bevy::prelude::*;
 
 use crate::body::{Body, Builder, CARPET, DARK, METAL, TRIM, Wheels};
 use crate::catalogue::Catalogue;
-use crate::chassis::{Chassis, Orientation};
+use crate::chassis::{Chassis, EngineBay, Orientation};
 use crate::items::{BONNET_CUT_OUT, Does, Item, Kind, Panel, Seat};
 use crate::physics::engine::hardware::CamDrive;
 
@@ -148,8 +148,23 @@ pub fn mesh(catalogue: &Catalogue, chassis: &Chassis, car: &Item) -> Mesh {
     };
     let exhaust_start = engine_bay(&mut b, &frame, catalogue, chassis, car);
     cabin(&mut b, &frame, catalogue, chassis, car);
-    underneath(&mut b, &frame, catalogue, chassis, car, exhaust_start);
+    let rear = crate::items::rear_engine(catalogue, car).is_some();
+    underneath(&mut b, &frame, catalogue, chassis, car, exhaust_start, rear);
     b.build()
+}
+
+/// The bay `car`'s engine sits in (an engine subframe's, or the chassis' own) and what
+/// holds it and its gearbox (see `items::powertrain`).
+fn bay_of<'a>(
+    catalogue: &'a Catalogue,
+    chassis: &'a Chassis,
+    car: &'a Item,
+) -> (&'a EngineBay, &'a Item) {
+    let holder = crate::items::powertrain(catalogue, car);
+    match crate::items::engine_subframe(catalogue, car) {
+        Some((_, subframe, bay)) if std::ptr::eq(subframe, holder) => (bay, holder),
+        _ => (&chassis.bay, car),
+    }
 }
 
 /// The engine (with its gearbox beside or behind it, and a rear-wheel drive's shafts and
@@ -163,7 +178,8 @@ fn engine_bay(
     car: &Item,
 ) -> Option<Vec<Vec3>> {
     let body = frame.body;
-    let bay = &chassis.bay;
+    let (bay, holder) = bay_of(catalogue, chassis, car);
+    let rear = !std::ptr::eq(holder, car);
     let named = |slot: &str| part(catalogue, car, slot);
     // The radiator behind the front bumper, an intercooler low in front of it.
     let nose = body.bumpers[0] + 0.03;
@@ -190,7 +206,20 @@ fn engine_bay(
         RED,
     );
 
-    let engine = car.fitted(catalogue, Kind::Engine).next()?;
+    // An engine subframe's firewall behind the front seats, across the cabin from the
+    // floor to the belt.
+    if let Some((_, _, rear_bay)) = crate::items::engine_subframe(catalogue, car) {
+        let wall = body.front_overhang + rear_bay.engine_at - rear_bay.length / 2.0;
+        let top = body.deck_height(wall) - 0.02;
+        let width = 2.0 * 0.92 * body.half_width(wall);
+        let middle = (body.floor + top) / 2.0;
+        b.cuboid(
+            frame.at(wall, middle, 0.0),
+            Vec3::new(width, top - body.floor, 0.03),
+            DARK,
+        );
+    }
+    let engine = holder.fitted(catalogue, Kind::Engine).next()?;
     let block = engine.fitted(catalogue, Kind::LongBlock).next()?;
     let Does::Block { family, version } = block.def(catalogue).does else {
         return None;
@@ -233,6 +262,22 @@ fn engine_bay(
     let (along, across) = (family.length, family.width);
     let x = body.front_overhang + bay.engine_at;
     let bottom = body.floor + 0.03;
+    // An engine at the rear keeps the radiator at the front: two coolant lines along the
+    // floor from one to the other.
+    if rear && named("Radiator").is_some() {
+        let ahead = x - if transverse { across } else { along } / 2.0;
+        for side in [-0.12, 0.12] {
+            let points = [
+                frame.at(nose + 0.06, body.floor + 0.2, side),
+                frame.at(nose + 0.3, body.floor - 0.01, side),
+                frame.at(ahead - 0.1, body.floor - 0.01, side),
+                frame.at(ahead, bottom + 0.25, side),
+            ];
+            for pair in points.windows(2) {
+                b.bar(pair[0], pair[1], 0.035, BLACK);
+            }
+        }
+    }
     let under_bonnet = body.deck_height(x) - 0.04;
     let height = family.height.min(under_bonnet - bottom);
     let (centre, axes) = if transverse {
@@ -764,7 +809,8 @@ fn cabin(b: &mut Builder, frame: &Frame, catalogue: &Catalogue, chassis: &Chassi
 }
 
 /// The fuel tank and the exhaust line under the floor, from where it leaves the engine
-/// to the tailpipe under the rear bumper.
+/// to the tailpipe under the rear bumper (`rear`: from an engine at the rear, straight
+/// back under the bumper).
 fn underneath(
     b: &mut Builder,
     frame: &Frame,
@@ -772,6 +818,7 @@ fn underneath(
     chassis: &Chassis,
     car: &Item,
     from: Option<Vec<Vec3>>,
+    rear: bool,
 ) {
     let body = frame.body;
     let floor = body.floor;
@@ -848,9 +895,20 @@ fn underneath(
     let from = starts[0];
     let start = body.x(from.z, &frame.wheels);
     let tail = body.length;
-    let silencer = tail - 0.62;
-    let down = frame.at(start + 0.35, low, 0.06);
-    let cat = [down.z + 0.05, down.z + 0.5];
+    let silencer = if rear {
+        (start + 0.45).min(tail - 0.35)
+    } else {
+        tail - 0.62
+    };
+    let down = frame.at(start + if rear { 0.1 } else { 0.35 }, low, 0.06);
+    let cat = if rear {
+        [
+            down.z + 0.03,
+            frame.at(silencer - 0.04, low, 0.0).z.max(down.z + 0.1),
+        ]
+    } else {
+        [down.z + 0.05, down.z + 0.5]
+    };
     for &from in &starts {
         pipe(b, from, down);
     }
@@ -868,12 +926,16 @@ fn underneath(
             );
         }
     }
-    let past_tank = frame.at(tank - length, low, side);
-    pipe(b, cat_out, past_tank);
-    let along_tank = frame.at(tank + length / 2.0 + 0.1, low, side);
-    pipe(b, past_tank, along_tank);
     let can_in = frame.at(silencer, floor + 0.04, side.max(0.3));
-    pipe(b, along_tank, can_in);
+    if rear {
+        pipe(b, cat_out, can_in);
+    } else {
+        let past_tank = frame.at(tank - length, low, side);
+        pipe(b, cat_out, past_tank);
+        let along_tank = frame.at(tank + length / 2.0 + 0.1, low, side);
+        pipe(b, past_tank, along_tank);
+        pipe(b, along_tank, can_in);
+    }
     let tip_y = floor + UNDER_TIP;
     let can_out = frame.at(tail - 0.1, tip_y, can_in.x);
     match named("Silencer") {
@@ -1076,5 +1138,37 @@ mod tests {
                 - triangles(&mesh(&catalogue, chassis, &empty))
         });
         assert!(pair > crossover, "{pair} {crossover}");
+    }
+
+    /// An engine moved behind the seats (an engine subframe) is drawn there: the front bay
+    /// keeps its radiator and battery, the rear has the engine, a firewall, and the
+    /// exhaust leaves under the rear bumper; within the body.
+    #[test]
+    fn an_engine_at_the_rear_is_drawn_there() {
+        let catalogue = crate::catalogue::builtin();
+        let stock = crate::car::CarSetup::of_trim(&catalogue, "tessel.2-0r").unwrap();
+        let mid = crate::fitting::mid_engined(&catalogue, "tessel.2-0r");
+        let chassis = stock.build.chassis();
+        let half = chassis.wheelbase / 2.0;
+        let count = |car: &Item, z: std::ops::Range<f32>| {
+            let mesh = mesh(&catalogue, chassis, car);
+            let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+                mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+            else {
+                panic!("no positions");
+            };
+            for p in positions {
+                assert!(p[1] > 0.0 && p[1] < chassis.body.height(), "{p:?}");
+                assert!(p[0].abs() < chassis.body.width / 2.0, "{p:?}");
+            }
+            (positions.iter()).filter(|p| z.contains(&p[2])).count()
+        };
+        // Ahead of the front axle, and from behind the seats to the tail.
+        let (front, back) = (-5.0..-half + 0.1, half - 0.6..5.0);
+        let (stock_front, mid_front) = (count(&stock.car, front.clone()), count(&mid.car, front));
+        let (stock_back, mid_back) = (count(&stock.car, back.clone()), count(&mid.car, back));
+        println!("ahead {stock_front} → {mid_front}, behind {stock_back} → {mid_back}");
+        assert!(mid_front < stock_front / 2, "{mid_front} {stock_front}");
+        assert!(mid_back > stock_back + 300, "{mid_back} {stock_back}");
     }
 }

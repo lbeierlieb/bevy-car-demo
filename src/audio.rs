@@ -1236,7 +1236,7 @@ fn update_engine(
         _ => engine.targets.ground(),
     };
     engine.targets.set_ground(ground);
-    let cabin = paths::CabinShape::of(looks.build.chassis());
+    let cabin = paths::CabinShape::of_bay(looks.build.chassis(), looks.build.bay());
     listening.0.set(inside, cabin);
 }
 

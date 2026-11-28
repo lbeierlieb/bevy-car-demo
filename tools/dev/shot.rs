@@ -434,7 +434,8 @@ fn dress_up(setup: &mut crate::car::CarSetup) {
         }
     }
     // FITIDS="vireo.wing,turbocharger.roots-blower": parts by id, each into the first slot
-    // of its kind in the tree (WING="angle" sets a wing's); a turbo onto every mount of the
+    // of its kind in the tree (a rear subframe as a shop fits it: "tessel.rear-subframe.engine"
+    // moves the engine behind the seats) (WING="angle" sets a wing's); a turbo onto every mount of the
     // first manifold with mounts (so the manifold goes first: FITIDS="r.manifolds.turbo,
     // turbocharger.medium").
     fn put(catalogue: &crate::catalogue::Catalogue, item: &mut Item, part: &Item) -> bool {
@@ -465,6 +466,15 @@ fn dress_up(setup: &mut crate::car::CarSetup) {
         let mut part = Item::new(&catalogue, def, paint);
         if let (Ok(angle), Some(knob)) = (std::env::var("WING"), part.knobs.first_mut()) {
             *knob = angle.parse().unwrap();
+        }
+        // A rear subframe as a shop fits it (an engine subframe takes the engine along).
+        let top = setup.car.def(&catalogue).slots.iter().position(|slot| {
+            slot.kind == Kind::RearSubframe && part.def(&catalogue).kind == Kind::RearSubframe
+        });
+        if let Some(at) = top {
+            crate::fitting::convert(&catalogue, &mut setup.car, at, &mut part);
+            setup.car.slots[at] = Some(part);
+            continue;
         }
         assert!(put(&catalogue, &mut setup.car, &part), "no slot for {id}");
     }

@@ -95,7 +95,14 @@ impl CabinShape {
         enclosed: 1.0,
     };
 
+    #[cfg(test)]
     pub(super) fn of(chassis: &Chassis) -> Self {
+        Self::of_bay(chassis, &chassis.bay)
+    }
+
+    /// `chassis`' cabin with its engine in `bay` (its own, or an engine subframe's right
+    /// behind the seats).
+    pub(super) fn of_bay(chassis: &Chassis, bay: &crate::chassis::EngineBay) -> Self {
         let body = &chassis.body;
         let closed = body.cabin.len() > 2;
         let (run, roof) = match (body.cabin.first(), body.cabin.last()) {
@@ -109,7 +116,7 @@ impl CabinShape {
         let mut modes =
             [run.max(1.0), CABIN_WIDTH * body.width, height].map(|size| SOUND_SPEED / (2.0 * size));
         modes.sort_by(f32::total_cmp);
-        let engine = body.front_overhang + chassis.bay.engine_at;
+        let engine = body.front_overhang + bay.engine_at;
         let distance = (engine - chassis.eye[0]).abs().max(0.3);
         let nearness = (ENGINE_NEAR / distance).clamp(NEARNESS.0, NEARNESS.1);
         let insulation = chassis.insulation.clamp(0.0, 1.0);
