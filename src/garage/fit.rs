@@ -8,8 +8,10 @@
 //! lists its mounts; turbos go on, and come off, every mount at once (new ones, or as many
 //! alike brought). A new part that would leave the gearbox not bolting to the engine says
 //! why, and is offered along with the adapter plate that makes it (or with the plate
-//! off), where the shop can do that. Every change is asked of the server (`fitting::Work`), which answers
-//! with the car.
+//! off), where the shop can do that. An engine subframe says what moves into it (and what
+//! would be refused); with the engine in it, its engine, gearbox and drive shafts are listed
+//! with the car's slots (the rear bench and the car's empty bay slots aren't). Every change
+//! is asked of the server (`fitting::Work`), which answers with the car.
 
 use bevy_egui::egui;
 
@@ -436,21 +438,51 @@ fn car_screen(ui: &mut egui::Ui, bench: &Bench, ask: &mut Option<Work>, go: &mut
     let catalogue = bench.catalogue;
     let car = &bench.car.setup.car;
     let slots = &car.def(catalogue).slots;
+    // With an engine subframe there's no rear bench (its place is the bay's); with the
+    // engine in it, its engine, gearbox and drive shafts are listed with the car's (whose
+    // empty ones go).
+    let subframe = crate::items::engine_subframe(catalogue, car);
+    let rear = crate::items::rear_engine(catalogue, car);
+    let hidden = |i: usize| {
+        let kind = slots[i].kind;
+        subframe.is_some() && kind == Kind::Seat(crate::items::Seat::RearBench)
+            || rear.is_some()
+                && car.slots[i].is_none()
+                && matches!(kind, Kind::Engine | Kind::Gearbox | Kind::DriveShafts)
+    };
+    let mut all: Vec<(Path, String, Kind, Option<&Item>)> = (0..slots.len())
+        .filter(|&i| !hidden(i) && fits_into(bench.shop.kind, slots[i].kind, None))
+        .map(|i| {
+            (
+                vec![i as u8],
+                slots[i].name.clone(),
+                slots[i].kind,
+                car.slots[i].as_ref(),
+            )
+        })
+        .collect();
+    if let (Some(at), Some((_, subframe, _))) = (rear, subframe) {
+        let inner = &subframe.def(catalogue).slots;
+        for (j, slot) in inner.iter().enumerate() {
+            if fits_into(bench.shop.kind, slot.kind, Some(Kind::RearSubframe)) {
+                let name = format!("{} (in the rear bay)", slot.name);
+                let path = vec![at as u8, j as u8];
+                all.push((path, name, slot.kind, subframe.slots[j].as_ref()));
+            }
+        }
+    }
     for heading in GROUPS {
-        let rows: Vec<usize> = (0..slots.len())
-            .filter(|&i| {
-                let kind = slots[i].kind;
-                group(kind) == heading && fits_into(bench.shop.kind, kind, None)
-            })
+        let rows: Vec<_> = (all.iter())
+            .filter(|(_, _, kind, _)| group(*kind) == heading)
             .collect();
         if rows.is_empty() {
             continue;
         }
         kit::section(ui, heading);
-        for i in rows {
-            let fitted = fitted_name(catalogue, car.slots[i].as_ref());
-            if kit::submenu_with(ui, &slots[i].name, &fitted).clicked() {
-                *go = Some(Screen::Slot(vec![i as u8]));
+        for (path, name, _, item) in rows {
+            let fitted = fitted_name(catalogue, *item);
+            if kit::submenu_with(ui, name, &fitted).clicked() {
+                *go = Some(Screen::Slot(path.clone()));
             }
         }
     }
@@ -897,6 +929,22 @@ fn ware_screen(
                 Does::PropShaft { torque } => {
                     kit::info(ui, "Takes", &format!("{torque:.0} N·m"));
                 }
+                Does::EngineSubframe(ref bay) => {
+                    kit::info(
+                        ui,
+                        "Engine bay",
+                        &format!(
+                            "{}, {:.2} × {:.2} × {:.2} m",
+                            bay.place, bay.length, bay.width, bay.height
+                        ),
+                    );
+                    kit::note(
+                        ui,
+                        "The engine, gearbox and front drive shafts move into it, behind \
+                         the seats, and drive the rear wheels; the rear bench comes out and \
+                         the bay takes part of the hold. The radiator stays at the front.",
+                    );
+                }
                 Does::Adapter(a) => {
                     let adapter = &catalogue.adapters[a];
                     kit::info(
@@ -958,8 +1006,37 @@ fn ware_screen(
         }
         _ => return,
     };
-    if !bolts_after(ui, bench, path, &supply, asks) {
+    if made_whole(ui, bench, path, &supply) && !bolts_after(ui, bench, path, &supply, asks) {
         fit_buttons(ui, bench, path, supply, ask);
+    }
+}
+
+/// Whether the car still makes one with a new rear subframe `supply` at `path` (moving the
+/// engine to the rear or back, `fitting::convert`): if not, says why. Other parts say
+/// nothing here.
+fn made_whole(ui: &mut egui::Ui, bench: &Bench, path: &Path, supply: &Supply) -> bool {
+    let catalogue = bench.catalogue;
+    let Supply::Part { def, paint, .. } = *supply else {
+        return true;
+    };
+    let part = Item::new(catalogue, usize::from(def), usize::from(paint));
+    let subframe = bench
+        .kinds(path)
+        .is_some_and(|(kind, _)| kind == Kind::RearSubframe);
+    if !subframe || loose(path) {
+        return true;
+    }
+    let Some(after) = with_fitted(catalogue, bench.worn, path, part) else {
+        return true;
+    };
+    let why = crate::items::bay_problem(catalogue, &after)
+        .or_else(|| (after.resolve(&bench.car.setup.build.catalogue).err()).map(|unfit| unfit.0));
+    match why {
+        Some(why) => {
+            kit::warning(ui, &why);
+            false
+        }
+        None => true,
     }
 }
 

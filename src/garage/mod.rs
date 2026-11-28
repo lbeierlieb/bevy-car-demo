@@ -214,7 +214,7 @@ fn brochure(ui: &mut egui::Ui, catalogue: &Shared, shown: &Showroom) {
     kit::note(ui, &parts.family().about);
     let gearbox = build.gearbox();
     let mass = setup.mass_with(0.0);
-    kit::info(ui, "Engine", &format!("at the {}", chassis.bay.place));
+    kit::info(ui, "Engine", &format!("at the {}", build.bay().place));
     kit::info(ui, "Drive", setup.engine.drive.name());
     kit::info(ui, "Gearbox", &gearbox.name.to_lowercase());
     kit::info(ui, "Weight", &format!("{mass:.0} kg"));
