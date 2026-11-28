@@ -439,7 +439,9 @@ fields!(HeadDef {
     cams,
     valves,
     valvetrain,
-    port_flow
+    port_flow,
+    intake_phasing,
+    exhaust_phasing
 } text { id, name });
 
 fields!(Regrind {
@@ -916,7 +918,12 @@ impl Catalogue {
                         && version.preset.manifold < family.manifolds.len()
                         && version.preset.head < family.heads.len()
                 })
-                && (family.heads.iter()).all(|head| !head.cams.is_empty() && head.bore > 0.0)
+                && (family.heads.iter()).all(|head| {
+                    !head.cams.is_empty()
+                        && head.bore > 0.0
+                        && (0.0..=90.0).contains(&head.intake_phasing)
+                        && (0.0..=90.0).contains(&head.exhaust_phasing)
+                })
         };
         let slot = |slot: &Slot| !slot.parts.is_empty();
         let does = |def: &PartDef| match def.does {

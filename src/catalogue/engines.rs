@@ -30,6 +30,8 @@ struct Block {
     /// A second cam profile to switch to, if it has one: its duration, lobe separation
     /// and lift over the first's.
     high: Option<(f32, f32, f32)>,
+    /// The range of an intake cam phaser in its head (crank degrees), 0 without one.
+    phaser: f32,
     /// The speed its valve springs and rods are made for (rpm).
     redline: f32,
     /// Intake runner and header primary lengths (mm).
@@ -137,7 +139,7 @@ fn block(b: Block) -> EngineHardware {
                 lift: round_to(cam.lift * lift, 1e-4),
             }))
             .collect(),
-        intake_phasing: 0.0,
+        intake_phasing: b.phaser,
         exhaust_phasing: 0.0,
         intake_timing: 0.0,
         exhaust_timing: 0.0,
@@ -427,6 +429,7 @@ pub fn families() -> Vec<Family> {
                             duration: 236.0,
                             separation: 112.0,
                             high: None,
+                            phaser: 0.0,
                             redline: 6300.0,
                             runner: 420.0,
                             header: 700.0,
@@ -449,6 +452,7 @@ pub fn families() -> Vec<Family> {
                             duration: 240.0,
                             separation: 112.0,
                             high: None,
+                            phaser: 0.0,
                             redline: 6000.0,
                             runner: 440.0,
                             header: 700.0,
@@ -474,6 +478,7 @@ pub fn families() -> Vec<Family> {
                             duration: 232.0,
                             separation: 110.0,
                             high: Some((270.0, 106.0, 1.22)),
+                            phaser: 0.0,
                             redline: 8200.0,
                             runner: 300.0,
                             header: 700.0,
@@ -511,6 +516,7 @@ pub fn families() -> Vec<Family> {
                         duration: 276.0,
                         separation: 130.0,
                         high: None,
+                        phaser: 0.0,
                         redline: 6000.0,
                         runner: 400.0,
                         header: 500.0,

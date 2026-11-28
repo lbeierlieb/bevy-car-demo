@@ -107,7 +107,8 @@ pub struct Family {
 }
 
 /// A cylinder head made for an engine family: its valves, their springs, the cams over
-/// them (or, on a pushrod engine, the cam working them) and how its ports flow. Its valves
+/// them (or, on a pushrod engine, the cam working them), their phasers and how its ports
+/// flow. Its valves
 /// keep their size on a block of another bore: they're relative to the bore it's made for.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HeadDef {
@@ -120,6 +121,10 @@ pub struct HeadDef {
     pub valves: ValveTrain,
     pub valvetrain: ValveLayout,
     pub port_flow: f32,
+    /// The range of its own cam phasers (crank degrees; intake advanced, exhaust
+    /// retarded), none without: they turn its cams, so they come with it.
+    pub intake_phasing: f32,
+    pub exhaust_phasing: f32,
 }
 
 impl HeadDef {
@@ -133,6 +138,8 @@ impl HeadDef {
             valves: block.valves,
             valvetrain: block.valvetrain,
             port_flow: block.port_flow,
+            intake_phasing: block.intake_phasing,
+            exhaust_phasing: block.exhaust_phasing,
         }
     }
 
@@ -141,6 +148,8 @@ impl HeadDef {
         hardware.cams = self.cams.clone();
         hardware.valves = self.valves;
         hardware.port_flow = self.port_flow;
+        hardware.intake_phasing = self.intake_phasing;
+        hardware.exhaust_phasing = self.exhaust_phasing;
         let mut layout = self.valvetrain;
         if self.bore != hardware.bore {
             let k = self.bore / hardware.bore;
