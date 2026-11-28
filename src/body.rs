@@ -48,6 +48,8 @@ const TAIL_TAPER: f32 = 0.8;
 const DECK_WIDTH: f32 = 0.88;
 const CABIN_WIDTH: f32 = 0.85;
 const PILLAR: f32 = 0.055;
+/// A cabin ending within this of the tail has its rear window in the hatch (m).
+const REAR_WINDOW_IN_HATCH: f32 = 0.4;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Tone {
@@ -99,6 +101,9 @@ pub struct Body {
     /// Where the doors' front and rear edges are (x); their glass runs from the
     /// windscreen's base to the rear edge.
     pub door: [f32; 2],
+    /// A four-door's rear doors' edges (x), their glass from the front doors' rear edge
+    /// (where a pillar stands) to theirs.
+    pub rear_door: Option<[f32; 2]>,
     /// How far the front and the rear bumper reach in from the ends, and the height of
     /// their top edge.
     pub bumpers: [f32; 2],
@@ -141,7 +146,9 @@ impl Side {
     /// The side a piece of `panel` on `side` is on: the paired ones keep it.
     fn of_panel(panel: Panel, side: Side) -> Side {
         match panel {
-            Panel::Fender | Panel::Door | Panel::Mirror | Panel::SideSkirt => side,
+            Panel::Fender | Panel::Door | Panel::RearDoor | Panel::Mirror | Panel::SideSkirt => {
+                side
+            }
             _ => Side::Middle,
         }
     }
@@ -158,7 +165,7 @@ pub struct Dress {
 
 impl Dress {
     /// Every piece a stock car has (bumpers, bonnet, fenders, doors, mirrors, hatch) in
-    /// `color`.
+    /// `color` (rear doors too, which only a four-door body draws).
     pub fn stock(color: [f32; 3]) -> Self {
         let mut pieces = Vec::new();
         for panel in [
@@ -169,7 +176,7 @@ impl Dress {
         ] {
             pieces.push((panel, Side::Middle, color));
         }
-        for panel in [Panel::Fender, Panel::Door, Panel::Mirror] {
+        for panel in [Panel::Fender, Panel::Door, Panel::RearDoor, Panel::Mirror] {
             for side in [Side::Left, Side::Right] {
                 pieces.push((panel, side, color));
             }
@@ -539,9 +546,30 @@ impl Body {
             .then(|| [0, 1].map(|axle| (axles[axle], wheels.radius[axle] + ARCH_CLEARANCE)))
     }
 
-    /// Whether `x` is between the doors' edges.
-    fn in_door(&self, x: f32) -> bool {
-        (self.door[0]..self.door[1]).contains(&x)
+    /// Which doors `x` is between the edges of: the front ones' or a four-door's rear
+    /// ones'.
+    fn door_at(&self, x: f32) -> Option<Panel> {
+        if (self.door[0]..self.door[1]).contains(&x) {
+            Some(Panel::Door)
+        } else {
+            (self.rear_door)
+                .filter(|rear| (rear[0]..rear[1]).contains(&x))
+                .map(|_| Panel::RearDoor)
+        }
+    }
+
+    /// Where the side glass that goes with the doors ends: the rear doors' rear edge, or
+    /// the front ones'.
+    fn door_glass_end(&self) -> f32 {
+        self.rear_door.map_or(self.door[1], |rear| rear[1])
+    }
+
+    /// Whether the rear window goes with the hatch (a hatchback's, the cabin reaching the
+    /// tail) rather than the shell (a saloon's, with a boot lid behind it).
+    fn rear_window_in_hatch(&self) -> bool {
+        self.cabin
+            .last()
+            .is_some_and(|last| last[0] > self.length - REAR_WINDOW_IN_HATCH)
     }
 
     /// The piece a detail at (x, y, across) belongs to (none: the shell).
@@ -553,8 +581,8 @@ impl Body {
             Some((Panel::FrontBumper, Side::Middle))
         } else if y < self.bumper_top && x > self.length - self.bumpers[1] {
             Some((Panel::RearBumper, Side::Middle))
-        } else if outer && self.in_door(x) {
-            Some((Panel::Door, side))
+        } else if let Some(door) = self.door_at(x).filter(|_| outer) {
+            Some((door, side))
         } else if outer && y > self.bumper_top && x > self.bumpers[0] && x < self.door[0] {
             Some((Panel::Fender, side))
         } else if !outer && y > self.bumper_top && cockpit.is_some_and(|(_, end)| x > end) {
@@ -742,7 +770,7 @@ impl Body {
             1 | 2 => return (Some(DARK), Some(DARK)),
             3 if x < self.bumpers[0] => Some((Panel::FrontBumper, Side::Middle)),
             3 if x > self.length - self.bumpers[1] => Some((Panel::RearBumper, Side::Middle)),
-            3..=5 if self.in_door(x) => Some((Panel::Door, side)),
+            3..=5 if self.door_at(x).is_some() => self.door_at(x).map(|door| (door, side)),
             3..=5 if x < self.door[0] => Some((Panel::Fender, side)),
             3..=5 => None,
             _ => match cabin {
@@ -775,6 +803,7 @@ impl Body {
         let mut xs: Vec<f32> = self.deck.iter().map(|p| p[0]).collect();
         xs.extend([0.3, 0.6, self.length - 0.3, self.length - 0.55]);
         xs.extend(self.door);
+        xs.extend(self.rear_door.into_iter().flatten());
         xs.extend([self.bumpers[0], self.length - self.bumpers[1]]);
         if let Some((start, end)) = cabin {
             xs.extend([start, end]);
@@ -860,7 +889,7 @@ impl Body {
                 if side < 0.0 {
                     quad.reverse();
                 }
-                let piece = self.in_door(x).then_some((Panel::Door, Side::of(side)));
+                let piece = self.door_at(x).map(|door| (door, Side::of(side)));
                 if let Some(color) = dress.color(piece) {
                     builder.skinned(quad, (Some(color), Some(TRIM)));
                 }
@@ -946,14 +975,17 @@ impl Body {
         builder.bar(left.1, right.1, PILLAR, paint);
     }
 
-    /// The cabin's outline with a point added at the doors' rear edge, where their glass
+    /// The cabin's outline with points added at the doors' rear edges, where their glass
     /// ends.
     fn cabin_points(&self) -> Vec<[f32; 3]> {
         let mut cabin = self.cabin.clone();
-        let edge = self.door[1];
-        if let Some(k) = (1..cabin.len()).find(|&k| cabin[k - 1][0] < edge && edge < cabin[k][0]) {
-            let roof = height(&self.cabin, edge);
-            cabin.insert(k, [edge, roof, cabin[k - 1][2]]);
+        for edge in std::iter::once(self.door[1]).chain(self.rear_door.map(|rear| rear[1])) {
+            if let Some(k) =
+                (1..cabin.len()).find(|&k| cabin[k - 1][0] < edge && edge < cabin[k][0])
+            {
+                let roof = height(&self.cabin, edge);
+                cabin.insert(k, [edge, roof, cabin[k - 1][2]]);
+            }
         }
         cabin
     }
@@ -999,8 +1031,27 @@ impl Body {
         // The side glazed (1), and the windscreen or rear window (1 or 2).
         let glazed = |station: usize| (0.5..1.5).contains(&cabin[station][2]);
         let window = |station: usize| cabin[station][2] > 0.5;
-        let door_glass = |station: usize| cabin[station][0] < self.door[1] - 1e-4;
+        // The doors' glass: the front doors' up to their rear edge, then the rear doors'.
+        let door_glass = |station: usize| {
+            let x = cabin[station][0];
+            if x < self.door[1] - 1e-4 {
+                Some(Panel::Door)
+            } else if x < self.door_glass_end() - 1e-4 {
+                Some(Panel::RearDoor)
+            } else {
+                None
+            }
+        };
+        // A pillar between the front and the rear doors' glass.
+        let b_pillar = |station: usize| {
+            self.rear_door.is_some() && (cabin[station][0] - self.door[1]).abs() < 1e-4
+        };
         let hatch = dress.get(Panel::Hatch, Side::Middle);
+        let rear_window = if self.rear_window_in_hatch() {
+            hatch
+        } else {
+            Some(dress.shell)
+        };
         builder.loft(&sections, |face| match face {
             // The sides (the doors' glass, then the quarters), then the top: the roof
             // between the windscreen and the rear window.
@@ -1009,7 +1060,7 @@ impl Body {
                 segment: 1,
                 side,
             } => {
-                let piece = door_glass(station).then_some((Panel::Door, Side::of(side)));
+                let piece = door_glass(station).map(|door| (door, Side::of(side)));
                 match (dress.color(piece), glazed(station)) {
                     (None, _) => (None, None),
                     (Some(_), true) => (Some(GLASS), None),
@@ -1022,13 +1073,13 @@ impl Body {
                 ..
             } => match station {
                 0 if window(0) => (Some(GLASS), None),
-                _ if station + 1 == last && window(station) => (hatch.map(|_| GLASS), None),
+                _ if station + 1 == last && window(station) => (rear_window.map(|_| GLASS), None),
                 _ => (Some(dress.shell), Some(HEADLINER)),
             },
             // Open to the lower body.
             Face::Side { .. } => (None, None),
             Face::Cap { front: true, .. } => (Some(dress.shell), None),
-            Face::Cap { front: false, .. } => (hatch, None),
+            Face::Cap { front: false, .. } => (rear_window, None),
         });
         // Pillars along the windscreen and the rear window, posts in between (but within
         // the doors' glass), and the roof's edges, all standing a little proud of the
@@ -1045,7 +1096,7 @@ impl Body {
                 if station == 0 {
                     builder.bar(proud(base, side), proud(next_top, side), PILLAR, paint);
                 } else {
-                    if !door_glass(station) {
+                    if door_glass(station).is_none() || b_pillar(station) {
                         builder.bar(proud(top, side), proud(base, side), PILLAR, paint);
                     }
                     let end = if station + 1 == last {
@@ -1271,31 +1322,39 @@ mod tests {
 
     #[test]
     fn every_piece_has_its_own_faces() {
-        // Each piece taken off takes triangles with it, and only its own colour's.
+        // Each piece taken off takes triangles with it, and only its own colour's: on the
+        // hatch, and on every four-door (rear doors too).
         let catalogue = crate::catalogue::builtin();
-        let chassis = &catalogue.chassis[0];
-        let (body, wheels) = (&chassis.body, chassis.wheels());
-        let red = [0.8, 0.1, 0.1];
-        let full = Dress::stock([0.5; 3])
-            .with(Panel::FrontLip, red)
-            .with(Panel::SideSkirt, red)
-            .with(Panel::RearSpoiler, red)
-            .with(Panel::Diffuser, red);
-        let count = |dress: &Dress| positions(&body.mesh(&wheels, dress)).len() / 3;
-        let all = count(&full);
-        for panel in Panel::ALL {
-            let fewer = count(&full.clone().without(panel));
-            assert!(fewer < all, "{panel:?}: {fewer} of {all}");
-        }
-        // A piece in another colour changes only its own faces' colours.
-        let mut green = full.clone();
-        for piece in &mut green.pieces {
-            if piece.0 == Panel::Bonnet {
-                piece.2 = [0.1, 0.8, 0.1];
+        let closed = (catalogue.chassis.iter().enumerate())
+            .filter(|(c, chassis)| *c == 0 || chassis.body.rear_door.is_some());
+        for (_, chassis) in closed {
+            let (body, wheels) = (&chassis.body, chassis.wheels());
+            let red = [0.8, 0.1, 0.1];
+            let full = Dress::stock([0.5; 3])
+                .with(Panel::FrontLip, red)
+                .with(Panel::SideSkirt, red)
+                .with(Panel::RearSpoiler, red)
+                .with(Panel::Diffuser, red);
+            let count = |dress: &Dress| positions(&body.mesh(&wheels, dress)).len() / 3;
+            let all = count(&full);
+            for panel in Panel::ALL {
+                let fewer = count(&full.clone().without(panel));
+                if panel == Panel::RearDoor && body.rear_door.is_none() {
+                    assert_eq!(fewer, all, "{}", chassis.name);
+                } else {
+                    assert!(fewer < all, "{} {panel:?}: {fewer} of {all}", chassis.name);
+                }
             }
+            // A piece in another colour changes only its own faces' colours.
+            let mut green = full.clone();
+            for piece in &mut green.pieces {
+                if piece.0 == Panel::Bonnet {
+                    piece.2 = [0.1, 0.8, 0.1];
+                }
+            }
+            assert_eq!(count(&green), all);
+            assert_ne!(green.key(), full.key());
         }
-        assert_eq!(count(&green), all);
-        assert_ne!(green.key(), full.key());
     }
 
     #[test]

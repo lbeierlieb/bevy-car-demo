@@ -170,26 +170,31 @@ fn needing(slot: SlotDef, place: usize) -> SlotDef {
 }
 
 /// What a chassis' body is called where it differs: the lid at the back and the spoiler
-/// on it, and whether there's a rear bench behind the front seats.
+/// on it, whether there's a rear bench behind the front seats, and whether it has rear
+/// doors (a four-door).
 struct Layout {
     lid: &'static str,
     spoiler: &'static str,
     rear_bench: bool,
+    rear_doors: bool,
 }
 
 fn layout(chassis: &str) -> Layout {
+    let hatch = Layout {
+        lid: "Hatch",
+        spoiler: "Roof spoiler",
+        rear_bench: true,
+        rear_doors: false,
+    };
     match chassis {
         // An open two-seater.
         "Merrow" => Layout {
             lid: "Boot lid",
             spoiler: "Boot spoiler",
             rear_bench: false,
+            ..hatch
         },
-        _ => Layout {
-            lid: "Hatch",
-            spoiler: "Roof spoiler",
-            rear_bench: true,
-        },
+        _ => hatch,
     }
 }
 
@@ -199,27 +204,50 @@ fn layout(chassis: &str) -> Layout {
 fn chassis_slots(catalogue: &Catalogue, chassis: &str) -> Vec<SlotDef> {
     let layout = layout(chassis);
     let body = |name: &str, panel| slot(name, Kind::Body(panel), false);
-    // A lip goes on the front bumper, mirrors on the doors, the spoiler on the hatch, the
-    // diffuser under the rear bumper (by their places here).
     let mut slots = vec![
         body("Front bumper", Panel::FrontBumper),
-        needing(body("Front lip", Panel::FrontLip), 0),
+        body("Front lip", Panel::FrontLip),
         body("Bonnet", Panel::Bonnet),
         body("Left fender", Panel::Fender),
         body("Right fender", Panel::Fender),
         body("Left door", Panel::Door),
         body("Right door", Panel::Door),
-        needing(body("Left mirror", Panel::Mirror), 5),
-        needing(body("Right mirror", Panel::Mirror), 6),
+        body("Left mirror", Panel::Mirror),
+        body("Right mirror", Panel::Mirror),
+    ];
+    if layout.rear_doors {
+        slots.extend([
+            body("Left rear door", Panel::RearDoor),
+            body("Right rear door", Panel::RearDoor),
+        ]);
+    }
+    slots.extend([
         body("Left side skirt", Panel::SideSkirt),
         body("Right side skirt", Panel::SideSkirt),
         body(layout.lid, Panel::Hatch),
-        needing(body("Rear spoiler", Panel::RearSpoiler), 11),
+        body("Rear spoiler", Panel::RearSpoiler),
         body("Rear bumper", Panel::RearBumper),
-        needing(body("Diffuser", Panel::Diffuser), 13),
+        body("Diffuser", Panel::Diffuser),
         slot("Driver's seat", Kind::Seat(Seat::Front), true),
         slot("Passenger seat", Kind::Seat(Seat::Front), false),
-    ];
+    ]);
+    // A lip goes on the front bumper, mirrors on the (front) doors, the spoiler on the
+    // hatch, the diffuser under the rear bumper.
+    let place = |slots: &[SlotDef], name: &str| {
+        (slots.iter())
+            .position(|slot| slot.name == name)
+            .expect("a body slot")
+    };
+    for (name, on) in [
+        ("Front lip", "Front bumper"),
+        ("Left mirror", "Left door"),
+        ("Right mirror", "Right door"),
+        ("Rear spoiler", layout.lid),
+        ("Diffuser", "Rear bumper"),
+    ] {
+        let (at, needed) = (place(&slots, name), place(&slots, on));
+        slots[at] = needing(slots[at].clone(), needed);
+    }
     if layout.rear_bench {
         slots.push(slot("Rear bench", Kind::Seat(Seat::RearBench), false));
     }
@@ -329,6 +357,13 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             ("bonnet", "Bonnet", Panel::Bonnet, [1.2, 1.4, 0.1], 12.0),
             ("fender", "Fender", Panel::Fender, [1.0, 0.3, 0.7], 4.0),
             ("door", "Door", Panel::Door, [1.3, 0.2, 1.1], 20.0),
+            (
+                "rear-door",
+                "Rear door",
+                Panel::RearDoor,
+                [1.0, 0.2, 1.1],
+                16.0,
+            ),
             ("mirror", "Mirror", Panel::Mirror, [0.25, 0.15, 0.15], 1.0),
             (
                 "side-skirt",
@@ -361,6 +396,9 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             ),
         ];
         for (part, title, panel, size, mass) in panels {
+            if panel == Panel::RearDoor && !layout.rear_doors {
+                continue;
+            }
             let def = Def::new(
                 &format!("{id}.{part}"),
                 title,
@@ -913,6 +951,7 @@ fn trims(catalogue: &Shared) -> Vec<Trim> {
                     Kind::Body(Panel::Bonnet) => format!("{id}.bonnet"),
                     Kind::Body(Panel::Fender) => format!("{id}.fender"),
                     Kind::Body(Panel::Door) => format!("{id}.door"),
+                    Kind::Body(Panel::RearDoor) => format!("{id}.rear-door"),
                     Kind::Body(Panel::Mirror) => format!("{id}.mirror"),
                     Kind::Body(Panel::Hatch) => format!("{id}.hatch"),
                     Kind::Body(Panel::RearSpoiler) if spec.spoiler => {

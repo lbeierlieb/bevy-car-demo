@@ -338,6 +338,7 @@ fn vireo() -> Chassis {
             ],
             // Long doors from the front wheel arch; bumpers wrapping round the ends.
             door: [1.22, 2.45],
+            rear_door: None,
             bumpers: [0.3, 0.3],
             bumper_top: 0.44,
             bulges: vec![],
@@ -461,6 +462,7 @@ fn merrow() -> Chassis {
                 detail([1.5, 0.48, 0.955], [0.3, 0.06, 0.02], Tone::Dark),
             ],
             door: [1.62, 2.88],
+            rear_door: None,
             bumpers: [0.36, 0.3],
             bumper_top: 0.42,
             // A long bulge down the middle of the bonnet, over the engine's intake.

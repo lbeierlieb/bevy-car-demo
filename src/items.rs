@@ -32,10 +32,12 @@ pub enum Panel {
     RearSpoiler,
     RearBumper,
     Diffuser,
+    /// A four-door's rear doors (behind the front ones, `Body::rear_door`).
+    RearDoor,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 11] = [
+    pub const ALL: [Panel; 12] = [
         Panel::FrontBumper,
         Panel::FrontLip,
         Panel::Bonnet,
@@ -47,6 +49,7 @@ impl Panel {
         Panel::RearSpoiler,
         Panel::RearBumper,
         Panel::Diffuser,
+        Panel::RearDoor,
     ];
 }
 
@@ -208,7 +211,7 @@ impl Panel {
             Panel::FrontBumper => 0.05,
             Panel::Bonnet => 0.04,
             Panel::Fender => 0.015,
-            Panel::Door => 0.02,
+            Panel::Door | Panel::RearDoor => 0.02,
             Panel::Mirror => -0.008,
             Panel::Hatch => 0.04,
             Panel::RearBumper => 0.02,
@@ -765,7 +768,9 @@ pub fn dress(catalogue: &Catalogue, car: &Item) -> crate::body::Dress {
         };
         seen.push(panel);
         let side = match panel {
-            Panel::Fender | Panel::Door | Panel::Mirror | Panel::SideSkirt => side,
+            Panel::Fender | Panel::Door | Panel::RearDoor | Panel::Mirror | Panel::SideSkirt => {
+                side
+            }
             _ => Side::Middle,
         };
         if let Some(item) = item {

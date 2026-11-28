@@ -152,6 +152,7 @@ fields!(Body {
     openings,
     details,
     door,
+    rear_door,
     bumpers,
     bumper_top,
     bulges,
