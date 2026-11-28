@@ -271,6 +271,85 @@ items with no limit (or don't exist yet), so steps 4 and 5 can ship apart.
    the exhaust exit and the radiator lines follow. One engine per car. It touches
    physics, looks, audio and fitting, so it is the largest step and is kept last.
 
+   **The plan** (2026-11-28, before building):
+   - **The part**: `<chassis>.rear-subframe.engine`, "Rear subframe with an engine bay",
+     for the Tessel, the Aldine and the Vireo (the classic mid-engine swap is on the
+     hatch the Vireo stands for; it needs no tunnel). Not for the Bothy (its rear is the
+     flat load floor under the tall tailgate, and it has all-wheel drive for traction) nor
+     the Merrow (no rear bench, its engine already sits behind the front axle). It goes in
+     the existing "Rear subframe" slot: a new `Does::EngineSubframe(EngineBay)` of
+     `Kind::RearSubframe` with three optional slots of its own: "Engine", "Gearbox" and
+     "Drive shafts". Mass about 45 kg (frame, engine mounts, a firewall behind the seats,
+     the shift cables and the coolant lines with their coolant: the radiator stays at the
+     front), counted at the rear axle like every rear subframe's difference.
+   - **Engine bays from where the engine is**: the chassis' `bay` stays the front one;
+     the subframe's bay is the rear one ("middle, transverse": the same transverse
+     orientation, the engine and gearbox as far ahead of the rear axle as the factory's
+     sit ahead of the front axle, since the whole front-drive unit is moved back as it is:
+     a gearbox turned round would drive the car backwards; about 0.95 m long, the front
+     bay's width, header room 1.1 m so the K20R's long tubes still fit and no factory
+     engine needs a bake there). `CarBuild::rear_bay` (the subframe's definition, when the
+     engine is in it; on the wire) and `CarBuild::bay()` give the bay; `Chassis::fit_in`
+     checks an engine against any bay (`install` uses the car's).
+   - **Where the engine is** (`items::powertrain`): in the subframe if it holds an
+     engine, else the car. `resolve`, `driveline`, `drivetrain_misfit`, `assemble`, the
+     masses, the looks and the shops look there. Exactly one engine: rules
+     (`items::bay_problem`, checked by `resolve`, so fitting and reading cars refuse
+     them): a second engine (front and rear), the gearbox not beside the engine, front
+     drive shafts or a prop shaft with the engine at the rear (nothing turns them), the
+     rear bench with an engine subframe fitted (its place is the bay's, even empty). An
+     empty engine subframe with the engine still at the front is allowed (the car drives
+     as before, heavier, without its rear bench). With the engine at the rear the car's
+     own "Engine", "Gearbox" and "Front drive shafts" slots aren't required
+     (`Item::fine`); the subframe's three are optional, and a rear engine without drive
+     shafts drives nothing (refused, like the Merrow without its prop shaft).
+   - **Drive**: a transverse gearbox in the engine subframe drives the rear axle through
+     its own differential and the subframe's drive shafts (`Drive::Rear`, the rear
+     differential the gearbox's); the front axle is undriven, a transfer output unused.
+     The front drive shafts are the ones that move to the rear (as in the real swaps,
+     which use the front-drive unit's own shafts), so no new shaft parts; their rating is
+     the rear axle's then.
+   - **Fitting**: a tuning shop does the conversion (they sell the subframe, and whole
+     engines are swapped at car and tuning shops in this game, the engine shop does long
+     blocks): fitting an engine subframe in place of one without moves the car's engine,
+     gearbox and front drive shafts into it and takes the rear bench out (into the trunk
+     or held, as anything taken off); fitting a subframe without a bay in place of an
+     engine subframe moves them back. One request, as a shop does it
+     (`fitting::convert`, also in `with_fitted` for the window's preview). Car workshops
+     and engine shops refuse engine subframes in or out; everything else on the engine
+     and gearbox in the subframe works as in the front (engines swapped, gearboxes, the
+     long block at the engine shop, the dyno). The window lists the subframe's engine,
+     gearbox and drive shafts with the car's slots and hides the car's empty ones and the
+     rear bench; the subframe's ware says what moves and warns if the car it makes is
+     refused. Sold at tuning shops (`assets/shops.cfg`), with the factory rear subframes
+     for going back; car workshops' `*.rear-subframe*` lines become exact ids.
+   - **Masses**: the engine and gearbox at the rear bay's places (`CarSetup::with_car`:
+     the balance and the inertia follow), the subframe's difference at the rear axle, the
+     front drive shafts' mass leaves the front axle (−12 kg there, +12 in the subframe),
+     the rear bench's mass goes with it. Tank, radiator, battery stay. Expected for the
+     Tessel 2.0R: about 45/55 (the engine and gearbox ahead of the rear axle, as in the
+     real kits; the shell's own mass is front-heavy).
+   - **Hold**: the bay's length takes the hold's columns there out (`cargo::grid`): the
+     rear bench's place and the front of the trunk (Tessel, Vireo); the Aldine keeps its
+     boot.
+   - **Looks and sound**: `mechanicals` draws the engine, intake, headers and gearbox in
+     the rear bay (exhaust side to the back, as at the front), a firewall behind the
+     seats, coolant lines along the floor from the radiator, and a short exhaust from the
+     collector under the rear bumper to the tip (no front pipe past the tank). Seen with
+     the hatch off (`UNFIT=Hatch`) and through the rear windows. The cabin sound
+     (`CabinShape`) takes the car's bay, so the engine right behind the driver comes
+     through brighter. The exhaust exit stays at the rear (it was already); night lights,
+     spray and the body don't change. Traffic and showrooms only use factory cars.
+   - **Saved cars**: nothing saved has one; loading a rear-engined car mustn't give it
+     new front drive shafts (`fill_front_shafts` skips it). Protocol 72 (a new `Does`,
+     `CarBuild::rear_bay`).
+   - **Tests**: the Tessel 2.0R converted at a tuning shop (fits; rear drive; balance
+     rearward; refused: a second engine, the gearbox left at the front, front shafts at
+     the front, a rear bench, a car workshop doing it; the conversion undone at a
+     tuning shop with the factory subframe; a saved round trip; 0–100 and pulling
+     away), stock cars bit for bit as before (fingerprint compared), the hold smaller,
+     drawn at the rear; the power-slide bot on it.
+
 ## Assumptions (agreed with the user, 2026-11-28)
 
 - Names: Tessel (hatch), Aldine (saloon), Bothy (box). Engine codes K20, K20R, K24, in
