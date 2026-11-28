@@ -1182,6 +1182,8 @@ mod tests {
                 "merrow.r80",
                 "tessel.2-0",
                 "tessel.2-0r",
+                "aldine.2-0",
+                "aldine.2-4",
             ]
         );
         let rims = |car: &Item| -> Vec<String> {

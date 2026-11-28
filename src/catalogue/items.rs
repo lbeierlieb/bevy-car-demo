@@ -194,6 +194,13 @@ fn layout(chassis: &str) -> Layout {
             rear_bench: false,
             ..hatch
         },
+        // A saloon: a boot lid behind the cabin, and rear doors.
+        "Aldine" => Layout {
+            lid: "Boot lid",
+            spoiler: "Boot spoiler",
+            rear_doors: true,
+            ..hatch
+        },
         _ => hatch,
     }
 }
@@ -1035,6 +1042,26 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
                         ["front-vented-large", "rear-disc"],
                     )
                 },
+            ]
+        }
+        "Aldine" => {
+            use super::chassis::wheel;
+            vec![
+                TrimSpec::new(
+                    "K20",
+                    "2.0",
+                    wheel(16, 65, 205, 60, STREET),
+                    "rim.alloy",
+                    ["front-vented", "rear-disc"],
+                ),
+                // The 2.4 on 17s.
+                TrimSpec::new(
+                    "K24",
+                    "2.4",
+                    wheel(17, 70, 215, 50, STREET),
+                    "rim.alloy",
+                    ["front-vented", "rear-disc"],
+                ),
             ]
         }
         _ => Vec::new(),

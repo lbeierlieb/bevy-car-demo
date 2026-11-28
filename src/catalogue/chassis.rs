@@ -231,7 +231,138 @@ const fn detail(at: [f32; 3], size: [f32; 3], tone: Tone) -> Detail {
 pub const DEFAULT_CHASSIS: usize = 0;
 
 pub fn chassis() -> Vec<Chassis> {
-    vec![vireo(), merrow(), tessel()]
+    vec![vireo(), merrow(), tessel(), aldine()]
+}
+
+/// The K-series saloon: a mid-size four-door from the early two-thousands.
+fn aldine() -> Chassis {
+    Chassis {
+        name: "Aldine".into(),
+        class: "Saloon".into(),
+        about: "A long, quiet four-door saloon from the early two-thousands: a low nose, a \
+                long cabin, a proper boot and a K-series four across the nose, the two-litre \
+                or the torquey 2.4, through a long-legged five-speed"
+            .into(),
+        // Without the seats (see `items`).
+        mass: 960.0,
+        mass_at: 1.12,
+        cg_height: 0.53,
+        wheelbase: 2.74,
+        track: [1.56, 1.56],
+        // The 2.0's wheels; the 2.4 has its own (see `items`).
+        wheels: [
+            wheel(16, 65, 205, 60, STREET),
+            wheel(16, 65, 205, 60, STREET),
+        ],
+        room: [
+            WheelRoom {
+                diameter: 0.68,
+                width: 235,
+                min_rim: 15,
+            },
+            WheelRoom {
+                diameter: 0.68,
+                width: 235,
+                min_rim: 14,
+            },
+        ],
+        // Without the brakes (see `items`).
+        hub: [10.0, 8.0],
+        ride: [1.35, 1.5],
+        damping: 0.3,
+        bars: [
+            bars(&[20, 22, 24, 26, 28], 1, 300.0),
+            bars(&[14, 16, 18, 20, 22], 1, 420.0),
+        ],
+        camber: [-0.6, -1.0],
+        pressure: [2.6, 2.0],
+        max_steer: 0.55,
+        drag_area: 0.66,
+        downforce_area: [0.0, 0.0],
+        tank: Tank {
+            litres: 65.0,
+            at: 2.3,
+            height: 0.3,
+        },
+        // Room for a K-series four with its gearbox across the car and long headers.
+        bay: EngineBay {
+            place: "front, transverse".into(),
+            orientation: Orientation::Transverse,
+            length: 0.9,
+            width: 1.2,
+            height: 0.75,
+            engine_at: -0.18,
+            gearbox_at: -0.18,
+            header_room: 1.2,
+        },
+        drive: Drive::Front,
+        limited_slip: false,
+        gearbox: gearbox("K 5-speed long (transverse)"),
+        final_drive: 4.44,
+        engines: codes(&["K20", "K24"]),
+        paint: 17,
+        body: Body {
+            length: 4.8,
+            width: 1.82,
+            front_overhang: 0.95,
+            floor: 0.15,
+            // A low nose and a long bonnet, a belt rising gently to a high, short boot.
+            deck: vec![
+                [0.0, 0.5],
+                [0.06, 0.66],
+                [0.7, 0.78],
+                [1.38, 0.9],
+                [3.6, 0.98],
+                [4.1, 1.02],
+                [4.66, 1.04],
+                [4.8, 0.92],
+            ],
+            // A raked windscreen, a long roof, a quarter window behind the rear doors and
+            // a sloping rear window over the boot.
+            cabin: vec![
+                [1.38, 0.9, 1.0],
+                [2.18, 1.43, 1.0],
+                [3.25, 1.46, 1.0],
+                [3.8, 1.33, 2.0],
+                [4.18, 1.02, 0.0],
+            ],
+            nose: 0.82,
+            tail: 0.9,
+            tumblehome: 0.8,
+            open_wheels: false,
+            openings: vec![],
+            details: vec![
+                // A bright strip across the boot lid between the tail lamps.
+                detail([4.79, 0.86, 0.0], [0.03, 0.04, 0.9], Tone::Metal),
+                // Dark rubbing strips along the doors.
+                detail([2.55, 0.56, 0.905], [1.9, 0.05, 0.03], Tone::Dark),
+                detail([2.55, 0.56, -0.905], [1.9, 0.05, 0.03], Tone::Dark),
+            ],
+            // Front doors from the front wheel arch, rear doors to ahead of the rear one.
+            door: [1.5, 2.62],
+            rear_door: Some([2.62, 3.5]),
+            bumpers: [0.35, 0.35],
+            bumper_top: 0.5,
+            bulges: vec![],
+            side_pipes: false,
+        },
+        eye: [2.3, 1.12, 0.38],
+        insulation: 0.65,
+        // Not in traffic yet.
+        traffic: 0.0,
+        // From the passenger's footwell to the boot: the boot under its lid, the rear
+        // bench's place and the passenger seat's while they're out.
+        hold: Hold {
+            from: 2.0,
+            left: -0.65,
+            base: 0.2,
+            areas: vec![
+                area([21, 27], [0, 13], 2, 7, None),
+                area([9, 17], [0, 13], 1, 10, Some("Rear bench")),
+                area([0, 8], [8, 13], 0, 10, Some("Passenger seat")),
+            ],
+        },
+    }
 }
 
 /// The place of the gearbox called `name` in `gearboxes`.
@@ -910,6 +1041,24 @@ mod k_cars {
             gearbox: "K 6-speed close-ratio (transverse)",
             limited_slip: true,
             tire: "205/45 R17",
+        },
+        Plan {
+            chassis: "Aldine",
+            engine: "K20",
+            mass: 1300.0..1400.0,
+            front: 0.58..0.64,
+            gearbox: "K 5-speed long (transverse)",
+            limited_slip: false,
+            tire: "205/60 R16",
+        },
+        Plan {
+            chassis: "Aldine",
+            engine: "K24",
+            mass: 1300.0..1400.0,
+            front: 0.58..0.64,
+            gearbox: "K 5-speed long (transverse)",
+            limited_slip: false,
+            tire: "215/50 R17",
         },
     ];
 

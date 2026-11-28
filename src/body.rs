@@ -1182,7 +1182,9 @@ impl Body {
         } else if let (Some(color), Some(_), Some(cabin)) = (
             has(Panel::RearSpoiler),
             has(Panel::Hatch),
-            (self.greenhouse()).map(|_| self.cabin[self.cabin.len() - 2]),
+            (self.greenhouse())
+                .filter(|_| self.rear_window_in_hatch())
+                .map(|_| self.cabin[self.cabin.len() - 2]),
         ) {
             // On the roof's rear edge, over the rear window, tipped down a little.
             let x = cabin[0];
@@ -1192,7 +1194,8 @@ impl Body {
             let centre = at(x + 0.04, cabin[1] + 0.035, 0.0);
             builder.oriented_box(centre, axes, size(0.26, 0.035, width), color);
         } else if let (Some(color), Some(_)) = (has(Panel::RearSpoiler), has(Panel::Hatch)) {
-            // Without a roof, a lip on the boot lid's rear edge, rising to the back.
+            // Without a roof (or on a saloon's boot), a lip on the boot lid's rear edge,
+            // rising to the back.
             let x = self.length - 0.16;
             let width = 2.0 * 0.8 * self.half_width(x);
             let tilt = Quat::from_rotation_x(-0.25);
