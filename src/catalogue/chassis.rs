@@ -97,6 +97,7 @@ pub fn gearboxes() -> Vec<Gearbox> {
             name: "5-speed (transverse)".into(),
             kind: GearboxKind::Transverse,
             bellhousing: "B-series".into(),
+            transfer: false,
             gears: vec![3.55, 1.95, 1.31, 0.97, 0.78],
             reverse: 3.4,
             mass: 35.0,
@@ -109,6 +110,7 @@ pub fn gearboxes() -> Vec<Gearbox> {
             name: "6-speed close-ratio (transverse)".into(),
             kind: GearboxKind::Transverse,
             bellhousing: "B-series".into(),
+            transfer: false,
             gears: vec![3.3, 2.05, 1.48, 1.14, 0.92, 0.76],
             reverse: 3.3,
             mass: 42.0,
@@ -122,6 +124,7 @@ pub fn gearboxes() -> Vec<Gearbox> {
             name: "6-speed heavy duty (inline)".into(),
             kind: GearboxKind::Inline,
             bellhousing: "R-series".into(),
+            transfer: false,
             gears: vec![2.66, 1.78, 1.3, 1.0, 0.74, 0.5],
             reverse: 2.9,
             mass: 60.0,
@@ -130,7 +133,67 @@ pub fn gearboxes() -> Vec<Gearbox> {
             shift_time: 0.28,
             engage_time: 0.16,
         },
+        // The K series': close to the real cars' ratios (the hatch's 5-speed, the saloon's
+        // with taller second and fifth, the box's short one, its all-wheel-drive version
+        // with a transfer output, and the hot hatch's close 6-speed). The final drives are
+        // the chassis'.
+        k_gearbox(
+            "K 5-speed (transverse)",
+            &[3.27, 1.88, 1.21, 0.92, 0.74],
+            38.0,
+            250.0,
+        ),
+        k_gearbox(
+            "K 5-speed long (transverse)",
+            &[3.27, 1.77, 1.21, 0.92, 0.71],
+            40.0,
+            290.0,
+        ),
+        k_gearbox(
+            "K 5-speed short (transverse)",
+            &[3.53, 2.04, 1.39, 1.03, 0.78],
+            40.0,
+            290.0,
+        ),
+        Gearbox {
+            transfer: true,
+            ..k_gearbox(
+                "K 5-speed AWD (transverse)",
+                &[3.53, 2.04, 1.39, 1.03, 0.78],
+                52.0,
+                290.0,
+            )
+        },
+        Gearbox {
+            clutch_torque: 300.0,
+            shift_time: 0.22,
+            engage_time: 0.15,
+            ..k_gearbox(
+                "K 6-speed close-ratio (transverse)",
+                &[3.27, 2.13, 1.52, 1.15, 0.92, 0.74],
+                44.0,
+                320.0,
+            )
+        },
     ]
+}
+
+/// A transverse gearbox for the K series of these ratios, mass (kg) and torque rating
+/// (N·m, its stock clutch's too).
+fn k_gearbox(name: &str, gears: &[f32], mass: f32, torque: f32) -> Gearbox {
+    Gearbox {
+        name: name.into(),
+        kind: GearboxKind::Transverse,
+        bellhousing: "K-series".into(),
+        transfer: false,
+        gears: gears.to_vec(),
+        reverse: 3.58,
+        mass,
+        clutch_torque: torque,
+        torque,
+        shift_time: 0.26,
+        engage_time: 0.16,
+    }
 }
 
 /// The adapter plates: for now only the one that puts a K-series four in front of the
@@ -584,6 +647,38 @@ mod tests {
     }
 
     #[test]
+    fn the_k_gearboxes_take_their_engines() {
+        let catalogue = builtin();
+        let k = |name: &str| {
+            let g = (catalogue.gearboxes.iter())
+                .position(|g| g.name == format!("K {name} (transverse)"))
+                .unwrap_or_else(|| panic!("the K {name}"));
+            &catalogue.gearboxes[g]
+        };
+        // Stock engines with margin (K20 211 N·m, K20R 229, K24 245; the K20R's head on
+        // the K24 271 in the close-ratio box).
+        assert!(k("5-speed").torque >= 240.0);
+        for name in ["5-speed long", "5-speed short", "5-speed AWD"] {
+            assert!(k(name).torque >= 280.0, "{name}");
+        }
+        assert!(k("6-speed close-ratio").torque >= 300.0);
+        // The saloon's is longer than the hatch's, the box's shorter, the hot hatch's
+        // closer (the same span in six gears, its biggest step smaller).
+        let top = |name: &str| *k(name).gears.last().unwrap();
+        assert!(top("5-speed long") < top("5-speed") && top("5-speed short") > top("5-speed"));
+        let widest = |name: &str| {
+            let gears = &k(name).gears;
+            gears.windows(2).map(|w| w[0] / w[1]).fold(0.0, f32::max)
+        };
+        assert!(widest("6-speed close-ratio") < widest("5-speed") - 0.15);
+        // Only the AWD one has a transfer output; otherwise it's the short one.
+        let (awd, short) = (k("5-speed AWD"), k("5-speed short"));
+        assert!(awd.transfer && !short.transfer && awd.mass > short.mass);
+        assert_eq!(awd.gears, short.gears);
+        assert!(catalogue.gearboxes.iter().filter(|g| g.transfer).count() == 1);
+    }
+
+    #[test]
     fn gearboxes_bolt_to_their_engines() {
         let catalogue = builtin();
         let hatch = &catalogue.chassis[DEFAULT_CHASSIS];
@@ -592,14 +687,27 @@ mod tests {
             .collect();
         assert_eq!(
             boxes,
-            ["5-speed (transverse)", "6-speed close-ratio (transverse)"]
+            [
+                "5-speed (transverse)",
+                "6-speed close-ratio (transverse)",
+                "K 5-speed (transverse)",
+                "K 5-speed long (transverse)",
+                "K 5-speed short (transverse)",
+                "K 5-speed AWD (transverse)",
+                "K 6-speed close-ratio (transverse)",
+            ]
         );
-        // Both bolt to the B series, neither to the K series: transverse gearboxes never
-        // cross families, and no adapter plate is made for them.
+        // The B gearboxes bolt to the B series only, the K ones to the K series only:
+        // transverse gearboxes never cross families, and no adapter plate is made for them.
         let (b, k) = (family("B16"), family("K20"));
         for gearbox in catalogue.gearboxes_for(hatch) {
-            assert_eq!(catalogue.bolting(gearbox, b), Bolting::Direct);
-            assert_eq!(catalogue.bolting(gearbox, k), Bolting::Never);
+            let own = match catalogue.gearboxes[gearbox].bellhousing.as_str() {
+                "B-series" => b,
+                _ => k,
+            };
+            let other = b + k - own;
+            assert_eq!(catalogue.bolting(gearbox, own), Bolting::Direct);
+            assert_eq!(catalogue.bolting(gearbox, other), Bolting::Never);
         }
         // The roadster's inline gearbox takes the K series through an adapter plate, the
         // B series not at all.

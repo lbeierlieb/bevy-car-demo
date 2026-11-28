@@ -159,6 +159,7 @@ fields!(Body {
 });
 fields!(Gearbox {
     kind,
+    transfer,
     gears,
     reverse,
     mass,

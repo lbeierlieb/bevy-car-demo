@@ -869,6 +869,31 @@ fn ware_screen(
                 });
             }
             kit::info(ui, "Mass", &format!("{:.1} kg", made.mass));
+            match made.does {
+                Does::Gearbox(g) => {
+                    let gearbox = &catalogue.gearboxes[g];
+                    let gears: Vec<String> =
+                        gearbox.gears.iter().map(|r| format!("{r:.2}")).collect();
+                    kit::info(ui, "Gears", &gears.join(" "));
+                    kit::info(ui, "Bellhousing", &gearbox.bellhousing);
+                    kit::info(ui, "Takes", &format!("{:.0} N·m", gearbox.torque));
+                    if gearbox.transfer {
+                        kit::note(
+                            ui,
+                            "It has a transfer output for a prop shaft to the rear axle.",
+                        );
+                    }
+                }
+                Does::Adapter(a) => {
+                    let adapter = &catalogue.adapters[a];
+                    kit::info(
+                        ui,
+                        "Bolts",
+                        &format!("{} gearbox to {} engine", adapter.gearbox, adapter.engine),
+                    );
+                }
+                _ => {}
+            }
             if made.kind == Kind::Manifold {
                 manifold_readouts(ui, catalogue, made);
                 let mounts = (made.slots.iter())

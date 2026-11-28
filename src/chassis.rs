@@ -67,6 +67,9 @@ pub struct Gearbox {
     /// pattern only through an adapter plate, and only if it isn't transverse (see
     /// `Catalogue::bolting`).
     pub bellhousing: String,
+    /// It has a transfer output for a prop shaft to the rear axle (an all-wheel-drive
+    /// transverse gearbox). Nothing drives through it yet.
+    pub transfer: bool,
     pub gears: Vec<f32>,
     pub reverse: f32,
     pub mass: f32,

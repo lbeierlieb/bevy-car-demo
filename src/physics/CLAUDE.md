@@ -17,8 +17,10 @@ catalogue entries, and things like swap subframes are named so they can be price
   Merrow roadster with the R80 since 2026-11-27,
   see "Owning cars and parts"; the other twelve (Minim, Linnet, Tarn, Halden, Skarn,
   Harrow, Calder, Rheon, Vespera, Wisp, Drover, Carrow) and their engines are in git
-  history before that; names are made up, no real cars), gearboxes (the two
-  transverse ones and an inline 6-speed), clutches, suspension kits and paints (the tire
+  history before that; names are made up, no real cars), gearboxes (two
+  transverse B-series ones, five transverse K-series ones (k-lineup step 2: 5-speed,
+  5-speed long, short, AWD with `Gearbox::transfer` (a flag nothing uses until step 4),
+  6-speed close-ratio; `k_gearbox`) and the R-series inline 6-speed), the adapter plates, clutches, suspension kits and paints (the tire
   compounds' rubber is `physics/tire.rs`'s `COMPOUNDS`, named in `catalogue/parts.rs`).
   `engines.rs` has the families (the B series, versions B16 and B20 (one cam, 8 valves) and B16R (two cams, 16
   valves, switching cams; see `docs/vireo-lineup.md`); the R-series V10,

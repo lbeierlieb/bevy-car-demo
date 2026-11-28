@@ -1210,6 +1210,51 @@ mod tests {
         assert_eq!(done.spec.build.final_drive, before.build.final_drive);
     }
 
+    #[test]
+    fn a_k_gearbox_doesnt_go_on_a_b_engine() {
+        let catalogue = builtin();
+        let before = spec(2);
+        let workshop = shop(ShopKind::Tuning, &["gearbox.*", "adapter-plate.*"]);
+        let gearbox = slots_of(&catalogue, &before.car, Kind::Gearbox);
+        let fit = |id: &str| Work::Fit {
+            slots: vec![gearbox.clone()],
+            supply: new(&catalogue, id),
+        };
+        let err = run(
+            &catalogue,
+            &workshop,
+            &before,
+            &[fit("gearbox.k-6-speed-close-ratio-transverse")],
+        )
+        .unwrap_err();
+        assert!(err.contains("K-series bellhousing"), "{err}");
+        assert!(err.contains("B-series four"), "{err}");
+        // No plate helps, and a transverse gearbox has no place for one.
+        let after = with_fitted(
+            &catalogue,
+            &before.car,
+            &gearbox,
+            Item::new(
+                &catalogue,
+                def(&catalogue, "gearbox.k-5-speed-transverse").into(),
+                0,
+            ),
+        )
+        .unwrap();
+        let misbolt = crate::items::drivetrain_misfit(&catalogue, &after).unwrap();
+        assert_eq!(misbolt.fix, None);
+        assert_eq!(adapter_slot(&catalogue, &after), None);
+        // The B close-ratio box goes on.
+        let done = run(
+            &catalogue,
+            &workshop,
+            &before,
+            &[fit("gearbox.6-speed-close-ratio-transverse")],
+        )
+        .unwrap();
+        assert_eq!(done.spec.build.gearbox, 1);
+    }
+
     /// A stock ECU is locked to its factory's maps, on whatever engine; a programmable one
     /// takes a tune; neither fires more cylinders than it's made for.
     #[test]
