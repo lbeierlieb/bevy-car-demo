@@ -1324,7 +1324,11 @@ mod tests {
         let tank = car(&mut anna).setup.tank.litres;
         car(&mut anna).refuel(5.0 / tank);
         run(&mut [&mut server, &mut anna], 60);
-        assert!(car(&mut anna).setup.build.limited_slip, "the 1.8");
+        assert_eq!(
+            car(&mut anna).setup.engine.differentials[0],
+            crate::physics::drivetrain::Differential::LIMITED_SLIP,
+            "the 1.8"
+        );
         // The old one again, as it was (its tank full); the 1.8 goes into the garage.
         ask(&mut anna, Stash::Drive { car: 0 });
         run(&mut [&mut server, &mut anna], 60);

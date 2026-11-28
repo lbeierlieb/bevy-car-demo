@@ -305,7 +305,8 @@ pub fn read_items(catalogue: &Catalogue, text: &str) -> Vec<Item> {
             let _ = parts.line(catalogue, rest);
         }
     }
-    let items = parts.finish(catalogue);
+    let (mut items, orphans) = parts.finish(catalogue);
+    items.extend(orphans);
     let fine = |item: &Item| {
         item.def(catalogue).kind != crate::items::Kind::Chassis && item.fine(catalogue)
     };
@@ -324,6 +325,9 @@ struct Parts {
     /// The engine family and version of the car's long block, for ECUs saved before there
     /// was one of each (`old_ecu`).
     engine: Option<(usize, usize)>,
+    /// Differentials saved in a gearbox that has no slot for one any more (an inline
+    /// gearbox's, before protocol 70: it's at the rear axle now, in the rear subframe).
+    orphans: Vec<Item>,
 }
 
 impl Parts {
@@ -413,6 +417,9 @@ impl Parts {
                 Some(place) => parent.slots[place] = Some(item),
                 None if slot == OLD_TURBO_SLOT && mount_old_turbo(catalogue, parent, &item) => {}
                 None if into_old_head(catalogue, parent, &item) => {}
+                None if catalogue.defs[item.def].kind == Kind::Differential => {
+                    self.orphans.push(item);
+                }
                 None => bevy::log::warn!(
                     "A saved part {} has no slot \"{slot}\" any more",
                     catalogue.defs[item.def].id
@@ -450,10 +457,10 @@ impl Parts {
         nearest_manifold(catalogue, family, wanted, false)
     }
 
-    /// The trees read.
-    fn finish(mut self, catalogue: &Catalogue) -> Vec<Item> {
+    /// The trees read, and the differentials that had no slot any more (`orphans`).
+    fn finish(mut self, catalogue: &Catalogue) -> (Vec<Item>, Vec<Item>) {
         self.settle(catalogue, 0);
-        self.roots
+        (self.roots, self.orphans)
     }
 }
 
@@ -535,6 +542,40 @@ fn fill_new_slots(catalogue: &Catalogue, item: &mut Item) {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// A car saved before the rear driveline was made of parts (protocol 70) given its
+/// chassis' factory rear subframe (and with it, if it has a differential mount, the
+/// factory's prop shaft): the differential its inline gearbox had (one of `orphans`) goes
+/// into the mount, so a limited slip stays one.
+fn fill_rear(catalogue: &Catalogue, car: &mut Item, orphans: &mut Vec<Item>) {
+    let Does::Chassis(chassis) = car.def(catalogue).does else {
+        return;
+    };
+    let slots = catalogue.defs[car.def].slots.clone();
+    let Some(place) = (slots.iter()).position(|slot| slot.kind == Kind::RearSubframe) else {
+        return;
+    };
+    if car.slots[place].is_some() {
+        return;
+    }
+    let differential = (!orphans.is_empty()).then(|| orphans.remove(0));
+    let Some((subframe, prop)) = crate::items::factory_rear(catalogue, chassis, differential)
+    else {
+        return;
+    };
+    let mounted = subframe
+        .fitted(catalogue, Kind::Differential)
+        .next()
+        .is_some();
+    car.slots[place] = Some(subframe);
+    if mounted {
+        for (slot, item) in slots.iter().zip(&mut car.slots) {
+            if slot.kind == Kind::PropShaft && item.is_none() {
+                *item = prop.clone();
+            }
         }
     }
 }
@@ -721,13 +762,16 @@ pub fn read(catalogue: &Shared, text: &str) -> Result<(CarSpec, Condition), Stri
             _ => {}
         }
     }
-    let mut car = car_parts
-        .finish(catalogue)
-        .into_iter()
-        .next()
-        .ok_or("no chassis")?;
+    let (cars, mut orphans) = car_parts.finish(catalogue);
+    let mut car = cars.into_iter().next().ok_or("no chassis")?;
     fill_new_slots(catalogue, &mut car);
-    let cargo = cargo_parts.map_or_else(Vec::new, |parts| parts.finish(catalogue));
+    fill_rear(catalogue, &mut car, &mut orphans);
+    let mut cargo = cargo_parts.map_or_else(Vec::new, |parts| {
+        let (cargo, loose) = parts.finish(catalogue);
+        orphans.extend(loose);
+        cargo
+    });
+    cargo.extend(orphans);
     let loose = |item: &Item| {
         item.def(catalogue).kind != crate::items::Kind::Chassis && item.fine(catalogue)
     };
@@ -851,6 +895,46 @@ mod tests {
                 assert_eq!(read, spec, "{text}");
                 assert_eq!(condition, Condition::of(&car));
             }
+        }
+    }
+
+    /// Cars saved before the rear driveline was made of parts get their chassis' factory
+    /// rear subframe; the roadster's limited slip, saved in its inline gearbox, goes into
+    /// the rear subframe's mount, and its prop shaft comes with it.
+    #[test]
+    fn cars_saved_before_rear_subframes_get_their_factory_one() {
+        let catalogue = crate::catalogue::builtin();
+        let merrow = catalogue.find_chassis("Merrow").unwrap();
+        for (chassis, option) in [(0, 1), (merrow, 0)] {
+            let (spec, car) = car(chassis, option);
+            let text = write(&catalogue, &spec, &Condition::of(&car));
+            // As the game wrote it then: no rear subframe (nor what's in it) or prop
+            // shaft, and an inline gearbox with its differential.
+            let mut old = String::new();
+            let mut skipping = false;
+            for line in text.lines() {
+                let fields: Vec<&str> = line.split('\t').collect();
+                if let ["part", depth, slot, ..] = fields[..] {
+                    if skipping && depth != "1" && depth != "0" {
+                        continue;
+                    }
+                    skipping = slot == "Rear subframe";
+                    if skipping || slot == "Prop shaft" {
+                        continue;
+                    }
+                    old += line;
+                    old += "\n";
+                    if slot == "Final drive" && chassis == merrow {
+                        old += "part\t2\tDifferential\tdifferential.limited-slip\t-\t0\n";
+                    }
+                    continue;
+                }
+                old += line;
+                old += "\n";
+            }
+            assert!(!old.contains("subframe") && old.len() < text.len(), "{old}");
+            let (read, _) = read(&catalogue, &old).expect("reads back");
+            assert_eq!(read, spec, "{old}");
         }
     }
 

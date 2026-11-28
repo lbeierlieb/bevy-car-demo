@@ -2,14 +2,14 @@
 
 use bevy::prelude::*;
 
-use crate::catalogue::Shared;
+use crate::catalogue::{Catalogue, Shared};
 use crate::chassis::{CarBuild, Chassis};
 use crate::input::WheelInput;
 use crate::items::{Aero, Does, Item, Kind, Seat};
 use crate::net::wire::{Reader, Wire, decode, encode};
 use crate::physics::brakes::Brake;
 use crate::physics::collision::Obb;
-use crate::physics::drivetrain::{Differential, Drivetrain, EngineSetup, REVERSE_SPEED};
+use crate::physics::drivetrain::{Drivetrain, EngineSetup, REVERSE_SPEED};
 use crate::physics::engine::EngineBuild;
 use crate::physics::engine::parts::Parts;
 use crate::physics::fuel::{self, Fuel, Tank};
@@ -99,6 +99,33 @@ pub struct CarSetup {
     pub cargo_load: Vec<(f32, Vec3)>,
 }
 
+/// What the rear driveline's parts fitted to `car` (a car's tree of `catalogue`'s
+/// `chassis`) weigh more than the chassis' factory ones (which its mass includes), and
+/// where: the rear subframe with what's in it at the rear axle, the prop shaft and a
+/// tunnel kit halfway along, a centre coupling at the gearbox. Nothing where they weigh
+/// the same (so a stock car's masses are exactly the chassis').
+fn driveline_masses(catalogue: &Catalogue, car: &Item, chassis: usize) -> Vec<(f32, f32)> {
+    let made = &catalogue.chassis[chassis];
+    let tree = |item: &Item| -> f32 { item.all().iter().map(|i| i.def(catalogue).mass).sum() };
+    let fitted = |kind: Kind| -> f32 { car.fitted(catalogue, kind).map(tree).sum() };
+    let (subframe, prop) = crate::items::factory_rear(catalogue, chassis, None)
+        .map(|(subframe, prop)| (tree(&subframe), prop.as_ref().map_or(0.0, tree)))
+        .unwrap_or_default();
+    let centre: f32 = (car.fitted(catalogue, Kind::Gearbox))
+        .flat_map(|gearbox| gearbox.fitted(catalogue, Kind::Centre))
+        .map(tree)
+        .sum();
+    let middle = fitted(Kind::PropShaft) + fitted(Kind::Tunnel) - prop;
+    [
+        (fitted(Kind::RearSubframe) - subframe, made.wheelbase),
+        (middle, made.wheelbase / 2.0),
+        (centre, made.bay.gearbox_at),
+    ]
+    .into_iter()
+    .filter(|(mass, _)| *mass != 0.0)
+    .collect()
+}
+
 impl CarSetup {
     /// The car that `build` and an engine of `parts` (built as `engine`) make. The
     /// engine's and the gearbox's masses sit where the chassis has them, which sets the
@@ -138,6 +165,7 @@ impl CarSetup {
                 masses.push((item.def(catalogue).mass, seat_at(seat)));
             }
         }
+        masses.extend(driveline_masses(catalogue, &car, build.chassis));
         let sprung_mass: f32 = masses.iter().map(|(mass, _)| mass).sum();
         let centre = masses.iter().map(|(mass, at)| mass * at).sum::<f32>() / sprung_mass;
         let (front_z, rear_z) = (-centre, chassis.wheelbase - centre);
@@ -223,11 +251,7 @@ impl CarSetup {
         // Each axle's brakes' share of the braking, and moved as the alignment shop set it.
         let [front, rear] = brakes.map(|(brake, _)| brake.torque);
         let brake_bias = (front / (front + rear).max(1.0) + build.brake_balance).clamp(0.3, 0.95);
-        let differential = if build.limited_slip {
-            Differential::LIMITED_SLIP
-        } else {
-            Differential::OPEN
-        };
+        let line = crate::items::driveline(catalogue, &car);
         // The air: each body part's (at its knobs), each piece missing.
         let mut aero = Aero::default();
         let mut ground = [(0.0, 0.0); 2];
@@ -281,9 +305,9 @@ impl CarSetup {
                 final_drive: build.final_drive,
                 shift_time: gearbox.shift_time,
                 engage_time: gearbox.engage_time,
-                drive: chassis.drive,
-                differentials: [differential; 2],
-                centre: differential,
+                drive: line.drive,
+                differentials: line.differentials,
+                centre: line.centre,
             },
             brake_torque: 2.0 * (front + rear) * build.brake_force,
             brake_bias,

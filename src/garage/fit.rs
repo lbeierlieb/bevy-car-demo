@@ -223,9 +223,16 @@ fn group(kind: Kind) -> &'static str {
         Kind::Seat(_) => "Seats",
         Kind::Wheel | Kind::Brake => "Wheels and brakes",
         Kind::Spring | Kind::Damper | Kind::AntiRollBar => "Suspension",
-        Kind::Gearbox | Kind::Clutch | Kind::FinalDrive | Kind::Differential | Kind::Adapter => {
-            "Drivetrain"
-        }
+        Kind::Gearbox
+        | Kind::Clutch
+        | Kind::FinalDrive
+        | Kind::Differential
+        | Kind::Adapter
+        | Kind::RearSubframe
+        | Kind::PropShaft
+        | Kind::DriveShafts
+        | Kind::Centre
+        | Kind::Tunnel => "Drivetrain",
         Kind::EnginePart(_) => "Exhaust and cooling",
         _ => "Engine",
     }

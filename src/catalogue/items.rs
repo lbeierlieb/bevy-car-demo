@@ -4,13 +4,14 @@
 use std::sync::Arc;
 
 use super::{Catalogue, Shared};
-use crate::chassis::{CarBuild, GearboxKind};
+use crate::chassis::{CarBuild, Chassis, Gearbox, GearboxKind, Tunnel};
 use crate::items::{
     Aero, Assembly, BONNET_CUT_OUT, Does, Item, Kind, Knob, OVERHEAD_CAMS, Panel, PartDef, Seat,
-    SlotDef, Trim, Wear, assemble, chassis_knobs, damper_knobs, engine_knobs, knob, spring_knobs,
-    tire_knobs, wing_knobs,
+    SlotDef, TUNNEL, Trim, Wear, assemble, chassis_knobs, damper_knobs, engine_knobs, knob,
+    spring_knobs, tire_knobs, wing_knobs,
 };
 use crate::physics::brakes::Brake;
+use crate::physics::drivetrain::Differential;
 use crate::physics::engine::hardware::CamDrive;
 use crate::physics::tire::STREET;
 use crate::wheels::Wheel;
@@ -87,6 +88,11 @@ impl Def {
             knobs: Vec::new(),
             slots: Vec::new(),
         }
+    }
+
+    fn needs(mut self, what: &str) -> Self {
+        self.needs.push(what.into());
+        self
     }
 
     fn provides(mut self, what: &str) -> Self {
@@ -214,8 +220,8 @@ fn layout(chassis: &str) -> Layout {
 /// A chassis' slots: body, seats, a wheel, brake, spring and damper at each corner,
 /// anti-roll bars, the drivetrain, the exhaust after the manifold, cooling, the ECU and the
 /// engine.
-fn chassis_slots(catalogue: &Catalogue, chassis: &str) -> Vec<SlotDef> {
-    let layout = layout(chassis);
+fn chassis_slots(catalogue: &Catalogue, made: &Chassis) -> Vec<SlotDef> {
+    let layout = layout(&made.name);
     let body = |name: &str, panel| slot(name, Kind::Body(panel), false);
     let mut slots = vec![
         body("Front bumper", Panel::FrontBumper),
@@ -275,7 +281,15 @@ fn chassis_slots(catalogue: &Catalogue, chassis: &str) -> Vec<SlotDef> {
         slot("Rear anti-roll bar", Kind::AntiRollBar, true),
         slot("Gearbox", Kind::Gearbox, true),
         slot("Clutch", Kind::Clutch, true),
+        slot("Rear subframe", Kind::RearSubframe, true),
     ]);
+    // A prop shaft along the floor's tunnel (a kit's, where the floor has none).
+    if made.tunnel == Tunnel::Kit {
+        slots.push(slot("Tunnel", Kind::Tunnel, false));
+    }
+    if made.tunnel != Tunnel::Never {
+        slots.push(slot("Prop shaft", Kind::PropShaft, false));
+    }
     for s in CAR_SLOTS {
         slots.push(slot(&catalogue.slots[s].name, Kind::EnginePart(s), true));
     }
@@ -284,6 +298,128 @@ fn chassis_slots(catalogue: &Catalogue, chassis: &str) -> Vec<SlotDef> {
         slot("Engine", Kind::Engine, true),
     ]);
     slots
+}
+
+/// The centre couplings: id, name, the share of the torque to the front, and how they
+/// move torque from the faster axle to the slower one. The reactive coupling (stock on
+/// the AWD gearbox) drives the front until the fronts spin faster than the rears, then
+/// sends torque back the more they do, like a pump-pressed clutch pack; the open centre
+/// splits evenly whatever the grip; the viscous one splits evenly and stiffens as one axle
+/// spins away.
+pub const CENTRES: [(&str, &str, f32, Differential); 3] = [
+    (
+        "centre.reactive",
+        "Reactive centre coupling",
+        1.0,
+        Differential {
+            coupling: 150.0,
+            limit: 1500.0,
+        },
+    ),
+    (
+        "centre.open",
+        "Open centre differential",
+        0.5,
+        Differential::OPEN,
+    ),
+    (
+        "centre.viscous",
+        "Viscous centre differential",
+        0.5,
+        Differential {
+            coupling: 60.0,
+            limit: 600.0,
+        },
+    ),
+];
+const CENTRE_MASS: f32 = 8.0;
+
+/// Masses of the rear driveline's parts (kg): a plain rear subframe, one with a mount for a
+/// differential (its housing), a prop shaft, a pair of rear drive shafts, a tunnel kit.
+const SUBFRAME_MASS: f32 = 18.0;
+const MOUNTED_SUBFRAME_MASS: f32 = 34.0;
+const PROP_SHAFT_MASS: f32 = 14.0;
+const DRIVE_SHAFTS_MASS: f32 = 12.0;
+const TUNNEL_KIT_MASS: f32 = 8.0;
+
+/// `chassis`' rear driveline parts: its factory rear subframe (`<id>.rear-subframe`: with a
+/// mount for a differential if its factory gearbox (in `gearboxes`) is inline, else plain),
+/// and where its floor has or can take a tunnel a prop shaft, rear drive shafts, a rear
+/// subframe with a mount (`<id>.rear-subframe.awd`, made for its pickup points, unless the
+/// factory one has a mount), and a tunnel kit where it takes one.
+fn rear_defs(chassis: &Chassis, gearboxes: &[Gearbox], add: &mut impl FnMut(Def)) {
+    let name = &chassis.name;
+    let id = name.to_lowercase();
+    let mounted = gearboxes[chassis.gearbox].kind == GearboxKind::Inline;
+    let subframe = |id: String, title: &str, mount: bool| {
+        let mut def = Def::new(
+            &id,
+            title,
+            Kind::RearSubframe,
+            Does::RearSubframe { mount },
+            [1.3, 0.7, 0.35],
+            if mount {
+                MOUNTED_SUBFRAME_MASS
+            } else {
+                SUBFRAME_MASS
+            },
+        )
+        .fits(name);
+        if mount {
+            def = def.slots(vec![
+                slot("Rear differential", Kind::Differential, false),
+                slot("Rear drive shafts", Kind::DriveShafts, false),
+            ]);
+        }
+        def
+    };
+    let title = if mounted {
+        "Rear subframe with a differential mount"
+    } else {
+        "Rear subframe"
+    };
+    add(subframe(format!("{id}.rear-subframe"), title, mounted));
+    if chassis.tunnel == Tunnel::Never {
+        return;
+    }
+    if !mounted {
+        add(subframe(
+            format!("{id}.rear-subframe.awd"),
+            "Rear subframe with a differential mount",
+            true,
+        ));
+    }
+    add(Def::new(
+        &format!("{id}.prop-shaft"),
+        "Prop shaft",
+        Kind::PropShaft,
+        Does::PropShaft,
+        [1.8, 0.15, 0.15],
+        PROP_SHAFT_MASS,
+    )
+    .fits(name)
+    .needs(TUNNEL));
+    add(Def::new(
+        &format!("{id}.rear-drive-shafts"),
+        "Rear drive shafts",
+        Kind::DriveShafts,
+        Does::DriveShafts,
+        [0.8, 0.3, 0.15],
+        DRIVE_SHAFTS_MASS,
+    )
+    .fits(name));
+    if chassis.tunnel == Tunnel::Kit {
+        add(Def::new(
+            &format!("{id}.tunnel-kit"),
+            "Tunnel kit",
+            Kind::Tunnel,
+            Does::Tunnel,
+            [1.6, 0.4, 0.25],
+            TUNNEL_KIT_MASS,
+        )
+        .fits(name)
+        .provides(TUNNEL));
+    }
 }
 
 /// The box a part of the catalogue's engine slot `slot` is packed in (m) and its mass
@@ -340,7 +476,7 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
         let id = name.to_lowercase();
         let body = &chassis.body;
         let shell = [body.length, body.width, 1.4];
-        add(Def::new(
+        let mut shell = Def::new(
             &id,
             name,
             Kind::Chassis,
@@ -350,7 +486,12 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
         )
         .painted()
         .knobs(chassis_knobs())
-        .slots(chassis_slots(catalogue, name)));
+        .slots(chassis_slots(catalogue, chassis));
+        if chassis.tunnel == Tunnel::Factory {
+            shell = shell.provides(TUNNEL);
+        }
+        add(shell);
+        rear_defs(chassis, &catalogue.gearboxes, &mut add);
         let layout = layout(name);
         let panels = [
             (
@@ -653,10 +794,15 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             gearbox.mass,
         )
         .wears(Wear::Gears);
-        let mut slots = vec![
-            slot("Final drive", Kind::FinalDrive, true),
-            slot("Differential", Kind::Differential, true),
-        ];
+        // Its differential, unless it's inline (then the differential is at the rear
+        // axle, in the rear subframe), and a centre coupling with a transfer output.
+        let mut slots = vec![slot("Final drive", Kind::FinalDrive, true)];
+        if gearbox.kind != GearboxKind::Inline {
+            slots.push(slot("Differential", Kind::Differential, true));
+        }
+        if gearbox.transfer {
+            slots.push(slot("Centre coupling", Kind::Centre, false));
+        }
         // An adapter plate on its face, if it may have one (`Catalogue::bolting`).
         if gearbox.kind != GearboxKind::Transverse {
             slots.push(slot("Adapter plate", Kind::Adapter, false));
@@ -703,6 +849,17 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             Does::Differential { limited_slip },
             [0.3, 0.3, 0.25],
             6.0,
+        ));
+    }
+    // Centre couplings, the reactive one first (the AWD gearbox's stock one).
+    for (id, title, front, coupling) in CENTRES {
+        add(Def::new(
+            id,
+            title,
+            Kind::Centre,
+            Does::Centre { front, coupling },
+            [0.3, 0.25, 0.25],
+            CENTRE_MASS,
         ));
     }
     for (k, clutch) in catalogue.clutches.iter().enumerate() {
@@ -944,6 +1101,9 @@ struct TrimSpec {
     spoiler: bool,
     gearbox: Option<&'static str>,
     final_drive: Option<f32>,
+    /// All-wheel drive: the rear subframe with a differential mount (an open
+    /// differential), a prop shaft, and the gearbox's stock centre coupling.
+    awd: bool,
 }
 
 impl TrimSpec {
@@ -966,6 +1126,7 @@ impl TrimSpec {
             spoiler: false,
             gearbox: None,
             final_drive: None,
+            awd: false,
         }
     }
 }
@@ -985,6 +1146,7 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
                 spoiler: false,
                 gearbox: None,
                 final_drive: None,
+                awd: false,
             },
             TrimSpec {
                 engine: "B20".into(),
@@ -996,6 +1158,7 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
                 spoiler: true,
                 gearbox: None,
                 final_drive: None,
+                awd: false,
             },
             TrimSpec {
                 engine: "B16R".into(),
@@ -1007,6 +1170,7 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
                 spoiler: true,
                 gearbox: None,
                 final_drive: None,
+                awd: false,
             },
         ],
         "Merrow" => vec![TrimSpec {
@@ -1022,6 +1186,7 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
             spoiler: false,
             gearbox: None,
             final_drive: None,
+            awd: false,
         }],
         "Tessel" => {
             use super::chassis::wheel;
@@ -1101,10 +1266,11 @@ fn trims(catalogue: &Shared) -> Vec<Trim> {
                     wheels: factory.wheels,
                     rim: "rim.alloy",
                     brakes: ["front-vented", "rear-disc"],
-                    limited_slip: chassis.limited_slip,
+                    limited_slip: false,
                     spoiler: false,
                     gearbox: None,
                     final_drive: None,
+                    awd: false,
                 })
                 .collect();
         }
@@ -1142,9 +1308,36 @@ fn trims(catalogue: &Shared) -> Vec<Trim> {
                 };
                 *item = Some(made(&part));
             }
+            // The rear subframe, and with all-wheel drive or an inline gearbox the prop
+            // shaft; the limited slip (if any) at the rear with an inline gearbox, else in
+            // the gearbox.
+            let differential = made(if spec.limited_slip {
+                "differential.limited-slip"
+            } else {
+                "differential.open"
+            });
+            let inline = catalogue.gearboxes[chassis.gearbox].kind == GearboxKind::Inline;
+            let (subframe, prop) = if spec.awd {
+                let subframe = crate::items::rear_subframe(
+                    catalogue,
+                    &format!("{id}.rear-subframe.awd"),
+                    None,
+                )
+                .expect("an AWD rear subframe");
+                (subframe, Some(made(&format!("{id}.prop-shaft"))))
+            } else {
+                let rear = inline.then(|| differential.clone());
+                crate::items::factory_rear(catalogue, c, rear).expect("a rear subframe")
+            };
+            for (slot, item) in slots.iter().zip(&mut car.slots) {
+                match slot.kind {
+                    Kind::RearSubframe => *item = Some(subframe.clone()),
+                    Kind::PropShaft => *item = prop.clone(),
+                    _ => {}
+                }
+            }
             let mut build = CarBuild::factory_in(catalogue, c);
             build.wheels = spec.wheels;
-            build.limited_slip = spec.limited_slip;
             if let Some(name) = spec.gearbox {
                 build.gearbox = (catalogue.gearboxes.iter())
                     .position(|gearbox| gearbox.name == name)
@@ -1155,7 +1348,18 @@ fn trims(catalogue: &Shared) -> Vec<Trim> {
                 .position(|code| *code == spec.engine)
                 .expect("a factory engine");
             let parts = build.factory_engine(option);
-            let car = assemble(catalogue, Some(&car), &build, &parts).expect("a stock car");
+            let mut car = assemble(catalogue, Some(&car), &build, &parts).expect("a stock car");
+            // The gearbox's own differential (the one `assemble` put in is open).
+            let gearbox = (slots.iter().zip(&mut car.slots))
+                .find(|(slot, _)| slot.kind == Kind::Gearbox)
+                .and_then(|(_, gearbox)| gearbox.as_mut())
+                .expect("a gearbox");
+            let holes = catalogue.defs[gearbox.def].slots.clone();
+            for (slot, item) in holes.iter().zip(&mut gearbox.slots) {
+                if slot.kind == Kind::Differential {
+                    *item = Some(differential.clone());
+                }
+            }
             trims.push(Trim {
                 id: format!("{id}.{}", slug(&spec.name)),
                 name: format!("{} {}", chassis.name, spec.name),

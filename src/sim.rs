@@ -604,9 +604,10 @@ mod tests {
         let terrain = Terrain::flat();
         // The strong hatch made to drive its rear wheels (weight going onto them in
         // reverse, which the front-wheel drive gains), floored in reverse.
-        let rear = crate::catalogue::builtin_changed(|c| c.chassis[0].drive = Drive::Rear);
+        let mut rear = strong_hatch(&crate::catalogue::builtin());
+        rear.engine.drive = Drive::Rear;
         let launch = |traction_control: bool| {
-            let mut car = Car::spawn_at(0, strong_hatch(&rear), &terrain, 0.0, 400.0, 0.0);
+            let mut car = Car::spawn_at(0, rear.clone(), &terrain, 0.0, 400.0, 0.0);
             car.warm_tires();
             car.traction_control = traction_control;
             car.drivetrain.shift_to(&car.setup.engine, -1);

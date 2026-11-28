@@ -42,7 +42,7 @@ use crate::trade::{Market, Stock, Trade};
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 69;
+pub const PROTOCOL: u32 = 70;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -791,7 +791,6 @@ impl Wire for CarBuild {
         self.gearbox.put(out);
         self.clutch.put(out);
         self.final_drive.put(out);
-        self.limited_slip.put(out);
         self.suspension.put(out);
         self.bars.put(out);
         self.wheels.put(out);
@@ -807,7 +806,6 @@ impl Wire for CarBuild {
             gearbox: r.get()?,
             clutch: r.get()?,
             final_drive: r.get()?,
-            limited_slip: r.get()?,
             suspension: r.get()?,
             bars: r.get()?,
             wheels: r.get()?,

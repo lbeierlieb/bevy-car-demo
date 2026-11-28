@@ -267,8 +267,8 @@ mod tests {
         assert!(rough[0] > 2.0 * smooth[0], "{rough:?} against {smooth:?}");
         assert!(floored[0] > 1.5 * rough[0], "{floored:?} against {rough:?}");
         assert!(floored[4] > 0.008, "the driveshafts: {floored:?}");
-        let rear = crate::catalogue::builtin_changed(|c| c.chassis[0].drive = Drive::Rear);
-        let rear = CarSetup::factory_in(&rear, 0, 0);
+        let mut rear = CarSetup::factory(0, 0);
+        rear.engine.drive = Drive::Rear;
         let (rough, _) = shake(rear.clone(), 256.0, false);
         let (floored, _) = shake(rear, 256.0, true);
         assert!(floored[0] < 1.3 * rough[0], "{floored:?} against {rough:?}");

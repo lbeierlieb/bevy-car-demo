@@ -12,7 +12,6 @@ use crate::body::{Body, Builder, CARPET, DARK, METAL, TRIM, Wheels};
 use crate::catalogue::Catalogue;
 use crate::chassis::{Chassis, Orientation};
 use crate::items::{BONNET_CUT_OUT, Does, Item, Kind, Panel, Seat};
-use crate::physics::drivetrain::Drive;
 use crate::physics::engine::hardware::CamDrive;
 
 const CAST: [f32; 3] = [0.42, 0.43, 0.45];
@@ -479,8 +478,8 @@ fn engine_bay(
         };
         (vec![collector], mouth)
     };
-    // Behind a longitudinal engine its gearbox (the bell housing, then the case), and a
-    // shaft to the differential at the driven rear axle, with a shaft out to each wheel.
+    // Behind a longitudinal engine its gearbox (the bell housing, then the case).
+    let mut prop_from = None;
     if !transverse {
         let start = x + along / 2.0;
         let end = (body.front_overhang + bay.gearbox_at + 0.35).max(start + 0.4);
@@ -498,27 +497,38 @@ fn engine_bay(
             case,
             CAST,
         );
-        if chassis.drive != Drive::Front {
-            let wheels = &frame.wheels;
-            let axle = body.front_overhang + wheels.wheelbase;
-            let hub = wheels.radius[1];
+        prop_from = Some((end, y));
+    }
+    // A prop shaft (behind an inline gearbox, or from a transverse one's transfer output)
+    // to the differential at the rear axle, with a shaft out to each wheel.
+    let rear_axle = (car.fitted(catalogue, Kind::RearSubframe)).any(|subframe| {
+        subframe
+            .fitted(catalogue, Kind::Differential)
+            .next()
+            .is_some()
+    });
+    if car.fitted(catalogue, Kind::PropShaft).next().is_some() && rear_axle {
+        let (end, y) =
+            prop_from.unwrap_or((body.front_overhang + bay.gearbox_at + 0.1, bottom + 0.1));
+        let wheels = &frame.wheels;
+        let axle = body.front_overhang + wheels.wheelbase;
+        let hub = wheels.radius[1];
+        b.bar(
+            frame.at(end, y, 0.0),
+            frame.at(axle - 0.15, hub, 0.0),
+            0.07,
+            DARK,
+        );
+        b.cuboid(frame.at(axle, hub, 0.0), Vec3::new(0.3, 0.24, 0.3), CAST);
+        let reach = wheels.track[1] / 2.0 - wheels.width[1] / 2.0 - 0.04;
+        for side in [-1.0, 1.0] {
+            let (from, to) = (side * 0.15, side * reach);
             b.bar(
-                frame.at(end, y, 0.0),
-                frame.at(axle - 0.15, hub, 0.0),
-                0.07,
+                frame.at(axle, hub, from),
+                frame.at(axle, hub, to),
+                0.05,
                 DARK,
             );
-            b.cuboid(frame.at(axle, hub, 0.0), Vec3::new(0.3, 0.24, 0.3), CAST);
-            let reach = wheels.track[1] / 2.0 - wheels.width[1] / 2.0 - 0.04;
-            for side in [-1.0, 1.0] {
-                let (from, to) = (side * 0.15, side * reach);
-                b.bar(
-                    frame.at(axle, hub, from),
-                    frame.at(axle, hub, to),
-                    0.05,
-                    DARK,
-                );
-            }
         }
     }
     // A turbo at each turbine inlet: the turbine's snail, the compressor's beside it

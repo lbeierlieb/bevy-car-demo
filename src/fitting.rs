@@ -225,6 +225,8 @@ pub fn item_mut<'a>(car: &'a mut Item, path: &[u8]) -> Option<&'a mut Item> {
 /// `holder` kind (none: the car).
 pub fn fits_into(kind: ShopKind, slot: Kind, holder: Option<Kind>) -> bool {
     match kind {
+        // A tunnel kit is welded into the floor at car workshops.
+        ShopKind::Car | ShopKind::Tuning if slot == Kind::Tunnel => kind == ShopKind::Car,
         ShopKind::Car | ShopKind::Tuning => {
             !matches!(
                 slot,
@@ -1206,8 +1208,118 @@ mod tests {
         )
         .unwrap();
         assert_eq!(done.spec.build.gearbox, 1);
-        assert!(done.spec.build.limited_slip);
+        let line = crate::items::driveline(&catalogue, &done.spec.car);
+        assert_eq!(
+            line.differentials[0],
+            crate::physics::drivetrain::Differential::LIMITED_SLIP
+        );
         assert_eq!(done.spec.build.final_drive, before.build.final_drive);
+    }
+
+    /// The hatch made all-wheel drive a piece at a time: every step drives (the rear axle
+    /// undriven until the prop shaft links it), a prop shaft needs a tunnel and something at
+    /// both ends, and the tunnel kit goes in at car workshops.
+    #[test]
+    fn the_hatch_is_made_all_wheel_drive_a_piece_at_a_time() {
+        use crate::physics::drivetrain::Drive;
+        let catalogue = builtin();
+        let tessel = catalogue.find_chassis("Tessel").unwrap();
+        let before = CarSpec::of(&CarSetup::factory(tessel, 0));
+        let workshop = shop(
+            ShopKind::Car,
+            &["tessel.*", "gearbox.*", "differential.*", "centre.*"],
+        );
+        let tuning = shop(ShopKind::Tuning, &["tessel.*"]);
+        let at = |kind| slots_of(&catalogue, &before.car, kind);
+        let fit = |slot: Vec<u8>, id: &str| Work::Fit {
+            slots: vec![slot],
+            supply: new(&catalogue, id),
+        };
+        let drive = |spec: &CarSpec| crate::items::driveline(&catalogue, &spec.car).drive;
+        assert_eq!(drive(&before), Drive::Front);
+        // The prop shaft wants the tunnel; the tunnel kit is a car workshop's work.
+        let prop = fit(at(Kind::PropShaft), "tessel.prop-shaft");
+        let why = run(&catalogue, &workshop, &before, std::slice::from_ref(&prop)).unwrap_err();
+        assert!(why.contains("tunnel"), "{why}");
+        let tunnel = fit(at(Kind::Tunnel), "tessel.tunnel-kit");
+        assert!(run(&catalogue, &tuning, &before, std::slice::from_ref(&tunnel)).is_err());
+        // With the tunnel but the front-drive gearbox, nothing turns the prop shaft.
+        let why = run(
+            &catalogue,
+            &workshop,
+            &before,
+            &[tunnel.clone(), prop.clone()],
+        );
+        assert!(why.unwrap_err().contains("nothing to turn it"));
+        // A piece at a time, each a car that drives its front wheels.
+        let mut spec = before.clone();
+        let subframe = at(Kind::RearSubframe)[0];
+        for work in [
+            tunnel,
+            fit(at(Kind::Gearbox), "gearbox.k-5-speed-awd-transverse"),
+            fit(vec![at(Kind::Gearbox)[0], 2], "centre.reactive"),
+            fit(vec![subframe], "tessel.rear-subframe.awd"),
+            fit(vec![subframe, 0], "differential.open"),
+        ] {
+            spec = run(&catalogue, &workshop, &spec, &[work]).unwrap().spec;
+            assert_eq!(drive(&spec), Drive::Front);
+        }
+        // Without the drive shafts the prop shaft has nothing to drive.
+        let why = run(&catalogue, &workshop, &spec, std::slice::from_ref(&prop)).unwrap_err();
+        assert!(why.contains("nothing to drive"), "{why}");
+        let shafts = fit(vec![subframe, 1], "tessel.rear-drive-shafts");
+        spec = run(&catalogue, &workshop, &spec, &[shafts]).unwrap().spec;
+        spec = run(&catalogue, &workshop, &spec, &[prop]).unwrap().spec;
+        // All four, through the AWD gearbox's stock reactive coupling.
+        assert_eq!(drive(&spec), Drive::All { front: 1.0 });
+        let gearbox = spec.car.fitted(&catalogue, Kind::Gearbox).next().unwrap();
+        let centre = gearbox.fitted(&catalogue, Kind::Centre).next().unwrap();
+        assert_eq!(centre.def(&catalogue).id, "centre.reactive");
+        // The front-drive gearbox back in with the prop shaft still there is refused.
+        let back = fit(at(Kind::Gearbox), "gearbox.k-5-speed-transverse");
+        assert!(run(&catalogue, &workshop, &spec, std::slice::from_ref(&back)).is_err());
+        // The rear's parts weigh what they weigh: about 60 kg more than before.
+        let setup = |spec: &CarSpec| {
+            let (build, parts) = spec.car.resolve(&catalogue).unwrap();
+            let engine = crate::physics::engine::EngineBuild::of_parts(&parts);
+            CarSetup::with_car(build, parts, engine, spec.car.clone())
+        };
+        let gained = setup(&spec).mass_with(0.0) - setup(&before).mass_with(0.0);
+        assert!((55.0..80.0).contains(&gained), "{gained} kg");
+    }
+
+    /// The roadster's inline gearbox drives through its prop shaft to the differential in
+    /// its rear subframe: neither comes out alone, and the hatch has no prop shaft slot.
+    #[test]
+    fn the_roadsters_prop_shaft_stays_and_the_vireo_takes_none() {
+        use crate::physics::drivetrain::{Differential, Drive};
+        let catalogue = builtin();
+        let merrow = catalogue.find_chassis("Merrow").unwrap();
+        let before = CarSpec::of(&CarSetup::factory(merrow, 0));
+        let line = crate::items::driveline(&catalogue, &before.car);
+        assert_eq!(line.drive, Drive::Rear);
+        assert_eq!(line.differentials[1], Differential::LIMITED_SLIP);
+        let workshop = shop(ShopKind::Car, &["merrow.*", "differential.*"]);
+        let prop = slots_of(&catalogue, &before.car, Kind::PropShaft);
+        let why = run(
+            &catalogue,
+            &workshop,
+            &before,
+            &[Work::Remove { slot: prop }],
+        );
+        assert!(why.unwrap_err().contains("Nothing drives the wheels"));
+        // An open differential at the back instead is fine.
+        let subframe = slots_of(&catalogue, &before.car, Kind::RearSubframe)[0];
+        let open = Work::Fit {
+            slots: vec![vec![subframe, 0]],
+            supply: new(&catalogue, "differential.open"),
+        };
+        let done = run(&catalogue, &workshop, &before, &[open]).unwrap();
+        let line = crate::items::driveline(&catalogue, &done.spec.car);
+        assert_eq!(line.differentials[1], Differential::OPEN);
+        let vireo = spec(0);
+        assert!(slots_of(&catalogue, &vireo.car, Kind::PropShaft).is_empty());
+        assert!(slots_of(&catalogue, &vireo.car, Kind::Tunnel).is_empty());
     }
 
     #[test]

@@ -463,10 +463,9 @@ mod tests {
     #[test]
     fn all_wheel_drive_loses_more() {
         // The hatch made to drive all four wheels.
-        let catalogue = crate::catalogue::builtin_changed(|c| {
-            c.chassis[0].drive = crate::physics::drivetrain::Drive::All { front: 0.4 };
-        });
-        let (mut car, mut rollers) = on_rollers(CarSetup::factory_in(&catalogue, 0, 0));
+        let mut setup = CarSetup::factory(0, 0);
+        setup.engine.drive = crate::physics::drivetrain::Drive::All { front: 0.4 };
+        let (mut car, mut rollers) = on_rollers(setup);
         rollers.finish(&mut car);
         assert_eq!(rollers.stage, Stage::Done);
         let crank = rollers

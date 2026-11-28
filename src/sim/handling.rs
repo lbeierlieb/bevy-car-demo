@@ -677,9 +677,10 @@ fn factory_cars_roll_like_real_ones() {
     for (chassis, made) in crate::catalogue::builtin().chassis.iter().enumerate() {
         let setup = CarSetup::factory(chassis, 0);
         let weight = front_weight(&setup);
+        let rear = setup.engine.drive == Drive::Rear;
         let (roll, moved) = steady_roll(setup, 0.5);
         assert!((1.2..5.5).contains(&roll), "{}: {roll}°/g", made.name);
-        if made.drive == Drive::Rear && weight > 0.5 {
+        if rear && weight > 0.5 {
             assert!(moved > weight, "{}: {moved} against {weight}", made.name);
         }
     }

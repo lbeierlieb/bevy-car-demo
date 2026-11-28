@@ -14,6 +14,7 @@ use crate::catalogue::{Bolting, Catalogue};
 use crate::chassis::{
     BRAKE_BALANCES, BRAKE_FORCES, CarBuild, GearboxKind, Misfit, PRESSURES, TOES,
 };
+use crate::physics::drivetrain::{Differential, Drive};
 use crate::physics::engine::parts::{Effect, Parts};
 use crate::wheels::{Rim, TireSize, Wheel};
 
@@ -101,6 +102,19 @@ pub enum Kind {
     /// An adapter plate, on the face of a gearbox that isn't transverse: it bolts the
     /// gearbox to an engine of another bellhousing pattern.
     Adapter,
+    /// The frame the rear suspension hangs on: plain, or with a mount for a differential
+    /// (then with slots for it and the rear drive shafts).
+    RearSubframe,
+    /// The shaft from a gearbox's output (inline) or transfer output (all-wheel drive) to
+    /// the rear differential, along the floor's tunnel.
+    PropShaft,
+    /// The pair of shafts from the rear differential to the rear wheels.
+    DriveShafts,
+    /// The centre coupling of an all-wheel-drive gearbox, splitting the torque between
+    /// the axles.
+    Centre,
+    /// A tunnel kit: makes room in the floor for a prop shaft.
+    Tunnel,
 }
 
 /// What a part does, as far as the game's code knows kinds of parts.
@@ -161,6 +175,21 @@ pub enum Does {
     },
     /// The catalogue's adapter plate (by its place in `adapters`).
     Adapter(usize),
+    /// A rear subframe, with a mount for a differential or not.
+    RearSubframe {
+        mount: bool,
+    },
+    PropShaft,
+    DriveShafts,
+    /// A centre coupling: the share of the torque it sends to the front axle, and how it
+    /// moves torque from the faster axle to the slower one (a reactive coupling sends
+    /// everything to the front and only moves torque once the fronts spin faster).
+    Centre {
+        front: f32,
+        coupling: Differential,
+    },
+    /// Room in the floor for a prop shaft (it provides `TUNNEL`).
+    Tunnel,
 }
 
 /// What a body part does to the air flowing round the car (see `CarSetup::aero`). The
@@ -502,11 +531,9 @@ impl Item {
         };
         build.gearbox = g;
         build.final_drive = gearbox.nth(catalogue, Kind::FinalDrive, 0)?.knobs[0];
-        let differential = gearbox.nth(catalogue, Kind::Differential, 0)?;
-        let Does::Differential { limited_slip } = differential.def(catalogue).does else {
-            return Err(Unfit("not a differential".into()));
-        };
-        build.limited_slip = limited_slip;
+        if let Some(problem) = driveline(catalogue, self).problem {
+            return Err(Unfit(problem));
+        }
         let Does::Clutch(clutch) = self.nth(catalogue, Kind::Clutch, 0)?.def(catalogue).does else {
             return Err(Unfit("not a clutch".into()));
         };
@@ -720,6 +747,170 @@ pub fn drivetrain_misfit(catalogue: &Catalogue, car: &Item) -> Option<Misbolt> {
             None,
         ),
     }
+}
+
+/// What a prop shaft needs (and a chassis whose floor has a tunnel, or a tunnel kit,
+/// provides).
+pub const TUNNEL: &str = "tunnel in the floor";
+
+/// What drives the wheels, as a car's parts are fitted (see `driveline`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Driveline {
+    pub drive: Drive,
+    /// The front and the rear axle's differentials (open where there's none).
+    pub differentials: [Differential; 2],
+    /// The centre coupling (open without one).
+    pub centre: Differential,
+    /// Why the parts don't make a driveline, if they don't: a prop shaft with nothing to
+    /// turn it or nothing to drive, a gearbox driving no wheels.
+    pub problem: Option<String>,
+}
+
+/// The differential an item is (open if it isn't one).
+fn differential_of(catalogue: &Catalogue, item: Option<&Item>) -> Differential {
+    match item.map(|item| &item.def(catalogue).does) {
+        Some(Does::Differential { limited_slip: true }) => Differential::LIMITED_SLIP,
+        _ => Differential::OPEN,
+    }
+}
+
+/// What drives `car`'s (a car's tree) wheels. A transverse gearbox drives the front axle
+/// through its own differential; one with a transfer output also the rear, through the
+/// centre coupling in it, when a prop shaft links it to a rear subframe's differential with drive
+/// shafts. An inline gearbox drives only the rear, through the prop shaft; a transaxle the
+/// rear through its own differential. A piece missing from the way to the rear leaves the
+/// rear axle undriven (honestly so: nothing turns it); a prop shaft fitted with nothing
+/// to turn it or nothing to drive, or a car with no driven wheels, is a `problem` (fitting
+/// refuses it).
+pub fn driveline(catalogue: &Catalogue, car: &Item) -> Driveline {
+    let mut line = Driveline {
+        drive: Drive::Front,
+        differentials: [Differential::OPEN; 2],
+        centre: Differential::OPEN,
+        problem: None,
+    };
+    let Some(gearbox) = car.fitted(catalogue, Kind::Gearbox).next() else {
+        return line;
+    };
+    let Does::Gearbox(g) = gearbox.def(catalogue).does else {
+        return line;
+    };
+    let made = &catalogue.gearboxes[g];
+    let own = differential_of(
+        catalogue,
+        gearbox.fitted(catalogue, Kind::Differential).next(),
+    );
+    let prop = car.fitted(catalogue, Kind::PropShaft).next();
+    let subframe = car.fitted(catalogue, Kind::RearSubframe).next();
+    let rear = subframe.and_then(|subframe| {
+        let differential = subframe.fitted(catalogue, Kind::Differential).next()?;
+        subframe.fitted(catalogue, Kind::DriveShafts).next()?;
+        Some(differential_of(catalogue, Some(differential)))
+    });
+    // A transfer output turns only through a centre coupling.
+    let centre = gearbox.fitted(catalogue, Kind::Centre).next();
+    let output = match made.kind {
+        GearboxKind::Transverse => made.transfer && centre.is_some(),
+        GearboxKind::Inline => true,
+        GearboxKind::Transaxle => false,
+    };
+    if let Some(prop) = prop {
+        let name = prop.def(catalogue).name.to_lowercase();
+        if !output {
+            line.problem = Some(if made.transfer {
+                format!(
+                    "The {name} has nothing to turn it: the {} needs a centre coupling",
+                    made.name
+                )
+            } else {
+                format!(
+                    "The {name} has nothing to turn it: the {} has no output for one",
+                    made.name
+                )
+            });
+        } else if rear.is_none() {
+            line.problem = Some(format!(
+                "The {name} has nothing to drive: it needs a rear subframe with a \
+                 differential and drive shafts"
+            ));
+        }
+    }
+    let rear = rear.filter(|_| output && prop.is_some());
+    match (made.kind, rear) {
+        (GearboxKind::Transverse, None) => line.differentials[0] = own,
+        (GearboxKind::Transverse, Some(rear)) => {
+            let (front, coupling) = match centre.map(|centre| &centre.def(catalogue).does) {
+                Some(&Does::Centre { front, coupling }) => (front, coupling),
+                _ => (1.0, Differential::OPEN),
+            };
+            line.drive = Drive::All { front };
+            line.differentials = [own, rear];
+            line.centre = coupling;
+        }
+        (GearboxKind::Inline, rear) => {
+            line.drive = Drive::Rear;
+            line.differentials[1] = rear.unwrap_or(Differential::OPEN);
+            if rear.is_none() && line.problem.is_none() {
+                line.problem = Some(format!(
+                    "Nothing drives the wheels: the {} turns the rear axle through a prop \
+                     shaft and a rear differential",
+                    made.name
+                ));
+            }
+        }
+        (GearboxKind::Transaxle, _) => {
+            line.drive = Drive::Rear;
+            line.differentials[1] = own;
+        }
+    }
+    line
+}
+
+/// The rear subframe `chassis` leaves the factory with (`<chassis>.rear-subframe`), with
+/// what goes into its mount if it has one (`differential`, else an open one, and the
+/// drive shafts), and the factory's prop shaft to it if it has a mount.
+pub fn factory_rear(
+    catalogue: &Catalogue,
+    chassis: usize,
+    differential: Option<Item>,
+) -> Option<(Item, Option<Item>)> {
+    let id = catalogue.chassis.get(chassis)?.name.to_lowercase();
+    let subframe = rear_subframe(catalogue, &format!("{id}.rear-subframe"), differential)?;
+    let mounted = subframe.def(catalogue).does == Does::RearSubframe { mount: true };
+    let prop = mounted
+        .then(|| by_id(catalogue, &format!("{id}.prop-shaft")))
+        .flatten()
+        .map(|def| Item::new(catalogue, def, 0));
+    Some((subframe, prop))
+}
+
+/// A new rear subframe of definition `id`, its mount (if it has one) filled with
+/// `differential` (else an open one) and the chassis' drive shafts.
+pub fn rear_subframe(catalogue: &Catalogue, id: &str, differential: Option<Item>) -> Option<Item> {
+    let def = by_id(catalogue, id)?;
+    let mut subframe = Item::new(catalogue, def, 0);
+    let chassis = id.split('.').next().unwrap_or_default();
+    let slots = catalogue.defs[def].slots.clone();
+    let mut differential = differential;
+    for (slot, place) in slots.iter().zip(&mut subframe.slots) {
+        *place = match slot.kind {
+            Kind::Differential => Some(differential.take().or_else(|| {
+                by_id(catalogue, "differential.open").map(|d| Item::new(catalogue, d, 0))
+            })?),
+            Kind::DriveShafts => Some(Item::new(
+                catalogue,
+                by_id(catalogue, &format!("{chassis}.rear-drive-shafts"))?,
+                0,
+            )),
+            _ => None,
+        };
+    }
+    Some(subframe)
+}
+
+/// The definition with `id`.
+pub fn by_id(catalogue: &Catalogue, id: &str) -> Option<usize> {
+    catalogue.defs.iter().position(|def| def.id == id)
 }
 
 /// What a Roots blower needs (and a bonnet with a cut-out provides, or no bonnet at all).
@@ -938,19 +1129,31 @@ pub fn assemble(
             def(Kind::AntiRollBar, Does::AntiRollBar(axle))
         },
     )?;
+    // The gearbox keeps its differential and centre coupling (into another gearbox too);
+    // a new one's empty slots get an open differential and the first coupling.
+    let mut kept: Vec<(Kind, usize)> = Vec::new();
     swap(catalogue, &mut car, Kind::Gearbox, paint, |_, gearbox| {
+        for kind in [Kind::Differential, Kind::Centre] {
+            if let Some(item) = gearbox.fitted(catalogue, kind).next()
+                && catalogue.defs[item.def].kind == kind
+            {
+                kept.retain(|(k, _)| *k != kind);
+                kept.push((kind, item.def));
+            }
+        }
         swap(catalogue, gearbox, Kind::FinalDrive, paint, |_, drive| {
             if let Some(ratio) = drive.knobs.first_mut() {
                 *ratio = build.final_drive;
             }
             def(Kind::FinalDrive, Does::FinalDrive)
         })?;
-        swap(catalogue, gearbox, Kind::Differential, paint, |_, _| {
-            let does = Does::Differential {
-                limited_slip: build.limited_slip,
-            };
-            def(Kind::Differential, does)
-        })?;
+        for kind in [Kind::Differential, Kind::Centre] {
+            let first = (catalogue.defs.iter()).position(|d| d.kind == kind && !d.absent);
+            let made = (kept.iter().find(|(k, _)| *k == kind).map(|(_, d)| *d)).or(first);
+            swap(catalogue, gearbox, kind, paint, |_, _| {
+                made.ok_or_else(|| Unfit(format!("no {kind:?} in the catalogue")))
+            })?;
+        }
         def(Kind::Gearbox, Does::Gearbox(build.gearbox))
     })?;
     swap(catalogue, &mut car, Kind::Clutch, paint, |_, _| {
@@ -1202,7 +1405,8 @@ mod tests {
         assert_eq!(rims(&base.car), ["rim.steel"; 4]);
         assert_eq!(rims(&sport.car), ["rim.alloy"; 4]);
         assert!(!spoiler(&base.car) && spoiler(&sport.car));
-        assert!(!base.build.limited_slip && sport.build.limited_slip);
+        let lsd = crate::physics::drivetrain::Differential::LIMITED_SLIP;
+        assert!(base.engine.differentials[0] != lsd && sport.engine.differentials[0] == lsd);
         assert_eq!(sport.build.wheels[0].rim.diameter, 15);
         assert_eq!(sport.engine.parts.hardware().name, "B20 2.0 SOHC four");
         // A shop's change keeps the steel rims steel.
@@ -1222,7 +1426,10 @@ mod tests {
         let (build, parts) = trim.car.resolve(&catalogue).expect("a car");
         assert_eq!(parts.hardware().name, "R80 8.0 V10");
         assert_ne!(build.wheels[0].tire, build.wheels[1].tire);
-        assert!(build.limited_slip);
+        let line = driveline(&catalogue, &trim.car);
+        assert_eq!(line.drive, Drive::Rear);
+        assert_eq!(line.differentials[1], Differential::LIMITED_SLIP);
+        assert_eq!(line.problem, None);
         assert_eq!(
             assemble(&catalogue, None, &build, &parts).as_ref(),
             Ok(&trim.car)
@@ -1267,7 +1474,6 @@ mod tests {
         build.camber = [-2.0, -1.5];
         build.wheels[1].compound = 3;
         build.bars = [2, 3];
-        build.limited_slip = false;
         build.final_drive = 4.1;
         build.paint = 2;
         parts.chosen[crate::catalogue::TURBO] = 2;

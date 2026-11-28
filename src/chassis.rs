@@ -13,7 +13,6 @@ use bevy::prelude::*;
 
 use crate::body::{Body, Wheels};
 use crate::catalogue::{Catalogue, Paint, Shared, Suspension};
-use crate::physics::drivetrain::Drive;
 use crate::physics::engine::parts::Parts;
 use crate::physics::fuel::Tank;
 use crate::wheels::{Wheel, WheelRoom};
@@ -68,7 +67,7 @@ pub struct Gearbox {
     /// `Catalogue::bolting`).
     pub bellhousing: String,
     /// It has a transfer output for a prop shaft to the rear axle (an all-wheel-drive
-    /// transverse gearbox). Nothing drives through it yet.
+    /// transverse gearbox), and a slot for the centre coupling that splits the torque.
     pub transfer: bool,
     pub gears: Vec<f32>,
     pub reverse: f32,
@@ -80,6 +79,19 @@ pub struct Gearbox {
     /// Time the clutch stays open for a gear change, and takes to close again (s).
     pub shift_time: f32,
     pub engage_time: f32,
+}
+
+/// Whether a chassis' floor has a tunnel for a prop shaft to the rear axle: from the
+/// factory, once a tunnel kit is fitted (an aftermarket part, at car workshops), or never.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tunnel {
+    Never,
+    Kit,
+    Factory,
+}
+
+impl Tunnel {
+    pub const ALL: [Tunnel; 3] = [Tunnel::Never, Tunnel::Kit, Tunnel::Factory];
 }
 
 /// The cold tire pressures that can be set (bar).
@@ -127,9 +139,8 @@ pub struct Chassis {
     /// The fuel tank.
     pub tank: Tank,
     pub bay: EngineBay,
-    pub drive: Drive,
-    /// Limited-slip differentials from the factory.
-    pub limited_slip: bool,
+    /// Whether its floor has room for a prop shaft to the rear axle (see `Tunnel`).
+    pub tunnel: Tunnel,
     /// The factory's gearbox (in the catalogue's `gearboxes`) and final drive.
     pub gearbox: usize,
     pub final_drive: f32,
@@ -264,7 +275,6 @@ pub struct CarBuild {
     pub gearbox: usize,
     pub clutch: usize,
     pub final_drive: f32,
-    pub limited_slip: bool,
     pub suspension: usize,
     /// The anti-roll bars front and rear (in the chassis' `bars`).
     pub bars: [usize; 2],
@@ -303,7 +313,6 @@ impl CarBuild {
             gearbox: made.gearbox,
             clutch: 0,
             final_drive: made.final_drive,
-            limited_slip: made.limited_slip,
             suspension: 0,
             bars: [0, 1].map(|axle| made.bars[axle].factory),
             wheels: made.wheels,

@@ -5,13 +5,13 @@
 use super::{AdapterDef, Catalogue, Clutch, EcuDef, Paint, Suspension, TireCompound};
 use crate::body::{Body, Detail, Tone};
 use crate::cargo::{Area, Hold};
-use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars};
+use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars, Tunnel};
 use crate::items::{
     Aero, Assembly, Does, Item, Kind, Knob, Panel, PartDef, Seat, SlotDef, Trim, Wear,
 };
 use crate::net::wire::{Reader, Wire};
 use crate::physics::brakes::Brake;
-use crate::physics::drivetrain::Drive;
+use crate::physics::drivetrain::{Differential, Drive};
 use crate::physics::engine::families::{Family, HeadDef, Layout, ManifoldDef, Version};
 use crate::physics::engine::hardware::{
     BottomEnd, CamDrive, CamProfile, Collector, Compressor, Cooling, Diverter, EngineHardware,
@@ -111,6 +111,7 @@ listed!(
         GearboxKind::Transaxle
     ]
 );
+listed!(Tunnel, Tunnel::ALL);
 listed!(Field, Field::ALL);
 listed!(Readout, Readout::ALL);
 listed!(Layout, Layout::ALL);
@@ -210,8 +211,7 @@ fields!(Chassis {
     downforce_area,
     tank,
     bay,
-    drive,
-    limited_slip,
+    tunnel,
     gearbox,
     final_drive,
     engines,
@@ -591,6 +591,11 @@ impl Wire for Kind {
             Kind::Turbo => 19,
             Kind::Head => 20,
             Kind::Adapter => 21,
+            Kind::RearSubframe => 22,
+            Kind::PropShaft => 23,
+            Kind::DriveShafts => 24,
+            Kind::Centre => 25,
+            Kind::Tunnel => 26,
         };
         tag.put(out);
         match self {
@@ -624,6 +629,11 @@ impl Wire for Kind {
             19 => Kind::Turbo,
             20 => Kind::Head,
             21 => Kind::Adapter,
+            22 => Kind::RearSubframe,
+            23 => Kind::PropShaft,
+            24 => Kind::DriveShafts,
+            25 => Kind::Centre,
+            26 => Kind::Tunnel,
             _ => return None,
         })
     }
@@ -677,6 +687,18 @@ impl Wire for Does {
                 (*family, *head).put(out);
             }
             Does::Adapter(a) => (20u8, *a).put(out),
+            Does::RearSubframe { mount } => {
+                21u8.put(out);
+                mount.put(out);
+            }
+            Does::PropShaft => 22u8.put(out),
+            Does::DriveShafts => 23u8.put(out),
+            Does::Centre { front, coupling } => {
+                24u8.put(out);
+                front.put(out);
+                coupling.put(out);
+            }
+            Does::Tunnel => 25u8.put(out),
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -716,8 +738,31 @@ impl Wire for Does {
                 Does::Head { family, head }
             }
             20 => Does::Adapter(r.get()?),
+            21 => Does::RearSubframe { mount: r.get()? },
+            22 => Does::PropShaft,
+            23 => Does::DriveShafts,
+            24 => Does::Centre {
+                front: r.get::<f32>()?.clamp(0.0, 1.0),
+                coupling: r.get()?,
+            },
+            25 => Does::Tunnel,
             _ => return None,
         })
+    }
+}
+
+impl Wire for Differential {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.coupling.put(out);
+        self.limit.put(out);
+    }
+    fn get(r: &mut Reader) -> Option<Self> {
+        let made = Self {
+            coupling: r.get()?,
+            limit: r.get()?,
+        };
+        let fine = (0.0..=1e4).contains(&made.coupling) && (0.0..=1e5).contains(&made.limit);
+        fine.then_some(made)
     }
 }
 

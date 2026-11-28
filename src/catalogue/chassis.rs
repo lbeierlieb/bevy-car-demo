@@ -3,8 +3,7 @@
 use super::{AdapterDef, Clutch, Paint, Suspension};
 use crate::body::{Body, Detail, Tone};
 use crate::cargo::{Area, Hold};
-use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars};
-use crate::physics::drivetrain::Drive;
+use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars, Tunnel};
 use crate::physics::fuel::Tank;
 use crate::physics::tire::STREET;
 use crate::wheels::{Rim, TireSize, Wheel, WheelRoom};
@@ -295,8 +294,7 @@ fn bothy() -> Chassis {
             gearbox_at: -0.15,
             header_room: 1.2,
         },
-        drive: Drive::Front,
-        limited_slip: false,
+        tunnel: Tunnel::Factory,
         gearbox: gearbox("K 5-speed short (transverse)"),
         final_drive: 4.76,
         engines: codes(&["K24"]),
@@ -427,8 +425,7 @@ fn aldine() -> Chassis {
             gearbox_at: -0.18,
             header_room: 1.2,
         },
-        drive: Drive::Front,
-        limited_slip: false,
+        tunnel: Tunnel::Kit,
         gearbox: gearbox("K 5-speed long (transverse)"),
         final_drive: 4.44,
         engines: codes(&["K20", "K24"]),
@@ -566,8 +563,7 @@ fn tessel() -> Chassis {
             gearbox_at: -0.14,
             header_room: 1.2,
         },
-        drive: Drive::Front,
-        limited_slip: false,
+        tunnel: Tunnel::Kit,
         gearbox: gearbox("K 5-speed (transverse)"),
         final_drive: 4.29,
         engines: codes(&["K20", "K20R"]),
@@ -697,8 +693,7 @@ fn vireo() -> Chassis {
             gearbox_at: -0.12,
             header_room: 1.15,
         },
-        drive: Drive::Front,
-        limited_slip: false,
+        tunnel: Tunnel::Never,
         gearbox: 0,
         final_drive: 4.25,
         engines: codes(&["B16", "B20", "B16R"]),
@@ -825,8 +820,7 @@ fn merrow() -> Chassis {
             gearbox_at: 1.25,
             header_room: 0.8,
         },
-        drive: Drive::Rear,
-        limited_slip: true,
+        tunnel: Tunnel::Factory,
         gearbox: 2,
         final_drive: 3.07,
         engines: codes(&["R80"]),
@@ -1010,7 +1004,7 @@ mod tests {
     fn the_roadster_is_a_heavy_v10_driving_its_rear_wheels() {
         use crate::car::CarSetup;
         use crate::chassis::{GearboxKind, Orientation};
-        use crate::physics::drivetrain::Drive;
+        use crate::physics::drivetrain::{Differential, Drive};
         let catalogue = builtin();
         let merrow = catalogue.find_chassis("Merrow").expect("the roadster");
         let setup = CarSetup::factory(merrow, 0);
@@ -1026,9 +1020,9 @@ mod tests {
         assert!((0.46..0.52).contains(&front), "{front} at the front");
         assert_eq!(hardware.name, "R80 8.0 V10");
         let made = &catalogue.chassis[merrow];
-        assert_eq!(made.drive, Drive::Rear);
+        assert_eq!(setup.engine.drive, Drive::Rear);
         assert_eq!(made.bay.orientation, Orientation::Longitudinal);
-        assert!(setup.build.limited_slip);
+        assert_eq!(setup.engine.differentials[1], Differential::LIMITED_SLIP);
         // Its gearbox takes the V10's torque, and only inline gearboxes go in.
         assert_eq!(setup.build.gearbox().kind, GearboxKind::Inline);
         assert!(setup.engine.gearbox_torque >= 640.0 && setup.engine.clutch_torque >= 650.0);
@@ -1139,7 +1133,7 @@ mod tests {
 mod k_cars {
     use crate::car::CarSetup;
     use crate::catalogue::{Bolting, builtin};
-    use crate::physics::drivetrain::Drive;
+    use crate::physics::drivetrain::{Differential, Drive};
 
     /// A K-series trim as the plan has it: chassis, factory engine, full mass (kg), share
     /// on the front, gearbox, limited slip, front tire.
@@ -1227,9 +1221,13 @@ mod k_cars {
             assert!(plan.mass.contains(&mass), "{name}: {mass} kg");
             assert!(plan.front.contains(&front), "{name}: {front} front");
             assert_eq!(setup.build.gearbox().name, plan.gearbox, "{name}");
-            assert_eq!(setup.build.limited_slip, plan.limited_slip, "{name}");
+            let differential = match plan.limited_slip {
+                true => Differential::LIMITED_SLIP,
+                false => Differential::OPEN,
+            };
+            assert_eq!(setup.engine.differentials[0], differential, "{name}");
             assert_eq!(setup.build.wheels[0].tire.label(), plan.tire, "{name}");
-            assert_eq!(made.drive, Drive::Front, "{name}");
+            assert_eq!(setup.engine.drive, Drive::Front, "{name}");
             let family = catalogue.find_engine(plan.engine).unwrap().0;
             assert_eq!(
                 catalogue.bolting(setup.build.gearbox, family),
