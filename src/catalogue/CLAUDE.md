@@ -648,7 +648,10 @@ offering capped), the same linkage as every car; made-up looks:
   "Tailgate" split at the belt (a dark seam; one part), dark cladding and roof rails
   (details), a tall load space (ceiling 1.5 m). `bothy.2-4` (K24, K 5-speed short, 4.76,
   open, 215/70 R16 steel, vented front, rear drums) 1562 kg, 60 % front. Paint Khaki. Its
-  floor is meant to have a tunnel (step 4's AWD trim); nothing models it yet.
+  floor has a tunnel (`Tunnel::Factory`); `bothy.2-4-awd` (step 4) is the same with the
+  K 5-speed AWD, the reactive centre coupling, `bothy.rear-subframe.awd` with an open
+  differential and `bothy.rear-drive-shafts`, and `bothy.prop-shaft`: 1630 kg full (+68),
+  0–100 8.4 s, 186 km/h.
 Trims may name their own gearbox and final drive (`TrimSpec::gearbox`, `final_drive`).
 Layouts (`catalogue/items.rs`'s `layout`) say lid, spoiler, rear bench and `rear_doors`
 (slots "Left/Right rear door", part `<chassis>.rear-door`; slot needs found by name). The
@@ -668,3 +671,38 @@ parts and the K engines, tuning shops their tuning parts. Traffic weights Vireo 
 2.0, Tessel 1.6, Bothy 0.8, Merrow 0.15 (still ~1 in 50). Shots: `OFFLINE=1 TRIM=2,0` (Tessel
 2.0; 2,1 the 2.0R; 3,x the Aldine; 4,0 the Bothy) `CARCAM="-6.5,1.3,0"`; the lineup's forest
 straight hides them. Protocol 69 (rear doors on the wire).
+
+## Drivetrains made of parts (2026-11-28, `docs/k-lineup.md` step 4)
+
+`Chassis::drive`, `Chassis::limited_slip` and `CarBuild::limited_slip` are gone; the drive
+is worked out from the tree (`items::driveline`; see "Cars" in `src/physics/CLAUDE.md`).
+Kinds `RearSubframe` (chassis slot "Rear subframe", required; `Does::RearSubframe { mount
+}`: with a mount it has "Rear differential" and "Rear drive shafts", both optional),
+`PropShaft` (chassis slot "Prop shaft" where `Chassis::tunnel` isn't `Never`; needs
+`items::TUNNEL`, which a `Tunnel::Factory` chassis and the tunnel kit provide), `Tunnel`
+(slot "Tunnel" on `Tunnel::Kit` chassis, fitted only at car workshops), `DriveShafts`,
+`Centre` (an AWD gearbox's optional "Centre coupling" slot; `Does::Centre { front,
+coupling }`; `centre.reactive`, `centre.open`, `centre.viscous`). Per chassis
+(`rear_defs`): `<id>.rear-subframe` (the factory one: with a mount if the factory gearbox
+is inline, the Merrow's, else plain), and with a tunnel or a kit `<id>.rear-subframe.awd`,
+`<id>.prop-shaft`, `<id>.rear-drive-shafts`, `<id>.tunnel-kit` (Tessel, Aldine). The Vireo
+takes none (the user's decision). The inline gearbox has no differential slot: the
+Merrow's limited slip is in its factory rear subframe, with a prop shaft.
+Rules (decided): a piece missing on the way to the rear (no coupling, prop shaft,
+mount, differential or shafts) leaves the rear undriven; a prop shaft fitted with nothing
+to turn it or nothing to drive, or a car driving no wheels (the Merrow without its prop
+shaft), is refused (`Driveline::problem`, via `resolve`). So a conversion goes in any
+order that ends with the prop shaft, and back by taking it off first; a new AWD gearbox
+comes without a coupling (fit one). Masses: the factory rear parts' are in the chassis'
+mass; fitted ones count their difference (`car::driveline_masses`: subframe tree at the
+rear axle, prop shaft and tunnel kit halfway, coupling at the gearbox), so stock cars
+drive to the bit as before (checked against the commit before). Shops: car workshops sell
+every chassis' rear parts, the tunnel kits, `centre.reactive`; tuning shops
+`centre.open`, `centre.viscous` and `differential.limited-slip` (front or rear). Saved cars:
+an empty "Rear subframe" gets the chassis' factory one (`saved::fill_rear`), a
+differential saved in an inline gearbox goes into its mount (loose ones stay loose).
+Showrooms list a chassis' trims (`items::trims_of`; two Bothys share the K24), not
+engine options. Protocol 70. Tests: `the_hatch_is_made_all_wheel_drive_a_piece_at_a_time`,
+`the_saloon_converts_at_the_shops_and_drives_all_four`,
+`the_roadsters_prop_shaft_stays_and_the_vireo_takes_none`,
+`cars_saved_before_rear_subframes_get_their_factory_one`, `sim::all_wheel_drive`.

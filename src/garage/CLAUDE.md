@@ -86,11 +86,12 @@ as built, in order:
    `traffic::FactoryLooks`); the one picked turns on a turntable under spotlights (its
    floor place hidden), a sign beside it egui-painted with name, class and engine. "Start
    it" idles the picked engine (the model's `Motion::engine`, heard by `hear_others`) and
-   blips it every 3.5 s. The window on the right: the list and `brochure`; "Drive it"
+   blips it every 3.5 s. The window on the right: the car, its trim (the chassis' trims,
+   `items::trims_of`, since 2026-11-28) and `brochure`; "Drive it"
    builds the car and goes straight out to it (once built), in neutral with the parking
    brake on (`fit` leaves every car put down afresh so). The camera stays within `REACH` (7.4 m) of the
    turntable, clear of the floor cars. Shots: `TAPS="Enter@200"` in, then the first row is the car
-   (`ArrowRight` the next), then the engine, "Drive it", "Start it".
+   (`ArrowRight` the next), then the trim, "Buy it and drive it", the trade-in, "Start it".
    (`shops::shop_window` draws a shop's window for other modules, saying when the car came in).
 9. ✓ **Parts shop**, since 2026-11-26 **car workshops, tuning shops and tire shops**
    (see "Owning cars and parts", milestone 6: the fitting window). Since 2026-11-22

@@ -196,6 +196,41 @@ items with no limit (or don't exist yet), so steps 4 and 5 can ship apart.
 4. **Drivetrain parts**: rear subframe, rear differential, prop shaft, centre coupling,
    `Drive` derived, a differential per axle; the AWD Bothy trim; the tunnel kit and AWD
    conversions for the Tessel and Aldine; limited-slip swaps front and rear.
+
+   **Done** (2026-11-28; protocol 70). As planned, with these decisions (details in
+   `src/catalogue/CLAUDE.md`, "Drivetrains made of parts"):
+   - Half-done builds: a piece missing on the way to the rear (centre coupling, prop
+     shaft, the mount's differential or drive shafts) leaves the rear axle undriven, as it
+     honestly is; a prop shaft fitted with nothing to turn it or nothing to drive, or a car
+     that drives no wheels, is refused with the reason. A conversion goes in any order
+     ending with the prop shaft (or in one request); undone by taking the prop shaft off
+     first. A new AWD gearbox comes without a coupling.
+   - The Merrow: its inline gearbox lost its differential slot; its factory rear subframe
+     (`merrow.rear-subframe`) has the mount with the limited slip and drive shafts, and a
+     prop shaft runs along its factory tunnel. It drives exactly as before (all stock cars
+     were checked to the bit against the commit before: the factory rear parts' masses are
+     in the chassis' mass, other parts count their difference).
+   - The tunnel: `Chassis::tunnel` (`Never` Vireo, `Kit` Tessel and Aldine, `Factory`
+     Bothy and Merrow); the prop shaft needs what a factory tunnel or the tunnel kit
+     provides; tunnel kits are fitted only at car workshops.
+   - The reactive coupling fits `Differential { coupling, limit }` with `Drive::All {
+     front: 1.0 }`; no physics change was needed beyond a differential per axle (one
+     driven only through the coupling has its differential working too). Tuned to 250
+     N·m·s, 1500 N·m: cruising the rears pull about a tenth, floored on a meadow without
+     traction control about half. Open centre 50/50; viscous 50/50, 60 / 600.
+   - Showrooms list the chassis' trims (two Bothys share the K24).
+
+   | | `bothy.2-4` | `bothy.2-4-awd` |
+   |---|---|---|
+   | Mass full | 1562 kg | 1630 kg |
+   | 0–100 | 8.5 s | 8.4 s |
+   | 60 s flat out | 186 km/h | 186 km/h |
+   | 4 s from standing, dry | 16.1 m/s | 16.6 m/s |
+   | … on a meadow | 7.1 m/s | 11.3 m/s |
+   | … one side on grass | 7.2 m/s | 11.0 m/s |
+
+   (With traction control. The Aldine 2.4 converted with limited slips front and rear:
+   11.3 m/s on the meadow against 7.8.) Rear drive shafts are plain items for step 5.
 5. **Drive shafts** with torque ratings, wear and breaking.
 6. **Rear-engine subframe** (aftermarket, planned in detail when we get there): a rear
    subframe that carries an engine and a transverse gearbox at the rear axle, like the

@@ -21,16 +21,28 @@ catalogue entries, and things like swap subframes are named so they can be price
   Harrow, Calder, Rheon, Vespera, Wisp, Drover, Carrow) and their engines are in git
   history before that; names are made up, no real cars), gearboxes (two
   transverse B-series ones, five transverse K-series ones (k-lineup step 2: 5-speed,
-  5-speed long, short, AWD with `Gearbox::transfer` (a flag nothing uses until step 4),
+  5-speed long, short, AWD with `Gearbox::transfer` (a transfer output and a centre coupling slot, step 4),
   6-speed close-ratio; `k_gearbox`) and the R-series inline 6-speed), the adapter plates, clutches, suspension kits and paints (the tire
   compounds' rubber is `physics/tire.rs`'s `COMPOUNDS`, named in `catalogue/parts.rs`).
   `engines.rs` has the families (the B series, versions B16 and B20 (one cam, 8 valves) and B16R (two cams, 16
   valves, switching cams; see `docs/vireo-lineup.md`); the R-series V10,
   R80, the Merrow's; `EngineHardware::default`
   is still the W20 2-litre four everything is scaled from). Tests needing another kind
-  of car change the one: `catalogue::builtin_changed` (heavier, rear-wheel drive…).
-- **A car** is a `CarBuild` (chassis, paint, gearbox, clutch, final drive, limited-slip,
+  of car change the one: `catalogue::builtin_changed` (heavier…), or the drive on the
+  `CarSetup` itself (`setup.engine.drive = Drive::Rear`: the drive isn't the chassis' any
+  more).
+- **A car** is a `CarBuild` (chassis, paint, gearbox, clutch, final drive,
   suspension, a `Wheel` per axle) plus its engine's `Parts` (family, version, a part per slot, ECU).
+  The drive and the differentials come from the car's tree (`items::driveline`, k-lineup
+  step 4, 2026-11-28): `EngineSetup::drive`, `differentials` (front, rear; each counts on a
+  driven axle, one driven only through the centre coupling too) and `centre`. A transverse
+  gearbox drives the front through its differential; with a transfer output and a centre
+  coupling also the rear, when a prop shaft links it to a rear subframe's differential with
+  drive shafts; an inline gearbox the rear through the prop shaft. The AWD Bothy's
+  reactive coupling is `Drive::All { front: 1.0 }` with the centre `Differential` 250
+  N·m·s / 1500 N·m (`catalogue/items.rs`'s `CENTRES`; stable in the air from 150 to 500,
+  at 500 cruising got a limit cycle on the rears); the open and viscous centres split
+  50/50 (viscous 60 / 600). Tests: `sim::all_wheel_drive`.
   `CarSetup::new` works everything the simulation needs out of them: the engine's and
   the gearbox's masses sit where the chassis' bay has them, which gives the balance and
   the inertia; springs and dampers come from ride frequencies and the weight on each

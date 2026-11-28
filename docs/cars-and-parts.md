@@ -83,7 +83,7 @@ cargo grid):
 | Interior | driver's seat, passenger seat, rear bench | the driver's seat |
 | Per corner (×4) | wheel, brake, spring, damper | all |
 | Per axle (×2) | anti-roll bar | no |
-| Drivetrain | gearbox, clutch | both |
+| Drivetrain | gearbox, clutch, rear subframe; prop shaft (where the floor has or can take a tunnel), tunnel kit (Tessel, Aldine) | gearbox, clutch, rear subframe |
 | Exhaust | front pipe, catalyst, centre pipe/resonator, silencer | the pipes (a straight pipe is a pipe part) |
 | Cooling | radiator; intercooler (with a turbo; needs a bumper with an opening) | the radiator |
 | Electronics | ECU (stays with the car: a swapped engine needs a new tune) | yes |
@@ -95,7 +95,8 @@ Items with slots:
 |---|---|---|
 | Engine | long block; intake manifold, throttle body, air filter, exhaust manifold (its family's; turbos on its mounts, see `exhaust-manifolds.md`), supercharger, flywheel | bolt-ons at car and tuning shops; comes out of the car whole |
 | Long block | block (family, version, bore oversize), crankshaft, rods, pistons (matching the bore), head gasket, cylinder head (its family's: porting, camshafts, valve springs, cam phasers) | engine shop only |
-| Gearbox | gear set, final drive, differential; an adapter plate (not on transverse gearboxes: to an engine of another bellhousing pattern, see `k-lineup.md`) | car and tuning shops; plates also at engine shops |
+| Gearbox | gear set, final drive, differential (not an inline one's: its differential is at the rear axle); a centre coupling (with a transfer output); an adapter plate (not on transverse gearboxes: to an engine of another bellhousing pattern, see `k-lineup.md`) | car and tuning shops; plates also at engine shops |
+| Rear subframe (with a differential mount) | rear differential, rear drive shafts (see `k-lineup.md`, step 4) | car and tuning shops |
 | Wheel | rim, tire | tire shop only (rims and tires also loose in trunks and garages) |
 
 Springs, dampers, brakes, wheels: each corner its own item (sold in pairs or fours).
