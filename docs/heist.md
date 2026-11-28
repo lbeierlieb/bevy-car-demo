@@ -1,4 +1,4 @@
-# Heists (planned 2026-11-28, waiting for the user's answers on the assumptions)
+# Heists (planned with the user, 2026-11-28)
 
 The user asked for a new event: pull up to a bank (a disc, like any event's marker), see
 the robbery in a scene of its own, pick how much money to take, then drive in a world of
@@ -26,9 +26,10 @@ in your garage.
 
 There are no police, no people in any scene, and no way to be without a driven car.
 
-## Assumptions (to confirm)
+## Assumptions
 
-Each comes with what I'd do. The ones most worth an answer come first.
+The user confirmed 2, 3, 11 and the bank scene (answers 2026-11-28) and changed 4; the
+rest are mine, unchallenged.
 
 1. **Solo.** A heist is a private round of one, like a time trial. Crew heists (a
    getaway driver plus others) come later, if wanted.
@@ -36,11 +37,17 @@ Each comes with what I'd do. The ones most worth an answer come first.
    with its trunk.
 3. **Impound** means the car goes to a new place, `impound`, in the database. It isn't
    destroyed. You get it back at an impound lot (a new shop kind) for a fine, built in
-   the last milestone. Until then an impounded car is gone for good.
-4. **After a bust** you are put in the garage park's hall. The server makes your first
-   garage car the one you drive. With an empty garage, it gives you the server's start
-   car, as a new player gets, so nobody ends up with no car. Being without a car would
-   touch every system, so I'd avoid it.
+   the last milestone. Until then an impounded car is gone for good. (The user: "Losing is
+   the stake I want.")
+4. **After a bust** you are put in the garage park's hall **without a car** (the user's
+   answer). You pick one of your garage cars to drive. With an empty garage the hall
+   offers **"Get a free car"**: a scene where your parents give you a car (the server's
+   start car). No people in it, as the game has none: the car on your parents' drive with
+   a big bow on it and a card, "From Mum and Dad". Being without a car is a new state:
+   the game must cope with no driven car while in the hall (no HUD, no driving, no
+   prediction), and the server with a peer that has none (sent nothing, simulated
+   nothing, no traffic anchor). "Get a free car" is offered only with no car at all, so
+   it can't be farmed.
 5. **Leaving counts as a bust.** That covers Esc or "Leave", a disconnect, and the
    server dropping a silent player. Otherwise leaving would be a free way out.
 6. **No R.** During a heist the reset rule is `ResetRule::Never`, as for the hunted. If
@@ -59,7 +66,8 @@ Each comes with what I'd do. The ones most worth an answer come first.
 10. **A bust** happens when your car is under 10 km/h for 5 s with a police car within
     12 m. The bar shows a meter filling. It mirrors the hunt's "Stop them". A wrecked
     or stalled car also counts if police are that near.
-11. **Police are kinematic, like traffic, not simulated cars.** A simulated car costs
+11. **Police are kinematic, like traffic, not simulated cars** (the user: try simple
+    scripted ones for now and see how it feels). A simulated car costs
     the VPS about 10 % of its vCPU, which rules out up to ten police cars. A pursuit
     driver routes along the road network towards you, goes over the limit, and within
     ~40 m leaves the lane to aim at you and block you. A knock only ends its drive past
@@ -71,9 +79,9 @@ Each comes with what I'd do. The ones most worth an answer come first.
 13. **Cooldown**: one heist per player per 10 minutes, on the server's clock, for the
     session only.
 14. **Traffic** in the heist's realm is on, at the server's normal density.
-15. **The bank** is a made-up name ("Kreditkasse Baunach" or similar) at a real building
-    in Baunach, its point picked from the map in milestone 1, with three escape points
-    1–4 km away.
+15. **The bank** is in Reckendorf, at the real Raiffeisen bank's building (the user's
+    pick; its point from the map's OSM data in milestone 1), under a made-up name, never
+    the real one (e.g. "Kreditkasse Reckendorf"). Three escape points 1–4 km away.
 
 ## Heat levels (first numbers, to tune by playing)
 
@@ -117,18 +125,24 @@ The protocol is bumped in every milestone that changes a message.
    and one crashes out from a hard knock but not a light one.
 4. **Busted and impounded.** The bust rule on the server and the meter in the bar.
    Impounding moves the car (and trunk) to the `impound` place in the database (a
-   migration). Then the next garage car or the start car, the move to the garage park,
-   and the hall. Leaving mid-heist counts as busted. Test: sitting still with police
-   near busts, the car is gone from `Owned`, you drive another at the garage park.
+   migration). Leaving mid-heist counts as busted. You land in the garage park's hall
+   without a car: the new car-less state in the server (a peer with no car) and the game
+   (only the hall, picking a garage car to drive out in). Test: sitting still with police
+   near busts, the car is gone from `Owned`, the player has no car, then drives a garage
+   car out.
+4b. **"Get a free car".** In the hall with no car and an empty garage: the button, then a
+   scene of its own (your parents' house: a drive, the start car with a big bow on it, a
+   card "From Mum and Dad"), "Drive it" builds the server's start car and drives out. The
+   server gives it only to a player with no car at all. Test: a car-less player with an
+   empty garage gets the start car once, one with a garage car is refused.
 5. **Heat.** The table above: counts, join delays, speeds. Roadblocks (two or three
    parked police cars across the road ahead on your likely way, placed out of sight).
    The police helicopter (a `Chase` per heist, sent like the hunt's) and what police know
    without it. Tests: at heat 1 a scripted drive to the escape gets away. At heat 5
    stopping halfway gets busted.
-6. **The bank scene.** Like the other scenes, under the marker: a banking hall with
-   counters, an open vault door, a red alarm light turning, money bags on a trolley and
-   notes on the floor. There are no people, as the game has none. Masked robbers made of
-   primitives are possible if wanted. The loot window moves into the scene, and the bags
+6. **The bank scene.** Like the other scenes, under the marker: the aftermath only (the
+   user's answer, no robbers): a banking hall with counters, an open vault door, a red
+   alarm light turning, money bags on a trolley and notes on the floor. The loot window moves into the scene, and the bags
    on the trolley grow with the amount. "Go!" drives you out into the heist's world.
    Shots for the notes and the screenshots skill.
 7. **Polish.** Sirens (synthesised like the engine, two-tone, with Doppler through
@@ -139,11 +153,10 @@ The protocol is bumped in every milestone that changes a message.
 Possible later: crew heists, losing the police (out of sight for long enough), spike
 strips (tire pressures), loot bags as cargo that weigh the car down.
 
-## Open questions for the user
+## Answers (2026-11-28)
 
-- Assumptions 2 to 4: is losing the car for good (until the impound lot comes) the
-  stake you want, and what happens with an empty garage?
-- Assumption 11: kinematic police (cheap, many, a bit rail-like) or simulated cars
-  (real physics, few, costly on the VPS)?
-- Should the bank scene have robbers in it, or just the aftermath (vault open, alarm)?
-- Which town and building for the first bank?
+- Losing the car is the stake. In the garage without a car: "Get a free car", a scene
+  where your parents give you one (milestone 4b).
+- Simple scripted police for now, to see how it feels.
+- The bank scene shows the aftermath only.
+- The first bank: Reckendorf, the Raiffeisen bank's building (under a made-up name).

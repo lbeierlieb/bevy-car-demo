@@ -50,7 +50,7 @@ Topic notes live next to the code and load when working there; update them there
 - `src/editor/CLAUDE.md`: Map editing
 - `src/audio/CLAUDE.md`: Audio
 - Skills (`.claude/skills/`, loaded on use): `screenshots` (shot.sh, formerly "Screenshots" under the sandbox workflow), `fake-wheel` (the virtual wheel), `windows-build`.
-- Plans: `docs/cars-and-parts.md`, `docs/exhaust-manifolds.md`, `docs/pushrod-v10.md`, `docs/vireo-lineup.md`, `docs/k-lineup.md`, `docs/heist.md` (planned, not built).
+- Plans: `docs/cars-and-parts.md`, `docs/exhaust-manifolds.md`, `docs/pushrod-v10.md`, `docs/vireo-lineup.md`, `docs/k-lineup.md`, `docs/heist.md` (being built).
 
 ## Apps (agreed with the user)
 
