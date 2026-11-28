@@ -81,6 +81,19 @@ impl Grid {
         }
     }
 
+    /// No room in the cells whose middle is `along` (metres from the nose; the hold's
+    /// cells start at `from`).
+    pub fn close(&mut self, from: f32, along: std::ops::Range<f32>) {
+        for i in 0..self.along {
+            let middle = from + (i as f32 + 0.5) * CELL;
+            if along.contains(&middle) {
+                for j in 0..self.across {
+                    self.columns[i * self.across + j] = (0, 0);
+                }
+            }
+        }
+    }
+
     /// How many cells there's room for.
     pub fn room(&self) -> usize {
         (self.columns.iter())
@@ -209,7 +222,15 @@ pub fn grid(catalogue: &Catalogue, car: &Item) -> Option<Grid> {
             slot.name == seat && matches!(slot.kind, Kind::Seat(_)) && item.is_none()
         })
     };
-    Some(Grid::of(&catalogue.chassis[chassis].hold, open))
+    let made = &catalogue.chassis[chassis];
+    let mut grid = Grid::of(&made.hold, open);
+    // An engine subframe's bay takes the hold's room along its length.
+    if let Some((_, _, bay)) = crate::items::engine_subframe(catalogue, car) {
+        let middle = made.body.front_overhang + bay.engine_at;
+        let (from, to) = (middle - bay.length / 2.0, middle + bay.length / 2.0);
+        grid.close(made.hold.from, from..to);
+    }
+    Some(grid)
 }
 
 /// An item's mass with everything fitted to it (kg).

@@ -42,7 +42,7 @@ use crate::trade::{Market, Stock, Trade};
 use crate::wheels::{Rim, TireSize, Wheel};
 
 /// Changes whenever the messages do: a client and server must agree on it.
-pub const PROTOCOL: u32 = 71;
+pub const PROTOCOL: u32 = 72;
 
 /// A player, numbered by the server.
 pub type PlayerId = u32;
@@ -796,6 +796,7 @@ impl Wire for CarBuild {
         self.wheels.put(out);
         self.camber.put(out);
         self.pressure.put(out);
+        self.rear_bay.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         let catalogue = r.catalogue()?;
@@ -817,12 +818,19 @@ impl Wire for CarBuild {
             brake_balance: 0.0,
             ride_height: [0.0; 2],
             wing: 0.0,
+            rear_bay: r.get()?,
         };
         let chassis = catalogue.chassis.get(build.chassis)?;
         let fine = build.paint < catalogue.paints.len()
             && build.gearbox < catalogue.gearboxes.len()
             && build.clutch < catalogue.clutches.len()
             && build.suspension < catalogue.suspensions.len()
+            && build.rear_bay.is_none_or(|d| {
+                (catalogue.defs.get(d)).is_some_and(|def| {
+                    matches!(def.does, crate::items::Does::EngineSubframe(_))
+                        && crate::fitting::made_for(def, &chassis.name)
+                })
+            })
             && (0..2).all(|i| build.bars[i] < chassis.bars[i].sizes.len())
             && build.wheels.iter().all(|w| {
                 w.compound < catalogue.compounds.len()

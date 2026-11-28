@@ -699,6 +699,10 @@ impl Wire for Does {
                 coupling.put(out);
             }
             Does::Tunnel => 25u8.put(out),
+            Does::EngineSubframe(bay) => {
+                26u8.put(out);
+                bay.put(out);
+            }
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -750,6 +754,7 @@ impl Wire for Does {
                 coupling: r.get()?,
             },
             25 => Does::Tunnel,
+            26 => Does::EngineSubframe(r.get()?),
             _ => return None,
         })
     }
@@ -891,6 +896,15 @@ impl Item {
             Some(paint) => def.painted && paint < catalogue.paints.len(),
             None => !def.painted,
         };
+        // With the engine in an engine subframe, the car's own bay needn't have one, nor
+        // its gearbox and front drive shafts.
+        let rear = whole
+            && def.kind == Kind::Chassis
+            && crate::items::rear_engine(catalogue, self).is_some();
+        let needed = |slot: &crate::items::SlotDef| {
+            slot.required
+                && !(rear && matches!(slot.kind, Kind::Engine | Kind::Gearbox | Kind::DriveShafts))
+        };
         let slots = self.slots.len() == def.slots.len()
             && (self.slots.iter().zip(&def.slots)).all(|(item, slot)| match item {
                 Some(item) => {
@@ -900,7 +914,7 @@ impl Item {
                             .needs
                             .is_none_or(|n| self.slots.get(n).is_some_and(Option::is_some))
                 }
-                None => !slot.required || !whole,
+                None => !needed(slot) || !whole,
             });
         let needs = !(whole && def.kind == Kind::Chassis)
             || crate::items::unmet_need(catalogue, self).is_none();

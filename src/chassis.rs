@@ -221,11 +221,21 @@ impl Chassis {
         self.hub[axle] + self.wheels[axle].mass()
     }
 
-    /// How an engine of `family` (in `catalogue`'s `families`) fits, or why it doesn't:
-    /// it needs the space, and nothing else.
+    /// How an engine of `family` (in `catalogue`'s `families`) fits in its own bay (at
+    /// the front), or why it doesn't: it needs the space, and nothing else.
     pub fn fit(&self, catalogue: &Catalogue, family: usize) -> Result<Fit, Misfit> {
+        self.fit_in(catalogue, family, &self.bay)
+    }
+
+    /// How an engine of `family` fits in `bay` (the chassis' own, or an engine subframe's),
+    /// or why it doesn't.
+    pub fn fit_in(
+        &self,
+        catalogue: &Catalogue,
+        family: usize,
+        bay: &EngineBay,
+    ) -> Result<Fit, Misfit> {
         let engine = &catalogue.families[family];
-        let bay = &self.bay;
         // Across the car, the gearbox sits on the end of the crank.
         let (along, across) = match bay.orientation {
             Orientation::Longitudinal => (engine.length, engine.width),
@@ -294,6 +304,9 @@ pub struct CarBuild {
     pub ride_height: [f32; 2],
     /// The rear wing's angle (degrees), if there's a wing: its knob.
     pub wing: f32,
+    /// The engine subframe the engine and gearbox sit in (in the catalogue's `defs`), if
+    /// they aren't in the chassis' own bay (see `bay`).
+    pub rear_bay: Option<usize>,
 }
 
 impl CarBuild {
@@ -323,6 +336,17 @@ impl CarBuild {
             brake_balance: 0.0,
             ride_height: [0.0; 2],
             wing: 0.0,
+            rear_bay: None,
+        }
+    }
+
+    /// The bay the engine and gearbox sit in: an engine subframe's (`rear_bay`), else the
+    /// chassis' own.
+    pub fn bay(&self) -> &EngineBay {
+        let def = self.rear_bay.and_then(|d| self.catalogue.defs.get(d));
+        match def.map(|def| &def.does) {
+            Some(crate::items::Does::EngineSubframe(bay)) => bay,
+            _ => &self.chassis().bay,
         }
     }
 
@@ -430,7 +454,7 @@ impl CarBuild {
     pub fn install(&self, mut parts: Parts) -> Result<Parts, Misfit> {
         parts.header_room = self
             .chassis()
-            .fit(&self.catalogue, parts.family)?
+            .fit_in(&self.catalogue, parts.family, self.bay())?
             .header_room;
         Ok(parts)
     }

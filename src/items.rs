@@ -12,9 +12,9 @@
 
 use crate::catalogue::{Bolting, Catalogue};
 use crate::chassis::{
-    BRAKE_BALANCES, BRAKE_FORCES, CarBuild, GearboxKind, Misfit, PRESSURES, TOES,
+    BRAKE_BALANCES, BRAKE_FORCES, CarBuild, EngineBay, GearboxKind, Misfit, PRESSURES, TOES,
 };
-use crate::physics::drivetrain::{Differential, Drive, SHAFTS};
+use crate::physics::drivetrain::{Differential, Drive, REAR_SHAFTS, SHAFTS};
 use crate::physics::engine::parts::{Effect, Parts};
 use crate::wheels::{Rim, TireSize, Wheel};
 
@@ -198,6 +198,10 @@ pub enum Does {
     },
     /// Room in the floor for a prop shaft (it provides `TUNNEL`).
     Tunnel,
+    /// A rear subframe with an engine bay ahead of the rear axle (behind the seats): it
+    /// carries an engine and a transverse gearbox driving the rear wheels through its
+    /// drive shafts, in slots of its own (see `powertrain`).
+    EngineSubframe(crate::chassis::EngineBay),
 }
 
 /// What a body part does to the air flowing round the car (see `CarSetup::aero`). The
@@ -536,7 +540,13 @@ impl Item {
             return Err(Unfit("not a spring".into()));
         };
         build.suspension = kit;
-        let gearbox = self.nth(catalogue, Kind::Gearbox, 0)?;
+        if let Some(problem) = bay_problem(catalogue, self) {
+            return Err(Unfit(problem));
+        }
+        // The engine and its gearbox: in the car's own bay, or in an engine subframe's.
+        let holder = powertrain(catalogue, self);
+        build.rear_bay = (!std::ptr::eq(holder, self)).then_some(holder.def);
+        let gearbox = holder.nth(catalogue, Kind::Gearbox, 0)?;
         let Does::Gearbox(g) = gearbox.def(catalogue).does else {
             return Err(Unfit("not a gearbox".into()));
         };
@@ -552,7 +562,7 @@ impl Item {
         let Does::Ecu(ecu) = self.nth(catalogue, Kind::Ecu, 0)?.def(catalogue).does else {
             return Err(Unfit("not an ECU".into()));
         };
-        let engine = self.nth(catalogue, Kind::Engine, 0)?;
+        let engine = holder.nth(catalogue, Kind::Engine, 0)?;
         let block = engine.nth(catalogue, Kind::LongBlock, 0)?;
         let Does::Block { family, version } = block.def(catalogue).does else {
             return Err(Unfit("not a block".into()));
@@ -706,6 +716,7 @@ pub enum Fix {
 /// the gearbox, or one that isn't needed. A car without an engine or gearbox has nothing
 /// to bolt.
 pub fn drivetrain_misfit(catalogue: &Catalogue, car: &Item) -> Option<Misbolt> {
+    let car = powertrain(catalogue, car);
     let gearbox = car.fitted(catalogue, Kind::Gearbox).next()?;
     let Does::Gearbox(g) = gearbox.def(catalogue).does else {
         return None;
@@ -804,7 +815,8 @@ pub fn driveline(catalogue: &Catalogue, car: &Item) -> Driveline {
         shafts: [f32::INFINITY; SHAFTS],
         problem: None,
     };
-    let Some(gearbox) = car.fitted(catalogue, Kind::Gearbox).next() else {
+    let holder = powertrain(catalogue, car);
+    let Some(gearbox) = holder.fitted(catalogue, Kind::Gearbox).next() else {
         return line;
     };
     let Does::Gearbox(g) = gearbox.def(catalogue).does else {
@@ -815,6 +827,27 @@ pub fn driveline(catalogue: &Catalogue, car: &Item) -> Driveline {
         catalogue,
         gearbox.fitted(catalogue, Kind::Differential).next(),
     );
+    let takes = |item: Option<&Item>| match item.map(|item| &item.def(catalogue).does) {
+        Some(Does::DriveShafts { torque } | Does::PropShaft { torque }) => *torque,
+        _ => f32::INFINITY,
+    };
+    // An engine subframe's gearbox drives the rear axle through its own differential and
+    // the subframe's drive shafts; the front axle is undriven (`bay_problem` refuses
+    // shafts there, or a prop shaft).
+    if !std::ptr::eq(holder, car) {
+        let shafts = holder.fitted(catalogue, Kind::DriveShafts).next();
+        line.drive = Drive::Rear;
+        line.differentials[1] = own;
+        line.shafts[REAR_SHAFTS] = takes(shafts);
+        if shafts.is_none() {
+            line.problem = Some(format!(
+                "Nothing drives the wheels: the {} needs drive shafts from its gearbox to \
+                 the rear wheels",
+                holder.def(catalogue).name.to_lowercase()
+            ));
+        }
+        return line;
+    }
     let prop = car.fitted(catalogue, Kind::PropShaft).next();
     let subframe = car.fitted(catalogue, Kind::RearSubframe).next();
     let rear = subframe.and_then(|subframe| {
@@ -852,10 +885,6 @@ pub fn driveline(catalogue: &Catalogue, car: &Item) -> Driveline {
     }
     let rear = rear.filter(|_| output && prop.is_some());
     let [front_shafts, rear_shafts, prop_shaft] = shafts(catalogue, car);
-    let takes = |item: Option<&Item>| match item.map(|item| &item.def(catalogue).does) {
-        Some(Does::DriveShafts { torque } | Does::PropShaft { torque }) => *torque,
-        _ => f32::INFINITY,
-    };
     line.shafts = [takes(front_shafts), takes(rear_shafts), takes(prop_shaft)];
     match (made.kind, rear) {
         (GearboxKind::Transverse, None) => line.differentials[0] = own,
@@ -945,6 +974,80 @@ pub fn rear_subframe(catalogue: &Catalogue, id: &str, differential: Option<Item>
 /// The definition with `id`.
 pub fn by_id(catalogue: &Catalogue, id: &str) -> Option<usize> {
     catalogue.defs.iter().position(|def| def.id == id)
+}
+
+/// The engine subframe fitted to `car` (a car's tree), if its rear subframe is one: its
+/// place in the car's slots, the subframe, and its engine bay. It takes the room of its bay
+/// (the rear bench's place, part of the hold) even while the engine is still at the front.
+pub fn engine_subframe<'a>(
+    catalogue: &'a Catalogue,
+    car: &'a Item,
+) -> Option<(usize, &'a Item, &'a EngineBay)> {
+    let slots = &catalogue.defs.get(car.def)?.slots;
+    (slots.iter().zip(&car.slots).enumerate()).find_map(|(at, (slot, item))| {
+        let item = item.as_ref().filter(|_| slot.kind == Kind::RearSubframe)?;
+        match &catalogue.defs.get(item.def)?.does {
+            Does::EngineSubframe(bay) => Some((at, item, bay)),
+            _ => None,
+        }
+    })
+}
+
+/// What holds `car`'s (a car's tree) engine and gearbox: an engine subframe with an engine
+/// in it, else the car itself (its own bay, the chassis').
+pub fn powertrain<'a>(catalogue: &'a Catalogue, car: &'a Item) -> &'a Item {
+    match engine_subframe(catalogue, car) {
+        Some((_, subframe, _)) if subframe.fitted(catalogue, Kind::Engine).next().is_some() => {
+            subframe
+        }
+        _ => car,
+    }
+}
+
+/// The place in `car`'s slots of the engine subframe holding its engine, if one does.
+pub fn rear_engine(catalogue: &Catalogue, car: &Item) -> Option<usize> {
+    let (at, subframe, _) = engine_subframe(catalogue, car)?;
+    subframe.fitted(catalogue, Kind::Engine).next().map(|_| at)
+}
+
+/// Why where `car`'s (a car's tree) engine sits doesn't make a car, if it doesn't: one
+/// engine to a car, its gearbox beside it, nothing left at the front for an engine at the
+/// rear to turn (front drive shafts, a prop shaft), no rear bench where an engine subframe
+/// has its bay.
+pub fn bay_problem(catalogue: &Catalogue, car: &Item) -> Option<String> {
+    let (_, subframe, _) = engine_subframe(catalogue, car)?;
+    let name = subframe.def(catalogue).name.to_lowercase();
+    let has = |item: &Item, kind: Kind| item.fitted(catalogue, kind).next().is_some();
+    let rear = has(subframe, Kind::Engine);
+    if rear && has(car, Kind::Engine) {
+        return Some(format!(
+            "One engine to a car: the {name} carries one already"
+        ));
+    }
+    if has(subframe, Kind::Gearbox) != rear || rear && has(car, Kind::Gearbox) {
+        return Some(if rear {
+            format!("The gearbox goes beside the engine, in the {name}")
+        } else {
+            format!("The gearbox stays beside the engine: the {name} has none in it")
+        });
+    }
+    if rear && has(car, Kind::DriveShafts) {
+        return Some(
+            "The front drive shafts have nothing to turn them: the engine sits at the rear".into(),
+        );
+    }
+    if rear && has(car, Kind::PropShaft) {
+        return Some("The prop shaft has nothing to turn it: the engine sits at the rear".into());
+    }
+    let slots = &car.def(catalogue).slots;
+    if (slots.iter().zip(&car.slots))
+        .any(|(slot, item)| slot.kind == Kind::Seat(Seat::RearBench) && item.is_some())
+    {
+        return Some(format!(
+            "The rear bench's place is the engine bay of the {name}: it comes out"
+        ));
+    }
+    None
 }
 
 /// What a Roots blower needs (and a bonnet with a cut-out provides, or no bonnet at all).
@@ -1170,10 +1273,22 @@ pub fn assemble(
             def(Kind::AntiRollBar, Does::AntiRollBar(axle))
         },
     )?;
+    swap(catalogue, &mut car, Kind::Clutch, paint, |_, _| {
+        def(Kind::Clutch, Does::Clutch(build.clutch))
+    })?;
+    swap(catalogue, &mut car, Kind::Ecu, paint, |_, _| {
+        def(Kind::Ecu, Does::Ecu(parts.ecu))
+    })?;
+    // The engine and gearbox where they are: in the car's own bay, or in an engine
+    // subframe's (never one in each).
+    let holder: &mut Item = match rear_engine(catalogue, &car) {
+        Some(at) => car.slots[at].as_mut().expect("the engine subframe"),
+        None => &mut car,
+    };
     // The gearbox keeps its differential and centre coupling (into another gearbox too);
     // a new one's empty slots get an open differential and the first coupling.
     let mut kept: Vec<(Kind, usize)> = Vec::new();
-    swap(catalogue, &mut car, Kind::Gearbox, paint, |_, gearbox| {
+    swap(catalogue, holder, Kind::Gearbox, paint, |_, gearbox| {
         for kind in [Kind::Differential, Kind::Centre] {
             if let Some(item) = gearbox.fitted(catalogue, kind).next()
                 && catalogue.defs[item.def].kind == kind
@@ -1197,15 +1312,9 @@ pub fn assemble(
         }
         def(Kind::Gearbox, Does::Gearbox(build.gearbox))
     })?;
-    swap(catalogue, &mut car, Kind::Clutch, paint, |_, _| {
-        def(Kind::Clutch, Does::Clutch(build.clutch))
-    })?;
-    swap(catalogue, &mut car, Kind::Ecu, paint, |_, _| {
-        def(Kind::Ecu, Does::Ecu(parts.ecu))
-    })?;
     let engine_part = |slot: usize| def(Kind::EnginePart(slot), engine_does(parts, slot));
     let slots = catalogue.slots.len();
-    swap(catalogue, &mut car, Kind::Engine, paint, |_, engine| {
+    swap(catalogue, holder, Kind::Engine, paint, |_, engine| {
         if let [intake, exhaust, boost, ..] = &mut engine.knobs[..] {
             (*intake, *exhaust, *boost) = (parts.intake_timing, parts.exhaust_timing, parts.boost);
         }

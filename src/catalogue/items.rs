@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use super::{Catalogue, Shared};
-use crate::chassis::{CarBuild, Chassis, Gearbox, GearboxKind, Tunnel};
+use crate::chassis::{CarBuild, Chassis, EngineBay, Gearbox, GearboxKind, Orientation, Tunnel};
 use crate::items::{
     Aero, Assembly, BONNET_CUT_OUT, Does, Item, Kind, Knob, OVERHEAD_CAMS, Panel, PartDef, Seat,
     SlotDef, TUNNEL, Trim, Wear, assemble, chassis_knobs, damper_knobs, engine_knobs, knob,
@@ -338,6 +338,39 @@ pub const CENTRES: [(&str, &str, f32, Differential); 3] = [
 ];
 const CENTRE_MASS: f32 = 8.0;
 
+/// The chassis an engine subframe is made for (an aftermarket kit, like the real
+/// mid-engine swaps of front-drive hatches): the hatches and the saloon. Not the Bothy (its
+/// rear is the load floor under the tall tailgate, and it has all-wheel drive for
+/// traction) nor the Merrow (two seats, its engine behind the front axle already).
+const REAR_ENGINED: [&str; 3] = ["Vireo", "Tessel", "Aldine"];
+
+/// An engine subframe's mass (kg): the frame and engine mounts, a firewall behind the
+/// seats, the shift cables, and the coolant lines (with their coolant) from the radiator,
+/// which stays at the front.
+const ENGINE_SUBFRAME_MASS: f32 = 45.0;
+
+/// An engine subframe's bay, how long it is (m) and the longest primaries it has room for.
+const REAR_BAY_LENGTH: f32 = 0.95;
+const REAR_HEADER_ROOM: f32 = 1.1;
+
+/// The bay an engine subframe for `chassis` has, behind the seats: the front-drive unit
+/// moved back as it is (a gearbox turned round would drive the car backwards), so the
+/// engine and gearbox sit as far ahead of the rear axle as the factory's sit from the
+/// front one, across the car; as wide and tall as the front bay.
+fn rear_bay(chassis: &Chassis) -> EngineBay {
+    let front = &chassis.bay;
+    EngineBay {
+        place: "middle, transverse".into(),
+        orientation: Orientation::Transverse,
+        length: REAR_BAY_LENGTH,
+        width: front.width,
+        height: front.height,
+        engine_at: chassis.wheelbase + front.engine_at,
+        gearbox_at: chassis.wheelbase + front.gearbox_at,
+        header_room: REAR_HEADER_ROOM,
+    }
+}
+
 /// Masses of the rear driveline's parts (kg): a plain rear subframe, one with a mount for a
 /// differential (its housing), a prop shaft, a pair of rear drive shafts, a tunnel kit.
 const SUBFRAME_MASS: f32 = 18.0;
@@ -471,6 +504,22 @@ fn rear_defs(chassis: &Chassis, gearboxes: &[Gearbox], add: &mut impl FnMut(Def)
         "Rear subframe"
     };
     add(subframe(format!("{id}.rear-subframe"), title, mounted));
+    if REAR_ENGINED.contains(&name.as_str()) {
+        add(Def::new(
+            &format!("{id}.rear-subframe.engine"),
+            "Rear subframe with an engine bay",
+            Kind::RearSubframe,
+            Does::EngineSubframe(rear_bay(chassis)),
+            [1.3, 0.9, 0.5],
+            ENGINE_SUBFRAME_MASS,
+        )
+        .fits(name)
+        .slots(vec![
+            slot("Engine", Kind::Engine, false),
+            slot("Gearbox", Kind::Gearbox, false),
+            slot("Drive shafts", Kind::DriveShafts, false),
+        ]));
+    }
     if chassis.tunnel == Tunnel::Never {
         return;
     }

@@ -240,7 +240,7 @@ pub fn fits_into(kind: ShopKind, slot: Kind, holder: Option<Kind>) -> bool {
         ShopKind::Engine => {
             slot == Kind::LongBlock
                 || in_long_block(holder)
-                || slot == Kind::Engine && holder.is_none()
+                || slot == Kind::Engine && matches!(holder, None | Some(Kind::RearSubframe))
                 || slot == Kind::Adapter
         }
         _ => false,
@@ -409,6 +409,9 @@ fn take_over(catalogue: &Catalogue, part: &mut Item, old: &mut Item) {
 /// if there's no such place.
 pub fn with_fitted(catalogue: &Catalogue, car: &Item, path: &[u8], mut part: Item) -> Option<Item> {
     let mut car = car.clone();
+    if let [at] = *path {
+        convert(catalogue, &mut car, usize::from(at), &mut part);
+    }
     let place = slot_mut(&mut car, path)?;
     if let Some(mut old) = place.take() {
         take_over(catalogue, &mut part, &mut old);
@@ -417,13 +420,80 @@ pub fn with_fitted(catalogue: &Catalogue, car: &Item, path: &[u8], mut part: Ite
     Some(car)
 }
 
-/// The path of the adapter plate's slot on `car`'s gearbox, if it has one.
+/// The path of the adapter plate's slot on `car`'s gearbox (where the engine is: see
+/// `items::powertrain`), if it has one.
 pub fn adapter_slot(catalogue: &Catalogue, car: &Item) -> Option<Path> {
-    let slots = &car.def(catalogue).slots;
+    let mut path = Path::new();
+    let holder = match crate::items::rear_engine(catalogue, car) {
+        Some(at) => {
+            path.push(at as u8);
+            car.slots.get(at)?.as_ref()?
+        }
+        None => car,
+    };
+    let slots = &holder.def(catalogue).slots;
     let g = slots.iter().position(|slot| slot.kind == Kind::Gearbox)?;
-    let gearbox = car.slots.get(g)?.as_ref()?;
+    let gearbox = holder.slots.get(g)?.as_ref()?;
     let a = (gearbox.def(catalogue).slots.iter()).position(|slot| slot.kind == Kind::Adapter)?;
-    Some(vec![g as u8, a as u8])
+    path.extend([g as u8, a as u8]);
+    Some(path)
+}
+
+/// Whether `item` is an engine subframe (it has a bay for the engine, see
+/// `items::powertrain`).
+pub fn engine_bay(catalogue: &Catalogue, item: &Item) -> bool {
+    matches!(item.def(catalogue).does, Does::EngineSubframe(_))
+}
+
+/// What fitting `part` into `car`'s slot `at` moves, as a shop does it, if it's a rear
+/// subframe: an engine subframe in place of one without a bay takes the car's engine,
+/// gearbox and front drive shafts into its slots (the front-drive unit moved back as it
+/// is) and the rear bench comes out (its place is the bay's); a subframe without a bay in
+/// place of an engine subframe gives them back to the car's empty slots. Returns what
+/// came off besides the old subframe (the rear bench).
+pub fn convert(catalogue: &Catalogue, car: &mut Item, at: usize, part: &mut Item) -> Vec<Item> {
+    const MOVED: [Kind; 3] = [Kind::Engine, Kind::Gearbox, Kind::DriveShafts];
+    let mut off = Vec::new();
+    let is_subframe =
+        (car.def(catalogue).slots.get(at)).is_some_and(|s| s.kind == Kind::RearSubframe);
+    if !is_subframe || part.def(catalogue).kind != Kind::RearSubframe {
+        return off;
+    }
+    let Some(mut old) = car.slots.get_mut(at).and_then(Option::take) else {
+        return off;
+    };
+    // The first fitted part of `kind` in `from`, into the first empty slot of its kind in
+    // `to` (if there's one).
+    fn shift(catalogue: &Catalogue, from: &mut Item, to: &mut Item, kind: Kind) {
+        let empty = (catalogue.defs[to.def].slots.iter().zip(&to.slots))
+            .position(|(slot, item)| slot.kind == kind && item.is_none());
+        let full = (catalogue.defs[from.def].slots.iter().zip(&from.slots))
+            .position(|(slot, item)| slot.kind == kind && item.is_some());
+        if let (Some(empty), Some(full)) = (empty, full) {
+            to.slots[empty] = from.slots[full].take();
+        }
+    }
+    match (engine_bay(catalogue, &old), engine_bay(catalogue, part)) {
+        (false, true) => {
+            for kind in MOVED {
+                shift(catalogue, car, part, kind);
+            }
+            let slots = car.def(catalogue).slots.clone();
+            for (slot, item) in slots.iter().zip(&mut car.slots) {
+                if slot.kind == Kind::Seat(crate::items::Seat::RearBench) {
+                    off.extend(item.take());
+                }
+            }
+        }
+        (true, false) => {
+            for kind in MOVED {
+                shift(catalogue, &mut old, car, kind);
+            }
+        }
+        _ => {}
+    }
+    car.slots[at] = Some(old);
+    off
 }
 
 /// A shop's bench: the car being changed, with the trunk and what the shop holds for the
@@ -733,6 +803,16 @@ impl<'a> Bench<'a> {
         if !made_for(def, chassis) {
             return Err(format!("The {} isn't made for the {chassis}", def.name));
         }
+        // An engine subframe in or out moves the engine, gearbox and drive shafts with it:
+        // a tuning shop's conversion.
+        if let [at] = *path {
+            let old = item_at(&self.car, path).is_some_and(|old| engine_bay(catalogue, old));
+            if (old || engine_bay(catalogue, &part)) && kind != ShopKind::Tuning {
+                return Err("Moving the engine to the rear or back is a tuning shop's work".into());
+            }
+            let off = convert(catalogue, &mut self.car, usize::from(at), &mut part);
+            self.off.extend(off);
+        }
         let (tree, rest) = self.tree_mut(path).ok_or("No such place on the car")?;
         let place = slot_mut(tree, rest).ok_or("No such place on the car")?;
         let old = place.take().map(|mut old| {
@@ -755,6 +835,9 @@ impl<'a> Bench<'a> {
             .chain(&self.cargo)
             .chain(&self.held);
         if let Some(why) = all.find_map(|item| crate::items::engine_misfit(catalogue, item)) {
+            return Err(why);
+        }
+        if let Some(why) = crate::items::bay_problem(catalogue, &self.car) {
             return Err(why);
         }
         if !self.car.fine(catalogue) {
@@ -1091,6 +1174,41 @@ pub fn read_works(r: &mut Reader) -> Option<Vec<Work>> {
     (0..n).map(|_| r.get()).collect()
 }
 
+/// `trim`'s stock car with its engine moved to the rear: the chassis' engine subframe
+/// fitted at a tuning shop (for tests elsewhere).
+#[cfg(test)]
+pub fn mid_engined(catalogue: &Shared, trim: &str) -> CarSpec {
+    let setup = crate::car::CarSetup::of_trim(catalogue, trim).expect("a trim");
+    let before = CarSpec::of(&setup);
+    let id = format!(
+        "{}.rear-subframe.engine",
+        trim.split('.').next().unwrap_or_default()
+    );
+    let shop = Shop {
+        kind: ShopKind::Tuning,
+        name: "Tuning".into(),
+        at: Default::default(),
+        sells: vec![id.clone()],
+    };
+    let slots = &before.car.def(catalogue).slots;
+    let at = (slots.iter())
+        .position(|slot| slot.kind == Kind::RearSubframe)
+        .unwrap();
+    let def = crate::items::by_id(catalogue, &id).expect("an engine subframe");
+    let mut bench = Bench::new(catalogue, &shop, &before, &[]);
+    bench
+        .work(&Work::Fit {
+            slots: vec![vec![at as u8]],
+            supply: Supply::Part {
+                def: def as u16,
+                variant: 0,
+                paint: 0,
+            },
+        })
+        .unwrap();
+    bench.finish().unwrap().spec
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1386,6 +1504,134 @@ mod tests {
         let (front, all) = (speed(&before), speed(&awd));
         println!("the saloon on a meadow in 4 s: {front:.1} m/s, converted {all:.1}");
         assert!(all > front + 2.0, "{all} against {front}");
+    }
+
+    /// The hot hatch with its engine behind the seats (`tessel.rear-subframe.engine`, a
+    /// tuning shop's conversion): its engine, gearbox and front drive shafts move into the
+    /// subframe in one fit, the rear bench comes out, the rear wheels are driven and the
+    /// weight moves back; a second engine, the gearbox or shafts left at the front, the
+    /// rear bench back in are refused, as are car workshops doing it; it reads back from
+    /// the wire and a saved file, and goes back to the front with the factory subframe.
+    #[test]
+    fn the_hatch_gets_its_engine_behind_the_seats() {
+        use crate::physics::drivetrain::{Differential, Drive};
+        let catalogue = builtin();
+        let before = CarSpec::of(&CarSetup::of_trim(&catalogue, "tessel.2-0r").unwrap());
+        let at = |kind| slots_of(&catalogue, &before.car, kind);
+        let subframe = at(Kind::RearSubframe)[0];
+        let fit = |slot: Vec<u8>, id: &str| Work::Fit {
+            slots: vec![slot],
+            supply: new(&catalogue, id),
+        };
+        let convert = fit(vec![subframe], "tessel.rear-subframe.engine");
+        let workshop = shop(ShopKind::Car, &["*"]);
+        let why = run(
+            &catalogue,
+            &workshop,
+            &before,
+            std::slice::from_ref(&convert),
+        );
+        assert!(why.unwrap_err().contains("tuning shop"));
+        let tuning = shop(ShopKind::Tuning, &["*"]);
+        let done = run(&catalogue, &tuning, &before, std::slice::from_ref(&convert)).unwrap();
+        let mid = done.spec;
+        let car = &mid.car;
+        for kind in [Kind::Engine, Kind::Gearbox, Kind::DriveShafts] {
+            assert!(car.fitted(&catalogue, kind).next().is_none(), "{kind:?}");
+        }
+        let holder = crate::items::powertrain(&catalogue, car);
+        assert!(!std::ptr::eq(holder, car));
+        assert_eq!(holder.slots.iter().flatten().count(), 3);
+        let bench = Kind::Seat(Seat::RearBench);
+        assert!(car.fitted(&catalogue, bench).next().is_none());
+        // Into the trunk if there's room left, else held.
+        let off = mid.cargo.iter().chain(&done.held);
+        assert!(off.clone().any(|item| item.def(&catalogue).kind == bench));
+        assert_eq!(mid.build.bay().place, "middle, transverse");
+        let line = crate::items::driveline(&catalogue, car);
+        assert_eq!(line.drive, Drive::Rear);
+        assert_eq!(line.differentials[1], Differential::LIMITED_SLIP);
+        assert!(line.shafts[0].is_infinite() && line.shafts[1] == 1850.0);
+        // The weight moves back; the K20R's long tubes still fit (no maps to bake).
+        let (old, new) = (before.setup(), mid.setup());
+        assert_eq!(old.engine.parts.hardware(), new.engine.parts.hardware());
+        let front = |setup: &CarSetup| setup.front_weight_with(setup.tank.litres);
+        let full = |setup: &CarSetup| setup.mass_with(setup.tank.litres);
+        println!(
+            "Tessel 2.0R: {:.0} kg, {:.1} % front; mid-engined {:.0} kg, {:.1} % front",
+            full(&old),
+            100.0 * front(&old),
+            full(&new),
+            100.0 * front(&new)
+        );
+        assert!((0.42..0.5).contains(&front(&new)), "{}", front(&new));
+        assert!(new.inertia.y > old.inertia.y * 0.9);
+        // The bay takes the hold's room where the bench was and the trunk's front.
+        let mut benchless = before.car.clone();
+        benchless.slots[usize::from(at(bench)[0])] = None;
+        let room = |car: &Item| crate::cargo::grid(&catalogue, car).unwrap().room();
+        assert!(
+            room(car) < room(&benchless) / 2,
+            "{} {}",
+            room(car),
+            room(&benchless)
+        );
+        // One engine to a car, its gearbox beside it, nothing left at the front to turn.
+        let k20 = catalogue
+            .assemblies
+            .iter()
+            .position(|a| a.id == "engine.k20")
+            .unwrap();
+        let refused = |works: &[Work], says: &str| {
+            let why = run(&catalogue, &tuning, &mid, works).unwrap_err();
+            assert!(why.contains(says), "{why}");
+        };
+        let engine = Work::Fit {
+            slots: vec![at(Kind::Engine)],
+            supply: Supply::Assembly(k20 as u16),
+        };
+        refused(&[engine], "One engine to a car");
+        refused(
+            &[fit(
+                at(Kind::Gearbox),
+                "gearbox.k-6-speed-close-ratio-transverse",
+            )],
+            "The gearbox goes beside the engine",
+        );
+        refused(
+            &[fit(at(Kind::DriveShafts), "tessel.drive-shafts")],
+            "front drive shafts have nothing to turn",
+        );
+        refused(&[fit(at(bench), "rear-bench.stock")], "rear bench's place");
+        let shafts = vec![subframe, 2];
+        refused(
+            &[Work::Remove { slot: shafts }],
+            "Nothing drives the wheels",
+        );
+        // Car workshops work on what's in it as on the front's: another gearbox.
+        let gearbox = fit(vec![subframe, 1], "gearbox.k-5-speed-transverse");
+        let swapped = run(&catalogue, &workshop, &mid, &[gearbox]).unwrap().spec;
+        assert_eq!(swapped.build.gearbox().name, "K 5-speed (transverse)");
+        // On the wire and saved, as it is.
+        let bytes = encode(&mid);
+        let read: CarSpec = crate::net::wire::decode_with(&bytes, Some(&catalogue)).unwrap();
+        assert_eq!(read, mid);
+        let condition = crate::saved::Condition::of_parts(&catalogue, &mid.car, 40.0, 95.0);
+        let text = crate::saved::write(&catalogue, &mid, &condition);
+        let (saved, _) = crate::saved::read(&catalogue, &text).unwrap();
+        assert_eq!(saved.car, mid.car);
+        assert_eq!(saved.build, mid.build);
+        // Back to the front with the factory subframe (the bench stays where it went).
+        let back = fit(vec![subframe], "tessel.rear-subframe");
+        let back = run(&catalogue, &tuning, &mid, &[back]).unwrap().spec;
+        assert_eq!(back.build, before.build);
+        let mut expected = benchless;
+        expected.slots[usize::from(subframe)] = before.car.slots[usize::from(subframe)].clone();
+        assert_eq!(back.car, expected);
+        assert_eq!(
+            crate::items::driveline(&catalogue, &back.car).drive,
+            Drive::Front
+        );
     }
 
     /// The roadster's inline gearbox drives through its prop shaft to the differential in

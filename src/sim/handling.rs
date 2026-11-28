@@ -212,6 +212,23 @@ fn power_slides() {
             }
         }
     }
+    // The hot hatch with its engine moved behind the seats.
+    let catalogue = crate::catalogue::builtin();
+    let mid = crate::fitting::mid_engined(&catalogue, "tessel.2-0r");
+    for (gear, traction_control) in [(2, false), (2, true), (3, false), (3, true)] {
+        let slide = power_slide(mid.setup(), traction_control, gear);
+        println!(
+            "Tessel mid-engined K20R gear {gear} {} deepest {:5.1}°  snap back {:5.1}°  end \
+             {:5.1}° {:6.1}°/s  TC travel {:5.2}{}",
+            if traction_control { "TC" } else { "  " },
+            slide.deepest,
+            slide.snap_back,
+            slide.end_slip,
+            slide.end_yaw,
+            slide.traction_travel,
+            if slide.spun() { "  SPUN" } else { "" },
+        );
+    }
 }
 
 /// Prints one car's power slide step by step: `SLIDE_CAR=chassis,engine SLIDE_TRACE=1
@@ -839,6 +856,21 @@ fn time_to_hundred(setup: CarSetup) -> f32 {
         time += dt;
     }
     time - 0.5
+}
+
+/// The hot hatch with its engine behind the seats pulls away and reaches 100 km/h about as
+/// quickly as the stock one (the same engine and gears, a little heavier, the weight on
+/// the driven wheels helping off the line).
+#[test]
+fn the_mid_engined_hatch_pulls_away() {
+    let catalogue = crate::catalogue::builtin();
+    let stock = time_to_hundred(CarSetup::of_trim(&catalogue, "tessel.2-0r").unwrap());
+    let mid = time_to_hundred(crate::fitting::mid_engined(&catalogue, "tessel.2-0r").setup());
+    println!("Tessel 2.0R: 0-100 in {stock:.1} s, mid-engined {mid:.1} s");
+    assert!(
+        (stock - 0.8..stock + 0.5).contains(&mid),
+        "{mid} against {stock}"
+    );
 }
 
 /// The K-series cars pull away like their kinds: the hot hatch quickest (about 6 s), the

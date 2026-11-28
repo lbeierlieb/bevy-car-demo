@@ -622,8 +622,12 @@ fn fill_rear(catalogue: &Catalogue, car: &mut Item, orphans: &mut Vec<Item>) {
 }
 
 /// A car saved before front drive shafts were parts (protocol 71) given its chassis'
-/// stock ones (`<chassis>.drive-shafts`), new.
+/// stock ones (`<chassis>.drive-shafts`), new; not one whose engine sits in an engine
+/// subframe (nothing at the front for them to turn: its shafts are in the subframe).
 fn fill_front_shafts(catalogue: &Catalogue, car: &mut Item) {
+    if crate::items::rear_engine(catalogue, car).is_some() {
+        return;
+    }
     let slots = catalogue.defs[car.def].slots.clone();
     let id = format!("{}.drive-shafts", catalogue.defs[car.def].id);
     for (slot, place) in slots.iter().zip(&mut car.slots) {

@@ -99,27 +99,47 @@ pub struct CarSetup {
     pub cargo_load: Vec<(f32, Vec3)>,
 }
 
-/// What the rear driveline's parts fitted to `car` (a car's tree of `catalogue`'s
-/// `chassis`) weigh more than the chassis' factory ones (which its mass includes), and
-/// where: the rear subframe with what's in it at the rear axle, the prop shaft and a
-/// tunnel kit halfway along, a centre coupling at the gearbox. Nothing where they weigh
-/// the same (so a stock car's masses are exactly the chassis').
-fn driveline_masses(catalogue: &Catalogue, car: &Item, chassis: usize) -> Vec<(f32, f32)> {
+/// What the driveline's parts fitted to `car` (a car's tree of `build`'s chassis) weigh
+/// more than the chassis' factory ones (which its mass includes), and where: the rear
+/// subframe with what's in it at the rear axle (an engine subframe's engine and gearbox
+/// apart: they count where its bay has them), front drive shafts at the front axle, the
+/// prop shaft and a tunnel kit halfway along, a centre coupling at the gearbox. Nothing
+/// where they weigh the same (so a stock car's masses are exactly the chassis').
+fn driveline_masses(catalogue: &Catalogue, car: &Item, build: &CarBuild) -> Vec<(f32, f32)> {
+    let chassis = build.chassis;
     let made = &catalogue.chassis[chassis];
-    let tree = |item: &Item| -> f32 { item.all().iter().map(|i| i.def(catalogue).mass).sum() };
+    fn tree(catalogue: &Catalogue, item: &Item) -> f32 {
+        let slots = &item.def(catalogue).slots;
+        let inside: f32 = (slots.iter().zip(&item.slots))
+            .filter(|(slot, _)| !matches!(slot.kind, Kind::Engine | Kind::Gearbox))
+            .filter_map(|(_, item)| item.as_ref())
+            .map(|item| tree(catalogue, item))
+            .sum();
+        item.def(catalogue).mass + inside
+    }
+    let tree = |item: &Item| tree(catalogue, item);
     let fitted = |kind: Kind| -> f32 { car.fitted(catalogue, kind).map(tree).sum() };
     let (subframe, prop) = crate::items::factory_rear(catalogue, chassis, None)
         .map(|(subframe, prop)| (tree(&subframe), prop.as_ref().map_or(0.0, tree)))
         .unwrap_or_default();
-    let centre: f32 = (car.fitted(catalogue, Kind::Gearbox))
+    let centre: f32 = (crate::items::powertrain(catalogue, car).fitted(catalogue, Kind::Gearbox))
         .flat_map(|gearbox| gearbox.fitted(catalogue, Kind::Centre))
         .map(tree)
         .sum();
     let middle = fitted(Kind::PropShaft) + fitted(Kind::Tunnel) - prop;
+    // The factory's front drive shafts (in the chassis' mass), where it has a slot for them.
+    let slots = &car.def(catalogue).slots;
+    let front_shafts = if slots.iter().any(|slot| slot.kind == Kind::DriveShafts) {
+        let id = format!("{}.drive-shafts", made.name.to_lowercase());
+        crate::items::by_id(catalogue, &id).map_or(0.0, |def| catalogue.defs[def].mass)
+    } else {
+        0.0
+    };
     [
         (fitted(Kind::RearSubframe) - subframe, made.wheelbase),
+        (fitted(Kind::DriveShafts) - front_shafts, 0.0),
         (middle, made.wheelbase / 2.0),
-        (centre, made.bay.gearbox_at),
+        (centre, build.bay().gearbox_at),
     ]
     .into_iter()
     .filter(|(mass, _)| *mass != 0.0)
@@ -153,10 +173,13 @@ impl CarSetup {
             };
             chassis.eye[0] + behind_eyes - body.front_overhang
         };
+        // The engine and gearbox where their bay is (the chassis' own, at the front, or an
+        // engine subframe's).
+        let bay = build.bay();
         let mut masses = vec![
             (chassis.mass, chassis.mass_at),
-            (engine_mass, chassis.bay.engine_at),
-            (gearbox.mass, chassis.bay.gearbox_at),
+            (engine_mass, bay.engine_at),
+            (gearbox.mass, bay.gearbox_at),
         ];
         let catalogue = &build.catalogue;
         let slots = &car.def(catalogue).slots;
@@ -165,7 +188,7 @@ impl CarSetup {
                 masses.push((item.def(catalogue).mass, seat_at(seat)));
             }
         }
-        masses.extend(driveline_masses(catalogue, &car, build.chassis));
+        masses.extend(driveline_masses(catalogue, &car, &build));
         let sprung_mass: f32 = masses.iter().map(|(mass, _)| mass).sum();
         let centre = masses.iter().map(|(mass, at)| mass * at).sum::<f32>() / sprung_mass;
         let (front_z, rear_z) = (-centre, chassis.wheelbase - centre);
