@@ -374,3 +374,67 @@ Built 2026-11-27. Where the plan was silent:
 Not done: the turbos' second shaft (different turbos per side), an intercooler drawn in
 the pipes, the 10-into-1's crossover over the valley, turbos checked against the bay's
 room (the R80's large crossover turbo stays under the bonnet only by its placing).
+
+## How a manifold is made (2026-11-28, agreed with the user)
+
+The header's reflection depended on the collector alone (`Tuned` 0.8, `Turbine` 0.3), so
+a cast manifold tuned exactly like tube headers. Now `hardware::Manifold::made`
+(`Made::Tubes`, `Cast`, `CastPaired`) says how it's made; it is in the maps' fingerprint
+and on the wire (protocol 73), and `ManifoldDef::cast()` is derived from it.
+
+1. **Reflection** (`cycle.rs`): tubes 0.8 (each primary smooth and on its own until it
+   opens into a big collector cone, nearly an open end), a cast 4-2-1 0.6 (each pair a
+   longer run of its own into a Y), a cast log 0.45 (the stubs merge early into a small
+   volume: the step in area is small, rough walls and the bends at the ports take more),
+   any turbine inlet 0.3 as before.
+2. **Measured, the weaker reflection alone made cast manifolds better**: their 650–700 mm
+   primaries' wave hurt at the power peak, so the B16, B20, K20 and K24 gained 2–5 kW and
+   headers still bought almost nothing. What a real cast manifold loses is mostly at its
+   merge, so the merge is a live restriction (`Exhaust::resistance`: an effective area of
+   the pipe's × `Made::CAST_FLOW` 1.0, about a dynamic head lost there, as much as the pipe
+   loses over its length and bends; a 4-2-1's two Ys `PAIRED_FLOW` 1.5; none while it
+   feeds a turbine, whose map takes it in; an empty turbo manifold has it). It acts live
+   (no re-bake), more the more flow: more up high.
+3. **Tried and left out**: the other cylinders' blowdown crossing over at a cast log's
+   merge (each a firing interval behind this one's, after the same echo delay, 0.2 of it
+   on a log and 0.3 from the 360° partner on a 4-2-1): with these primaries the pulses
+   arrive while the valve is shut, it raised the cast manifolds' torque a little, so it
+   isn't worth its code. Smearing of the wave by rough walls neither.
+4. **Re-tuned**: the B16's head flows 0.93 (was 0.95; back to 66 kW). The K20R's wild cam
+   now pays on cast manifolds too, so it gets a cast 4-2-1 from the factory like the real
+   one (`k.manifold.4-2-1`, 850 mm, appended last so the places stay; car workshops sell
+   it) and 400 mm runners (440 put a VE cliff at 7500 that peaked it at 7000); long tubes
+   are an upgrade for it now (+2 %). Saved K20Rs keep the long tubes fitted, saved B16Rs
+   the 700 mm manifold (no conversion: it's what's fitted; their maps bake on the server).
+   A version's block takes its factory manifold (`engines::with_factory_manifolds`), so the
+   locked ECUs' tunes are made for it.
+5. Tools: `factory_engines_on_their_manifolds` (ignored, `MEASURE=codes`) prints every
+   factory engine with its own ECU and on each of its family's manifolds (programmable
+   ECU), with the gain over the factory one; `full_load_ve_by_cam` takes `VE_MADE`
+   (`tubes`, `cast`, `paired`). Test: `tube_headers_beat_the_cast_manifold` (the K20: long
+   tubes 3–9 % more peak power than the cast 4-into-1, the 4-2-1 between, more at 6500
+   than at 4500).
+
+Peaks with the engine's own ECU (torque N·m, power kW at rpm; limits unchanged):
+
+| Engine | before | after |
+|---|---|---|
+| B16 | 154, 66 at 5000 | 153, 66 at 5000 (flow 0.93) |
+| B20 | 189, 78 at 4500 | 188, 79 at 4500 |
+| B16R | 172, 131 at 8000, switch 5700 | 171, 129 at 8000, switch 5500 |
+| R80 | 638, 306 at 5000 | 633, 303 at 5000 |
+| K20 | 211, 115 at 6500 | 211, 119 at 6500 |
+| K20R | 229, 158 at 8500 (long tubes) | 225, 160 at 7500, switch 5900 (cast 4-2-1) |
+| K24 | 245, 118 at 5500 | 242, 122 at 5500 |
+| W20 | 206, 115 at 6500 | the same (tubes) |
+| B16T | 230, 108 at 5000 | 229, 106 at 5000 (the B16's head) |
+
+Peak power on each manifold against the factory one (programmable ECU), before → after:
+B16 short +2.3 → +0.6 %, long +2.1 → +0.4 %; B20 short +1.6 → +0.7 %, long −0.3 → −1.2 %;
+B16R (on the 4-2-1) cast 4-into-1 −0.7 → −2.1 %, long +1.1 → +2.7 %; R80 long −2.6 →
+−1.6 %; K20 short +5.2 → +1.6 %, long +9.3 → +5.6 %, 4-2-1 +4.0 %; K24 short +4.1 →
++1.1 %, long +8.2 → +5.1 %, 4-2-1 +2.1 %; K20R (now on its 4-2-1) cast 4-into-1 −3.7 %,
+long +1.8 % (before, on long tubes: cast −4.0 %). The "before" gains of the short headers
+came from the cast manifolds' harmful wave, not from tuning. Open: the 8-valve B16/B20
+gain under 1 % from any header (little overlap to scavenge, power peaking at 4500–5000
+where the flow is small); more would take a restriction larger than plausible.

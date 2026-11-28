@@ -131,6 +131,14 @@ items with no limit (or don't exist yet), so steps 4 and 5 can ship apart.
    until a trim has one (step 3). Found on the way: the B16R's stock ECU never switches
    (its wild cam breathes better nowhere below its redline, `switch_rpm` 9500); fixed
    afterwards (2026-11-28, see `docs/vireo-lineup.md`): it switches at 5700.
+
+   **Since cast manifolds reflect less and lose at their merge** (2026-11-28, see "How a
+   manifold is made" in `docs/exhaust-manifolds.md`): K20 211 N·m, 119 kW at 6500; K24
+   242 N·m, 122 kW at 5500; the K20R's wild cam pays on cast manifolds too, so it has a
+   cast 4-2-1 from the factory like the real one (`k.manifold.4-2-1`, 850 mm, place 4)
+   and 400 mm runners: 225 N·m, 160 kW at 7500, switching at 5900 (long tubes 163 kW).
+   The K24 with the K20R head: 260 N·m, 152 kW at 6500; built as above 164 kW, race
+   pistons 174. The table above is as it was built.
 2. **Bellhousings and K gearboxes**: compatibility from data, adapter plates as items
    (inline only), the five K gearboxes; the derived `needs_adapter` goes.
 

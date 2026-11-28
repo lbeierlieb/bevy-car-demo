@@ -540,8 +540,9 @@ share (`exhaust_pressure`), compressors and diverters × turbos into the ducts
 `TurboKit::fit` sizes a turbo for the displacement behind its branch (efficiency +2 % per
 doubling, `TURBO_SCALE_EFFICIENCY`, so a big single holds boost high up; the twins spool
 quicker by their lighter shafts); `cycle.rs` reflects 0.8 of the header's wave off a
-`Tuned` collector, `TURBINE_REFLECTION` 0.3 off a turbine's inlet; the fingerprint has
-the primaries and the collector, not the branches. The oil→coolant exchange grows with
+`Tuned` collector, `TURBINE_REFLECTION` 0.3 off a turbine's inlet (since 2026-11-28 by how
+the manifold is made, see "How a manifold is made" below); the fingerprint has the
+primaries, the collector and `made`, not the branches. The oil→coolant exchange grows with
 the engine (`thermal.rs`, by the oil's heat capacity). Numbers: the plan's "Decided
 while building milestone 2"; `turbo_layouts` (ignored) prints them. Milestone 3 (the
 game, protocols 55–56): the workshop's manifold screen (readouts as info rows: primaries,
@@ -561,6 +562,21 @@ CARCAM="0.4,2.6,-1.6,1.0"`), from the side (`UNFIT=Bonnet,Fender CARCAM="-1.6,0.
 the Vireo's from above (`TRIM=0,0 UNFIT=Bonnet FITIDS="b.manifold.turbo,turbocharger.medium"
 CARCAM="0.5,2.5,0.1,1.3"`); the manifold screen at the tuning shop: `CAR=1
 PLACE="-1950,-3160,150" TAPS="Enter@200;ArrowDown*2@206;Enter@214;ArrowDown*2@222;Enter@230"`.
+
+**How a manifold is made** (2026-11-28, agreed with the user; the plan's last section):
+`hardware::Manifold::made` (`Made::Tubes`, `Cast`, `CastPaired`; in the fingerprint and on the
+wire, protocol 73; `ManifoldDef::cast()` is derived from it, the looks' `cast` field went).
+`cycle.rs` reflects `TUBES_REFLECTION` 0.8, `PAIRED_REFLECTION` 0.6 (a cast 4-2-1),
+`CAST_REFLECTION` 0.45 (a cast log), `TURBINE_REFLECTION` 0.3 (any turbine inlet, as
+before); a cast manifold's merge is also a live restriction (`Exhaust::resistance`, the
+pipe's effective area × `Made::CAST_FLOW` 1.0 / `PAIRED_FLOW` 1.5; none while it feeds a
+turbine), so it needs no re-bake to tune. A version's block takes its factory manifold
+(`engines::with_factory_manifolds`; `Block::header` went). Cast in pairs is drawn as a
+4-2-1 (`Headers::paired`), the workshop says "cast in pairs". Long tubes now make 5–6 %
+more peak power than the K's cast 4-into-1 (`tube_headers_beat_the_cast_manifold`), the
+cast 4-2-1 between; on the 8-valve B16/B20 any header gains under 1 % (little overlap to
+scavenge, power peaking low). `factory_engines_on_their_manifolds` (ignored) prints every
+factory engine on each of its family's manifolds.
 
 ## Cylinder heads (asked for by the user, 2026-11-27: the Vireo lineup, see `docs/vireo-lineup.md`)
 
@@ -596,19 +612,21 @@ cylinders (`saved::old_ecu`). Tunes say `ecu <name>`. Protocol 62.
 
 ## The Vireo's lineup (2026-11-27, `docs/vireo-lineup.md` step 4)
 
-B16 (1.6, SOHC, 8 valves: `Head::SINGLE_CAM`, 154 N·m, 66 kW, 6300 rpm), B20 (2.0, SOHC,
-189 N·m, 78 kW, 6000 rpm), B16R (1.6, DOHC, `Head::B_R`, port flow 1.35, switching
+B16 (1.6, SOHC, 8 valves: `Head::SINGLE_CAM`, port flow 0.93 (0.95 until the manifolds'
+make counted, 2026-11-28), 153 N·m, 66 kW, 6300 rpm), B20 (2.0, SOHC, 188 N·m, 79 kW, 6000
+rpm), B16R (1.6, DOHC, `Head::B_R`, port flow 1.35, switching
 cams from the factory (`Block::high`: 212°/112° lifting 4.2 mm, out of breath past 6000, and
 236°/108° × 1.8 lift), the cast 4-2-1 `b.manifold.4-2-1` (850 mm, `preset.manifold`; the B16
-and B20 keep the 700 mm `b.manifold.stock`), 172 N·m, 131 kW at 8000, 8200 rpm), each with its
-locked ECU (the B16R's switches at 5700, `the_b16r_switches_to_its_wild_cam`; until
+and B20 keep the 700 mm `b.manifold.stock`), 171 N·m, 129 kW at 8000, 8200 rpm), each with its
+locked ECU (the B16R's switches at 5500 (5700 while cast manifolds reflected like tubes),
+`the_b16r_switches_to_its_wild_cam`; until
 2026-11-28 it never did: 232°/270° cams on the 700 mm manifold, 164 N·m, 129 kW at 7500).
 Saved B16Rs get the new cams from the catalogue but keep the manifold fitted (the 700 mm one
 from before; no conversion).
 The B20 block with the B16R head (`the_twin_cam_head_on_the_two_litre_pays` prints them):
-207 N·m, 122 kW, but its long runners peak it at 6500; with short runners 197 N·m, and 132 kW
-at 7500 once forged rods let it rev past the B20 rods' 7300; with the B16R's manifold too 195
-N·m, 136 kW at 7000; it needs a programmable ECU (the B16R's runs 1.6-litre maps), and its
+209 N·m, 125 kW, but its long runners peak it at 6500; with short runners 191 N·m, and 129 kW
+at 7500 once forged rods let it rev past the B20 rods' 7300; with the B16R's manifold too 192
+N·m, 134 kW at 7500; it needs a programmable ECU (the B16R's runs 1.6-litre maps), and its
 torque is near the stock 5-speed's 200 N·m. Saved `b18`, `b18.head`, `ecu.b18` read as the B20's
 (`saved::RENAMED`). Tests that broke things with a turbo on the B16 use the B16R
 (`twin_cam_turbo`): the 8-valve head doesn't breathe enough to. Protocol 63.
@@ -625,17 +643,21 @@ UNFIT="Bonnet" CARCAM="-0.9,1.9,1.5,1.5"` (`TRIM` 0,0 the B16, 0,1 the B20, 0,2 
 ## The K family (2026-11-28, `docs/k-lineup.md` step 1)
 
 The second four (`K-series four`, 115 kg, the third family): K20 (86 × 86, 9.8:1, fixed
-236°/112° cams, 211 N·m, 115 kW at 6500, 6900 rpm), K20R (11.5:1, `Head::K_R`, cams
-switched at about 5500 and its head's intake phaser (`Block::phaser`, 50°), long-tube
-headers from the factory (`preset.manifold` = `k.headers.long-tube`), 158 kW at 8500, 8600
-rpm), K24 (87 × 99, 9.7:1, 245 N·m, 118 kW at 5500, 6500 rpm); each with its locked ECU
-(the K20R's switches and phases). Manifolds `k.manifold.stock` (650 mm), `k.headers.short`,
-`k.headers.long-tube`, `k.manifold.turbo`. The K24 with the K20R head
-(`the_k20r_head_on_the_k24_block_pays` prints them): 271 N·m, 145 kW, rods cap it at 7000;
+236°/112° cams, 211 N·m, 119 kW at 6500, 6900 rpm), K20R (11.5:1, `Head::K_R`, cams
+switched at 5900 and its head's intake phaser (`Block::phaser`, 50°), runners 400 mm, the
+cast 4-2-1 `k.manifold.4-2-1` (850 mm) from the factory (`preset.manifold` = 4; long tubes
+until 2026-11-28, when cast manifolds stopped reflecting like tubes: 229 N·m, 158 kW at
+8500 on 440 mm runners), 225 N·m, 160 kW at 7500, 8600 rpm; long tubes give it 163 kW),
+K24 (87 × 99, 9.7:1, 242 N·m, 122 kW at 5500, 6500 rpm); each with its locked ECU (the
+K20R's switches and phases). Manifolds `k.manifold.stock` (650 mm), `k.headers.short`,
+`k.headers.long-tube`, `k.manifold.turbo`, `k.manifold.4-2-1`. Saved K20Rs keep the long
+tubes they have (no conversion: it's what's fitted; their maps aren't stock any more, so
+the server bakes them). The K24 with the K20R head
+(`the_k20r_head_on_the_k24_block_pays` prints them): 260 N·m, 152 kW, rods cap it at 7000;
 forged rods, short runners and long tubes 164 kW, race pistons 174; it needs a
 programmable ECU. The trims of step 3 (below) make `engine.k20`, `engine.k20r`,
 `engine.k24`. Sold: long blocks and heads at engine shops, stock ECUs and the
-cast manifold at car workshops, `k.*` at tuning shops.
+cast manifolds at car workshops, `k.*` at tuning shops.
 
 ## The K cars (2026-11-28, `docs/k-lineup.md` step 3)
 
@@ -666,8 +688,8 @@ three's brakes are `scaled_brakes` of the hatch's (torque, heat, cooling, life �
 `front-vented`, `front-vented-large`, `front-big`, `rear-drum`, `rear-disc`. The Vireo's
 bay went to 0.68 m tall so a K fits (a swap; the K20R's long tubes don't fit beside it,
 header room 0.84). Measured: 0–100 (`the_k_cars_reach_a_hundred_in_their_time`) Tessel 2.0
-7.4 s, 2.0R 6.2, Aldine 2.0 7.5, 2.4 7.6 (the K24 reaches 100 just in second at 6500 and no
-quicker than the K20; a 4.25 final drive didn't help), Bothy 8.5; top speeds (60 s flat out)
+7.3 s, 2.0R 6.2, Aldine 2.0 7.4, 2.4 7.5 (the K24 reaches 100 just in second at 6500 and no
+quicker than the K20; a 4.25 final drive didn't help), Bothy 8.4 (each 0.1 s slower before 2026-11-28); top speeds (60 s flat out)
 223, 244, 222, 226, 187 km/h; roll 4.1, 4.1, 4.9 °/g (Bothy's load transfer 63 % front on 61
 % weight: a stiffer rear bar made the brake test lock its rear on track tires); consumption
 at 100 km/h 6.7, 7.2, 6.6, 7.6, 10.3 L/100 km. They don't power-slide (front drive).

@@ -63,6 +63,11 @@ switch, stronger above. Full-load VE (mild/wild): 4500 0.85/0.83, 5500 0.92/0.89
 0.91/0.98, 7000 0.84/1.05, 7500 0.77/1.06, 8000 0.69/1.05. The switch rule stayed. Tuned
 with `full_load_ve_by_cam` (ignored test in `maps.rs`).
 
+Since cast manifolds reflect less and lose at their merge (2026-11-28, see "How a manifold
+is made" in `docs/exhaust-manifolds.md`): the B16 153 N·m, 66 kW (its head's flow 0.95 →
+0.93, else 68), the B20 188 N·m, 79 kW, the B16R 171 N·m, 129 kW at 8000, switching at
+5500; long tubes give the B16R 2.7 % more than its cast 4-2-1.
+
 ## Assumptions (stated to the user, not yet answered)
 
 - Codes B16, B20, B16R; the start car stays the base 1.6 (now the SOHC, slower).
