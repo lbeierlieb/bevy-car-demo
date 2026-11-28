@@ -9,12 +9,13 @@
 //! length at the speed of sound. That is what tunes them: a wave arriving at the right
 //! moment packs more charge in before the intake valve closes, or pulls exhaust out
 //! during the overlap. Gas pushed back into the intake mixes into the runner, which
-//! fills from the plenum with fresh air as the cylinder draws on it. Each cylinder sees a plenum and a collector at constant pressure; the other
-//! cylinders' pulses are left out.
+//! fills from the plenum with fresh air as the cylinder draws on it. Each cylinder sees a
+//! plenum and a collector at constant pressure (the other cylinders' pulses are left out);
+//! how much of the wave the collector sends back follows from how the manifold is made.
 
 use std::f64::consts::PI;
 
-use super::hardware::{CamProfile, Collector, EngineHardware};
+use super::hardware::{CamProfile, Collector, EngineHardware, Made};
 
 const R: f64 = 287.0;
 const STOICHIOMETRIC: f64 = 14.7;
@@ -45,7 +46,16 @@ const KNOCK_B: f64 = 3800.0;
 const GAMMA_UNBURNT: f64 = 1.35;
 /// Share of the waves' swing (around their mean) that comes back from the pipes' open ends.
 const INTAKE_REFLECTION: f64 = 0.85;
-const HEADER_REFLECTION: f64 = 0.8;
+/// The header's, by how the manifold is made (`hardware::Made`). Tubular headers: each
+/// primary smooth and on its own until it opens into a big collector cone, nearly an open
+/// end.
+const TUBES_REFLECTION: f64 = 0.8;
+/// A cast log: the stubs merge early into a small volume, so the step in area the wave
+/// meets is small (the log is only a little more pipe), and rough walls and the bends at
+/// the ports take more of it.
+const CAST_REFLECTION: f64 = 0.45;
+/// A cast 4-2-1: each pair's runner is a longer run of its own into a Y.
+const PAIRED_REFLECTION: f64 = 0.6;
 /// What comes back from a turbine's inlet: its nozzle chokes the collector, which then
 /// acts less like an open end (and a turbo manifold's small, short collector less like a
 /// big volume), so little of the wave comes back inverted to scavenge.
@@ -76,7 +86,7 @@ pub struct Cylinder {
     exhaust: Valve,
     runner: Pipe,
     header: Pipe,
-    /// Share of the waves the header's collector sends back (see `HEADER_REFLECTION`).
+    /// Share of the waves the header's collector sends back (see `TUBES_REFLECTION`).
     header_reflection: f64,
 }
 
@@ -131,6 +141,7 @@ impl Cylinder {
     /// hardware's cam timing. Valves (as many and as big as the head's), runner and header
     /// diameters scale with the bore, and their flow areas with the head's port flow.
     pub fn new(hardware: &EngineHardware, cam: &CamProfile, intake: f32, exhaust: f32) -> Self {
+        let manifold = hardware.exhaust.manifold;
         let bore = f64::from(hardware.bore);
         let stroke = f64::from(hardware.stroke);
         let piston_area = PI / 4.0 * bore * bore;
@@ -170,9 +181,11 @@ impl Cylinder {
             },
             runner: pipe(hardware.intake.runner_length, 0.45 * bore),
             header: pipe(hardware.exhaust.manifold.primary_length, 0.42 * bore),
-            header_reflection: match hardware.exhaust.manifold.collector {
-                Collector::Tuned => HEADER_REFLECTION,
-                Collector::Turbine => TURBINE_REFLECTION,
+            header_reflection: match (manifold.collector, manifold.made) {
+                (Collector::Turbine, _) => TURBINE_REFLECTION,
+                (_, Made::Tubes) => TUBES_REFLECTION,
+                (_, Made::Cast) => CAST_REFLECTION,
+                (_, Made::CastPaired) => PAIRED_REFLECTION,
             },
         }
     }

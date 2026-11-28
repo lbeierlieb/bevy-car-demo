@@ -581,7 +581,9 @@ fn orifice_flow(area: f32, upstream: f32, downstream: f32, temperature: f32) -> 
 /// exhaust's restrictions to ambient.
 fn restricted(hardware: &EngineHardware, flow: f32, temperature: f32) -> f32 {
     // The drop is ṁ²·R·T·resistance / (2p) at the pressure p: solve for p.
-    let k = flow * flow * R_AIR * temperature * hardware.exhaust.resistance() / 2.0;
+    let k =
+        flow * flow * R_AIR * temperature * hardware.exhaust.resistance(hardware.turbo.is_some())
+            / 2.0;
     (AMBIENT_PRESSURE + (AMBIENT_PRESSURE.powi(2) + 4.0 * k).sqrt()) / 2.0
 }
 
@@ -940,6 +942,72 @@ mod tests {
         let limit = build.ecu.rev_limit;
         println!("{code:5} {torque:4.0} N·m {power:4.0} kW at {at} rpm, limit {limit}");
         (torque, power, at, limit)
+    }
+
+    /// A tuning tool: every factory engine's peaks with its own ECU, then on each of its
+    /// family's manifolds without turbo mounts with a programmable ECU (gains against the
+    /// factory manifold's), and the two engines the tests measure against. `MEASURE` limits
+    /// it to the codes given (`B16,K20R`).
+    /// `cargo test --profile release-dev factory_engines_on_their_manifolds -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn factory_engines_on_their_manifolds() {
+        use crate::physics::engine::parts::Parts;
+        let only = std::env::var("MEASURE").ok().filter(|v| !v.is_empty());
+        let catalogue = crate::catalogue::builtin();
+        for family in &catalogue.families {
+            for version in &family.versions {
+                let code = &version.code;
+                if only
+                    .as_ref()
+                    .is_some_and(|o| !o.split(',').any(|c| c == code))
+                {
+                    continue;
+                }
+                factory_peaks(code);
+                let factory = Parts::factory(code).unwrap();
+                if factory.ecu_model().switching {
+                    let build = EngineBuild::of_parts(&factory);
+                    println!(
+                        "      its ECU switches cams at {} rpm",
+                        build.ecu.cams.switch_rpm
+                    );
+                }
+                let measured = |parts: &Parts| {
+                    let build = EngineBuild::new(parts.hardware(), ecu::EcuModel::PROGRAMMABLE);
+                    let (torque, power, at) = peaks(&build);
+                    (torque, power, at, build.ecu.rev_limit)
+                };
+                let base = measured(&factory);
+                for (m, manifold) in family.manifolds.iter().enumerate() {
+                    if manifold.mounts {
+                        continue;
+                    }
+                    let mut parts = factory.clone();
+                    parts.manifold = m;
+                    let (torque, power, at, limit) = measured(&parts);
+                    let mark = if m == factory.manifold { '*' } else { ' ' };
+                    println!(
+                        "  {mark}{:24} {torque:4.0} N·m {power:4.0} kW at {at} rpm, limit \
+                         {limit}: {:+.1} % torque, {:+.1} % power",
+                        manifold.id,
+                        100.0 * (torque / base.0 - 1.0),
+                        100.0 * (power / base.1 - 1.0),
+                    );
+                }
+            }
+        }
+        for (name, build) in [
+            ("W20", EngineBuild::default()),
+            (
+                "B16T",
+                EngineBuild::new(EngineHardware::turbo(), ecu::EcuModel::STOCK),
+            ),
+        ] {
+            let (torque, power, at) = peaks(&build);
+            let limit = build.ecu.rev_limit;
+            println!("{name:5} {torque:4.0} N·m {power:4.0} kW at {at} rpm, limit {limit}");
+        }
     }
 
     /// The K series as the table in `docs/k-lineup.md` has it: the K20 about 118 kW at
@@ -1405,6 +1473,35 @@ mod tests {
             long[3] < empty[3] && long[4] < empty[4],
             "{long:?} vs {empty:?}"
         );
+    }
+
+    /// Tube headers on the K20 (each on a programmable ECU tuned for it): its cast 4-into-1
+    /// sends less of the wave back and loses at its merge, so the long tubes make a few per
+    /// cent more peak power, more up high than in the middle; the cast 4-2-1 sits between.
+    #[test]
+    fn tube_headers_beat_the_cast_manifold() {
+        let on = |id: &str| {
+            let mut parts = parts::Parts::factory("K20").unwrap();
+            parts.manifold = (parts.family().manifolds.iter())
+                .position(|m| m.id == id)
+                .unwrap();
+            EngineBuild::new(parts.hardware(), ecu::EcuModel::PROGRAMMABLE)
+        };
+        let (cast, paired, tubes) = (
+            on("k.manifold.stock"),
+            on("k.manifold.4-2-1"),
+            on("k.headers.long-tube"),
+        );
+        let power = |build: &EngineBuild| peaks(build).1;
+        let (cast_kw, paired_kw, tubes_kw) = (power(&cast), power(&paired), power(&tubes));
+        let gain = tubes_kw / cast_kw - 1.0;
+        println!("cast {cast_kw} kW, cast 4-2-1 {paired_kw} kW, long tubes {tubes_kw} kW");
+        assert!((0.03..0.09).contains(&gain), "{:.1} %", gain * 100.0);
+        assert!(cast_kw < paired_kw && paired_kw < tubes_kw);
+        let at = |build: &EngineBuild, rpm| run_flat_out(build, rpm, 2.0).torque(build, rpm);
+        let top = at(&tubes, 6500.0) / at(&cast, 6500.0);
+        let middle = at(&tubes, 4500.0) / at(&cast, 4500.0);
+        assert!(top > middle + 0.02, "{top} at 6500 rpm, {middle} at 4500");
     }
 
     /// The same turbo kit on the R80's pair of turbo manifolds (a turbo per bank, each

@@ -469,7 +469,7 @@ fn load_point(hardware: &EngineHardware, profile: usize, ve: &Table, point: &[f3
 pub fn fingerprint(hardware: &EngineHardware) -> u64 {
     let h = hardware;
     let key = format!(
-        "{} {} {} {} {} {:?} {} {} {} {} {} {} {:?} {} {} {:?}",
+        "{} {} {} {} {} {:?} {} {} {} {} {} {} {:?} {:?} {} {} {:?}",
         h.cylinders,
         h.bore,
         h.stroke,
@@ -483,6 +483,7 @@ pub fn fingerprint(hardware: &EngineHardware) -> u64 {
         h.intake.runner_length,
         h.exhaust.manifold.primary_length,
         h.exhaust.manifold.collector,
+        h.exhaust.manifold.made,
         h.turbo.is_some(),
         h.port_flow,
         h.valvetrain,
@@ -656,7 +657,8 @@ mod tests {
     /// A tuning tool: prints the full-load volumetric efficiency of each cam profile of a
     /// factory engine (unphased) across the rev range, on each of a few manifolds:
     /// `VE_ENGINE` (code, default B16R), `VE_HEADERS` (primary lengths in mm, default the
-    /// factory one), `VE_CAMS` (profiles in place of the engine's, `duration/separation/lift
+    /// factory one), `VE_MADE` (how the manifold is made: `tubes`, `cast` or `paired`, default
+    /// the factory one's), `VE_CAMS` (profiles in place of the engine's, `duration/separation/lift
     /// in mm` separated by `;`), `VE_FLOW` (the head's port flow), `VE_RPM` (from, to and step, default 2000,9000,500).
     /// `cargo test --profile release-dev full_load_ve_by_cam -- --ignored --nocapture`
     #[test]
@@ -686,6 +688,15 @@ mod tests {
                 })
                 .collect();
         }
+        if let Some(made) = var("VE_MADE") {
+            use crate::physics::engine::hardware::Made;
+            hardware.exhaust.manifold.made = match made.as_str() {
+                "tubes" => Made::Tubes,
+                "cast" => Made::Cast,
+                "paired" => Made::CastPaired,
+                _ => panic!("tubes, cast or paired: {made}"),
+            };
+        }
         if let Some(flow) = var("VE_FLOW") {
             hardware.port_flow = flow.parse().unwrap();
         }
@@ -702,7 +713,8 @@ mod tests {
         }
         for header in headers {
             println!(
-                "{code}, primaries {header} mm, redline {}",
+                "{code}, primaries {header} mm ({:?}), redline {}",
+                hardware.exhaust.manifold.made,
                 hardware.redline()
             );
             hardware.exhaust.manifold.primary_length = header / 1000.0;

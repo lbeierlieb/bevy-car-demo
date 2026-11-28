@@ -331,6 +331,36 @@ pub struct Manifold {
     pub primary_length: f32,
     pub collector: Collector,
     pub branches: u32,
+    /// How it's made, which decides how its pressure waves behave (see `cycle.rs`).
+    pub made: Made,
+}
+
+/// How an exhaust manifold is made: what the waves leaving a cylinder meet at the end of
+/// its primary, and what reaches it from the other cylinders' (`cycle.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Made {
+    /// Tubular headers: smooth bends of even bore, each primary on its own until it opens
+    /// into a big collector cone. Most of a wave comes back inverted, and the other
+    /// cylinders' pulses pass on down the pipe.
+    Tubes,
+    /// Cast iron, the primaries short, rough stubs merging early into a log of small
+    /// volume: less of a wave comes back, and every other cylinder's blowdown on the branch
+    /// reaches this one's valve.
+    Cast,
+    /// Cast iron in pairs (a cast 4-2-1): the cylinders firing 360° apart share a runner
+    /// before the pairs meet, so only the partner's pulse reaches the valve, when it's shut.
+    CastPaired,
+}
+
+impl Made {
+    pub const ALL: [Made; 3] = [Made::Tubes, Made::Cast, Made::CastPaired];
+    /// The effective flow area of a cast manifold's merge, relative to the exhaust pipe's
+    /// (a live restriction, in `Exhaust::resistance`): the abrupt junction of rough, narrow
+    /// runners loses about a dynamic head of the gas's speed there, as much as the pipe
+    /// loses over its length and bends; a 4-2-1's two Ys about half that. Tubular headers'
+    /// smooth collector cone loses next to nothing.
+    pub const CAST_FLOW: f32 = 1.0;
+    pub const PAIRED_FLOW: f32 = 1.5;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -381,12 +411,26 @@ impl Default for Cooling {
 
 impl Exhaust {
     /// Flow resistance of the parts in series: the pressure drop is this times ṁ²/(2ρ).
-    pub fn resistance(&self) -> f32 {
-        [Some(self.pipe_area), self.cat_area, self.silencer_area]
-            .into_iter()
-            .flatten()
-            .map(|area| 1.0 / (area * area))
-            .sum()
+    /// A cast manifold's merge is one of them, unless it feeds a turbine (`turbocharged`;
+    /// the turbine's map takes it in).
+    pub fn resistance(&self, turbocharged: bool) -> f32 {
+        let merge = match self.manifold.made {
+            _ if turbocharged && self.manifold.collector == Collector::Turbine => None,
+            Made::Cast => Some(Made::CAST_FLOW),
+            Made::CastPaired => Some(Made::PAIRED_FLOW),
+            Made::Tubes => None,
+        };
+        let merge = merge.map(|share| share * self.pipe_area);
+        [
+            Some(self.pipe_area),
+            merge,
+            self.cat_area,
+            self.silencer_area,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|area| 1.0 / (area * area))
+        .sum()
     }
 }
 
@@ -531,6 +575,7 @@ impl Default for EngineHardware {
                     primary_length: 0.8,
                     collector: Collector::Tuned,
                     branches: 1,
+                    made: Made::Tubes,
                 },
                 pipe_area: 1.9e-3,
                 cat_area: Some(2.0e-3),

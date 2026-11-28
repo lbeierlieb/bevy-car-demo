@@ -62,6 +62,8 @@ pub fn key(car: &Item) -> u64 {
 /// the cylinders into, and the turbos on its mounts (their turbine snails' radius, m).
 struct Headers {
     cast: bool,
+    /// Cast in pairs (a cast 4-2-1).
+    paired: bool,
     share: f32,
     branches: u32,
     turbos: Vec<f32>,
@@ -82,6 +84,7 @@ impl Headers {
         let Some(made) = made.or(stock) else {
             return Self {
                 cast: true,
+                paired: false,
                 share: 1.0,
                 branches: if family.layout.is_vee() { 2 } else { 1 },
                 turbos: Vec::new(),
@@ -110,7 +113,8 @@ impl Headers {
             })
             .unwrap_or_default();
         Self {
-            cast: made.cast,
+            cast: made.cast(),
+            paired: made.manifold.made == crate::physics::engine::hardware::Made::CastPaired,
             share,
             branches: made.manifold.branches,
             turbos,
@@ -461,7 +465,7 @@ fn engine_bay(
             })
             .collect();
         let turbo = headers.turbos.first().copied();
-        let collector = if headers.cast && headers.long() && cylinders == 4 && turbo.is_none() {
+        let collector = if headers.paired && cylinders == 4 && turbo.is_none() {
             // A cast 4-2-1: the ports in pairs (the outer two, the inner two) into two
             // thick runners down to one collector, low, from a flange along the head.
             b.bar(to(-0.38, 0.64, 0.26), to(0.38, 0.64, 0.26), 0.04, IRON);

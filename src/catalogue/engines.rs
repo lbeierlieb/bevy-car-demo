@@ -11,7 +11,7 @@ use crate::physics::engine::families::{
 };
 use crate::physics::engine::hardware::{
     BottomEnd, CamDrive, CamProfile, Collector, Cooling, EngineHardware, Exhaust, FLOAT_MARGIN,
-    Intake, Manifold, ROD_MARGIN, ValveLayout, ValveTrain,
+    Intake, Made, Manifold, ROD_MARGIN, ValveLayout, ValveTrain,
 };
 use crate::physics::engine::maps::EngineMaps;
 use crate::physics::engine::parts::{Preset, round_to};
@@ -34,9 +34,8 @@ struct Block {
     phaser: f32,
     /// The speed its valve springs and rods are made for (rpm).
     redline: f32,
-    /// Intake runner and header primary lengths (mm).
+    /// Intake runner length (mm). (The header's primaries are its factory manifold's.)
     runner: f32,
-    header: f32,
     /// Flywheel and crank inertia (kg·m²).
     inertia: f32,
     /// How well the head flows (see `EngineHardware::port_flow`).
@@ -185,11 +184,9 @@ fn block(b: Block) -> EngineHardware {
         tract_volume: intake.tract_volume * size,
     };
     hardware.exhaust = Exhaust {
-        manifold: Manifold {
-            primary_length: b.header / 1000.0,
-            collector: Collector::Tuned,
-            branches: 1,
-        },
+        // The factory manifold's, once the family's manifolds are known
+        // (`with_factory_manifolds`).
+        manifold: exhaust.manifold,
         pipe_area: exhaust.pipe_area * size,
         cat_area: exhaust.cat_area.map(|area| area * size),
         silencer_area: exhaust.silencer_area.map(|area| area * size),
@@ -238,15 +235,8 @@ fn version(
 
 fn none(_: &mut Preset) {}
 
-/// How a manifold is made, for how it looks: cast in iron, or bent of tubes.
-#[derive(Clone, Copy)]
-enum Made {
-    Cast,
-    Tubes,
-}
-
 /// A manifold: its id and name, primaries (mm) into `branches` collectors, or into as many
-/// turbine inlets (`mounts`), cast or of tubes.
+/// turbine inlets (`mounts`), made as `made`.
 fn manifold(
     id: &str,
     name: &str,
@@ -266,9 +256,9 @@ fn manifold(
                 Collector::Tuned
             },
             branches,
+            made,
         },
         mounts,
-        cast: matches!(made, Made::Cast),
     }
 }
 
@@ -312,10 +302,13 @@ fn b_manifolds() -> Vec<ManifoldDef> {
             B_R_HEADER,
             1,
             false,
-            Cast,
+            CastPaired,
         ),
     ]
 }
+
+/// The K20R's cast 4-2-1 manifold's primaries (mm).
+const K_R_HEADER: f32 = 850.0;
 
 /// The K series' cast manifold's primaries (mm), its fixed mild cams (duration, lobe
 /// separation) and its plain head's flow.
@@ -325,7 +318,7 @@ const K_SEPARATION: f32 = 112.0;
 const K_FLOW: f32 = 1.1;
 
 /// The K series' manifolds, as the B series': the cast 4-into-1, short and long-tube
-/// headers, and a turbo manifold.
+/// headers, a turbo manifold, and the K20R's cast 4-2-1.
 fn k_manifolds() -> Vec<ManifoldDef> {
     use Made::*;
     vec![
@@ -360,6 +353,14 @@ fn k_manifolds() -> Vec<ManifoldDef> {
             1,
             true,
             Cast,
+        ),
+        manifold(
+            "k.manifold.4-2-1",
+            "Stock cast 4-2-1 manifold",
+            K_R_HEADER,
+            1,
+            false,
+            CastPaired,
         ),
     ]
 }
@@ -461,6 +462,14 @@ pub fn ecus(families: &mut [Family]) -> Vec<EcuDef> {
     ecus
 }
 
+/// Every version's block given its factory manifold.
+fn with_factory_manifolds(mut family: Family) -> Family {
+    for version in &mut family.versions {
+        version.block.exhaust.manifold = family.manifolds[version.preset.manifold].manifold;
+    }
+    family
+}
+
 /// Every version's factory head made one of its family's heads (`<code>.head`), and the
 /// version's preset fitting it.
 fn with_heads(mut family: Family) -> Family {
@@ -503,9 +512,8 @@ pub fn families() -> Vec<Family> {
                             phaser: 0.0,
                             redline: 6300.0,
                             runner: 420.0,
-                            header: 700.0,
                             inertia: 0.13,
-                            flow: 0.95,
+                            flow: 0.93,
                             head: Head::SINGLE_CAM,
                         })
                     },
@@ -526,7 +534,6 @@ pub fn families() -> Vec<Family> {
                             phaser: 0.0,
                             redline: 6000.0,
                             runner: 440.0,
-                            header: 700.0,
                             inertia: 0.15,
                             flow: 0.95,
                             head: Head::SINGLE_CAM,
@@ -553,7 +560,6 @@ pub fn families() -> Vec<Family> {
                             phaser: 0.0,
                             redline: 8200.0,
                             runner: 300.0,
-                            header: B_R_HEADER,
                             inertia: 0.11,
                             flow: 1.35,
                             head: Head::B_R,
@@ -593,7 +599,6 @@ pub fn families() -> Vec<Family> {
                         phaser: 0.0,
                         redline: 6000.0,
                         runner: 400.0,
-                        header: 500.0,
                         inertia: 0.35,
                         flow: 0.95,
                         head: Head::PUSHROD,
@@ -631,7 +636,6 @@ pub fn families() -> Vec<Family> {
                             phaser: 0.0,
                             redline: 6900.0,
                             runner: 430.0,
-                            header: K_HEADER,
                             inertia: 0.13,
                             flow: K_FLOW,
                             head: Head::TWIN_CAM,
@@ -646,10 +650,9 @@ pub fn families() -> Vec<Family> {
                         // The same block with more compression, a head with big valves
                         // and ports that flow under a mild cam (phased on the intake)
                         // and a wild one with far more lift switched in from the middle
-                        // up (about 5500 rpm), and long-tube headers: it revs. (In the
-                        // model the wild cam pays only with long headers; its runners
-                        // hold the top end to the table's power, and leave short ones
-                        // to the swaps.)
+                        // up (about 5500 rpm), and a long cast 4-2-1 manifold: it revs.
+                        // (Its runners hold the top end to the table's power, and leave
+                        // shorter ones to the swaps.)
                         block(Block {
                             cylinders: 4,
                             bore: 86.0,
@@ -660,15 +663,14 @@ pub fn families() -> Vec<Family> {
                             high: Some((236.0, 110.0, 1.3)),
                             phaser: 50.0,
                             redline: 8600.0,
-                            runner: 440.0,
-                            header: 960.0,
+                            runner: 400.0,
                             inertia: 0.12,
                             flow: 1.4,
                             head: Head::K_R,
                         })
                     },
-                    // Tubular 4-2-1 headers from the factory.
-                    |preset| preset.manifold = 2,
+                    // The cast 4-2-1 from the factory.
+                    |preset| preset.manifold = 4,
                 ),
                 version(
                     "K24",
@@ -687,7 +689,6 @@ pub fn families() -> Vec<Family> {
                             phaser: 0.0,
                             redline: 6500.0,
                             runner: 450.0,
-                            header: K_HEADER,
                             inertia: 0.15,
                             flow: K_FLOW,
                             head: Head::TWIN_CAM,
@@ -702,6 +703,7 @@ pub fn families() -> Vec<Family> {
         },
     ]
     .into_iter()
+    .map(with_factory_manifolds)
     .map(with_heads)
     .collect()
 }
@@ -753,7 +755,7 @@ mod tests {
                 let manifold = &family.manifolds[version.preset.manifold];
                 assert!(!manifold.mounts, "{}", version.code);
                 assert_eq!(
-                    manifold.manifold.primary_length, version.block.exhaust.manifold.primary_length,
+                    manifold.manifold, version.block.exhaust.manifold,
                     "{}",
                     version.code
                 );

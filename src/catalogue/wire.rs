@@ -15,8 +15,8 @@ use crate::physics::drivetrain::{Differential, Drive};
 use crate::physics::engine::families::{Family, HeadDef, Layout, ManifoldDef, Version};
 use crate::physics::engine::hardware::{
     BottomEnd, CamDrive, CamProfile, Collector, Compressor, Cooling, Diverter, EngineHardware,
-    Exhaust, Intake, Intercooler, Manifold, Supercharger, Turbine, Turbo, ValveLayout, ValveTrain,
-    Wastegate,
+    Exhaust, Intake, Intercooler, Made, Manifold, Supercharger, Turbine, Turbo, ValveLayout,
+    ValveTrain, Wastegate,
 };
 use crate::physics::engine::parts::{
     Change, Effect, Field, Part, Preset, Readout, Regrind, Slot, SuperchargerKit, TurboKit,
@@ -117,6 +117,7 @@ listed!(Readout, Readout::ALL);
 listed!(Layout, Layout::ALL);
 listed!(CamDrive, CamDrive::ALL);
 listed!(Collector, Collector::ALL);
+listed!(Made, Made::ALL);
 
 fields!(Detail { at, size, tone });
 fields!(Tank { litres, at, height });
@@ -422,12 +423,14 @@ impl Wire for Manifold {
         self.primary_length.put(out);
         self.collector.put(out);
         self.branches.put(out);
+        self.made.put(out);
     }
     fn get(r: &mut Reader) -> Option<Self> {
         let manifold = Self {
             primary_length: r.get()?,
             collector: r.get()?,
             branches: r.get()?,
+            made: r.get()?,
         };
         let fine = (0.05..=3.0).contains(&manifold.primary_length)
             && (1..=crate::physics::engine::damage::MAX_CYLINDERS as u32)
@@ -435,7 +438,7 @@ impl Wire for Manifold {
         fine.then_some(manifold)
     }
 }
-fields!(ManifoldDef { manifold, mounts, cast } text { id, name });
+fields!(ManifoldDef { manifold, mounts } text { id, name });
 fields!(EcuDef { model, factory, tune } text { id, name });
 fields!(HeadDef {
     bore,

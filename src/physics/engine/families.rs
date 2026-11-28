@@ -5,7 +5,7 @@
 //! car it fits into. The catalogue says which there are (see `catalogue::engines` for
 //! the built-in ones).
 
-use super::hardware::{CamProfile, EngineHardware, Manifold, ValveLayout, ValveTrain};
+use super::hardware::{CamProfile, EngineHardware, Made, Manifold, ValveLayout, ValveTrain};
 use super::parts::Preset;
 
 /// How the cylinders are arranged, which is what an engine sounds like.
@@ -173,12 +173,14 @@ pub struct ManifoldDef {
     pub name: String,
     pub manifold: Manifold,
     pub mounts: bool,
-    /// Cast in iron (stubby primaries into a log) rather than bent of tubes: only how it
-    /// looks.
-    pub cast: bool,
 }
 
 impl ManifoldDef {
+    /// Cast in iron (stubby primaries into a log, or pairs) rather than bent of tubes.
+    pub fn cast(&self) -> bool {
+        self.manifold.made != Made::Tubes
+    }
+
     /// How many turbos it carries when filled.
     pub fn mounts(&self) -> u32 {
         if self.mounts {

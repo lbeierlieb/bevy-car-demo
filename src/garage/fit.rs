@@ -26,7 +26,7 @@ use crate::items::{Does, Fix, Item, Kind, OVERSIZES, drivetrain_misfit};
 use crate::menu::kit;
 use crate::net::Connection;
 use crate::owned::name;
-use crate::physics::engine::hardware::Collector;
+use crate::physics::engine::hardware::{Collector, Made};
 use crate::shops::{Shop, ShopKind};
 use crate::wheels::{self, Rim, TireSize, Wheel};
 
@@ -1447,7 +1447,11 @@ fn manifold_readouts(ui: &mut egui::Ui, catalogue: &Catalogue, def: &crate::item
         &format!(
             "{:.0} mm{}",
             m.primary_length * 1000.0,
-            if made.cast { ", cast" } else { ", tubes" }
+            match m.made {
+                Made::Tubes => ", tubes",
+                Made::Cast => ", cast",
+                Made::CastPaired => ", cast in pairs",
+            }
         ),
     );
     let per = cylinders / m.branches.max(1);
