@@ -365,6 +365,14 @@ impl CarSetup {
         Self::with_car(build, parts, engine, car)
     }
 
+    /// `catalogue`'s trim `id` (a stock car) as it leaves the factory, if there's one.
+    pub fn of_trim(catalogue: &Shared, id: &str) -> Option<Self> {
+        let trim = catalogue.trims.iter().find(|trim| trim.id == id)?;
+        let (build, parts) = trim.car.resolve(catalogue).ok()?;
+        let engine = EngineBuild::of_parts(&parts);
+        Some(Self::with_car(build, parts, engine, trim.car.clone()))
+    }
+
     /// What the stock car of `chassis` with its factory engine `option` is built of: its
     /// trim's, if it has one, else the chassis' and the engine's own.
     fn stock(catalogue: &Shared, chassis: usize, option: usize) -> (CarBuild, Parts, Item) {

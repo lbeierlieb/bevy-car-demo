@@ -840,3 +840,114 @@ mod tests {
 
 #[cfg(test)]
 mod handling;
+
+/// All-wheel drive as the factory builds it: the box with its reactive centre coupling.
+#[cfg(test)]
+mod all_wheel_drive {
+    use super::*;
+    use crate::car::{Car, CarSetup, Controls};
+    use crate::physics::drivetrain::Drive;
+
+    fn bothy(awd: bool) -> CarSetup {
+        let id = if awd { "bothy.2-4-awd" } else { "bothy.2-4" };
+        CarSetup::of_trim(&crate::catalogue::builtin(), id).expect("the trim")
+    }
+
+    /// The front and the rear tires' pull (N).
+    fn pulls(car: &Car) -> (f32, f32) {
+        let pull = |front: bool| -> f32 {
+            let corners = car.corners.iter().filter(|c| c.front == front);
+            corners.filter_map(|c| c.contact).map(|c| c.tire.fx).sum()
+        };
+        (pull(true), pull(false))
+    }
+
+    /// `setup` pulling away along z at `x` on `terrain` at `throttle` with the automatic
+    /// gearbox (and traction control if `tc`) for `seconds`: the car, and the front and
+    /// rear tires' pull summed over the first `early` seconds.
+    fn pull_away(
+        setup: CarSetup,
+        terrain: &Terrain,
+        x: f32,
+        (tc, throttle): (bool, f32),
+        seconds: f32,
+        early: f32,
+    ) -> (Car, f32, f32) {
+        let mut car = Car::spawn_at(0, setup, terrain, x, 300.0, std::f32::consts::PI);
+        car.warm_tires();
+        car.parking_brake = false;
+        car.traction_control = tc;
+        car.drivetrain.automatic = true;
+        car.drivetrain.shift_to(&car.setup.engine, 1);
+        for _ in 0..120 {
+            step_car(&mut car, terrain, STEP);
+        }
+        car.controls = Controls {
+            throttle,
+            ..Default::default()
+        };
+        let (mut front, mut rear) = (0.0, 0.0);
+        for i in 0..(seconds / STEP) as usize {
+            step_car(&mut car, terrain, STEP);
+            if (i as f32) * STEP < early {
+                let (f, r) = pulls(&car);
+                (front, rear) = (front + f, rear + r);
+            }
+        }
+        (car, front, rear)
+    }
+
+    /// The reactive coupling drives the front wheels alone while they grip, and the rear
+    /// ones once they spin: cruising, the rears pull a few per cent; floored on a meadow
+    /// without traction control, about half.
+    #[test]
+    fn the_reactive_coupling_sends_torque_back_once_the_fronts_slip() {
+        let setup = bothy(true);
+        assert_eq!(setup.engine.drive, Drive::All { front: 1.0 });
+        let (mut car, _, _) =
+            pull_away(setup.clone(), &Terrain::flat(), 0.0, (true, 0.3), 15.0, 0.0);
+        let (mut front, mut rear) = (0.0, 0.0);
+        for _ in 0..120 {
+            step_car(&mut car, &Terrain::flat(), STEP);
+            let (f, r) = pulls(&car);
+            (front, rear) = (front + f, rear + r);
+        }
+        let speed = car.forward_speed();
+        println!("cruising at {speed:.1} m/s: front {front:.0}, rear {rear:.0}");
+        assert!(speed > 15.0 && front > 0.0, "{speed} m/s, front {front}");
+        assert!(rear.abs() < 0.12 * front, "front {front}, rear {rear}");
+        let meadow = Terrain::flat_meadow();
+        let (_, front, rear) = pull_away(setup, &meadow, 50.0, (false, 1.0), 1.5, 1.5);
+        let share = rear / (front + rear);
+        println!("floored on the meadow: the rear's share {share:.2}");
+        assert!(share > 0.3, "the rear's share {share}");
+    }
+
+    /// The AWD box pulls away better than the front-drive one on a meadow and with one side
+    /// on the road and the other on grass, and as quickly on dry asphalt, about 70 kg
+    /// heavier.
+    #[test]
+    fn the_awd_box_pulls_away_better_where_the_grip_is_poor() {
+        let meadow = Terrain::flat_meadow();
+        let [fwd, awd] = [false, true].map(bothy);
+        let gained = awd.mass_with(0.0) - fwd.mass_with(0.0);
+        assert!((60.0..80.0).contains(&gained), "{gained} kg");
+        for (name, terrain, x) in [
+            ("asphalt", &Terrain::flat(), 0.0),
+            ("meadow", &meadow, 50.0),
+            ("split", &meadow, 3.0),
+        ] {
+            let speed = |setup: &CarSetup| {
+                let (car, ..) = pull_away(setup.clone(), terrain, x, (true, 1.0), 4.0, 0.0);
+                car.forward_speed()
+            };
+            let (front, all) = (speed(&fwd), speed(&awd));
+            println!("{name}: in 4 s front drive {front:.1} m/s, all-wheel drive {all:.1}");
+            if name == "asphalt" {
+                assert!(all > front - 0.5, "{name}: {all} against {front}");
+            } else {
+                assert!(all > front + 2.0, "{name}: {all} against {front}");
+            }
+        }
+    }
+}

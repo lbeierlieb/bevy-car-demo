@@ -312,7 +312,7 @@ pub const CENTRES: [(&str, &str, f32, Differential); 3] = [
         "Reactive centre coupling",
         1.0,
         Differential {
-            coupling: 150.0,
+            coupling: 250.0,
             limit: 1500.0,
         },
     ),
@@ -1235,13 +1235,28 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
                 ),
             ]
         }
-        "Bothy" => vec![TrimSpec::new(
-            "K24",
-            "2.4",
-            super::chassis::wheel(16, 65, 215, 70, STREET),
-            "rim.steel",
-            ["front-vented", "rear-drum"],
-        )],
+        "Bothy" => vec![
+            TrimSpec::new(
+                "K24",
+                "2.4",
+                super::chassis::wheel(16, 65, 215, 70, STREET),
+                "rim.steel",
+                ["front-vented", "rear-drum"],
+            ),
+            // All four driven: the AWD gearbox with its reactive coupling, a prop shaft
+            // along the tunnel, the rear subframe with an open differential.
+            TrimSpec {
+                gearbox: Some("K 5-speed AWD (transverse)"),
+                awd: true,
+                ..TrimSpec::new(
+                    "K24",
+                    "2.4 AWD",
+                    super::chassis::wheel(16, 65, 215, 70, STREET),
+                    "rim.steel",
+                    ["front-vented", "rear-drum"],
+                )
+            },
+        ],
         _ => Vec::new(),
     }
 }

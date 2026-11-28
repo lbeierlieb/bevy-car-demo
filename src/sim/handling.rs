@@ -842,7 +842,8 @@ fn time_to_hundred(setup: CarSetup) -> f32 {
 }
 
 /// The K-series cars pull away like their kinds: the hot hatch quickest (about 6 s), the
-/// hatch and the saloons in 7 to 8.5 s, the heavy box slowest.
+/// hatch and the saloons in 7 to 8.5 s, the heavy box slowest (its all-wheel-drive one
+/// about as quick: more grip, more weight).
 #[test]
 fn the_k_cars_reach_a_hundred_in_their_time() {
     let catalogue = crate::catalogue::builtin();
@@ -858,6 +859,9 @@ fn the_k_cars_reach_a_hundred_in_their_time() {
     let hatch = time("Tessel", "K20");
     let saloon = time("Aldine", "K24");
     let lazy = time("Bothy", "K24");
+    let awd = time_to_hundred(CarSetup::of_trim(&catalogue, "bothy.2-4-awd").unwrap());
+    println!("Bothy K24 AWD: 0-100 in {awd:.1} s");
+    assert!((lazy - 0.5..lazy + 1.0).contains(&awd), "{awd}");
     assert!((5.0..7.0).contains(&hot), "{hot}");
     assert!((6.5..8.5).contains(&hatch) && hot < hatch - 0.6, "{hatch}");
     assert!((6.5..9.0).contains(&saloon), "{saloon}");

@@ -656,6 +656,22 @@ impl Terrain {
         terrain
     }
 
+    /// `flat` covered in meadow (grass grips under half as well as asphalt), with a road 6
+    /// m wide along z through the middle level with it: a car straddling an edge has split
+    /// grip.
+    #[cfg(test)]
+    pub fn flat_meadow() -> Self {
+        let mut terrain = Self::flat_road(0.0);
+        for chunk in &mut terrain.chunks {
+            chunk.classes = vec![6];
+        }
+        for road in &mut terrain.roads {
+            road.heights.fill(0.0);
+            road.crown = 0.0;
+        }
+        terrain
+    }
+
     /// Half the map's extent along x and z; the map is centred on the origin.
     pub fn half_size(&self) -> Vec2 {
         Vec2::new(self.cells_x as f32, self.cells_z as f32) * self.cell / 2.0
