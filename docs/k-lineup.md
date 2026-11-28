@@ -171,6 +171,28 @@ items with no limit (or don't exist yet), so steps 4 and 5 can ship apart.
    1200, 1350, 1550 kg; AWD +70 kg), tanks, wheels, anti-roll bars, holds, body slots,
    showroom and traffic weights. The AWD Bothy comes in step 4. Until then it ships front
    drive only.
+
+   **Done** (2026-11-28; protocol 69). Tessel (3-door, 4.15 m), Aldine (saloon, 4.80 m, rear
+   doors, boot), Bothy (tall box, 1.79 m, rear doors, a tailgate split at the belt); details
+   and numbers in `src/catalogue/CLAUDE.md`, "The K cars". As built:
+
+   | Trim | Mass full | Front | 0–100 | Top |
+   |---|---|---|---|---|
+   | `tessel.2-0` | 1194 kg | 62 % | 7.4 s | 223 km/h |
+   | `tessel.2-0r` | 1208 kg | 63 % | 6.2 s | 244 km/h |
+   | `aldine.2-0` | 1356 kg | 62 % | 7.5 s | 222 km/h |
+   | `aldine.2-4` | 1361 kg | 62 % | 7.6 s | 226 km/h |
+   | `bothy.2-4` | 1562 kg | 60 % | 8.5 s | 187 km/h |
+
+   Decided while building: bodies got rear doors (`Panel::RearDoor`, `Body::rear_door`) as
+   parts of their own, and a saloon's rear window belongs to the shell; the Bothy's split
+   tailgate is one part (drawn split); trims may have their own gearbox and final drive
+   (the Tessel R's 6-speed and 4.76); the final drives as suggested (the 2.4 Aldine's 4.44
+   too: a 4.25 made it no quicker); the three's brakes are the hatch's kinds scaled for their
+   weight, with a large vented front disc for the Tessel R; the Vireo's bay is 0.68 m tall
+   now so a K swaps in (only what fits changed). The sim is optimistic about acceleration
+   for every car (the K20 cars run 0–100 a second or two quicker than the real ones). The
+   Bothy's tunnel isn't modelled until step 4.
 4. **Drivetrain parts**: rear subframe, rear differential, prop shaft, centre coupling,
    `Drive` derived, a differential per axle; the AWD Bothy trim; the tunnel kit and AWD
    conversions for the Tessel and Aldine; limited-slip swaps front and rear.

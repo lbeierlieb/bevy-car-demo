@@ -14,7 +14,9 @@ catalogue entries, and things like swap subframes are named so they can be price
 - **Catalogues** (data in a `catalogue::Catalogue`, the server's, see "Server
   catalogue"; entries referred to by their place; engine versions also by code). The
   built-in one (`src/catalogue/`): `chassis.rs` has the chassis (only the Vireo hatch, from 2026-11-26: B16, B20 and B16R since 2026-11-27; the
-  Merrow roadster with the R80 since 2026-11-27,
+  Merrow roadster with the R80 since 2026-11-27; the Tessel hatch (K20, K20R), the Aldine
+  saloon (K20, K24) and the Bothy tall box (K24) since 2026-11-28, `docs/k-lineup.md` step 3,
+  see "The K cars" in `src/catalogue/CLAUDE.md`;
   see "Owning cars and parts"; the other twelve (Minim, Linnet, Tarn, Halden, Skarn,
   Harrow, Calder, Rheon, Vespera, Wisp, Drover, Carrow) and their engines are in git
   history before that; names are made up, no real cars), gearboxes (two
@@ -91,7 +93,10 @@ catalogue entries, and things like swap subframes are named so they can be price
   The cylinder head (port flow) is a slot too: the cycle simulation's valves and ports
   scale with it, which is what lets the sporty engines breathe at high rpm.
 - **Bodies** (`body.rs`) are generated: a deck outline and a cabin outline in metres
-  from the nose and above the ground, plan taper, tumblehome, and details as boxes. The
+  from the nose and above the ground, plan taper, tumblehome, and details as boxes;
+  four-doors have `Body::rear_door` (`Panel::RearDoor` pieces, a pillar between the doors'
+  glass), and a cabin ending more than 0.4 m ahead of the tail (a saloon) keeps its rear
+  window in the shell and puts a boot spoiler on the lid's edge. The
   lower body is a loft with wheel wells; the cabin a loft with glass, roof and pillars;
   an open car's windscreen is a one-sided pane in a frame (two cabin points). One mesh
   with vertex colours, in pieces (see "Owning cars and parts"). The cockpit is placed by

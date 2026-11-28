@@ -105,7 +105,7 @@ used car dealers sell `merrow.r80` (the other showrooms show it only to look at)
 workshops its stock body parts, brakes, springs, dampers, bars, the inline gearbox, the
 limited slip and `engine.r80`, the tuning shops its lip, skirts, spoiler, wing,
 diffuser, cut-out bonnet, sport/track springs and dampers and bars, the engine shop the
-`r80` long block. Traffic weight 0.06 (one car in ~50, a test holds 40–60;
+`r80` long block. Traffic weight 0.06, 0.15 since the K cars (one car in ~50, a test holds 40–60;
 `drivers_follow_the_roads` makes every fifth car the rarest chassis). Its sound is
 `Layout::OddFireV10` (see "Audio"). Handling: `a_power_slide_can_be_caught` is back for
 it, floored on the circle in second and third **with traction control** (6.5° and 9.9°,
@@ -627,6 +627,44 @@ rpm), K24 (87 × 99, 9.7:1, 245 N·m, 118 kW at 5500, 6500 rpm); each with its l
 `k.headers.long-tube`, `k.manifold.turbo`. The K24 with the K20R head
 (`the_k20r_head_on_the_k24_block_pays` prints them): 271 N·m, 145 kW, rods cap it at 7000;
 forged rods, short runners and long tubes 164 kW, race pistons 174; it needs a
-programmable ECU. No chassis offers the K family yet (step 3): no `engine.k*` assemblies,
-which come from trims. Sold: long blocks and heads at engine shops, stock ECUs and the
+programmable ECU. The trims of step 3 (below) make `engine.k20`, `engine.k20r`,
+`engine.k24`. Sold: long blocks and heads at engine shops, stock ECUs and the
 cast manifold at car workshops, `k.*` at tuning shops.
+
+## The K cars (2026-11-28, `docs/k-lineup.md` step 3)
+
+Three chassis at places 2–4, all front-drive with transverse bays sized for a K, its
+gearbox and the K20R's 960 mm long tubes (bay 0.85–0.9 m long, header room 1.2: no factory
+offering capped), the same linkage as every car; made-up looks:
+- **Tessel** (EP Civic's counterpart): tall one-box three-door, 4.15 m, 2.57 m wheelbase,
+  50 L. `tessel.2-0` (K20, K 5-speed, 4.29, open, 195/60 R15 alloys, vented front, rear
+  drums) 1194 kg full, 62 % front; `tessel.2-0r` (K20R, K 6-speed close-ratio, 4.76, limited
+  slip, 205/45 R17, `front-vented-large`, rear discs, roof spoiler) 1208 kg. Paint Off-white.
+- **Aldine** (7th-gen Accord's): four-door saloon, 4.80 m, 2.74 m, 65 L, a boot ("Boot lid",
+  "Boot spoiler"), rear doors. `aldine.2-0` (K20, 205/60 R16), `aldine.2-4` (K24, 215/50
+  R17), both K 5-speed long, 4.44, open, vented front, rear discs; ~1360 kg, 62 % front.
+  Paint Slate.
+- **Bothy** (Element's): tall box, 4.30 × 1.82 × 1.79 m, 2.575 m, 60 L, four doors, a
+  "Tailgate" split at the belt (a dark seam; one part), dark cladding and roof rails
+  (details), a tall load space (ceiling 1.5 m). `bothy.2-4` (K24, K 5-speed short, 4.76,
+  open, 215/70 R16 steel, vented front, rear drums) 1562 kg, 60 % front. Paint Khaki. Its
+  floor is meant to have a tunnel (step 4's AWD trim); nothing models it yet.
+Trims may name their own gearbox and final drive (`TrimSpec::gearbox`, `final_drive`).
+Layouts (`catalogue/items.rs`'s `layout`) say lid, spoiler, rear bench and `rear_doors`
+(slots "Left/Right rear door", part `<chassis>.rear-door`; slot needs found by name). The
+three's brakes are `scaled_brakes` of the hatch's (torque, heat, cooling, life × 1.28,
+1.55, 1.9; front rims from 15/15/16", the large vented disc and big kit an inch more):
+`front-vented`, `front-vented-large`, `front-big`, `rear-drum`, `rear-disc`. The Vireo's
+bay went to 0.68 m tall so a K fits (a swap; the K20R's long tubes don't fit beside it,
+header room 0.84). Measured: 0–100 (`the_k_cars_reach_a_hundred_in_their_time`) Tessel 2.0
+7.4 s, 2.0R 6.2, Aldine 2.0 7.5, 2.4 7.6 (the K24 reaches 100 just in second at 6500 and no
+quicker than the K20; a 4.25 final drive didn't help), Bothy 8.5; top speeds (60 s flat out)
+223, 244, 222, 226, 187 km/h; roll 4.1, 4.1, 4.9 °/g (Bothy's load transfer 63 % front on 61
+% weight: a stiffer rear bar made the brake test lock its rear on track tires); consumption
+at 100 km/h 6.7, 7.2, 6.6, 7.6, 10.3 L/100 km. They don't power-slide (front drive).
+Shops: dealers in Reckendorf and by the Gewerbepark and both used car dealers every trim,
+Eichenhügel adds the Tessel, Rattelsdorf the Aldine and Bothy; car workshops their stock
+parts and the K engines, tuning shops their tuning parts. Traffic weights Vireo 3.0, Aldine
+2.0, Tessel 1.6, Bothy 0.8, Merrow 0.15 (still ~1 in 50). Shots: `OFFLINE=1 TRIM=2,0` (Tessel
+2.0; 2,1 the 2.0R; 3,x the Aldine; 4,0 the Bothy) `CARCAM="-6.5,1.3,0"`; the lineup's forest
+straight hides them. Protocol 69 (rear doors on the wire).
