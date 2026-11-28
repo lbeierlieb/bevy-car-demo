@@ -652,4 +652,65 @@ mod tests {
         assert!(margin(3000.0, 0.4) > 0.0);
         assert!((15.0..40.0).contains(&maps.mbt(0, 4000.0, 0.9)));
     }
+
+    /// A tuning tool: prints the full-load volumetric efficiency of each cam profile of a
+    /// factory engine (unphased) across the rev range, on each of a few manifolds:
+    /// `VE_ENGINE` (code, default B16R), `VE_HEADERS` (primary lengths in mm, default the
+    /// factory one), `VE_CAMS` (profiles in place of the engine's, `duration/separation/lift
+    /// in mm` separated by `;`), `VE_RPM` (from, to and step, default 2000,9000,500).
+    /// `cargo test --profile release-dev full_load_ve_by_cam -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn full_load_ve_by_cam() {
+        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        let numbers = |text: &str, split: char| -> Vec<f32> {
+            text.split(split)
+                .map(|n| n.trim().parse().unwrap())
+                .collect()
+        };
+        let code = var("VE_ENGINE").unwrap_or("B16R".into());
+        let parts = crate::physics::engine::parts::Parts::factory(&code).expect("a factory code");
+        let mut hardware = parts.hardware();
+        if let Some(cams) = var("VE_CAMS") {
+            hardware.cams = (cams.split(';'))
+                .map(|cam| {
+                    let [duration, separation, lift] = numbers(cam, '/')[..] else {
+                        panic!("duration/separation/lift: {cam}");
+                    };
+                    crate::physics::engine::hardware::CamProfile {
+                        intake_duration: duration,
+                        exhaust_duration: duration,
+                        lobe_separation: separation,
+                        lift: lift / 1000.0,
+                    }
+                })
+                .collect();
+        }
+        let headers = var("VE_HEADERS").map_or_else(
+            || vec![hardware.exhaust.manifold.primary_length * 1000.0],
+            |h| numbers(&h, ','),
+        );
+        let rpm = var("VE_RPM").map_or(vec![2000.0, 9000.0, 500.0], |r| numbers(&r, ','));
+        // At full load as the factory's cam control measures it.
+        let map = 100e3;
+        let ratio = (1.05 * AMBIENT_PRESSURE).max(1.1 * map) / map;
+        for cam in &hardware.cams {
+            println!("profile {cam:?}");
+        }
+        for header in headers {
+            println!(
+                "{code}, primaries {header} mm, redline {}",
+                hardware.redline()
+            );
+            hardware.exhaust.manifold.primary_length = header / 1000.0;
+            let mut at = rpm[0];
+            while at <= rpm[1] {
+                let ve: Vec<_> = (0..hardware.cams.len())
+                    .map(|p| format!("{:.3}", ve_point(&hardware, p, &[at, map, ratio, 0.0, 0.0])))
+                    .collect();
+                println!("{at:6} {}", ve.join(" "));
+                at += rpm[2];
+            }
+        }
+    }
 }
