@@ -657,7 +657,7 @@ mod tests {
     /// factory engine (unphased) across the rev range, on each of a few manifolds:
     /// `VE_ENGINE` (code, default B16R), `VE_HEADERS` (primary lengths in mm, default the
     /// factory one), `VE_CAMS` (profiles in place of the engine's, `duration/separation/lift
-    /// in mm` separated by `;`), `VE_RPM` (from, to and step, default 2000,9000,500).
+    /// in mm` separated by `;`), `VE_FLOW` (the head's port flow), `VE_RPM` (from, to and step, default 2000,9000,500).
     /// `cargo test --profile release-dev full_load_ve_by_cam -- --ignored --nocapture`
     #[test]
     #[ignore]
@@ -685,6 +685,9 @@ mod tests {
                     }
                 })
                 .collect();
+        }
+        if let Some(flow) = var("VE_FLOW") {
+            hardware.port_flow = flow.parse().unwrap();
         }
         let headers = var("VE_HEADERS").map_or_else(
             || vec![hardware.exhaust.manifold.primary_length * 1000.0],

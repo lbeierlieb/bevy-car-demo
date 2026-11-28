@@ -882,8 +882,8 @@ mod tests {
     }
 
     /// The B16R's head on the B20's block: the B16R's top end with the B20's torque, held
-    /// back by the B20's long runners and its rods until short runners and forged rods go
-    /// in (and an ECU that switches cams runs it).
+    /// back by the B20's long runners and its rods until short runners, forged rods and
+    /// the B16R's manifold go in (and an ECU that switches cams runs it).
     #[test]
     fn the_twin_cam_head_on_the_two_litre_pays() {
         use crate::physics::engine::parts::Parts;
@@ -911,6 +911,8 @@ mod tests {
         let short = measured("… and short runners", &swap);
         swap.chosen[3] = 1;
         let forged = measured("… and forged rods", &swap);
+        swap.manifold = 4;
+        let built = measured("… and the B16R's manifold", &swap);
         // The stock three: the 2.0 pulls harder than the 1.6, the 1.6R makes far more power.
         assert!(b20.0 > 1.15 * b16.0 && b20.1 > b16.1, "{b16:?} {b20:?}");
         assert!(b16r.1 > 1.5 * b20.1, "{b20:?} {b16r:?}");
@@ -924,8 +926,8 @@ mod tests {
         );
         // All of it: more power than the B16R, and much more torque.
         assert!(
-            forged.1 > 1.04 * b16r.1 && forged.0 > 1.15 * b16r.0,
-            "{forged:?} {b16r:?}"
+            built.1 > 1.02 * b16r.1 && built.0 > 1.1 * b16r.0,
+            "{built:?} {b16r:?}"
         );
     }
 
@@ -978,6 +980,29 @@ mod tests {
             "at {phased} rpm: {:?}",
             engine.actuators
         );
+        assert_eq!(engine.actuators.cam_profile, 0);
+        let engine = run_flat_out(&build, 7500.0, 2.0);
+        assert_eq!(engine.actuators.cam_profile, 1);
+    }
+
+    /// The B16R as `docs/vireo-lineup.md` has it: about 129 kW at 7500 to 8000 rpm (limit
+    /// 8200), its locked ECU putting the wild cam in between 5000 and 6000 rpm.
+    #[test]
+    fn the_b16r_switches_to_its_wild_cam() {
+        let b16r = factory_peaks("B16R");
+        let (_, power, at, limit) = b16r;
+        assert!((power - 129.0).abs() < 0.05 * 129.0, "{b16r:?}");
+        assert!((7500.0..=8000.0).contains(&at), "{b16r:?}");
+        assert_eq!(limit, 8200.0);
+        let parts = crate::physics::engine::parts::Parts::factory("B16R").unwrap();
+        let build = EngineBuild::of_parts(&parts);
+        assert!(EngineMaps::stock(&build.hardware).is_some(), "baked maps");
+        let model = parts.ecu_model();
+        assert!(model.switching && model.locked);
+        let switch = build.ecu.cams.switch_rpm;
+        println!("switches at {switch} rpm");
+        assert!((5000.0..=6000.0).contains(&switch), "{switch} rpm");
+        let engine = run_flat_out(&build, 4500.0, 2.0);
         assert_eq!(engine.actuators.cam_profile, 0);
         let engine = run_flat_out(&build, 7500.0, 2.0);
         assert_eq!(engine.actuators.cam_profile, 1);

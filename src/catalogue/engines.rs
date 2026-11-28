@@ -83,6 +83,12 @@ impl Head {
         lift: 0.105,
         ..Self::TWIN_CAM
     };
+    /// Big valves under two switching cams, the mild profile lifting very little: it
+    /// runs out of breath past the middle, where the wild one takes over.
+    const B_R: Self = Self {
+        lift: 0.052,
+        ..Self::BIG_VALVES
+    };
     /// Big valves under two switching cams, the mild profile lifting little (the wild
     /// one makes up for it).
     const K_R: Self = Self {
@@ -266,6 +272,9 @@ fn manifold(
     }
 }
 
+/// The B16R's cast 4-2-1 manifold's primaries (mm).
+const B_R_HEADER: f32 = 850.0;
+
 /// The B series' manifolds: the cast 4-into-1 (its primaries the B16's and B20's headers),
 /// short and long-tube headers, a turbo manifold (the turbo where the cast one's collector
 /// is), and the B16R's longer cast 4-2-1.
@@ -300,7 +309,7 @@ fn b_manifolds() -> Vec<ManifoldDef> {
         manifold(
             "b.manifold.4-2-1",
             "Stock cast 4-2-1 manifold",
-            850.0,
+            B_R_HEADER,
             1,
             false,
             Cast,
@@ -529,27 +538,29 @@ pub fn families() -> Vec<Family> {
                     "B16R",
                     "1.6 DOHC four",
                     || {
-                        // Short and oversquare, a mild cam for the street and a wild one
-                        // from the middle up, big valves and ports that flow freely: it
-                        // revs.
+                        // Short and oversquare, big valves and ports that flow freely, a
+                        // mild cam lifting little for the street (out of breath past about
+                        // 6000 rpm) and a wild one with far more lift switched in from
+                        // about 5500, and a long cast 4-2-1 manifold tuned for it: it revs.
                         block(Block {
                             cylinders: 4,
                             bore: 81.0,
                             stroke: 77.4,
                             compression: 10.4,
-                            duration: 232.0,
-                            separation: 110.0,
-                            high: Some((270.0, 106.0, 1.22)),
+                            duration: 212.0,
+                            separation: 112.0,
+                            high: Some((236.0, 108.0, 1.8)),
                             phaser: 0.0,
                             redline: 8200.0,
                             runner: 300.0,
-                            header: 700.0,
+                            header: B_R_HEADER,
                             inertia: 0.11,
                             flow: 1.35,
-                            head: Head::BIG_VALVES,
+                            head: Head::B_R,
                         })
                     },
-                    none,
+                    // The cast 4-2-1 from the factory.
+                    |preset| preset.manifold = 4,
                 ),
             ],
             manifolds: b_manifolds(),
