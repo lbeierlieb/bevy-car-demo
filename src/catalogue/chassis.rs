@@ -350,8 +350,7 @@ fn bothy() -> Chassis {
         },
         eye: [2.05, 1.42, 0.4],
         insulation: 0.4,
-        // Not in traffic yet.
-        traffic: 0.0,
+        traffic: 1.6,
         // From the passenger's footwell to the tailgate: the tall load space behind the
         // rear bench, the bench's place and the passenger seat's while they're out.
         hold: Hold {
@@ -481,8 +480,7 @@ fn aldine() -> Chassis {
         },
         eye: [2.3, 1.12, 0.38],
         insulation: 0.65,
-        // Not in traffic yet.
-        traffic: 0.0,
+        traffic: 2.0,
         // From the passenger's footwell to the boot: the boot under its lid, the rear
         // bench's place and the passenger seat's while they're out.
         hold: Hold {
@@ -622,8 +620,7 @@ fn tessel() -> Chassis {
         },
         eye: [2.0, 1.15, 0.37],
         insulation: 0.45,
-        // Not in traffic yet.
-        traffic: 0.0,
+        traffic: 0.8,
         // From the passenger's footwell to the hatch: the trunk behind the rear bench,
         // the bench's place and the passenger seat's while they're out.
         hold: Hold {
@@ -878,7 +875,7 @@ fn merrow() -> Chassis {
         eye: [2.68, 0.98, 0.36],
         insulation: 0.15,
         // Rare in traffic: about one car in fifty.
-        traffic: 0.06,
+        traffic: 0.15,
         // A small trunk under the boot lid, over the rear axle, and the passenger seat's
         // place while it's out.
         hold: Hold {
