@@ -195,6 +195,16 @@ impl Drive {
         ]
     }
 
+    /// Whether the engine drives `axle` (0 front, 1 rear), if only through the centre
+    /// coupling (all-wheel drive with the whole share at the front).
+    pub fn drives(self, axle: usize) -> bool {
+        match self {
+            Drive::Front => axle == 0,
+            Drive::Rear => axle == 1,
+            Drive::All { .. } => true,
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Drive::Rear => "rear-wheel drive",
@@ -248,8 +258,9 @@ pub struct EngineSetup {
     pub shift_time: f32,
     pub engage_time: f32,
     pub drive: Drive,
-    /// The differentials in the driven axles, and between them with all-wheel drive.
-    pub differential: Differential,
+    /// The differentials in the front and the rear axle (each counts only on a driven
+    /// axle), and the centre coupling between the axles with all-wheel drive.
+    pub differentials: [Differential; 2],
     pub centre: Differential,
 }
 
@@ -268,7 +279,7 @@ impl Default for EngineSetup {
             shift_time: 0.25,
             engage_time: 0.15,
             drive: Drive::Rear,
-            differential: Differential::OPEN,
+            differentials: [Differential::OPEN; 2],
             centre: Differential::OPEN,
         }
     }

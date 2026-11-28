@@ -254,10 +254,11 @@ fn apply_controls(car: &mut Car, dt: f32) {
     let grounded = (0..4).all(|i| shares[i] == 0.0 || corners[i].contact.is_some());
     let drive = drivetrain.step(engine, throttle, c.clutch, driven_omega, grounded, dt);
     let mut torque = shares.map(|share| share * drive.torque);
-    // Limited-slip differentials move torque from the faster side to the slower one.
-    for (left, right) in [(0, 1), (2, 3)] {
-        if shares[left] > 0.0 {
-            let moved = engine.differential.transfer(omega[left], omega[right]);
+    // Limited-slip differentials move torque from the faster side to the slower one, on
+    // every driven axle (one driven only through the centre coupling too).
+    for (axle, (left, right)) in [(0, 1), (2, 3)].into_iter().enumerate() {
+        if engine.drive.drives(axle) {
+            let moved = engine.differentials[axle].transfer(omega[left], omega[right]);
             torque[left] -= moved;
             torque[right] += moved;
         }
@@ -478,7 +479,7 @@ mod tests {
         let launch = |drive: Drive, differential: Differential| {
             let mut car = test_car(&terrain);
             car.setup.engine.drive = drive;
-            car.setup.engine.differential = differential;
+            car.setup.engine.differentials = [differential; 2];
             car.setup.engine.centre = differential;
             run(&mut car, &terrain, 1.0);
             car.controls = Controls {

@@ -282,7 +282,7 @@ impl CarSetup {
                 shift_time: gearbox.shift_time,
                 engage_time: gearbox.engage_time,
                 drive: chassis.drive,
-                differential,
+                differentials: [differential; 2],
                 centre: differential,
             },
             brake_torque: 2.0 * (front + rear) * build.brake_force,
