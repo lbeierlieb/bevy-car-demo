@@ -1288,6 +1288,62 @@ mod tests {
         assert!((55.0..80.0).contains(&gained), "{gained} kg");
     }
 
+    /// The saloon made all-wheel drive at the repo's car workshop in one go, then given
+    /// limited slips front and rear at its tuning shop: it drives all four wheels and pulls
+    /// away on a meadow better than it did.
+    #[test]
+    fn the_saloon_converts_at_the_shops_and_drives_all_four() {
+        use crate::physics::drivetrain::{Differential, Drive};
+        let catalogue = builtin();
+        let shops = crate::shops::parse(crate::shops::LIST).unwrap();
+        let named = |name: &str| shops.iter().find(|shop| shop.name == name).unwrap();
+        let (workshop, tuning) = (named("Werkstatt Knockäcker"), named("Tuning Bastei"));
+        let aldine = catalogue.find_chassis("Aldine").unwrap();
+        let before = CarSpec::of(&CarSetup::factory(aldine, 1));
+        let at = |kind| slots_of(&catalogue, &before.car, kind);
+        let fit = |slot: Vec<u8>, id: &str| Work::Fit {
+            slots: vec![slot],
+            supply: new(&catalogue, id),
+        };
+        let (gearbox, subframe) = (at(Kind::Gearbox)[0], at(Kind::RearSubframe)[0]);
+        let works = [
+            fit(at(Kind::Tunnel), "aldine.tunnel-kit"),
+            fit(vec![gearbox], "gearbox.k-5-speed-awd-transverse"),
+            fit(vec![gearbox, 2], "centre.reactive"),
+            fit(vec![subframe], "aldine.rear-subframe.awd"),
+            fit(vec![subframe, 0], "differential.open"),
+            fit(vec![subframe, 1], "aldine.rear-drive-shafts"),
+            fit(at(Kind::PropShaft), "aldine.prop-shaft"),
+        ];
+        let awd = run(&catalogue, workshop, &before, &works).unwrap().spec;
+        let lsd = [vec![gearbox, 1], vec![subframe, 0]]
+            .map(|slot| fit(slot, "differential.limited-slip"));
+        let awd = run(&catalogue, tuning, &awd, &lsd).unwrap().spec;
+        let line = crate::items::driveline(&catalogue, &awd.car);
+        assert_eq!(line.drive, Drive::All { front: 1.0 });
+        assert_eq!(line.differentials, [Differential::LIMITED_SLIP; 2]);
+        // On a meadow, floored with traction control.
+        let terrain = crate::terrain::Terrain::flat_meadow();
+        let speed = |spec: &CarSpec| {
+            let (build, parts) = spec.car.resolve(&catalogue).unwrap();
+            let engine = crate::physics::engine::EngineBuild::of_parts(&parts);
+            let setup = CarSetup::with_car(build, parts, engine, spec.car.clone());
+            let mut car = crate::car::Car::spawn_at(0, setup, &terrain, 50.0, 300.0, 0.0);
+            car.warm_tires();
+            car.parking_brake = false;
+            car.drivetrain.automatic = true;
+            car.drivetrain.shift_to(&car.setup.engine, 1);
+            car.controls.throttle = 1.0;
+            for _ in 0..(4.0 / crate::sim::STEP) as usize {
+                crate::sim::step_car(&mut car, &terrain, crate::sim::STEP);
+            }
+            car.forward_speed().abs()
+        };
+        let (front, all) = (speed(&before), speed(&awd));
+        println!("the saloon on a meadow in 4 s: {front:.1} m/s, converted {all:.1}");
+        assert!(all > front + 2.0, "{all} against {front}");
+    }
+
     /// The roadster's inline gearbox drives through its prop shaft to the differential in
     /// its rear subframe: neither comes out alone, and the hatch has no prop shaft slot.
     #[test]
