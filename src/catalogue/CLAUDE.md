@@ -597,13 +597,19 @@ cylinders (`saved::old_ecu`). Tunes say `ecu <name>`. Protocol 62.
 ## The Vireo's lineup (2026-11-27, `docs/vireo-lineup.md` step 4)
 
 B16 (1.6, SOHC, 8 valves: `Head::SINGLE_CAM`, 154 N·m, 66 kW, 6300 rpm), B20 (2.0, SOHC,
-189 N·m, 78 kW, 6000 rpm), B16R (1.6, DOHC, `Head::BIG_VALVES`, port flow 1.35, switching
-cams from the factory (`Block::high`: 232° / 270°, 1.22× lift), 164 N·m, 129 kW at 7500, 8200
-rpm), each with its locked ECU (the B16R's switches). The B20 block with the B16R head
-(`the_twin_cam_head_on_the_two_litre_pays` prints them): 207 N·m but its long runners peak it at
-6500; with short runners 195 N·m and 136 kW at 7500 once forged rods let it rev past the B20
-rods' 7300; it needs a programmable ECU (the B16R's runs 1.6-litre maps), and its torque is over
-the stock 5-speed's 200 N·m. Saved `b18`, `b18.head`, `ecu.b18` read as the B20's
+189 N·m, 78 kW, 6000 rpm), B16R (1.6, DOHC, `Head::B_R`, port flow 1.35, switching
+cams from the factory (`Block::high`: 212°/112° lifting 4.2 mm, out of breath past 6000, and
+236°/108° × 1.8 lift), the cast 4-2-1 `b.manifold.4-2-1` (850 mm, `preset.manifold`; the B16
+and B20 keep the 700 mm `b.manifold.stock`), 172 N·m, 131 kW at 8000, 8200 rpm), each with its
+locked ECU (the B16R's switches at 5700, `the_b16r_switches_to_its_wild_cam`; until
+2026-11-28 it never did: 232°/270° cams on the 700 mm manifold, 164 N·m, 129 kW at 7500).
+Saved B16Rs get the new cams from the catalogue but keep the manifold fitted (the 700 mm one
+from before; no conversion).
+The B20 block with the B16R head (`the_twin_cam_head_on_the_two_litre_pays` prints them):
+207 N·m, 122 kW, but its long runners peak it at 6500; with short runners 197 N·m, and 132 kW
+at 7500 once forged rods let it rev past the B20 rods' 7300; with the B16R's manifold too 195
+N·m, 136 kW at 7000; it needs a programmable ECU (the B16R's runs 1.6-litre maps), and its
+torque is near the stock 5-speed's 200 N·m. Saved `b18`, `b18.head`, `ecu.b18` read as the B20's
 (`saved::RENAMED`). Tests that broke things with a turbo on the B16 use the B16R
 (`twin_cam_turbo`): the 8-valve head doesn't breathe enough to. Protocol 63.
 

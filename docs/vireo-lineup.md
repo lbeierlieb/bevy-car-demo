@@ -50,6 +50,19 @@ block should be the swap players want (a "Frankenstein" engine).
    shop, programmable ECUs and the wideband sensor at tuning shops, stock ECUs at car
    workshops; cam covers by head (one narrow cover for one cam, a wide one for two).
 
+## Fix: the B16R switches (2026-11-28, agreed with the user)
+
+Its stock ECU never switched: the switch point is where the wild cam gives more air at
+full load all the way to the redline, and on the 700 mm cast manifold its 270° cam did so
+nowhere below 8200 (the port flow scales the pipes too, so the 232° mild cam wasn't choked;
+lift past the valve area's saturation buys little). Now a low-lift street cam (212°/112°,
+4.2 mm, out of breath past 6000), a wild one of 236°/108° at 7.6 mm, and a cast 4-2-1 of
+850 mm from the factory (`b.manifold.4-2-1`, sold with the stock manifolds): it switches at
+5700, 172 N·m, 131 kW at 8000, limit 8200 (was 164 N·m, 129 kW at 7500); weaker below the
+switch, stronger above. Full-load VE (mild/wild): 4500 0.85/0.83, 5500 0.92/0.89, 6000
+0.91/0.98, 7000 0.84/1.05, 7500 0.77/1.06, 8000 0.69/1.05. The switch rule stayed. Tuned
+with `full_load_ve_by_cam` (ignored test in `maps.rs`).
+
 ## Assumptions (stated to the user, not yet answered)
 
 - Codes B16, B20, B16R; the start car stays the base 1.6 (now the SOHC, slower).

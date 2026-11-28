@@ -457,10 +457,17 @@ phasing, VTEC-style cam switching).
   switching cam 13 s on 4 cores).
   A locked stock ECU whose model has `switching`/`phasers` (the B16R's, the K20R's) runs
   the same factory cam control, frozen in its tune. The switch point is where the second
-  profile breathes better at full load all the way to the redline: the B16R's never does
-  (`switch_rpm` 9500, so it stays on its mild cam), the K20R's from about 5500 (a wild cam
-  pays in the model only with long headers; with its 960 mm 4-2-1 it does). Its phaser
+  profile breathes better at full load all the way to the redline (none: 9500): the B16R's
+  from 5700, the K20R's from about 5500 (a wild cam pays in the model only with long
+  headers, the K20R's 960 mm 4-2-1, the B16R's 850 mm cast 4-2-1). The K20R's phaser
   advances the intake at low speed (25° from 1500 to 3500 rpm under load) and rests above.
+  Tuning cams: the ignored `maps::tests::full_load_ve_by_cam` prints the full-load VE per
+  profile across the revs (`VE_ENGINE`, `VE_HEADERS`, `VE_CAMS`, `VE_FLOW`, `VE_RPM`). What
+  it taught (2026-11-28): the port flow scales the runners and headers too, so a mild cam
+  isn't choked at high revs by duration; the valve area saturates past about 0.225 × the
+  valve's diameter of lift, so lift chokes only below that (the B16R's mild cam lifts 4.2
+  mm on 33 mm valves); a cam's longer duration moves the header's tuned speed up, and the
+  wild cam's dip under it (4500–5500) is what keeps it out at low revs.
 - **Lambda sensors and closed loop** (2026-11-27, `docs/vireo-lineup.md` step 5): the
   engine slot "Lambda sensor" (narrowband stock, wideband: `EngineHardware::wideband`, live,
   not in the maps' fingerprint). `Sensors::lambda` is the last step's exhaust λ

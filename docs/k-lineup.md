@@ -129,8 +129,8 @@ items with no limit (or don't exist yet), so steps 4 and 5 can ship apart.
    items (`k20`, `k20r.head`, `ecu.k24`, `k.headers.long-tube`, …) come from the family
    like the B series'; the shops sell them (`assets/shops.cfg`), but no `engine.k*`
    until a trim has one (step 3). Found on the way: the B16R's stock ECU never switches
-   (its wild cam breathes better nowhere below its redline, `switch_rpm` 9500); left as
-   it is.
+   (its wild cam breathes better nowhere below its redline, `switch_rpm` 9500); fixed
+   afterwards (2026-11-28, see `docs/vireo-lineup.md`): it switches at 5700.
 2. **Bellhousings and K gearboxes**: compatibility from data, adapter plates as items
    (inline only), the five K gearboxes; the derived `needs_adapter` goes.
 
