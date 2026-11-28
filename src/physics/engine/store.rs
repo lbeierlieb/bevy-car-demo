@@ -11,11 +11,14 @@ use super::maps::{EngineMaps, fingerprint};
 /// The maps baked with the game, by the factory code of their engine; and two engines
 /// the tests measure against (`REFERENCES`).
 #[cfg(any(test, not(target_arch = "wasm32")))]
-const BAKED: [(&str, &str); 6] = [
+const BAKED: [(&str, &str); 9] = [
     ("B16", include_str!("baked/b16.maps")),
     ("B20", include_str!("baked/b20.maps")),
     ("B16R", include_str!("baked/b16r.maps")),
     ("R80", include_str!("baked/r80.maps")),
+    ("K20", include_str!("baked/k20.maps")),
+    ("K20R", include_str!("baked/k20r.maps")),
+    ("K24", include_str!("baked/k24.maps")),
     ("W20", include_str!("baked/w20.maps")),
     ("B16T", include_str!("baked/b16t.maps")),
 ];

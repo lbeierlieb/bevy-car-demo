@@ -83,6 +83,12 @@ impl Head {
         lift: 0.105,
         ..Self::TWIN_CAM
     };
+    /// Big valves under two switching cams, the mild profile lifting little (the wild
+    /// one makes up for it).
+    const K_R: Self = Self {
+        lift: 0.095,
+        ..Self::BIG_VALVES
+    };
     /// Two cams over four valves, as on the 2-litre four.
     const TWIN_CAM: Self = Self {
         layout: ValveLayout::FOUR_VALVE,
@@ -290,6 +296,53 @@ fn b_manifolds() -> Vec<ManifoldDef> {
             Tubes,
         ),
         manifold("b.manifold.turbo", "Turbo manifold", 700.0, 1, true, Cast),
+    ]
+}
+
+/// The K series' cast manifold's primaries (mm), its fixed mild cams (duration, lobe
+/// separation) and its plain head's flow.
+const K_HEADER: f32 = 650.0;
+const K_DURATION: f32 = 236.0;
+const K_SEPARATION: f32 = 112.0;
+const K_FLOW: f32 = 1.1;
+
+/// The K series' manifolds, as the B series': the cast 4-into-1, short and long-tube
+/// headers, and a turbo manifold.
+fn k_manifolds() -> Vec<ManifoldDef> {
+    use Made::*;
+    vec![
+        manifold(
+            "k.manifold.stock",
+            "Stock cast 4-into-1 manifold",
+            K_HEADER,
+            1,
+            false,
+            Cast,
+        ),
+        manifold(
+            "k.headers.short",
+            "Short 4-into-1 headers",
+            390.0,
+            1,
+            false,
+            Tubes,
+        ),
+        manifold(
+            "k.headers.long-tube",
+            "Long-tube 4-2-1 headers",
+            960.0,
+            1,
+            false,
+            Tubes,
+        ),
+        manifold(
+            "k.manifold.turbo",
+            "Turbo manifold",
+            K_HEADER,
+            1,
+            true,
+            Cast,
+        ),
     ]
 }
 
@@ -528,6 +581,100 @@ pub fn families() -> Vec<Family> {
                 none,
             )],
             manifolds: r_manifolds(),
+            heads: Vec::new(),
+        },
+        Family {
+            name: "K-series four".into(),
+            about: "A modern twin-cam four, square or long-stroke: strong everywhere".into(),
+            layout: Layout::Inline4,
+            length: 0.62,
+            width: 0.62,
+            height: 0.68,
+            mass: 115.0,
+            versions: vec![
+                version(
+                    "K20",
+                    "2.0 DOHC four",
+                    || {
+                        // Square, mild fixed cams and long runners: torque low down and
+                        // a modest top end.
+                        block(Block {
+                            cylinders: 4,
+                            bore: 86.0,
+                            stroke: 86.0,
+                            compression: 9.8,
+                            duration: K_DURATION,
+                            separation: K_SEPARATION,
+                            high: None,
+                            phaser: 0.0,
+                            redline: 6900.0,
+                            runner: 430.0,
+                            header: K_HEADER,
+                            inertia: 0.13,
+                            flow: K_FLOW,
+                            head: Head::TWIN_CAM,
+                        })
+                    },
+                    none,
+                ),
+                version(
+                    "K20R",
+                    "2.0 DOHC four",
+                    || {
+                        // The same block with more compression, a head with big valves
+                        // and ports that flow under a mild cam (phased on the intake)
+                        // and a wild one with far more lift switched in from the middle
+                        // up (about 5500 rpm), and long-tube headers: it revs. (In the
+                        // model the wild cam pays only with long headers; its runners
+                        // hold the top end to the table's power, and leave short ones
+                        // to the swaps.)
+                        block(Block {
+                            cylinders: 4,
+                            bore: 86.0,
+                            stroke: 86.0,
+                            compression: 11.5,
+                            duration: 224.0,
+                            separation: 112.0,
+                            high: Some((236.0, 110.0, 1.3)),
+                            phaser: 50.0,
+                            redline: 8600.0,
+                            runner: 440.0,
+                            header: 960.0,
+                            inertia: 0.12,
+                            flow: 1.4,
+                            head: Head::K_R,
+                        })
+                    },
+                    // Tubular 4-2-1 headers from the factory.
+                    |preset| preset.manifold = 2,
+                ),
+                version(
+                    "K24",
+                    "2.4 DOHC four",
+                    || {
+                        // Long-stroke: the K20's head on a taller block, rods made for
+                        // its lower revs.
+                        block(Block {
+                            cylinders: 4,
+                            bore: 87.0,
+                            stroke: 99.0,
+                            compression: 9.7,
+                            duration: K_DURATION,
+                            separation: K_SEPARATION,
+                            high: None,
+                            phaser: 0.0,
+                            redline: 6500.0,
+                            runner: 450.0,
+                            header: K_HEADER,
+                            inertia: 0.15,
+                            flow: K_FLOW,
+                            head: Head::TWIN_CAM,
+                        })
+                    },
+                    none,
+                ),
+            ],
+            manifolds: k_manifolds(),
             heads: Vec::new(),
         },
     ]

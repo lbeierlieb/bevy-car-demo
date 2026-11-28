@@ -929,6 +929,132 @@ mod tests {
         );
     }
 
+    /// Peak torque (N·m), peak power (kW), the speed of the peak power and the rev limit of
+    /// a factory engine with its own (locked) ECU.
+    fn factory_peaks(code: &str) -> (f32, f32, f32, f32) {
+        let parts = crate::physics::engine::parts::Parts::factory(code).unwrap();
+        let build = EngineBuild::of_parts(&parts);
+        let (torque, power, at) = peaks(&build);
+        let limit = build.ecu.rev_limit;
+        println!("{code:5} {torque:4.0} N·m {power:4.0} kW at {at} rpm, limit {limit}");
+        (torque, power, at, limit)
+    }
+
+    /// The K series as the table in `docs/k-lineup.md` has it: the K20 about 118 kW at
+    /// 6500 (limit 6900), the K20R 158 kW at 8000 (8600), the K24 120 kW at 5800 (6500)
+    /// with far more torque. Only the K20R's ECU switches its cams and phases the intake.
+    #[test]
+    fn the_k_series_is_what_the_table_says() {
+        let k20 = factory_peaks("K20");
+        let k20r = factory_peaks("K20R");
+        let k24 = factory_peaks("K24");
+        let near = |(_, power, at, limit): (f32, f32, f32, f32), kw: f32, rpm: f32, top: f32| {
+            (power - kw).abs() < 0.06 * kw
+                && (at - rpm).abs() <= 500.0
+                && (limit - top).abs() <= 100.0
+        };
+        assert!(near(k20, 118.0, 6500.0, 6900.0), "{k20:?}");
+        assert!(near(k20r, 158.0, 8000.0, 8600.0), "{k20r:?}");
+        assert!(near(k24, 120.0, 5800.0, 6500.0), "{k24:?}");
+        assert!(k24.0 > 1.12 * k20.0, "{k20:?} {k24:?}");
+        let ecu = |code: &str| {
+            let parts = crate::physics::engine::parts::Parts::factory(code).unwrap();
+            parts.ecu_model()
+        };
+        assert!(ecu("K20R").switching && ecu("K20R").phasers && ecu("K20R").locked);
+        assert!(!ecu("K20").cam_control() && !ecu("K24").cam_control());
+        // The K20R's ECU advances the intake cam under load, and puts the wild cam in
+        // high up.
+        let parts = crate::physics::engine::parts::Parts::factory("K20R").unwrap();
+        let build = EngineBuild::of_parts(&parts);
+        assert_eq!(build.hardware.intake_phasing, 50.0);
+        let phased = (3..16)
+            .map(|i| i as f32 * 500.0)
+            .find(|&rpm| build.ecu.cams.intake_phase.get(&[rpm, 100e3]) > 10.0)
+            .expect("phased somewhere at full load");
+        let engine = run_flat_out(&build, phased, 2.0);
+        assert!(
+            engine.actuators.intake_phase > 10.0,
+            "at {phased} rpm: {:?}",
+            engine.actuators
+        );
+        assert_eq!(engine.actuators.cam_profile, 0);
+        let engine = run_flat_out(&build, 7500.0, 2.0);
+        assert_eq!(engine.actuators.cam_profile, 1);
+    }
+
+    /// The K20R's head on the K24's block: more torque than either at once, and more
+    /// power than the K24; its revs held by the K24's rods until forged ones go in; with
+    /// those, short runners and long-tube headers more power than the K20R, and more again
+    /// with pistons that give back the K20R's compression. The K20R's stock ECU runs
+    /// 2-litre maps on it (lean flat out), the K24's doesn't switch the cams.
+    #[test]
+    fn the_k20r_head_on_the_k24_block_pays() {
+        use crate::physics::engine::parts::Parts;
+        let catalogue = crate::catalogue::builtin();
+        let measured = |name: &str, parts: &Parts| {
+            let build = EngineBuild::new(parts.hardware(), ecu::EcuModel::PROGRAMMABLE);
+            let (torque, power, at) = peaks(&build);
+            let limit = build.ecu.rev_limit;
+            println!("{name:30} {torque:4.0} N·m {power:4.0} kW at {at} rpm, limit {limit}");
+            (torque, power, limit)
+        };
+        let k20r = measured("K20R", &Parts::factory("K20R").unwrap());
+        let k24 = measured("K24", &Parts::factory("K24").unwrap());
+        let mut swap = Parts::factory("K24").unwrap();
+        let family = &catalogue.families[swap.family];
+        swap.head = (family.heads.iter())
+            .position(|h| h.id == "k20r.head")
+            .unwrap();
+        let headed = measured("K24 with the K20R head", &swap);
+        // The phaser comes with the head.
+        assert_eq!(swap.hardware().intake_phasing, 50.0);
+        let mut built = swap.clone();
+        built.chosen[3] = 1;
+        built.chosen[8] = 2;
+        built.manifold = 2;
+        let forged = measured("… forged rods, short runners,", &built);
+        println!("{:30} (and long-tube headers)", "");
+        built.chosen[crate::catalogue::PISTONS] = 3;
+        let pistons = measured("… and race pistons", &built);
+        // The head alone: more torque than either, more power than the K24.
+        assert!(
+            headed.0 > 1.05 * k24.0 && headed.0 > 1.1 * k20r.0,
+            "{headed:?}"
+        );
+        assert!(headed.1 > 1.15 * k24.1, "{headed:?}");
+        // The K24's rods hold it well under the K20R's revs; forged ones don't.
+        assert!(
+            headed.2 < k20r.2 - 500.0 && forged.2 >= k20r.2 - 100.0,
+            "{headed:?} {forged:?}"
+        );
+        // Built: more power than the K20R, and more torque.
+        assert!(
+            forged.1 > 1.02 * k20r.1 && forged.0 > 1.05 * k20r.0,
+            "{forged:?} {k20r:?}"
+        );
+        assert!(pistons.1 > 1.06 * k20r.1, "{pistons:?} {k20r:?}");
+        // Stock ECUs: the K20R's fuels a 2.0 (lean on the 2.4), the K24's stays on the
+        // mild cam.
+        let ecu = |code: &str| {
+            let mut parts = swap.clone();
+            parts.ecu = (catalogue.ecus.iter())
+                .position(|e| e.factory.as_deref() == Some(code))
+                .unwrap();
+            EngineBuild::of_parts(&parts)
+        };
+        let build = ecu("K20R");
+        let target = build.ecu.maps_on(1).1.get(&[6000.0, 100e3]);
+        let engine = run_flat_out(&build, 6000.0, 2.0);
+        assert!(
+            engine.exhaust_lambda > target + 0.05,
+            "λ {} for {target}",
+            engine.exhaust_lambda
+        );
+        let build = ecu("K24");
+        assert_eq!(run_flat_out(&build, 6000.0, 2.0).actuators.cam_profile, 0);
+    }
+
     #[test]
     fn every_factory_engine_idles_and_pulls() {
         let catalogue = crate::catalogue::builtin();
