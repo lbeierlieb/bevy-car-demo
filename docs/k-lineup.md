@@ -133,6 +133,39 @@ items with no limit (or don't exist yet), so steps 4 and 5 can ship apart.
    it is.
 2. **Bellhousings and K gearboxes**: compatibility from data, adapter plates as items
    (inline only), the five K gearboxes; the derived `needs_adapter` goes.
+
+   **Done** (2026-11-28; protocol 67, 68). `Family::bellhousing` and `Gearbox::bellhousing`
+   are pattern names (`B-series`, `K-series`, `R-series`); `Catalogue::bolting` gives
+   `Direct`, `Adapter(a)` or `Never`. Adapter plates are `Catalogue::adapters`
+   (`AdapterDef { id, name, gearbox, engine, mass }`), items of `Kind::Adapter` that go
+   into an optional "Adapter plate" slot on the gearbox (only gearboxes that aren't
+   transverse have it): the plate bolts to the gearbox's face and stays with it when the
+   engine is swapped, the usual case for a swap. The one plate, `adapter-plate.k-to-r`, is
+   sold at the engine shop, which now fits plates (as it swaps engines). The Merrow's bay
+   went from 0.62 to 0.70 m tall so a K (0.68 m) fits at all. Fitting refuses a gearbox
+   that doesn't bolt (`items::drivetrain_misfit`, with a `Fix`: fit plate `a`, or take
+   the plate off when the two bolt straight together); the shop window shows the reason
+   on a new part and offers it together with the plate (or the plate off) in one request,
+   since either alone is refused. No saved car needed converting: every factory pairing is
+   direct, and no other pairing could be built before (the B didn't fit the Merrow's bay,
+   the V10 not the Vireo's, and no K engine is sold whole yet).
+
+   The K gearboxes (transverse, `k_gearbox` in `catalogue/chassis.rs`; reverse 3.58;
+   final drives stay the chassis', for step 3: about 4.29 Tessel, 4.76 Tessel R, 4.44
+   Aldine, 4.76 Bothy):
+
+   | Gearbox | Gears | Mass | Takes (N·m) |
+   |---|---|---|---|
+   | K 5-speed (Tessel; EP3 Si) | 3.27 1.88 1.21 0.92 0.74 | 38 kg | 250 |
+   | K 5-speed long (Aldine; Accord 2.4) | 3.27 1.77 1.21 0.92 0.71 | 40 kg | 290 |
+   | K 5-speed short (Bothy; Element) | 3.53 2.04 1.39 1.03 0.78 | 40 kg | 290 |
+   | K 5-speed AWD (Bothy AWD) | as the short one, `transfer: true` | 52 kg | 290 |
+   | K 6-speed close-ratio (Tessel R; EP3 Type R) | 3.27 2.13 1.52 1.15 0.92 0.74 | 44 kg | 320 (clutch 300), shifts 0.22 s |
+
+   The AWD one is only marked: `Gearbox::transfer` is a flag nothing reads until step 4
+   (which may make it a gearbox kind of its own and add the centre coupling slot). Car
+   workshops sell the 5-speeds, tuning shops the 6-speed. The two B gearboxes keep their
+   names and ids (saved cars); the shop window shows a gearbox's bellhousing.
 3. **The three chassis and six trims**: bodies (`body.rs` outlines: short hatch, saloon,
    tall box with a split rear hatch), bays (all transverse, front), masses (about
    1200, 1350, 1550 kg; AWD +70 kg), tanks, wheels, anti-roll bars, holds, body slots,
