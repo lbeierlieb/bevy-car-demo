@@ -566,7 +566,8 @@ PLACE="-1950,-3160,150" TAPS="Enter@200;ArrowDown*2@206;Enter@214;ArrowDown*2@22
 
 A head is an item of its own (`Kind::Head`, `Does::Head { family, head }`), in the long
 block's "Cylinder head" slot: `Family::heads` (`HeadDef`: id, name, the bore it's made for,
-cams, valve springs, valve layout, port flow), each version's factory head its preset's
+cams, valve springs, valve layout, port flow, its own phasers' ranges (since protocol 66:
+`HeadDef::fit` sets them, the "Cam phasers" parts only add to them)), each version's factory head its preset's
 (`Preset::head`; the built-in ones are made from the versions' blocks, `<code>.head`,
 `engines::with_heads`). `Parts::head`; `HeadDef::fit` lays it over the block in
 `Parts::hardware` before the parts: valve sizes stay what they are on its own bore (relative
@@ -614,3 +615,18 @@ with its first part). Protocol 64.
 Looks: `mechanicals` draws an inline engine's cam cover by its head (one narrow hump over a
 single cam, a wide cover with a ridge over each of two). Shots of the bay: `OFFLINE=1 TRIM="0,2"
 UNFIT="Bonnet" CARCAM="-0.9,1.9,1.5,1.5"` (`TRIM` 0,0 the B16, 0,1 the B20, 0,2 the B16R).
+
+## The K family (2026-11-28, `docs/k-lineup.md` step 1)
+
+The second four (`K-series four`, 115 kg, the third family): K20 (86 × 86, 9.8:1, fixed
+236°/112° cams, 211 N·m, 115 kW at 6500, 6900 rpm), K20R (11.5:1, `Head::K_R`, cams
+switched at about 5500 and its head's intake phaser (`Block::phaser`, 50°), long-tube
+headers from the factory (`preset.manifold` = `k.headers.long-tube`), 158 kW at 8500, 8600
+rpm), K24 (87 × 99, 9.7:1, 245 N·m, 118 kW at 5500, 6500 rpm); each with its locked ECU
+(the K20R's switches and phases). Manifolds `k.manifold.stock` (650 mm), `k.headers.short`,
+`k.headers.long-tube`, `k.manifold.turbo`. The K24 with the K20R head
+(`the_k20r_head_on_the_k24_block_pays` prints them): 271 N·m, 145 kW, rods cap it at 7000;
+forged rods, short runners and long tubes 164 kW, race pistons 174; it needs a
+programmable ECU. No chassis offers the K family yet (step 3): no `engine.k*` assemblies,
+which come from trims. Sold: long blocks and heads at engine shops, stock ECUs and the
+cast manifold at car workshops, `k.*` at tuning shops.

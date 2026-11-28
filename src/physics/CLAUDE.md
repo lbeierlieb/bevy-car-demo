@@ -408,6 +408,12 @@ phasing, VTEC-style cam switching).
   stock ECU they stay on the first profile, at rest. Phase axes have 3 points and the
   ratio axis is coarser with phasers (bake: intake phaser about 2 s, both 6 s, with the
   switching cam 13 s on 4 cores).
+  A locked stock ECU whose model has `switching`/`phasers` (the B16R's, the K20R's) runs
+  the same factory cam control, frozen in its tune. The switch point is where the second
+  profile breathes better at full load all the way to the redline: the B16R's never does
+  (`switch_rpm` 9500, so it stays on its mild cam), the K20R's from about 5500 (a wild cam
+  pays in the model only with long headers; with its 960 mm 4-2-1 it does). Its phaser
+  advances the intake at low speed (25° from 1500 to 3500 rpm under load) and rests above.
 - **Lambda sensors and closed loop** (2026-11-27, `docs/vireo-lineup.md` step 5): the
   engine slot "Lambda sensor" (narrowband stock, wideband: `EngineHardware::wideband`, live,
   not in the maps' fingerprint). `Sensors::lambda` is the last step's exhaust λ

@@ -136,7 +136,7 @@ mute key went into it, 2026-11-23).
 apps load `assets/gerach.terrain` at startup, so they see a re-bake at once (tests use
 the embedded copy, `Terrain::baked`, the fallback otherwise); commit the re-baked file.
 - Engine maps of every factory engine of the built-in catalogue (B16, B20 and B16R since
-  2026-11-27 (the B18 before), R80, see `catalogue/engines.rs`), plus two engines tests measure against (W20,
+  2026-11-27 (the B18 before), R80, K20, K20R and K24 since 2026-11-28, see `catalogue/engines.rs`), plus two engines tests measure against (W20,
   `EngineHardware::default`; B16T, `EngineHardware::turbo`), are baked into
   `src/physics/engine/baked/<code>.maps` (listed in `engine/store.rs`'s `BAKED`). After changing `cycle.rs`, `maps.rs` (outside
   their tests; any edit counts, their text is in the fingerprint) or a factory engine's

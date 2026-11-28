@@ -104,6 +104,33 @@ items with no limit (or don't exist yet), so steps 4 and 5 can ship apart.
    switching with an intake phaser); stock ECUs (locked; the K20R's switches and phases); baked maps (new files in
    `engine/baked/`, `BAKED`); stock engines tested against the table above, and the
    Frankenstein (more power, rods' rev cap, refused by a stock ECU). Engine shop items.
+
+   **Done** (2026-11-28). Heads carry their own cam phasers now (`HeadDef::intake_phasing`,
+   `exhaust_phasing`, from `Block::phaser`; protocol 66), so the K20R's phaser goes with
+   its head onto the K24. The stock ECU model needed nothing more: `Ecu::calibrated`
+   already phased for a model with `phasers`. As measured (`the_k_series_is_what_the_table_says`,
+   `the_k20r_head_on_the_k24_block_pays`, each with its own locked ECU):
+
+   | Code | Torque | Power | Limit | Made of |
+   |---|---|---|---|---|
+   | K20 | 211 N·m | 115 kW at 6500 | 6900 | 236°/112° cams, runners 430 mm, flow 1.1, `Head::TWIN_CAM` |
+   | K20R | 229 N·m | 158 kW at 8500 | 8600 | 224°/112° (lift 0.095 bore, `Head::K_R`) and 236°/110° × 1.3 lift, switched at about 5500; intake phaser 50°; runners 440, flow 1.4; long-tube headers (960 mm) from the factory (`preset.manifold`) |
+   | K24 | 245 N·m | 118 kW at 5500 | 6500 | as the K20, runners 450 |
+
+   The K24 block with the K20R head: 271 N·m and 145 kW at 6500, held to 7000 by the
+   K24's rods; with forged rods, short runners and long-tube headers 248 N·m, 164 kW at
+   7500 (limit 8500); with race pistons (back to 11.7:1) 174 kW. The K20R's stock ECU
+   runs it lean (2-litre maps), the K24's never switches cams: a programmable ECU it is.
+   Decided while building: in the model a wilder high cam pays only with long headers
+   (with the 650 mm cast manifold the mild cam breathes better at every speed), hence
+   the K20R's factory 4-2-1; and the swap's gain over the K20R is small in power (the
+   same valves choke a bigger engine sooner, and the long stroke's friction grows), so
+   the K20R's runners are long enough to keep it at the table's power. The family's
+   items (`k20`, `k20r.head`, `ecu.k24`, `k.headers.long-tube`, …) come from the family
+   like the B series'; the shops sell them (`assets/shops.cfg`), but no `engine.k*`
+   until a trim has one (step 3). Found on the way: the B16R's stock ECU never switches
+   (its wild cam breathes better nowhere below its redline, `switch_rpm` 9500); left as
+   it is.
 2. **Bellhousings and K gearboxes**: compatibility from data, adapter plates as items
    (inline only), the five K gearboxes; the derived `needs_adapter` goes.
 3. **The three chassis and six trims**: bodies (`body.rs` outlines: short hatch, saloon,
