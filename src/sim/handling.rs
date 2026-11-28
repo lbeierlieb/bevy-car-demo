@@ -814,27 +814,51 @@ fn step_cost() {
 fn zero_to_hundred() {
     for (chassis, made) in crate::catalogue::builtin().chassis.iter().enumerate() {
         for option in 0..made.engines.len() {
-            let terrain = Terrain::flat();
-            let setup = CarSetup::factory(chassis, option);
-            let angle = -0.75 * std::f32::consts::PI;
-            let mut car = Car::spawn_at(0, setup, &terrain, -480.0, -480.0, angle);
-            car.warm_tires();
-            car.drivetrain.automatic = true;
-            car.traction_control = true;
-            car.parking_brake = false;
-            let dt = 1.0 / CHASSIS_HZ as f32;
-            let mut time = 0.0;
-            while car.forward_speed() < 100.0 / 3.6 && time < 30.0 {
-                car.controls.throttle = if time < 0.5 { 0.0 } else { 1.0 };
-                step_car(&mut car, &terrain, dt);
-                time += dt;
-            }
-            println!(
-                "{:<8} {:<5} {:4.1} s",
-                made.name,
-                made.engines[option],
-                time - 0.5
-            );
+            let time = time_to_hundred(CarSetup::factory(chassis, option));
+            println!("{:<8} {:<5} {time:4.1} s", made.name, made.engines[option]);
         }
     }
+}
+
+/// A car's time from standing to 100 km/h (s), flat out with traction control and the
+/// automatic gearbox, on warm tires (at most 30).
+fn time_to_hundred(setup: CarSetup) -> f32 {
+    let terrain = Terrain::flat();
+    let angle = -0.75 * std::f32::consts::PI;
+    let mut car = Car::spawn_at(0, setup, &terrain, -480.0, -480.0, angle);
+    car.warm_tires();
+    car.drivetrain.automatic = true;
+    car.traction_control = true;
+    car.parking_brake = false;
+    let dt = 1.0 / CHASSIS_HZ as f32;
+    let mut time = 0.0;
+    while car.forward_speed() < 100.0 / 3.6 && time < 30.5 {
+        car.controls.throttle = if time < 0.5 { 0.0 } else { 1.0 };
+        step_car(&mut car, &terrain, dt);
+        time += dt;
+    }
+    time - 0.5
+}
+
+/// The K-series cars pull away like their kinds: the hot hatch quickest (about 6 s), the
+/// hatch and the saloons in 7 to 8.5 s, the heavy box slowest.
+#[test]
+fn the_k_cars_reach_a_hundred_in_their_time() {
+    let catalogue = crate::catalogue::builtin();
+    let time = |chassis: &str, engine: &str| {
+        let c = catalogue.find_chassis(chassis).expect("the chassis");
+        let made = &catalogue.chassis[c];
+        let option = made.engines.iter().position(|e| e == engine).unwrap();
+        let time = time_to_hundred(CarSetup::factory(c, option));
+        println!("{chassis} {engine}: 0-100 in {time:.1} s");
+        time
+    };
+    let hot = time("Tessel", "K20R");
+    let hatch = time("Tessel", "K20");
+    let saloon = time("Aldine", "K24");
+    let lazy = time("Bothy", "K24");
+    assert!((5.0..7.0).contains(&hot), "{hot}");
+    assert!((6.5..8.5).contains(&hatch) && hot < hatch - 0.6, "{hatch}");
+    assert!((6.5..9.0).contains(&saloon), "{saloon}");
+    assert!((7.5..10.5).contains(&lazy) && lazy > saloon, "{lazy}");
 }
