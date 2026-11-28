@@ -3,10 +3,11 @@
 //! Engines, gearboxes and the rest are independent of the chassis: a car is built from a
 //! chassis and whatever fits it (`CarBuild`, and the engine's `Parts`).
 //!
-//! What fits: an engine goes into any bay it has the space for, the only hard limit. An
-//! engine the factory never offered there needs a swap subframe, a gearbox made for other
-//! engines an adapter plate, and the room around the engine limits how long the exhaust
-//! manifold's primaries can be.
+//! What fits: an engine goes into any bay it has the space for, the only hard limit of
+//! the chassis. An engine the factory never offered there needs a swap subframe, and the
+//! room around the engine limits how long the exhaust manifold's primaries can be. The
+//! gearbox bolts to engines of its bellhousing pattern (or through an adapter plate, see
+//! `Catalogue::bolting`).
 
 use bevy::prelude::*;
 
@@ -62,6 +63,10 @@ pub enum GearboxKind {
 pub struct Gearbox {
     pub name: String,
     pub kind: GearboxKind,
+    /// The engines' bellhousing pattern it bolts to (`Family::bellhousing`); another
+    /// pattern only through an adapter plate, and only if it isn't transverse (see
+    /// `Catalogue::bolting`).
+    pub bellhousing: String,
     pub gears: Vec<f32>,
     pub reverse: f32,
     pub mass: f32,

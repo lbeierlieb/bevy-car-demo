@@ -1,6 +1,6 @@
 //! The built-in catalogue's chassis, gearboxes, clutches, suspension kits and paints.
 
-use super::{Clutch, Paint, Suspension};
+use super::{AdapterDef, Clutch, Paint, Suspension};
 use crate::body::{Body, Detail, Tone};
 use crate::cargo::{Area, Hold};
 use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars};
@@ -96,6 +96,7 @@ pub fn gearboxes() -> Vec<Gearbox> {
         Gearbox {
             name: "5-speed (transverse)".into(),
             kind: GearboxKind::Transverse,
+            bellhousing: "B-series".into(),
             gears: vec![3.55, 1.95, 1.31, 0.97, 0.78],
             reverse: 3.4,
             mass: 35.0,
@@ -107,6 +108,7 @@ pub fn gearboxes() -> Vec<Gearbox> {
         Gearbox {
             name: "6-speed close-ratio (transverse)".into(),
             kind: GearboxKind::Transverse,
+            bellhousing: "B-series".into(),
             gears: vec![3.3, 2.05, 1.48, 1.14, 0.92, 0.76],
             reverse: 3.3,
             mass: 42.0,
@@ -119,6 +121,7 @@ pub fn gearboxes() -> Vec<Gearbox> {
         Gearbox {
             name: "6-speed heavy duty (inline)".into(),
             kind: GearboxKind::Inline,
+            bellhousing: "R-series".into(),
             gears: vec![2.66, 1.78, 1.3, 1.0, 0.74, 0.5],
             reverse: 2.9,
             mass: 60.0,
@@ -128,6 +131,18 @@ pub fn gearboxes() -> Vec<Gearbox> {
             engage_time: 0.16,
         },
     ]
+}
+
+/// The adapter plates: for now only the one that puts a K-series four in front of the
+/// roadster's inline gearbox.
+pub fn adapters() -> Vec<AdapterDef> {
+    vec![AdapterDef {
+        id: "adapter-plate.k-to-r".into(),
+        name: "Adapter plate, K-series engine to R-series gearbox".into(),
+        gearbox: "R-series".into(),
+        engine: "K-series".into(),
+        mass: 9.0,
+    }]
 }
 
 pub const fn wheel(diameter: u8, rim_width: u8, width: u16, aspect: u8, compound: usize) -> Wheel {
@@ -337,7 +352,8 @@ fn merrow() -> Chassis {
             orientation: Orientation::Longitudinal,
             length: 0.98,
             width: 0.92,
-            height: 0.62,
+            // Room for a twin-cam four's head too (a K through an adapter plate).
+            height: 0.7,
             engine_at: 0.42,
             gearbox_at: 1.25,
             header_room: 0.8,
@@ -418,7 +434,7 @@ fn area(along: [u8; 2], across: [u8; 2], floor: u8, ceiling: u8, seat: Option<&s
 
 #[cfg(test)]
 mod tests {
-    use crate::catalogue::{DEFAULT_CHASSIS, builtin};
+    use crate::catalogue::{Bolting, DEFAULT_CHASSIS, builtin};
     use crate::chassis::{CarBuild, Misfit};
     use crate::physics::engine::maps::EngineMaps;
     use crate::physics::engine::parts::Parts;
@@ -450,7 +466,11 @@ mod tests {
                 // The factory's engines fit without a swap subframe or an adapter, with
                 // their own exhaust manifold: their maps come baked with the game.
                 let fit = made.fit(&catalogue, family(code)).expect("it fits");
-                assert!(!fit.swap && !catalogue.needs_adapter(made.gearbox, family(code)));
+                assert!(!fit.swap);
+                assert_eq!(
+                    catalogue.bolting(made.gearbox, family(code)),
+                    Bolting::Direct
+                );
                 let parts = build.factory_engine(option);
                 let hardware = parts.hardware();
                 let free = Parts::factory(code).unwrap().hardware();
@@ -574,8 +594,24 @@ mod tests {
             boxes,
             ["5-speed (transverse)", "6-speed close-ratio (transverse)"]
         );
-        // The hatch's own gearbox takes its engine; the other needs a plate.
-        assert!(!catalogue.needs_adapter(hatch.gearbox, family("B16")));
-        assert!(catalogue.needs_adapter(1 - hatch.gearbox, family("B16")));
+        // Both bolt to the B series, neither to the K series: transverse gearboxes never
+        // cross families, and no adapter plate is made for them.
+        let (b, k) = (family("B16"), family("K20"));
+        for gearbox in catalogue.gearboxes_for(hatch) {
+            assert_eq!(catalogue.bolting(gearbox, b), Bolting::Direct);
+            assert_eq!(catalogue.bolting(gearbox, k), Bolting::Never);
+        }
+        // The roadster's inline gearbox takes the K series through an adapter plate, the
+        // B series not at all.
+        let roadster = &catalogue.chassis[catalogue.find_chassis("Merrow").unwrap()];
+        let Bolting::Adapter(plate) = catalogue.bolting(roadster.gearbox, k) else {
+            panic!("an adapter plate for a K in the roadster");
+        };
+        assert_eq!(catalogue.adapters[plate].id, "adapter-plate.k-to-r");
+        assert_eq!(catalogue.bolting(roadster.gearbox, b), Bolting::Never);
+        assert_eq!(
+            catalogue.bolting(roadster.gearbox, family("R80")),
+            Bolting::Direct
+        );
     }
 }

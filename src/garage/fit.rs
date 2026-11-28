@@ -6,7 +6,9 @@
 //! (in the trunk or held there), and rebore blocks (with pistons of the new size). An
 //! exhaust manifold's screen says what it is (primaries, branches, collectors, mounts) and
 //! lists its mounts; turbos go on, and come off, every mount at once (new ones, or as many
-//! alike brought). Every change is asked of the server (`fitting::Work`), which answers
+//! alike brought). A new part that would leave the gearbox not bolting to the engine says
+//! why, and is offered along with the adapter plate that makes it (or with the plate
+//! off), where the shop can do that. Every change is asked of the server (`fitting::Work`), which answers
 //! with the car.
 
 use bevy_egui::egui;
@@ -14,10 +16,11 @@ use bevy_egui::egui;
 use crate::car::Car;
 use crate::catalogue::Catalogue;
 use crate::fitting::{
-    HELD, IN_TRUNK, Path, Supply, Work, bore_name, engine_on, fits_into, item_in, loose, made_for,
-    made_for_engine, mounts, new_paints, slot_kinds_in, wares, wheel_of,
+    HELD, IN_TRUNK, Path, Supply, Work, adapter_slot, bore_name, engine_on, fits_into, item_in,
+    loose, made_for, made_for_engine, mounts, new_paints, slot_kinds_in, wares, wheel_of,
+    with_fitted,
 };
-use crate::items::{Does, Item, Kind, OVERSIZES};
+use crate::items::{Does, Fix, Item, Kind, OVERSIZES, drivetrain_misfit};
 use crate::menu::kit;
 use crate::net::Connection;
 use crate::owned::name;
@@ -220,7 +223,9 @@ fn group(kind: Kind) -> &'static str {
         Kind::Seat(_) => "Seats",
         Kind::Wheel | Kind::Brake => "Wheels and brakes",
         Kind::Spring | Kind::Damper | Kind::AntiRollBar => "Suspension",
-        Kind::Gearbox | Kind::Clutch | Kind::FinalDrive | Kind::Differential => "Drivetrain",
+        Kind::Gearbox | Kind::Clutch | Kind::FinalDrive | Kind::Differential | Kind::Adapter => {
+            "Drivetrain"
+        }
         Kind::EnginePart(_) => "Exhaust and cooling",
         _ => "Engine",
     }
@@ -334,7 +339,7 @@ pub fn window(ui: &mut egui::Ui, fitter: &mut Fitter, bench: Bench) {
     match &screen {
         Screen::Slot(path) if path.is_empty() => car_screen(ui, &bench, &mut ask, &mut go),
         Screen::Slot(path) => slot_screen(ui, fitter, &bench, path, &mut ask, &mut asks, &mut go),
-        Screen::Ware(path, n) => ware_screen(ui, fitter, &bench, path, *n, &mut ask),
+        Screen::Ware(path, n) => ware_screen(ui, fitter, &bench, path, *n, &mut ask, &mut asks),
         Screen::NewWheel(path) => new_wheel_screen(ui, fitter, &bench, path, &mut ask),
         Screen::MakeWheel => make_wheel_screen(ui, fitter, &bench, &mut ask),
         Screen::Loose(path) => loose_screen(ui, &bench, path, &mut go),
@@ -498,8 +503,8 @@ fn car_screen(ui: &mut egui::Ui, bench: &Bench, ask: &mut Option<Work>, go: &mut
                  trunk while there's room, else the shop holds it."
             }
             ShopKind::Engine => {
-                "Only long blocks: what's inside them, rebores, and engines swapped. What \
-                 comes off goes into the trunk while there's room, else the shop keeps it \
+                "Only long blocks: what's inside them, rebores, and engines swapped (with an \
+                 adapter plate on the gearbox where it needs one). What comes off goes into the trunk while there's room, else the shop keeps it \
                  (one engine and one long block for you at most). A changed engine runs as \
                  it was until its maps are worked out."
             }
@@ -822,6 +827,7 @@ fn ware_screen(
     path: &Path,
     n: usize,
     ask: &mut Option<Work>,
+    asks: &mut Option<Vec<Work>>,
 ) {
     let catalogue = bench.catalogue;
     let car = &bench.car.setup.car;
@@ -914,7 +920,83 @@ fn ware_screen(
         }
         _ => return,
     };
-    fit_buttons(ui, bench, path, supply, ask);
+    if !bolts_after(ui, bench, path, &supply, asks) {
+        fit_buttons(ui, bench, path, supply, ask);
+    }
+}
+
+/// Whether the gearbox still bolts to the engine with the new part `supply` at `path`
+/// (`items::drivetrain_misfit`). If not, says why
+/// and offers fitting it along with what makes it bolt, if the shop can do that.
+fn bolts_after(
+    ui: &mut egui::Ui,
+    bench: &Bench,
+    path: &Path,
+    supply: &Supply,
+    asks: &mut Option<Vec<Work>>,
+) -> bool {
+    let catalogue = bench.catalogue;
+    let part = match *supply {
+        Supply::Part {
+            def,
+            variant,
+            paint,
+        } => {
+            let mut part = Item::new(catalogue, usize::from(def), usize::from(paint));
+            part.variant = usize::from(variant);
+            part
+        }
+        Supply::Assembly(a) => catalogue.assemblies[usize::from(a)].item.clone(),
+        _ => return true,
+    };
+    if loose(path) {
+        return true;
+    }
+    let Some(after) = with_fitted(catalogue, bench.worn, path, part) else {
+        return true;
+    };
+    let Some(misbolt) = drivetrain_misfit(catalogue, &after) else {
+        return true;
+    };
+    kit::warning(ui, &misbolt.why);
+    let fit = Work::Fit {
+        slots: vec![path.clone()],
+        supply: supply.clone(),
+    };
+    let plate = adapter_slot(catalogue, &after)
+        .filter(|_| fits_into(bench.shop.kind, Kind::Adapter, Some(Kind::Gearbox)));
+    match (misbolt.fix, plate) {
+        (Some(Fix::Fit(a)), Some(plate)) => {
+            let adapter = &catalogue.adapters[a];
+            let def = (catalogue.defs.iter()).position(|def| def.does == Does::Adapter(a));
+            match def.filter(|_| bench.shop.sells(&adapter.id)) {
+                Some(def) => {
+                    if kit::button_with(ui, "Fit it with the adapter plate", &adapter.name)
+                        .clicked()
+                    {
+                        let supply = Supply::Part {
+                            def: def as u16,
+                            variant: 0,
+                            paint: 0,
+                        };
+                        let plate = Work::Fit {
+                            slots: vec![plate],
+                            supply,
+                        };
+                        *asks = Some(vec![fit, plate]);
+                    }
+                }
+                None => kit::note(ui, &format!("{} hasn't got that plate.", bench.shop.name)),
+            }
+        }
+        (Some(Fix::Remove), Some(plate))
+            if kit::button(ui, "Fit it and take the adapter plate off").clicked() =>
+        {
+            *asks = Some(vec![fit, Work::Remove { slot: plate }]);
+        }
+        _ => {}
+    }
+    false
 }
 
 /// A new wheel for the slot at `path`: rim (kind, diameter, width) and tire (kind and a size

@@ -95,7 +95,7 @@ Items with slots:
 |---|---|---|
 | Engine | long block; intake manifold, throttle body, air filter, exhaust manifold (its family's; turbos on its mounts, see `exhaust-manifolds.md`), supercharger, flywheel | bolt-ons at car and tuning shops; comes out of the car whole |
 | Long block | block (family, version, bore oversize), crankshaft, rods, pistons (matching the bore), head gasket, cylinder head (its family's: porting, camshafts, valve springs, cam phasers) | engine shop only |
-| Gearbox | gear set, final drive, differential | car and tuning shops |
+| Gearbox | gear set, final drive, differential; an adapter plate (not on transverse gearboxes: to an engine of another bellhousing pattern, see `k-lineup.md`) | car and tuning shops; plates also at engine shops |
 | Wheel | rim, tire | tire shop only (rims and tires also loose in trunks and garages) |
 
 Springs, dampers, brakes, wheels: each corner its own item (sold in pairs or fours).

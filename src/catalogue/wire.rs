@@ -2,7 +2,7 @@
 //! checks that it holds together (every place it refers to is in it, every list that must
 //! have something does), so a car built from it can't index out of it.
 
-use super::{Catalogue, Clutch, EcuDef, Paint, Suspension, TireCompound};
+use super::{AdapterDef, Catalogue, Clutch, EcuDef, Paint, Suspension, TireCompound};
 use crate::body::{Body, Detail, Tone};
 use crate::cargo::{Area, Hold};
 use crate::chassis::{Chassis, EngineBay, Gearbox, GearboxKind, Orientation, RollBars};
@@ -166,8 +166,9 @@ fields!(Gearbox {
     torque,
     shift_time,
     engage_time
-} text { name });
+} text { name, bellhousing });
 fields!(Clutch { torque } text { name });
+fields!(AdapterDef { mass } text { id, name, gearbox, engine });
 fields!(Suspension {
     ride,
     damping,
@@ -412,7 +413,7 @@ fields!(Family {
     versions,
     manifolds,
     heads
-} text { name, about });
+} text { name, about, bellhousing });
 
 impl Wire for Manifold {
     fn put(&self, out: &mut Vec<u8>) {
@@ -587,6 +588,7 @@ impl Wire for Kind {
             Kind::Manifold => 18,
             Kind::Turbo => 19,
             Kind::Head => 20,
+            Kind::Adapter => 21,
         };
         tag.put(out);
         match self {
@@ -619,6 +621,7 @@ impl Wire for Kind {
             18 => Kind::Manifold,
             19 => Kind::Turbo,
             20 => Kind::Head,
+            21 => Kind::Adapter,
             _ => return None,
         })
     }
@@ -671,6 +674,7 @@ impl Wire for Does {
                 19u8.put(out);
                 (*family, *head).put(out);
             }
+            Does::Adapter(a) => (20u8, *a).put(out),
         }
     }
     fn get(r: &mut Reader) -> Option<Self> {
@@ -709,6 +713,7 @@ impl Wire for Does {
                 let (family, head) = r.get()?;
                 Does::Head { family, head }
             }
+            20 => Does::Adapter(r.get()?),
             _ => return None,
         })
     }
@@ -864,6 +869,7 @@ impl Wire for Catalogue {
         self.slots.put(out);
         self.start.put(out);
         self.ecus.put(out);
+        self.adapters.put(out);
         self.defs.put(out);
         self.trims.put(out);
         self.assemblies.put(out);
@@ -881,6 +887,7 @@ impl Wire for Catalogue {
             r.get()?,
         );
         catalogue.ecus = r.get()?;
+        catalogue.adapters = r.get()?;
         catalogue.defs = r.get()?;
         catalogue.trims = r.get()?;
         catalogue.assemblies = r.get()?;
@@ -932,6 +939,7 @@ impl Catalogue {
             Does::Spring(k) | Does::Damper(k) => k < self.suspensions.len(),
             Does::Gearbox(g) => g < self.gearboxes.len(),
             Does::Clutch(k) => k < self.clutches.len(),
+            Does::Adapter(a) => a < self.adapters.len(),
             Does::Block { family, version } => {
                 (self.families.get(family)).is_some_and(|f| version < f.versions.len())
             }

@@ -24,6 +24,10 @@
 //!   (`mounts` are the paths to fill at once); a turbo and a supercharger exclude each
 //!   other (`items::engine_misfit`). Another manifold takes the turbos over only onto as
 //!   many mounts; else they stay on the old one.
+//! - The gearbox bolts to the engine (`items::drivetrain_misfit`, `Catalogue::bolting`):
+//!   of the same bellhousing pattern, or an inline gearbox through the adapter plate made
+//!   for the two (on the gearbox, its slot; engine shops fit them too, as they swap
+//!   engines). Works that change both go in one request.
 //! - What comes off goes into the trunk while there's room, else the shop holds it (up to
 //!   `SHOP_HOLD`), else it's thrown away. A part standing for nothing (no turbo) is never
 //!   kept.
@@ -235,6 +239,7 @@ pub fn fits_into(kind: ShopKind, slot: Kind, holder: Option<Kind>) -> bool {
             slot == Kind::LongBlock
                 || in_long_block(holder)
                 || slot == Kind::Engine && holder.is_none()
+                || slot == Kind::Adapter
         }
         _ => false,
     }
@@ -370,6 +375,53 @@ pub fn wheel_of(catalogue: &Catalogue, wheel: &Item) -> Option<Wheel> {
         tire: TireSize::all().nth(tire.variant)?,
         compound,
     })
+}
+
+/// What of `old`, coming off, goes into `part`'s empty slots in its place: what's in
+/// slots of the same kind (a gearbox's final drive and differential, its adapter plate).
+/// Turbos move to another manifold only all together, onto as many mounts; else they stay
+/// on the old one.
+fn take_over(catalogue: &Catalogue, part: &mut Item, old: &mut Item) {
+    let slots = &catalogue.defs[part.def].slots;
+    let old_slots = &catalogue.defs[old.def].slots;
+    let mounts = |slots: &[crate::items::SlotDef], items: &[Option<Item>]| {
+        (slots.iter().zip(items))
+            .filter(|(slot, item)| slot.kind == Kind::Turbo && item.is_some())
+            .count()
+    };
+    let all_mounts = slots.iter().filter(|s| s.kind == Kind::Turbo).count();
+    let turbos_move = mounts(old_slots, &old.slots) == all_mounts;
+    for (slot, item) in slots.iter().zip(&mut part.slots) {
+        if item.is_some() || slot.kind == Kind::Turbo && !turbos_move {
+            continue;
+        }
+        let moved = (old_slots.iter().zip(&mut old.slots))
+            .find(|(s, i)| s.kind == slot.kind && i.is_some())
+            .and_then(|(_, i)| i.take());
+        *item = moved;
+    }
+}
+
+/// `car` (a car's tree) with `part` fitted at `path` in it as a shop fits it (what it
+/// takes over from the part coming off included), for showing what that would make; none
+/// if there's no such place.
+pub fn with_fitted(catalogue: &Catalogue, car: &Item, path: &[u8], mut part: Item) -> Option<Item> {
+    let mut car = car.clone();
+    let place = slot_mut(&mut car, path)?;
+    if let Some(mut old) = place.take() {
+        take_over(catalogue, &mut part, &mut old);
+    }
+    *place = Some(part);
+    Some(car)
+}
+
+/// The path of the adapter plate's slot on `car`'s gearbox, if it has one.
+pub fn adapter_slot(catalogue: &Catalogue, car: &Item) -> Option<Path> {
+    let slots = &car.def(catalogue).slots;
+    let g = slots.iter().position(|slot| slot.kind == Kind::Gearbox)?;
+    let gearbox = car.slots.get(g)?.as_ref()?;
+    let a = (gearbox.def(catalogue).slots.iter()).position(|slot| slot.kind == Kind::Adapter)?;
+    Some(vec![g as u8, a as u8])
 }
 
 /// A shop's bench: the car being changed, with the trunk and what the shop holds for the
@@ -682,26 +734,7 @@ impl<'a> Bench<'a> {
         let (tree, rest) = self.tree_mut(path).ok_or("No such place on the car")?;
         let place = slot_mut(tree, rest).ok_or("No such place on the car")?;
         let old = place.take().map(|mut old| {
-            let slots = &catalogue.defs[part.def].slots;
-            let old_slots = &catalogue.defs[old.def].slots;
-            // Turbos move to another manifold only all together, onto as many mounts;
-            // else they stay on the old one.
-            let mounts = |slots: &[crate::items::SlotDef], items: &[Option<Item>]| {
-                (slots.iter().zip(items))
-                    .filter(|(slot, item)| slot.kind == Kind::Turbo && item.is_some())
-                    .count()
-            };
-            let all_mounts = slots.iter().filter(|s| s.kind == Kind::Turbo).count();
-            let turbos_move = mounts(old_slots, &old.slots) == all_mounts;
-            for (slot, item) in slots.iter().zip(&mut part.slots) {
-                if item.is_some() || slot.kind == Kind::Turbo && !turbos_move {
-                    continue;
-                }
-                let moved = (old_slots.iter().zip(&mut old.slots))
-                    .find(|(s, i)| s.kind == slot.kind && i.is_some())
-                    .and_then(|(_, i)| i.take());
-                *item = moved;
-            }
+            take_over(catalogue, &mut part, &mut old);
             old
         });
         *place = Some(part);
@@ -724,6 +757,9 @@ impl<'a> Bench<'a> {
         }
         if !self.car.fine(catalogue) {
             return Err("That doesn't make a car".into());
+        }
+        if let Some(misbolt) = crate::items::drivetrain_misfit(catalogue, &self.car) {
+            return Err(misbolt.why);
         }
         let trees = std::iter::once(&self.car)
             .chain(&self.cargo)
@@ -1764,6 +1800,107 @@ mod tests {
             })
             .unwrap();
         assert!(bench.finish().is_err());
+    }
+
+    /// The roadster as it leaves the factory, and its trim's tree with the engine `code`
+    /// (whatever fits) in it, the engine taken out on its own.
+    fn roadster_with(code: &str) -> (CarSpec, Item) {
+        let catalogue = builtin();
+        let merrow = catalogue.find_chassis("Merrow").unwrap();
+        let before = CarSpec::of(&CarSetup::factory(merrow, 0));
+        let build = crate::chassis::CarBuild::factory(merrow);
+        let parts = build
+            .install(crate::physics::engine::parts::Parts::factory(code).unwrap())
+            .unwrap();
+        let car = crate::items::assemble(&catalogue, Some(&before.car), &build, &parts).unwrap();
+        let engine = car.fitted(&catalogue, Kind::Engine).next().unwrap().clone();
+        (before, engine)
+    }
+
+    #[test]
+    fn a_k_goes_into_the_roadster_only_with_its_adapter_plate() {
+        let catalogue = builtin();
+        let (before, k20) = roadster_with("K20");
+        let engines = shop(ShopKind::Engine, &["adapter-plate.*"]);
+        let engine = slots_of(&catalogue, &before.car, Kind::Engine);
+        let plate = adapter_slot(&catalogue, &before.car).expect("an inline gearbox's plate");
+        let swap = Work::Fit {
+            slots: vec![engine],
+            supply: Supply::Held(0),
+        };
+        let fit_plate = Work::Fit {
+            slots: vec![plate.clone()],
+            supply: new(&catalogue, "adapter-plate.k-to-r"),
+        };
+        let at = |works: &[Work], spec: &CarSpec, held: &[Item]| {
+            let mut bench = Bench::new(&catalogue, &engines, spec, held);
+            for work in works {
+                bench.work(work)?;
+            }
+            bench.finish()
+        };
+        let held = std::slice::from_ref(&k20);
+        // On its own the K doesn't bolt to the V10's gearbox, nor the plate to the V10.
+        let err = at(std::slice::from_ref(&swap), &before, held).unwrap_err();
+        assert!(err.contains("adapter plate"), "{err}");
+        assert!(at(std::slice::from_ref(&fit_plate), &before, &[]).is_err());
+        // Together they do: the plate sits on the gearbox.
+        let done = at(&[swap.clone(), fit_plate.clone()], &before, held).unwrap();
+        assert_eq!(done.spec.parts.hardware().name, "K20 2.0 DOHC four");
+        assert_eq!(
+            crate::items::drivetrain_misfit(&catalogue, &done.spec.car),
+            None
+        );
+        let on = item_at(&done.spec.car, &plate).unwrap();
+        assert_eq!(on.def(&catalogue).id, "adapter-plate.k-to-r");
+        // The plate stays as long as the K does.
+        let off = Work::Remove { slot: plate };
+        assert!(at(std::slice::from_ref(&off), &done.spec, &done.held).is_err());
+        // The V10 back in (held there) takes the plate off with it.
+        let v10 = (done.held.iter())
+            .position(|item| item.def(&catalogue).kind == Kind::Engine)
+            .expect("the V10 held at the shop") as u16;
+        let back = Work::Fit {
+            slots: vec![slots_of(&catalogue, &before.car, Kind::Engine)],
+            supply: Supply::Held(v10),
+        };
+        let err = at(std::slice::from_ref(&back), &done.spec, &done.held).unwrap_err();
+        assert!(err.contains("bolts straight"), "{err}");
+        let done = at(&[back, off], &done.spec, &done.held).unwrap();
+        assert_eq!(done.spec.parts.hardware().name, "R80 8.0 V10");
+    }
+
+    #[test]
+    fn a_b_doesnt_bolt_to_the_roadsters_gearbox() {
+        let catalogue = builtin();
+        let (before, b16) = roadster_with("B16");
+        let engine = slots_of(&catalogue, &before.car, Kind::Engine);
+        let after = with_fitted(&catalogue, &before.car, &engine, b16.clone()).unwrap();
+        let why = crate::items::drivetrain_misfit(&catalogue, &after).unwrap();
+        assert!(why.why.contains("no adapter plate"), "{}", why.why);
+        assert_eq!(why.fix, None);
+        let engines = shop(ShopKind::Engine, &["adapter-plate.*"]);
+        let mut bench = Bench::new(&catalogue, &engines, &before, std::slice::from_ref(&b16));
+        bench
+            .work(&Work::Fit {
+                slots: vec![engine],
+                supply: Supply::Held(0),
+            })
+            .unwrap();
+        assert_eq!(bench.finish().unwrap_err(), why.why);
+    }
+
+    #[test]
+    fn what_a_new_part_would_make_is_seen_before() {
+        let catalogue = builtin();
+        let (before, k20) = roadster_with("K20");
+        let engine = slots_of(&catalogue, &before.car, Kind::Engine);
+        let after = with_fitted(&catalogue, &before.car, &engine, k20).unwrap();
+        let misbolt = crate::items::drivetrain_misfit(&catalogue, &after).unwrap();
+        let crate::items::Fix::Fit(plate) = misbolt.fix.unwrap() else {
+            panic!("an adapter plate fixes it");
+        };
+        assert_eq!(catalogue.adapters[plate].id, "adapter-plate.k-to-r");
     }
 
     #[test]

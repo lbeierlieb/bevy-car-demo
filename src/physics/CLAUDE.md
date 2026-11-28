@@ -64,10 +64,21 @@ catalogue entries, and things like swap subframes are named so they can be price
   spins and the Wisp B16 snaps back 28° (was 6°). Not done: hollow bars, a bar's mass.
 - **What fits** (`Chassis::fit`): the engine's length, width and height against the
   bay's (a transverse engine needs its length plus 36 cm for the gearbox across the
-  car). That's all that can stop a swap. An engine family the factory never offered in
-  the chassis "needs a swap subframe" and a gearbox no factory car pairs with the family
-  "needs an adapter plate": both are derived and only shown (nothing to buy yet).
-  A gearbox must be of the chassis' kind.
+  car). That's all the chassis can stop. An engine family the factory never offered in
+  the chassis "needs a swap subframe" (derived, only shown). A gearbox must be of the
+  chassis' kind, and bolt to the engine (k-lineup step 2, 2026-11-28): `Family::bellhousing`
+  and `Gearbox::bellhousing` are pattern names (`B-series`, `K-series`, `R-series`);
+  `Catalogue::bolting` says `Direct` (same pattern), `Adapter(a)` or `Never`. Transverse
+  gearboxes never cross families (the B series turns the other way from the K series);
+  an inline one goes through an adapter plate (`Catalogue::adapters`, `AdapterDef { id,
+  name, gearbox, engine, mass }`, items `Kind::Adapter`/`Does::Adapter`) in the
+  gearbox's optional "Adapter plate" slot (only gearboxes that aren't transverse have
+  it; it stays with the gearbox when the engine is swapped). For now one plate:
+  `adapter-plate.k-to-r` (a K in the Merrow, whose bay is 0.70 m tall for it), sold at
+  the engine shop, which fits plates too. `items::drivetrain_misfit` (a reason and a
+  `Fix`: fit plate `a` or take it off) is checked by `fitting::Bench::finish`; the shop
+  window shows it on a new part and offers the part with the plate (or the plate off) in
+  one request (`fitting::with_fitted`, `adapter_slot`).
 - **Headers depend on engine and chassis**: the bay's `header_room`, less when the
   engine fills the bay sideways, caps the exhaust primaries' length
   (`Parts::header_room`, set by `CarBuild::install`). A swapped engine can so differ

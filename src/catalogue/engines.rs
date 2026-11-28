@@ -545,6 +545,7 @@ pub fn families() -> Vec<Family> {
             ],
             manifolds: b_manifolds(),
             heads: Vec::new(),
+            bellhousing: "B-series".into(),
         },
         Family {
             name: "R-series V10".into(),
@@ -582,6 +583,7 @@ pub fn families() -> Vec<Family> {
             )],
             manifolds: r_manifolds(),
             heads: Vec::new(),
+            bellhousing: "R-series".into(),
         },
         Family {
             name: "K-series four".into(),
@@ -676,6 +678,7 @@ pub fn families() -> Vec<Family> {
             ],
             manifolds: k_manifolds(),
             heads: Vec::new(),
+            bellhousing: "K-series".into(),
         },
     ]
     .into_iter()

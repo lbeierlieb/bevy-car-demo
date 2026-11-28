@@ -104,6 +104,9 @@ pub struct Family {
     /// The cylinder heads made for the family (each version's factory head is its
     /// preset's): any goes onto any of its blocks.
     pub heads: Vec<HeadDef>,
+    /// The bolt pattern of its bellhousing face (e.g. `K-series`): a gearbox of the same
+    /// pattern bolts to it (`Gearbox::bellhousing`, `Catalogue::bolting`).
+    pub bellhousing: String,
 }
 
 /// A cylinder head made for an engine family: its valves, their springs, the cams over

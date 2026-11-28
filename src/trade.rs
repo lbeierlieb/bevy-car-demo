@@ -102,6 +102,7 @@ fn own_value(catalogue: &Catalogue, item: &Item) -> i64 {
         Kind::Damper => 90,
         Kind::AntiRollBar => 70,
         Kind::Gearbox => 700,
+        Kind::Adapter => 200,
         Kind::FinalDrive => 150,
         Kind::Differential => 250,
         Kind::Clutch => 160,

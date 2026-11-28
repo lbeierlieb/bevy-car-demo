@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use super::{Catalogue, Shared};
-use crate::chassis::CarBuild;
+use crate::chassis::{CarBuild, GearboxKind};
 use crate::items::{
     Aero, Assembly, BONNET_CUT_OUT, Does, Item, Kind, Knob, OVERHEAD_CAMS, Panel, PartDef, Seat,
     SlotDef, Trim, Wear, assemble, chassis_knobs, damper_knobs, engine_knobs, knob, spring_knobs,
@@ -591,17 +591,32 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
             [0.6, 0.45, 0.4],
             gearbox.mass,
         )
-        .wears(Wear::Gears)
-        .slots(vec![
+        .wears(Wear::Gears);
+        let mut slots = vec![
             slot("Final drive", Kind::FinalDrive, true),
             slot("Differential", Kind::Differential, true),
-        ]);
+        ];
+        // An adapter plate on its face, if it may have one (`Catalogue::bolting`).
+        if gearbox.kind != GearboxKind::Transverse {
+            slots.push(slot("Adapter plate", Kind::Adapter, false));
+        }
+        def = def.slots(slots);
         for chassis in &catalogue.chassis {
             if catalogue.gearboxes[chassis.gearbox].kind == gearbox.kind {
                 def = def.fits(&chassis.name);
             }
         }
         add(def);
+    }
+    for (a, adapter) in catalogue.adapters.iter().enumerate() {
+        add(Def::new(
+            &adapter.id,
+            &adapter.name,
+            Kind::Adapter,
+            Does::Adapter(a),
+            [0.45, 0.4, 0.05],
+            adapter.mass,
+        ));
     }
     add(Def::new(
         "final-drive",

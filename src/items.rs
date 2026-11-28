@@ -10,8 +10,10 @@
 //! paint), for the shops that still change cars that way. Where a tree says more than a
 //! `CarBuild` can (another spring on the right than on the left), the left one counts.
 
-use crate::catalogue::Catalogue;
-use crate::chassis::{BRAKE_BALANCES, BRAKE_FORCES, CarBuild, Misfit, PRESSURES, TOES};
+use crate::catalogue::{Bolting, Catalogue};
+use crate::chassis::{
+    BRAKE_BALANCES, BRAKE_FORCES, CarBuild, GearboxKind, Misfit, PRESSURES, TOES,
+};
 use crate::physics::engine::parts::{Effect, Parts};
 use crate::wheels::{Rim, TireSize, Wheel};
 
@@ -93,6 +95,9 @@ pub enum Kind {
     Manifold,
     /// A turbo, on one of a manifold's mounts.
     Turbo,
+    /// An adapter plate, on the face of a gearbox that isn't transverse: it bolts the
+    /// gearbox to an engine of another bellhousing pattern.
+    Adapter,
 }
 
 /// What a part does, as far as the game's code knows kinds of parts.
@@ -151,6 +156,8 @@ pub enum Does {
         family: usize,
         manifold: usize,
     },
+    /// The catalogue's adapter plate (by its place in `adapters`).
+    Adapter(usize),
 }
 
 /// What a body part does to the air flowing round the car (see `CarSetup::aero`). The
@@ -634,6 +641,82 @@ pub fn engine_misfit(catalogue: &Catalogue, item: &Item) -> Option<String> {
         }
     }
     (item.slots.iter().flatten()).find_map(|child| engine_misfit(catalogue, child))
+}
+
+/// Why a car's gearbox doesn't bolt to its engine (`drivetrain_misfit`), and what would
+/// make it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Misbolt {
+    pub why: String,
+    pub fix: Option<Fix>,
+}
+
+/// What makes a gearbox bolt to an engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fix {
+    /// This adapter plate (in the catalogue's `adapters`) on the gearbox.
+    Fit(usize),
+    /// The adapter plate off: the two bolt straight together.
+    Remove,
+}
+
+/// Why `car`'s (a car's tree) gearbox doesn't bolt to its engine, if it doesn't (see
+/// `Catalogue::bolting`): another bellhousing pattern and no adapter plate for the two on
+/// the gearbox, or one that isn't needed. A car without an engine or gearbox has nothing
+/// to bolt.
+pub fn drivetrain_misfit(catalogue: &Catalogue, car: &Item) -> Option<Misbolt> {
+    let gearbox = car.fitted(catalogue, Kind::Gearbox).next()?;
+    let Does::Gearbox(g) = gearbox.def(catalogue).does else {
+        return None;
+    };
+    let engine = car.fitted(catalogue, Kind::Engine).next()?;
+    let block = engine.fitted(catalogue, Kind::LongBlock).next()?;
+    let Does::Block { family, .. } = block.def(catalogue).does else {
+        return None;
+    };
+    let adapter = (gearbox.fitted(catalogue, Kind::Adapter).next()).and_then(|plate| {
+        match plate.def(catalogue).does {
+            Does::Adapter(a) => Some(a),
+            _ => None,
+        }
+    });
+    let (made, engine) = (&catalogue.gearboxes[g], &catalogue.families[family]);
+    let misbolt = |why: String, fix| Some(Misbolt { why, fix });
+    match (catalogue.bolting(g, family), adapter) {
+        (Bolting::Direct, None) => None,
+        (Bolting::Direct, Some(_)) => misbolt(
+            format!(
+                "The {} bolts straight to the {}: the adapter plate comes off",
+                made.name, engine.name
+            ),
+            Some(Fix::Remove),
+        ),
+        (Bolting::Adapter(a), Some(fitted)) if a == fitted => None,
+        (Bolting::Adapter(a), _) => misbolt(
+            format!(
+                "The {} bolts to the {} only through the {}",
+                made.name,
+                engine.name,
+                catalogue.adapters[a].name.to_lowercase()
+            ),
+            Some(Fix::Fit(a)),
+        ),
+        (Bolting::Never, _) => misbolt(
+            if made.kind == GearboxKind::Transverse {
+                format!(
+                    "The {} has a {} bellhousing and doesn't go on the {}: a transverse \
+                     gearbox stays with its engine family (they don't all turn the same way)",
+                    made.name, made.bellhousing, engine.name
+                )
+            } else {
+                format!(
+                    "The {} has a {} bellhousing, and no adapter plate bolts it to the {}",
+                    made.name, made.bellhousing, engine.name
+                )
+            },
+            None,
+        ),
+    }
 }
 
 /// What a Roots blower needs (and a bonnet with a cut-out provides, or no bonnet at all).

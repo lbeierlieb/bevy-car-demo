@@ -61,6 +61,9 @@ pub struct Catalogue {
     /// Every part there is (see `items`), and the stock cars built of them.
     /// The ECUs there are (each version's factory one its preset's).
     pub ecus: Vec<EcuDef>,
+    /// The adapter plates there are, each bolting gearboxes of one bellhousing pattern to
+    /// engines of another (see `bolting`).
+    pub adapters: Vec<AdapterDef>,
     pub defs: Vec<crate::items::PartDef>,
     pub trims: Vec<crate::items::Trim>,
     /// Parts sold as one, put together as the factory does (the factory engines).
@@ -80,6 +83,30 @@ pub struct EcuDef {
     pub model: crate::physics::engine::ecu::EcuModel,
     pub factory: Option<String>,
     pub tune: Option<crate::physics::engine::ecu::Ecu>,
+}
+
+/// An adapter plate: it bolts a gearbox of the bellhousing pattern `gearbox` to an engine
+/// of the pattern `engine` (`Gearbox::bellhousing`, `Family::bellhousing`). It sits on the
+/// gearbox's face and stays with it when the engine is swapped.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdapterDef {
+    /// Stable, for saved cars and items: e.g. `adapter-plate.k-to-r`.
+    pub id: String,
+    pub name: String,
+    pub gearbox: String,
+    pub engine: String,
+    pub mass: f32,
+}
+
+/// How a gearbox bolts to an engine (`Catalogue::bolting`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bolting {
+    /// Straight on: they have the same bellhousing pattern.
+    Direct,
+    /// Through this adapter plate (in `adapters`).
+    Adapter(usize),
+    /// Not at all.
+    Never,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -142,6 +169,7 @@ impl Catalogue {
             slots,
             start,
             ecus: Vec::new(),
+            adapters: Vec::new(),
             defs: Vec::new(),
             trims: Vec::new(),
             assemblies: Vec::new(),
@@ -159,7 +187,7 @@ impl Catalogue {
     /// FNV-1a over everything in it.
     fn hash(&self) -> u64 {
         let text = format!(
-            "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{}{:?}{:?}{:?}{:?}",
+            "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{}{:?}{:?}{:?}{:?}{:?}",
             self.chassis,
             self.gearboxes,
             self.clutches,
@@ -170,6 +198,7 @@ impl Catalogue {
             self.slots,
             self.start,
             self.ecus,
+            self.adapters,
             self.defs,
             self.trims,
             self.assemblies
@@ -214,12 +243,21 @@ impl Catalogue {
         (0..self.gearboxes.len()).filter(move |&gearbox| self.gearboxes[gearbox].kind == kind)
     }
 
-    /// Whether `gearbox` needs an adapter plate to bolt to an engine of `family`: it does
-    /// unless some factory car pairs the two.
-    pub fn needs_adapter(&self, gearbox: usize, family: usize) -> bool {
-        !self.chassis.iter().any(|chassis| {
-            chassis.gearbox == gearbox && self.factory_families(chassis).any(|f| f == family)
-        })
+    /// How `gearbox` bolts to an engine of `family`: straight on if their bellhousings
+    /// have the same pattern; else through an adapter plate made for the two patterns, but
+    /// never a transverse gearbox (it would turn the wrong way on an engine of another
+    /// family: the B series turns the other way round from the K series).
+    pub fn bolting(&self, gearbox: usize, family: usize) -> Bolting {
+        let (gearbox, family) = (&self.gearboxes[gearbox], &self.families[family]);
+        if gearbox.bellhousing == family.bellhousing {
+            return Bolting::Direct;
+        }
+        if gearbox.kind == crate::chassis::GearboxKind::Transverse {
+            return Bolting::Never;
+        }
+        (self.adapters.iter())
+            .position(|a| a.gearbox == gearbox.bellhousing && a.engine == family.bellhousing)
+            .map_or(Bolting::Never, Bolting::Adapter)
     }
 }
 
@@ -262,6 +300,7 @@ fn builtin_parts() -> Catalogue {
         DEFAULT_CHASSIS,
     );
     catalogue.ecus = ecus;
+    catalogue.adapters = chassis::adapters();
     catalogue.rehash();
     catalogue
 }
