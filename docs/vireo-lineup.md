@@ -43,7 +43,8 @@ block should be the swap players want (a "Frankenstein" engine).
    with a short lag; closed loop only where the target is λ = 1 (not on the overrun cut
    or limiter), a short-term trim (a jump at each switch and a ramp, ±25 %), so it hunts
    around stoichiometric; open loop elsewhere. Wideband (programmable ECUs only): closed
-   loop to the target everywhere, with a settable authority; a stock ECU reads it as a
+   loop to any target, with a settable authority; either only at part throttle (below 80 %,
+   the user's wish), never at full throttle; a stock ECU reads it as a
    narrowband. The trim is physics state (`snapshot!`).
 6. **Shops, looks and notes** (done; programmable ECUs at the tuning shops): heads, long blocks and programmable ECUs at the engine
    shop, programmable ECUs and the wideband sensor at tuning shops, stock ECUs at car

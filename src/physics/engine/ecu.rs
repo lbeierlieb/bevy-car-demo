@@ -44,6 +44,8 @@ const NARROWBAND_RAMP: f32 = 0.08;
 const STOICHIOMETRIC_BAND: f32 = 0.005;
 /// A wideband sensor's closed loop: trim per second per share the mixture is off.
 const WIDEBAND_GAIN: f32 = 1.5;
+/// The loop closes only at part throttle: below this throttle opening.
+const PART_THROTTLE: f32 = 0.8;
 /// Out of closed loop the trim lets go within about this long (s).
 const TRIM_RELEASE: f32 = 0.5;
 /// The most a factory tune lets the closed loop trim the fuel by (share).
@@ -430,10 +432,11 @@ impl Ecu {
             / (R_AIR * intake_temperature * self.cylinders as f32);
         let target = lambda.get(&point);
 
-        // The lambda sensor follows the exhaust. With a wideband sensor (and an ECU that
-        // reads one) the loop closes to the target everywhere; with a narrowband one only
-        // where the target is λ = 1, the trim jumping at each switch and ramping between
-        // (so the mixture hunts round it); elsewhere the trim lets go.
+        // The lambda sensor follows the exhaust. Only at part throttle does the loop close:
+        // with a wideband sensor (and an ECU that reads one) to any target; with a
+        // narrowband one only where the target is λ = 1, the trim jumping at each switch
+        // and ramping between (so the mixture hunts round it). Otherwise (full throttle
+        // included) it's open and the trim lets go.
         let seen = if exhaust_lambda.is_finite() {
             exhaust_lambda.clamp(0.5, 2.0)
         } else {
@@ -441,7 +444,7 @@ impl Ecu {
         };
         state.sensed += (seen - state.sensed) * (dt / SENSOR_LAG).min(1.0);
         let wideband = wideband && self.model.wideband;
-        let running = rpm > RUNNING_RPM && !cut;
+        let running = rpm > RUNNING_RPM && !cut && throttle < PART_THROTTLE;
         let limit = self.trim_limit.max(0.0);
         if running && wideband {
             let lean = state.sensed / target - 1.0;

@@ -745,9 +745,10 @@ mod tests {
         (engine.exhaust_lambda, engine.actuators.trim, high - low)
     }
 
-    /// A narrowband sensor holds λ = 1 at part load against a fuel map 10 % lean, hunting
-    /// round it; at full throttle (richer than 1) the loop is open and the map's error
-    /// stays. A wideband one, with an ECU that reads it, holds the target there too.
+    /// A narrowband sensor holds λ = 1 at part throttle against a fuel map 10 % lean,
+    /// hunting round it; at full throttle the loop is open and the map's error stays. A
+    /// wideband one, with an ECU that reads it, holds any target at part throttle, but the
+    /// loop is open at full throttle all the same.
     #[test]
     fn the_lambda_sensor_closes_the_loop() {
         let mut build = EngineBuild::default();
@@ -760,18 +761,29 @@ mod tests {
         let (open, trim, _) = settled_mixture(&build, 5000.0, 1.0);
         assert!(open > target * 1.07, "λ {open} for {target}");
         assert!(trim.abs() < 0.01, "trim {trim}");
-        // Wideband: closed at full throttle too.
+        // Aiming richer than 1 at part throttle: a narrowband sensor can't hold that, a
+        // wideband one can; at full throttle neither closes the loop.
+        let rich = &build.ecu.lambda;
+        let values = vec![0.9; rich.values().len()];
+        build.ecu.lambda = table::Table::from_parts(rich.axes().to_vec(), values).unwrap();
+        let (open, trim, _) = settled_mixture(&build, 3000.0, 0.15);
+        assert!(
+            open > 0.9 * 1.07 && trim.abs() < 0.01,
+            "λ {open}, trim {trim}"
+        );
         build.hardware.wideband = true;
         build.ecu.model = ecu::EcuModel::PROGRAMMABLE;
-        let (closed, trim, _) = settled_mixture(&build, 5000.0, 1.0);
-        assert!(
-            (closed / target - 1.0).abs() < 0.02,
-            "λ {closed} for {target}"
-        );
+        let (closed, trim, _) = settled_mixture(&build, 3000.0, 0.15);
+        assert!((closed / 0.9 - 1.0).abs() < 0.02, "λ {closed}");
         assert!((0.06..0.16).contains(&trim), "trim {trim}");
+        let (open, trim, _) = settled_mixture(&build, 5000.0, 1.0);
+        assert!(
+            open > 0.9 * 1.07 && trim.abs() < 0.01,
+            "λ {open}, trim {trim}"
+        );
         // A stock ECU reads a wideband sensor as a narrowband one.
         build.ecu.model = ecu::EcuModel::STOCK;
-        assert!(settled_mixture(&build, 5000.0, 1.0).0 > target * 1.07);
+        assert!(settled_mixture(&build, 3000.0, 0.15).0 > 0.9 * 1.07);
         // No further than its limit: 40 % lean stays lean.
         let mut lean = EngineBuild::default();
         fuel_map_off(&mut lean, 0.6);

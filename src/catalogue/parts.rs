@@ -425,7 +425,7 @@ pub fn slots() -> Vec<Slot> {
             "Lambda sensor",
             "What the ECU knows of the mixture: a narrowband sensor only says rich or lean \
              of the ideal, which is enough to hold it there at part load; a wideband one \
-             reads it, so an ECU that can use it holds any target, full throttle too",
+             reads it, so an ECU that can use it holds any target at part throttle",
             Readout::Nothing,
             vec![
                 part("Narrowband", &[]),

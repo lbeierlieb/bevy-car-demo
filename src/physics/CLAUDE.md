@@ -411,10 +411,12 @@ phasing, VTEC-style cam switching).
 - **Lambda sensors and closed loop** (2026-11-27, `docs/vireo-lineup.md` step 5): the
   engine slot "Lambda sensor" (narrowband stock, wideband: `EngineHardware::wideband`, live,
   not in the maps' fingerprint). `Sensors::lambda` is the last step's exhaust λ
-  (`Engine::exhaust_lambda`); the ECU's sensor follows it (`SENSOR_LAG` 80 ms). Narrowband:
+  (`Engine::exhaust_lambda`); the ECU's sensor follows it (`SENSOR_LAG` 80 ms). The loop
+  closes only at part throttle (below `PART_THROTTLE`, 80 %; the user's wish), never at full
+  throttle, whatever the sensor. Narrowband:
   closed loop only where the target is λ = 1 (±0.005), the trim jumping 2 % at each switch
   and ramping 8 %/s between, so λ hunts round 1 by a percent or two; wideband (and an ECU
-  model with `wideband`): integral to the target everywhere (`WIDEBAND_GAIN`); otherwise the
+  model with `wideband`): integral to any target (`WIDEBAND_GAIN`); otherwise the
   trim lets go (`TRIM_RELEASE`). `Ecu::trim_limit` (±25 % factory, a tune setting "Closed
   loop trims up to"). No long-term trims. `Actuators::lambda_sensor` (volts or λ), `trim`; the
   tuning shows them by the true λ (the dyno's analyser), the telemetry (2) only the sensor.
