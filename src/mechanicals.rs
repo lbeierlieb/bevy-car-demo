@@ -461,7 +461,22 @@ fn engine_bay(
             })
             .collect();
         let turbo = headers.turbos.first().copied();
-        let collector = if headers.cast {
+        let collector = if headers.cast && headers.long() && cylinders == 4 && turbo.is_none() {
+            // A cast 4-2-1: the ports in pairs (the outer two, the inner two) into two
+            // thick runners down to one collector, low, from a flange along the head.
+            b.bar(to(-0.38, 0.64, 0.26), to(0.38, 0.64, 0.26), 0.04, IRON);
+            let collector = to(0.0, 0.1, 0.48);
+            for (pair, (a, c)) in [(0, 3), (1, 2)].into_iter().enumerate() {
+                let merge = to(0.1 * (pair as f32 * 2.0 - 1.0), 0.42, 0.4);
+                for k in [a, c] {
+                    let (u, port) = ports[k];
+                    b.bar(port, to(u * 0.7, 0.58, 0.32), 0.05, IRON);
+                    b.bar(to(u * 0.7, 0.58, 0.32), merge, 0.05, IRON);
+                }
+                b.bar(merge, collector, 0.06, IRON);
+            }
+            collector
+        } else if headers.cast {
             // A log along the head with a stub from each port, its outlet in the middle:
             // down to the collector, or the turbine on its flange.
             let log = |u: f32| to(u, 0.6, 0.3);

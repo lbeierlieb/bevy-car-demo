@@ -266,8 +266,9 @@ fn manifold(
     }
 }
 
-/// The B series' manifolds: the cast 4-into-1 (its primaries the blocks' headers), short
-/// and long-tube headers, and a turbo manifold (the turbo where the cast one's collector is).
+/// The B series' manifolds: the cast 4-into-1 (its primaries the B16's and B20's headers),
+/// short and long-tube headers, a turbo manifold (the turbo where the cast one's collector
+/// is), and the B16R's longer cast 4-2-1.
 fn b_manifolds() -> Vec<ManifoldDef> {
     use Made::*;
     vec![
@@ -296,6 +297,14 @@ fn b_manifolds() -> Vec<ManifoldDef> {
             Tubes,
         ),
         manifold("b.manifold.turbo", "Turbo manifold", 700.0, 1, true, Cast),
+        manifold(
+            "b.manifold.4-2-1",
+            "Stock cast 4-2-1 manifold",
+            850.0,
+            1,
+            false,
+            Cast,
+        ),
     ]
 }
 
