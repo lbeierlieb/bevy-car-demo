@@ -1,0 +1,143 @@
+# A second engine family, three new cars, and drivetrains made of parts (planned 2026-11-28, not agreed yet)
+
+The user asked for counterparts of Honda's EP Civic, 7th-generation Accord and Element,
+on a new engine family that works like Honda's K series. The car names below are made
+up. The engine codes copy Honda's style, as the B series already does. The user also
+wants:
+
+- the hot 2.0's head on the 2.4 block (the "Frankenstein" swap),
+- the rear axle and its differential (all-wheel drive) to be swappable into the hatch
+  and the saloon,
+- drive shafts that can limit high-power builds,
+- an aftermarket rear subframe that carries the engine at the rear axle,
+- gearboxes that don't cross between engine families where that isn't realistic.
+
+## The lineup
+
+| Trim | Chassis | Engine | Gearbox | Drive, differentials |
+|---|---|---|---|---|
+| `tessel.2-0` | Tessel, 3-door hatch (EP Civic) | K20 | K 5-speed | front, open |
+| `tessel.2-0r` | Tessel | K20R | K 6-speed close ratio | front, limited slip |
+| `aldine.2-0` | Aldine, saloon (7th-gen Accord) | K20 | K 5-speed (long) | front, open |
+| `aldine.2-4` | Aldine | K24 | K 5-speed (long) | front, open |
+| `bothy.2-4` | Bothy, tall box (Element) | K24 | K 5-speed (short) | front, open |
+| `bothy.2-4-awd` | Bothy | K24 | K 5-speed AWD (transfer output) | all four; front, rear and centre open (see Assumptions on the centre) |
+
+Engines, the K family (a new `Family` in `catalogue/engines.rs`, DOHC 16 valves, intake
+cam phaser on every version):
+
+| Code | Like | Bore × stroke | Compression | Cams | Power, limit (about) |
+|---|---|---|---|---|---|
+| K20 | K20A3 | 86 × 86 | 9.8 | switching on the intake only, a mild "economy" low cam | 118 kW at 6500, 6900 rpm |
+| K20R | K20A (Type R) | 86 × 86 | 11.5 | switching on both cams, wild high cam, head that flows | 158 kW at 8000, 8600 rpm |
+| K24 | K24A | 87 × 99 | 9.7 | like the K20 | 120 kW at 5800, 6500 rpm, much more torque |
+
+Frankenstein: the K20R head on the K24 block makes more power than either, as the B16R
+head does on the B20. The K24's rods (long stroke) cap the revs until forged rods go in,
+and the engine needs a programmable ECU that switches cams. All of this already exists
+for the B series, so it is data plus baked maps.
+
+## Gearboxes: bellhousings instead of "adapter plates for anything"
+
+Today any gearbox of the chassis' kind goes on any engine, and a pairing no factory car
+has only shows "needs an adapter plate". Plan:
+
+- `Family::bellhousing` and `Gearbox::bellhousing` (a pattern name). A gearbox bolts to
+  an engine of the same pattern.
+- Transverse gearboxes never cross families. Older Hondas turn the "wrong way"
+  (anticlockwise); the K series turns the usual way. A B gearbox on a K engine would
+  give five reverse gears and one forward, so no adapter is offered.
+- Inline gearboxes (longitudinal) are more lenient: adapter plates are items for listed
+  pairs (`AdapterDef { gearbox pattern, engine pattern }`), bought at the engine shop.
+  For now only the R80's inline 6-speed has one, to the K series, for a K in the Merrow.
+- The K gearboxes: 5-speed (Tessel), 5-speed long (Aldine), 5-speed short (Bothy),
+  5-speed AWD (Bothy, with a transfer output to a prop shaft), 6-speed close ratio
+  (Tessel R). Ratios will be close to the real cars' and tuned in that step. The two B
+  gearboxes become B only. Saved cars keep working, because every factory pairing stays
+  valid.
+
+## Drivetrains made of parts
+
+Today `Chassis::drive` and one `CarBuild::limited_slip` are fixed per chassis. They
+become something worked out from what's fitted:
+
+- **Gearbox**: transverse FWD, transverse AWD (transfer output), inline, transaxle. Its
+  slots stay as they are (gear set, final drive, differential, which is the front one for
+  a transverse gearbox). The AWD gearbox also has a **centre coupling** slot (open,
+  viscous, or the reactive coupling; see Assumptions).
+- **Rear subframe** (new required chassis slot): a plain one (no driven axle; what the
+  Tessel, Aldine, front-drive Bothy and Vireo have from the factory), or one with a
+  **differential mount** (the AWD Bothy's) that has its own slots: rear differential
+  (open, limited slip) and rear drive shafts.
+- **Prop shaft** (chassis slot, needs a tunnel): links the transfer output to the rear
+  differential. `Chassis::tunnel` says whether the floor has room. Tessel, Aldine and
+  Bothy do (their real platforms had all-wheel-drive siblings); the Vireo doesn't.
+- **Drive** follows from that: front if the gearbox drives the front; rear too if a
+  transfer output, prop shaft and rear differential are all fitted; the split from the
+  centre coupling. Fitting refuses half-done combinations, or shows "rear axle not
+  driven" (fitting's existing rules for required slots).
+- Physics: `EngineSetup::differential` becomes one per axle (`[Differential; 2]`).
+  `limited_slip` goes from `CarBuild` (each differential item says what it is). No new
+  sim state is expected. Protocol bump, and saved cars are converted: they get their
+  chassis' factory rear subframe; the old `limited_slip` becomes the gearbox's
+  differential item, as now.
+- AWD conversion for the Tessel and Aldine (aftermarket): the AWD gearbox plus the Bothy's
+  rear subframe re-made for their pickup points (`tessel.rear-subframe.awd`, …), prop
+  shaft and rear differential. Limited-slip swaps for every differential at tuning
+  shops.
+
+### Drive shafts
+
+Recommended, as a later step: a **pair of drive shafts** per driven axle (front: in the
+car's slots; rear: in the rear subframe), and the prop shaft, each with a torque rating
+like `Gearbox::torque`. Over it they wear, and a worn-out one breaks: that axle no longer
+drives (sim state, in `snapshot!`), and a hint says so. Stock shafts hold the factory
+engine with margin; stronger ones come from tuning shops. Until this step, shafts are
+items with no limit (or don't exist yet), so steps 4 and 5 can ship apart.
+
+## Steps
+
+1. **K family**: versions K20, K20R, K24; their heads (K20 / K24 economy switching,
+   K20R); stock ECUs (cam switching and phasers, locked); baked maps (new files in
+   `engine/baked/`, `BAKED`); stock engines tested against the table above, and the
+   Frankenstein (more power, rods' rev cap, refused by a stock ECU). Engine shop items.
+2. **Bellhousings and K gearboxes**: compatibility from data, adapter plates as items
+   (inline only), the five K gearboxes; the derived `needs_adapter` goes.
+3. **The three chassis and six trims**: bodies (`body.rs` outlines: short hatch, saloon,
+   tall box with a split rear hatch), bays (all transverse, front), masses (about
+   1200, 1350, 1550 kg; AWD +70 kg), tanks, wheels, anti-roll bars, holds, body slots,
+   showroom and traffic weights. The AWD Bothy comes in step 4. Until then it ships front
+   drive only.
+4. **Drivetrain parts**: rear subframe, rear differential, prop shaft, centre coupling,
+   `Drive` derived, a differential per axle; the AWD Bothy trim; AWD conversions for the
+   Tessel and Aldine; limited-slip swaps front and rear.
+5. **Drive shafts** with torque ratings, wear and breaking.
+6. **Rear-engine subframe** (aftermarket, planned in detail when we get there): a rear
+   subframe that carries an engine and a transverse gearbox at the rear axle, like the
+   real mid-engine Civic swaps. Engine bays then come from subframes instead of one
+   `Chassis::bay`: the rear one takes the rear bench's place and part of the hold, the
+   front axle goes undriven, and the masses, the engine's drawn place, the sound source,
+   the exhaust exit and the radiator lines follow. One engine per car. It touches
+   physics, looks, audio and fitting, so it is the largest step and is kept last.
+
+## Assumptions (to confirm)
+
+- Names: Tessel (hatch), Aldine (saloon), Bothy (box). Engine codes K20, K20R, K24, in
+  the style of B16/B16R.
+- The Accord's 2.0 is the Civic's K20, so there's one engine (fewer maps to bake), not a
+  separate K20A6.
+- The K20's economy switching is modelled as two intake cam profiles (a mild low one).
+  The real low-rpm single-valve swirl isn't modelled.
+- The AWD Bothy's centre: the user said "all open". The real car has no centre
+  differential, only a reactive pump coupling: front drive until the fronts slip, then
+  torque goes rearward. With an open centre and open axles, one unloaded wheel stops the
+  car. I suggest that the stock part is the reactive coupling (it fits
+  `Differential { coupling, limit }` with the whole share at the front; still to check in
+  the sim) and that an open centre and a viscous one are parts. Front and rear axle
+  differentials are open, as asked.
+- Any K head fits any K block; compression stays the block's (as with the B series).
+- The same double-A-arm suspension stays for every car and subframe: a subframe changes
+  what is driven and where mass sits, not the geometry.
+- Swap subframes for engines stay as they are now (derived, only shown).
+- Gearbox ratios and masses are close to the real cars', tuned by measurement, not
+  copied exactly.
