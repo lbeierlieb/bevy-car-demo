@@ -231,7 +231,140 @@ const fn detail(at: [f32; 3], size: [f32; 3], tone: Tone) -> Detail {
 pub const DEFAULT_CHASSIS: usize = 0;
 
 pub fn chassis() -> Vec<Chassis> {
-    vec![vireo(), merrow(), tessel(), aldine()]
+    vec![vireo(), merrow(), tessel(), aldine(), bothy()]
+}
+
+/// The K-series box: a tall, square four-door with a split tailgate.
+fn bothy() -> Chassis {
+    Chassis {
+        name: "Bothy".into(),
+        class: "Tall wagon".into(),
+        about: "A tall, square box on wheels from the early two-thousands: upright glass, \
+                four doors, a split tailgate, unpainted cladding all round and a floor made \
+                for muddy boots, with the 2.4 K-series and a short five-speed; built with a \
+                tunnel for a propeller shaft"
+            .into(),
+        // Without the seats (see `items`).
+        mass: 1150.0,
+        mass_at: 1.12,
+        cg_height: 0.64,
+        wheelbase: 2.575,
+        track: [1.565, 1.565],
+        wheels: [
+            wheel(16, 65, 215, 70, STREET),
+            wheel(16, 65, 215, 70, STREET),
+        ],
+        room: [
+            WheelRoom {
+                diameter: 0.74,
+                width: 245,
+                min_rim: 16,
+            },
+            WheelRoom {
+                diameter: 0.74,
+                width: 245,
+                min_rim: 15,
+            },
+        ],
+        // Without the brakes (see `items`).
+        hub: [11.0, 9.0],
+        ride: [1.35, 1.55],
+        damping: 0.32,
+        bars: [
+            bars(&[20, 22, 24, 26, 28], 2, 320.0),
+            bars(&[14, 16, 18, 20, 22], 1, 420.0),
+        ],
+        camber: [-0.5, -0.8],
+        pressure: [2.65, 2.1],
+        max_steer: 0.58,
+        drag_area: 1.25,
+        downforce_area: [0.0, 0.0],
+        tank: Tank {
+            litres: 60.0,
+            at: 2.0,
+            height: 0.38,
+        },
+        // Room for a K-series four with its gearbox across the car and long headers.
+        bay: EngineBay {
+            place: "front, transverse".into(),
+            orientation: Orientation::Transverse,
+            length: 0.9,
+            width: 1.2,
+            height: 0.8,
+            engine_at: -0.15,
+            gearbox_at: -0.15,
+            header_room: 1.2,
+        },
+        drive: Drive::Front,
+        limited_slip: false,
+        gearbox: gearbox("K 5-speed short (transverse)"),
+        final_drive: 4.76,
+        engines: codes(&["K24"]),
+        paint: 20,
+        body: Body {
+            length: 4.3,
+            width: 1.82,
+            front_overhang: 0.88,
+            floor: 0.2,
+            // A blunt, high nose, a short bonnet, a high belt dead level to a square tail.
+            deck: vec![
+                [0.0, 0.62],
+                [0.05, 0.82],
+                [0.55, 0.96],
+                [1.05, 1.03],
+                [4.18, 1.08],
+                [4.3, 1.02],
+            ],
+            // An upright windscreen, a flat roof as long as the car, a quarter window and
+            // a wide painted pillar, and the tailgate's upper glass standing upright.
+            cabin: vec![
+                [1.05, 1.02, 1.0],
+                [1.62, 1.76, 1.0],
+                [3.55, 1.79, 1.0],
+                [4.2, 1.77, 2.0],
+                [4.27, 1.08, 0.0],
+            ],
+            nose: 0.86,
+            tail: 0.96,
+            tumblehome: 0.9,
+            open_wheels: false,
+            openings: vec![],
+            details: vec![
+                // The split between the tailgate's glass upper half and its lower half.
+                detail([4.3, 1.05, 0.0], [0.03, 0.04, 1.5], Tone::Dark),
+                // Unpainted cladding low along the doors and across the bumpers.
+                detail([2.16, 0.42, 0.91], [2.0, 0.2, 0.03], Tone::Dark),
+                detail([2.16, 0.42, -0.91], [2.0, 0.2, 0.03], Tone::Dark),
+                detail([0.02, 0.36, 0.0], [0.05, 0.14, 1.45], Tone::Dark),
+                detail([4.29, 0.4, 0.0], [0.05, 0.14, 1.5], Tone::Dark),
+                // Roof rails.
+                detail([3.3, 1.82, 0.6], [1.6, 0.04, 0.04], Tone::Dark),
+            ],
+            // Short front doors from the front wheel arch, shorter rear ones.
+            door: [1.12, 2.35],
+            rear_door: Some([2.35, 3.2]),
+            bumpers: [0.36, 0.3],
+            bumper_top: 0.56,
+            bulges: vec![],
+            side_pipes: false,
+        },
+        eye: [2.05, 1.42, 0.4],
+        insulation: 0.4,
+        // Not in traffic yet.
+        traffic: 0.0,
+        // From the passenger's footwell to the tailgate: the tall load space behind the
+        // rear bench, the bench's place and the passenger seat's while they're out.
+        hold: Hold {
+            from: 1.75,
+            left: -0.7,
+            base: 0.2,
+            areas: vec![
+                area([16, 24], [0, 14], 3, 13, None),
+                area([9, 16], [0, 14], 1, 13, Some("Rear bench")),
+                area([0, 8], [8, 14], 0, 12, Some("Passenger seat")),
+            ],
+        },
+    }
 }
 
 /// The K-series saloon: a mid-size four-door from the early two-thousands.
@@ -1059,6 +1192,15 @@ mod k_cars {
             gearbox: "K 5-speed long (transverse)",
             limited_slip: false,
             tire: "215/50 R17",
+        },
+        Plan {
+            chassis: "Bothy",
+            engine: "K24",
+            mass: 1500.0..1600.0,
+            front: 0.55..0.62,
+            gearbox: "K 5-speed short (transverse)",
+            limited_slip: false,
+            tire: "215/70 R16",
         },
     ];
 

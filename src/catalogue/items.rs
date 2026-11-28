@@ -201,6 +201,12 @@ fn layout(chassis: &str) -> Layout {
             rear_doors: true,
             ..hatch
         },
+        // A tall box: four doors and a split tailgate.
+        "Bothy" => Layout {
+            lid: "Tailgate",
+            rear_doors: true,
+            ..hatch
+        },
         _ => hatch,
     }
 }
@@ -1064,6 +1070,13 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
                 ),
             ]
         }
+        "Bothy" => vec![TrimSpec::new(
+            "K24",
+            "2.4",
+            super::chassis::wheel(16, 65, 215, 70, STREET),
+            "rim.steel",
+            ["front-vented", "rear-drum"],
+        )],
         _ => Vec::new(),
     }
 }
