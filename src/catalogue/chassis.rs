@@ -289,7 +289,8 @@ fn vireo() -> Chassis {
             orientation: Orientation::Transverse,
             length: 0.74,
             width: 1.0,
-            height: 0.66,
+            // Tall enough for a K-series four too (0.68 m), the classic swap.
+            height: 0.68,
             engine_at: -0.12,
             gearbox_at: -0.12,
             header_room: 1.15,
@@ -567,6 +568,12 @@ mod tests {
         let four = family("B16");
         let fit = catalogue.chassis[DEFAULT_CHASSIS].fit(&catalogue, four);
         assert!(!fit.expect("its own engine fits").swap);
+        // A K-series four goes in too (the swap needs a subframe), its headers shorter
+        // than the K20R's long tubes: a K20R swapped in needs its maps worked out.
+        let k = catalogue.chassis[DEFAULT_CHASSIS]
+            .fit(&catalogue, family("K20R"))
+            .expect("a K fits the hatch");
+        assert!(k.swap && k.header_room < 0.96, "{k:?}");
         // Across the car, the gearbox sits on the end of the crank.
         assert_eq!(
             narrowed(0.1).fit(&catalogue, four),
