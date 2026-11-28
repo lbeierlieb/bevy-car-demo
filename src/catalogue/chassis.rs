@@ -231,7 +231,148 @@ const fn detail(at: [f32; 3], size: [f32; 3], tone: Tone) -> Detail {
 pub const DEFAULT_CHASSIS: usize = 0;
 
 pub fn chassis() -> Vec<Chassis> {
-    vec![vireo(), merrow()]
+    vec![vireo(), merrow(), tessel()]
+}
+
+/// The place of the gearbox called `name` in `gearboxes`.
+fn gearbox(name: &str) -> usize {
+    (gearboxes().iter())
+        .position(|gearbox| gearbox.name == name)
+        .unwrap_or_else(|| panic!("no gearbox {name}"))
+}
+
+/// The K-series hatch: a tall one-box three-door from the early two-thousands.
+fn tessel() -> Chassis {
+    Chassis {
+        name: "Tessel".into(),
+        class: "Hatchback".into(),
+        about: "A roomy three-door hatch from the early two-thousands: a short, sloping \
+                bonnet running into a long windscreen, a tall cabin and a K-series two-litre \
+                across the nose; the 2.0R revs to 8600 with a close six-speed, a limited-slip \
+                differential, 17-inch wheels and bigger brakes"
+            .into(),
+        // Without the seats (see `items`).
+        mass: 820.0,
+        mass_at: 1.06,
+        cg_height: 0.52,
+        wheelbase: 2.57,
+        track: [1.48, 1.475],
+        // The 2.0's wheels; the 2.0R has its own (see `items`).
+        wheels: [
+            wheel(15, 65, 195, 60, STREET),
+            wheel(15, 65, 195, 60, STREET),
+        ],
+        room: [
+            WheelRoom {
+                diameter: 0.65,
+                width: 225,
+                min_rim: 15,
+            },
+            WheelRoom {
+                diameter: 0.65,
+                width: 225,
+                min_rim: 14,
+            },
+        ],
+        // Without the brakes (see `items`).
+        hub: [9.0, 7.0],
+        ride: [1.5, 1.7],
+        damping: 0.32,
+        bars: [
+            bars(&[18, 20, 22, 24, 26], 1, 300.0),
+            bars(&[14, 16, 18, 20, 22], 1, 380.0),
+        ],
+        camber: [-0.8, -1.2],
+        pressure: [2.55, 1.95],
+        max_steer: 0.55,
+        drag_area: 0.7,
+        downforce_area: [0.0, 0.0],
+        tank: Tank {
+            litres: 50.0,
+            at: 2.05,
+            height: 0.3,
+        },
+        // Room for a K-series four with its gearbox across the car and its long-tube
+        // headers (the 2.0R's) behind it.
+        bay: EngineBay {
+            place: "front, transverse".into(),
+            orientation: Orientation::Transverse,
+            length: 0.85,
+            width: 1.08,
+            height: 0.72,
+            engine_at: -0.14,
+            gearbox_at: -0.14,
+            header_room: 1.2,
+        },
+        drive: Drive::Front,
+        limited_slip: false,
+        gearbox: gearbox("K 5-speed (transverse)"),
+        final_drive: 4.29,
+        engines: codes(&["K20", "K20R"]),
+        paint: 15,
+        body: Body {
+            length: 4.15,
+            width: 1.7,
+            front_overhang: 0.87,
+            floor: 0.15,
+            // A short nose sloping up to a long windscreen that starts far forward, a
+            // high, level belt and a tall, upright tail.
+            deck: vec![
+                [0.0, 0.47],
+                [0.06, 0.62],
+                [0.5, 0.74],
+                [0.95, 0.85],
+                [3.95, 0.99],
+                [4.15, 0.88],
+            ],
+            // The windscreen from over the front wheels, a tall cabin with long door glass
+            // and a quarter window, a thick C pillar and a near-upright hatch.
+            cabin: vec![
+                [0.95, 0.85, 1.0],
+                [1.82, 1.44, 1.0],
+                [2.95, 1.47, 1.0],
+                [3.62, 1.42, 2.0],
+                [4.06, 1.0, 0.0],
+            ],
+            nose: 0.8,
+            tail: 0.9,
+            tumblehome: 0.82,
+            open_wheels: false,
+            openings: vec![],
+            details: vec![
+                // A dark band across the hatch under the rear window.
+                detail([4.13, 0.92, 0.0], [0.03, 0.05, 1.0], Tone::Dark),
+                // Dark rubbing strips low along the doors.
+                detail([2.0, 0.52, 0.845], [1.5, 0.05, 0.03], Tone::Dark),
+                detail([2.0, 0.52, -0.845], [1.5, 0.05, 0.03], Tone::Dark),
+                // A slot under the bonnet's edge over the grille.
+                detail([0.04, 0.58, 0.0], [0.04, 0.03, 0.7], Tone::Dark),
+            ],
+            // Long doors from the front wheel arch; bumpers wrapping round the ends.
+            door: [1.18, 2.55],
+            rear_door: None,
+            bumpers: [0.32, 0.28],
+            bumper_top: 0.48,
+            bulges: vec![],
+            side_pipes: false,
+        },
+        eye: [2.0, 1.15, 0.37],
+        insulation: 0.45,
+        // Not in traffic yet.
+        traffic: 0.0,
+        // From the passenger's footwell to the hatch: the trunk behind the rear bench,
+        // the bench's place and the passenger seat's while they're out.
+        hold: Hold {
+            from: 1.75,
+            left: -0.6,
+            base: 0.2,
+            areas: vec![
+                area([16, 23], [0, 12], 3, 8, None),
+                area([9, 16], [0, 12], 1, 10, Some("Rear bench")),
+                area([0, 8], [7, 12], 0, 10, Some("Passenger seat")),
+            ],
+        },
+    }
 }
 
 /// The hot hatch.
@@ -730,5 +871,88 @@ mod tests {
             catalogue.bolting(roadster.gearbox, family("R80")),
             Bolting::Direct
         );
+    }
+}
+
+#[cfg(test)]
+mod k_cars {
+    use crate::car::CarSetup;
+    use crate::catalogue::{Bolting, builtin};
+    use crate::physics::drivetrain::Drive;
+
+    /// A K-series trim as the plan has it: chassis, factory engine, full mass (kg), share
+    /// on the front, gearbox, limited slip, front tire.
+    struct Plan {
+        chassis: &'static str,
+        engine: &'static str,
+        mass: std::ops::Range<f32>,
+        front: std::ops::Range<f32>,
+        gearbox: &'static str,
+        limited_slip: bool,
+        tire: &'static str,
+    }
+
+    const PLANS: &[Plan] = &[
+        Plan {
+            chassis: "Tessel",
+            engine: "K20",
+            mass: 1150.0..1250.0,
+            front: 0.58..0.65,
+            gearbox: "K 5-speed (transverse)",
+            limited_slip: false,
+            tire: "195/60 R15",
+        },
+        Plan {
+            chassis: "Tessel",
+            engine: "K20R",
+            mass: 1150.0..1250.0,
+            front: 0.58..0.65,
+            gearbox: "K 6-speed close-ratio (transverse)",
+            limited_slip: true,
+            tire: "205/45 R17",
+        },
+    ];
+
+    /// The K-series cars weigh what the plan says, with their gearboxes, differentials and
+    /// tires; front-wheel drive, in bays the K family fits with its long-tube headers.
+    #[test]
+    fn the_k_cars_are_what_the_plan_says() {
+        let catalogue = builtin();
+        for plan in PLANS {
+            let c = catalogue.find_chassis(plan.chassis).expect("the chassis");
+            let made = &catalogue.chassis[c];
+            let option = (made.engines.iter())
+                .position(|code| code == plan.engine)
+                .expect("the engine");
+            let setup = CarSetup::factory(c, option);
+            let full = setup.tank.litres;
+            let (mass, front) = (setup.mass_with(full), setup.front_weight_with(full));
+            println!(
+                "{} {}: {mass:.0} kg full, {:.1} % front, {}, final drive {}",
+                plan.chassis,
+                plan.engine,
+                100.0 * front,
+                setup.build.gearbox().name,
+                setup.build.final_drive
+            );
+            let name = format!("{} {}", plan.chassis, plan.engine);
+            assert!(plan.mass.contains(&mass), "{name}: {mass} kg");
+            assert!(plan.front.contains(&front), "{name}: {front} front");
+            assert_eq!(setup.build.gearbox().name, plan.gearbox, "{name}");
+            assert_eq!(setup.build.limited_slip, plan.limited_slip, "{name}");
+            assert_eq!(setup.build.wheels[0].tire.label(), plan.tire, "{name}");
+            assert_eq!(made.drive, Drive::Front, "{name}");
+            let family = catalogue.find_engine(plan.engine).unwrap().0;
+            assert_eq!(
+                catalogue.bolting(setup.build.gearbox, family),
+                Bolting::Direct
+            );
+            // The K family's gearbox and its long tubes fit beside it.
+            let fit = made.fit(&catalogue, family).expect("a K fits");
+            assert!(!fit.swap && fit.header_room >= 0.96, "{name}: {fit:?}");
+            // Sold whole as the trim has it.
+            let id = format!("engine.{}", plan.engine.to_lowercase());
+            assert!(catalogue.assemblies.iter().any(|a| a.id == id), "{id}");
+        }
     }
 }

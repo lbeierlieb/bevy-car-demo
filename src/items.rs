@@ -1173,7 +1173,17 @@ mod tests {
     fn the_trims_differ_in_more_than_the_engine() {
         let catalogue = builtin();
         let ids: Vec<&str> = catalogue.trims.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["vireo.1-6", "vireo.2-0", "vireo.1-6r", "merrow.r80"]);
+        assert_eq!(
+            ids,
+            [
+                "vireo.1-6",
+                "vireo.2-0",
+                "vireo.1-6r",
+                "merrow.r80",
+                "tessel.2-0",
+                "tessel.2-0r",
+            ]
+        );
         let rims = |car: &Item| -> Vec<String> {
             (car.fitted(&catalogue, Kind::Wheel))
                 .flat_map(|wheel| wheel.fitted(&catalogue, Kind::Rim))

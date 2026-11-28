@@ -498,11 +498,21 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
                 brake(720.0, 17, 3600.0, [10.0, 2.4], 680.0, 500.0),
             ),
         ];
-        let brakes: &[_] = match name.as_str() {
-            "Merrow" => &roadster_brakes,
-            _ => &hatch_brakes,
+        let brakes: Vec<_> = match name.as_str() {
+            "Merrow" => roadster_brakes.to_vec(),
+            "Vireo" => hatch_brakes.to_vec(),
+            // The later, heavier cars': the hatch's kinds made for their weight and
+            // wheels (see `scaled_brakes`).
+            other => {
+                let (scale, rim) = match other {
+                    "Tessel" => (1.28, 15),
+                    "Aldine" => (1.55, 15),
+                    _ => (1.9, 16),
+                };
+                scaled_brakes(&hatch_brakes, scale, rim)
+            }
         };
-        for &(part, title, mass, brake) in brakes {
+        for (part, title, mass, brake) in brakes {
             let def = Def::new(
                 &format!("{id}.brake.{part}"),
                 title,
@@ -842,6 +852,59 @@ fn defs(catalogue: &Catalogue) -> Vec<PartDef> {
     defs
 }
 
+/// A brake part: its id after the chassis' "<id>.brake.", its name, mass (kg) and brake.
+type BrakeDef = (&'static str, &'static str, f32, Brake);
+
+/// The hatch's brakes (`hatch`) made for a heavier car on bigger wheels: torque, heat
+/// capacity, cooling and the pads' life `scale` times theirs, behind rims of `rim` inches
+/// and more (the big kit and the large vented disc an inch more, the rear ones an inch
+/// less); no solid disc, and a
+/// large vented front disc (a hot trim's) between the vented one and the big kit.
+fn scaled_brakes(hatch: &[BrakeDef], scale: f32, rim: u8) -> Vec<BrakeDef> {
+    let mut brakes = Vec::new();
+    for &(part, title, mass, brake) in hatch {
+        if part == "front-solid" {
+            continue;
+        }
+        let bigger = part == "front-big";
+        let made = |brake: Brake, bigger: bool| Brake {
+            torque: (brake.torque * scale / 10.0).round() * 10.0,
+            min_rim: match (bigger, part.starts_with("rear")) {
+                (true, _) => rim + 1,
+                (_, true) => rim - 1,
+                _ => rim,
+            },
+            heat: (brake.heat * scale / 100.0).round() * 100.0,
+            cooling: brake.cooling.map(|c| (c * scale * 10.0).round() / 10.0),
+            life: (brake.life * scale / 10.0).round() * 10.0,
+            ..brake
+        };
+        let mass = (mass * scale.sqrt()).round();
+        if part == "front-big" {
+            // Between the vented disc and the big kit.
+            let vented = hatch
+                .iter()
+                .find(|b| b.0 == "front-vented")
+                .expect("vented");
+            let large = Brake {
+                torque: 0.5 * (vented.3.torque + brake.torque),
+                heat: 0.5 * (vented.3.heat + brake.heat),
+                fade: 0.5 * (vented.3.fade + brake.fade),
+                life: 0.5 * (vented.3.life + brake.life),
+                ..brake
+            };
+            brakes.push((
+                "front-vented-large",
+                "Large vented front disc brake",
+                mass - 1.0,
+                made(large, true),
+            ));
+        }
+        brakes.push((part, title, mass, made(brake, bigger)));
+    }
+    brakes
+}
+
 /// Whether `part` works on cams in the head: phasers or a switching cam.
 fn moves_overhead_cams(part: &crate::physics::engine::parts::Part) -> bool {
     use crate::physics::engine::parts::{Effect, Field};
@@ -856,7 +919,8 @@ fn moves_overhead_cams(part: &crate::physics::engine::parts::Part) -> bool {
 
 /// What sets a stock car apart: its factory engine, wheels (front and rear), rims,
 /// brakes (front and rear, by the part ids after the chassis' "<id>.brake."),
-/// differential and whether it has a rear spoiler.
+/// differential, whether it has a rear spoiler, and its gearbox (by name) and final drive
+/// where they aren't the chassis'.
 struct TrimSpec {
     engine: String,
     name: String,
@@ -865,6 +929,32 @@ struct TrimSpec {
     brakes: [&'static str; 2],
     limited_slip: bool,
     spoiler: bool,
+    gearbox: Option<&'static str>,
+    final_drive: Option<f32>,
+}
+
+impl TrimSpec {
+    /// A trim of `engine` called `name` on `wheels` (both axles) of `rim`, with `brakes`,
+    /// an open differential, no spoiler, and the chassis' gearbox and final drive.
+    fn new(
+        engine: &str,
+        name: &str,
+        wheel: Wheel,
+        rim: &'static str,
+        brakes: [&'static str; 2],
+    ) -> Self {
+        Self {
+            engine: engine.into(),
+            name: name.into(),
+            wheels: [wheel; 2],
+            rim,
+            brakes,
+            limited_slip: false,
+            spoiler: false,
+            gearbox: None,
+            final_drive: None,
+        }
+    }
 }
 
 /// The trims of `chassis` (none: one per factory engine, as the chassis leaves the
@@ -880,6 +970,8 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
                 brakes: ["front-solid", "rear-drum"],
                 limited_slip: false,
                 spoiler: false,
+                gearbox: None,
+                final_drive: None,
             },
             TrimSpec {
                 engine: "B20".into(),
@@ -889,6 +981,8 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
                 brakes: ["front-vented", "rear-disc"],
                 limited_slip: true,
                 spoiler: true,
+                gearbox: None,
+                final_drive: None,
             },
             TrimSpec {
                 engine: "B16R".into(),
@@ -898,6 +992,8 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
                 brakes: ["front-vented", "rear-disc"],
                 limited_slip: true,
                 spoiler: true,
+                gearbox: None,
+                final_drive: None,
             },
         ],
         "Merrow" => vec![TrimSpec {
@@ -911,7 +1007,36 @@ fn trim_specs(chassis: &str) -> Vec<TrimSpec> {
             brakes: ["front-vented", "rear-vented"],
             limited_slip: true,
             spoiler: false,
+            gearbox: None,
+            final_drive: None,
         }],
+        "Tessel" => {
+            use super::chassis::wheel;
+            vec![
+                TrimSpec::new(
+                    "K20",
+                    "2.0",
+                    wheel(15, 65, 195, 60, STREET),
+                    "rim.alloy",
+                    ["front-vented", "rear-drum"],
+                ),
+                // The hot one: the close six-speed, a shorter final drive, a limited slip,
+                // 17s, the large front discs, rear discs and the roof spoiler.
+                TrimSpec {
+                    limited_slip: true,
+                    spoiler: true,
+                    gearbox: Some("K 6-speed close-ratio (transverse)"),
+                    final_drive: Some(4.76),
+                    ..TrimSpec::new(
+                        "K20R",
+                        "2.0R",
+                        wheel(17, 70, 205, 45, STREET),
+                        "rim.alloy",
+                        ["front-vented-large", "rear-disc"],
+                    )
+                },
+            ]
+        }
         _ => Vec::new(),
     }
 }
@@ -938,6 +1063,8 @@ fn trims(catalogue: &Shared) -> Vec<Trim> {
                     brakes: ["front-vented", "rear-disc"],
                     limited_slip: chassis.limited_slip,
                     spoiler: false,
+                    gearbox: None,
+                    final_drive: None,
                 })
                 .collect();
         }
@@ -978,6 +1105,12 @@ fn trims(catalogue: &Shared) -> Vec<Trim> {
             let mut build = CarBuild::factory_in(catalogue, c);
             build.wheels = spec.wheels;
             build.limited_slip = spec.limited_slip;
+            if let Some(name) = spec.gearbox {
+                build.gearbox = (catalogue.gearboxes.iter())
+                    .position(|gearbox| gearbox.name == name)
+                    .unwrap_or_else(|| panic!("no gearbox {name}"));
+            }
+            build.final_drive = spec.final_drive.unwrap_or(build.final_drive);
             let option = (chassis.engines.iter())
                 .position(|code| *code == spec.engine)
                 .expect("a factory engine");
