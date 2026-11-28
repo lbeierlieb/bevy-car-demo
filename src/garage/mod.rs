@@ -39,7 +39,20 @@ struct Garage {
 #[derive(Clone, Copy)]
 struct Showroom {
     chassis: usize,
-    engine: usize,
+    /// The trim shown, by its place among the chassis' (`items::trims_of`).
+    trim: usize,
+}
+
+impl Showroom {
+    /// The trim shown.
+    fn trim<'a>(
+        &self,
+        catalogue: &'a crate::catalogue::Catalogue,
+    ) -> Option<&'a crate::items::Trim> {
+        crate::items::trims_of(catalogue, self.chassis)
+            .get(self.trim)
+            .copied()
+    }
 }
 
 impl Garage {
@@ -49,7 +62,7 @@ impl Garage {
         Self {
             showroom: Showroom {
                 chassis: setup.build.chassis,
-                engine: 0,
+                trim: 0,
             },
             catalogue: setup.build.catalogue.fingerprint(),
             status: String::new(),
@@ -191,8 +204,12 @@ fn brochure(ui: &mut egui::Ui, catalogue: &Shared, shown: &Showroom) {
     let body = &chassis.body;
     kit::section(ui, &chassis.class);
     kit::note(ui, &chassis.about);
-    // The trim: its wheels, brakes and differential as well as its engine.
-    let setup = CarSetup::factory_in(catalogue, shown.chassis, shown.engine);
+    // The trim: its wheels, brakes and drivetrain as well as its engine.
+    let Some(setup) =
+        (shown.trim(catalogue)).and_then(|trim| CarSetup::of_trim(catalogue, &trim.id))
+    else {
+        return;
+    };
     let (build, parts) = (&setup.build, &setup.engine.parts);
     kit::note(ui, &parts.family().about);
     let gearbox = build.gearbox();

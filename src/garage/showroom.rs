@@ -23,7 +23,6 @@ use crate::audio::{EngineAudio, EngineRun};
 use crate::camera::ChaseCamera;
 use crate::car::{ActiveCar, Away, Car, CarSetup};
 use crate::catalogue::Current;
-use crate::chassis::CarBuild;
 use crate::looks::{Looks, Motion};
 use crate::menu::kit::{self, Panel, Place};
 use crate::net::client::Connection;
@@ -219,7 +218,7 @@ fn shop(
     // Start at the car being driven.
     garage.showroom = Showroom {
         chassis: car.setup.build.chassis,
-        engine: 0,
+        trim: 0,
     };
     garage.status.clear();
     for mut projection in &mut cameras {
@@ -756,15 +755,16 @@ fn show(
         Option<&mut Visibility>,
     )>,
 ) {
-    let picked = (garage.showroom.chassis, garage.showroom.engine);
+    let picked = (garage.showroom.chassis, garage.showroom.trim);
     let new = hall.on_table != Some(picked);
-    let table_looks = new.then(|| {
-        let setup = CarSetup::to_look_at(&catalogue, picked.0, picked.1);
+    let trim = garage.showroom.trim(&catalogue);
+    let table_looks = new.then_some(trim).flatten().and_then(|trim| {
+        let setup = CarSetup::looked_at(&catalogue, &trim.car, &[])?;
         hall.on_table = Some(picked);
         hall.idle = setup.engine.build.ecu.idle_rpm;
         hall.rev_limit = setup.engine.build.ecu.rev_limit;
         hall.rpm = hall.rpm.max(hall.idle);
-        Looks::of(&setup)
+        Some(Looks::of(&setup))
     });
     hall.turn = (hall.turn + SPIN * time.delta_secs()) % (2.0 * PI);
     let outside = cars
@@ -938,8 +938,9 @@ fn sign(
         );
     };
     let chassis = &catalogue.chassis[garage.showroom.chassis];
-    let build = CarBuild::factory_in(&catalogue, garage.showroom.chassis);
-    let engine = build.factory_engine(garage.showroom.engine).hardware().name;
+    let trim = garage.showroom.trim(&catalogue);
+    let engine = (trim.and_then(|trim| trim.car.resolve(&catalogue).ok()))
+        .map_or(String::new(), |(_, parts)| parts.hardware().name);
     let ink = Color32::from_rgb(25, 25, 30);
     text(0.2, 0.3, &chassis.name, ink);
     text(0.52, 0.13, &chassis.class, ink.gamma_multiply(0.75));
@@ -969,14 +970,13 @@ fn window(
     let mut shown = garage.showroom;
     let mut drive = false;
     let mut out = back.take();
-    // What this dealer sells: the trims of each chassis (by its factory engine option).
+    // What this dealer sells: the trims of each chassis.
     let shop = at
         .shop
         .and_then(|i| shops.list.get(i))
         .map(|placed| &placed.shop);
-    let sold = |chassis: usize, option: usize| {
-        crate::items::trim_of(&catalogue, chassis, option)
-            .filter(|trim| shop.is_some_and(|shop| shop.sells(&trim.id)))
+    let sold = |shown: &Showroom| {
+        (shown.trim(&catalogue)).filter(|trim| shop.is_some_and(|shop| shop.sells(&trim.id)))
     };
     let trunk = car.setup.cargo.len();
     // A refusal ends the wait.
@@ -995,19 +995,13 @@ fn window(
             let names: Vec<String> = catalogue.chassis.iter().map(|c| c.name.clone()).collect();
             let mut chassis = shown.chassis;
             if kit::choice(ui, "Car", &mut chassis, &names).changed() {
-                shown = Showroom { chassis, engine: 0 };
+                shown = Showroom { chassis, trim: 0 };
             }
-            let options = catalogue.chassis[shown.chassis].engines.len();
-            let names: Vec<String> = (0..options)
-                .map(
-                    |option| match crate::items::trim_of(&catalogue, shown.chassis, option) {
-                        Some(trim) => trim.name.clone(),
-                        None => "?".into(),
-                    },
-                )
+            let names: Vec<String> = (crate::items::trims_of(&catalogue, shown.chassis).iter())
+                .map(|trim| trim.name.clone())
                 .collect();
-            kit::choice(ui, "Trim", &mut shown.engine, &names);
-            let for_sale = sold(shown.chassis, shown.engine).is_some();
+            kit::choice(ui, "Trim", &mut shown.trim, &names);
+            let for_sale = sold(&shown).is_some();
             drive = ui
                 .add_enabled_ui(hall.buying.is_none() && for_sale, |ui| {
                     kit::button(ui, "Buy it and drive it")
@@ -1044,7 +1038,7 @@ fn window(
         });
     if drive
         && let Some(mut connection) = connection
-        && let Some(trim) = sold(shown.chassis, shown.engine)
+        && let Some(trim) = sold(&shown)
         && let Some(place) = catalogue.trims.iter().position(|t| t.id == trim.id)
     {
         // The server builds it, and tells us (`YourCar`).
@@ -1054,14 +1048,16 @@ fn window(
             trade_in: hall.trade_in,
         });
         garage.status.clear();
-        hall.buying = Some((shown.chassis, shown.engine));
+        hall.buying = Some((shown.chassis, shown.trim));
     }
     garage.showroom = shown;
     // Bought: straight into the new car, once it's ours.
-    if let Some((chassis, engine)) = hall.buying {
-        let build = CarBuild::factory_in(&catalogue, chassis);
-        let parts = build.factory_engine(engine);
-        if car.setup.build == build && car.setup.engine.parts == parts {
+    if let Some((chassis, trim)) = hall.buying {
+        let bought = Showroom { chassis, trim };
+        let made = (bought.trim(&catalogue)).and_then(|trim| trim.car.resolve(&catalogue).ok());
+        if made.is_some_and(|(build, parts)| {
+            car.setup.build == build && car.setup.engine.parts == parts
+        }) {
             hall.buying = None;
             out = true;
         }

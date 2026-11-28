@@ -1000,6 +1000,13 @@ pub fn trim_of(catalogue: &Catalogue, chassis: usize, option: usize) -> Option<&
     })
 }
 
+/// The stock cars of `catalogue`'s `chassis`, in the catalogue's order.
+pub fn trims_of(catalogue: &Catalogue, chassis: usize) -> Vec<&Trim> {
+    (catalogue.trims.iter())
+        .filter(|trim| trim.car.def(catalogue).does == Does::Chassis(chassis))
+        .collect()
+}
+
 /// The definition doing `does` (of `kind`, made for `chassis` if it's made for one).
 pub fn find(catalogue: &Catalogue, kind: Kind, does: &Does, chassis: &str) -> Option<usize> {
     let fits = |def: &PartDef| def.fits.is_empty() || def.fits.iter().any(|c| c == chassis);
