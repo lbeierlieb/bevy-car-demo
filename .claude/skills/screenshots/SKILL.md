@@ -54,6 +54,8 @@ loops ran for hours, 2026-11-22). Wait for the output file, or `pgrep -x`/a PID.
 `shot.rs`). `shot.sh` fetches Mesa and Xvfb from the pinned nixpkgs on first use.
 A shot takes about 35 s.
 
+A mid-engined car: `OFFLINE=1 TRIM=2,1 FITIDS=tessel.rear-subframe.engine` (fitted as a
+shop does, the engine moving along); into the bay `UNFIT=Hatch CARCAM="-1.4,2.5,-3.4,-1.0"`.
 For looking at cars: `CAR="chassis[,engine]"` starts in that car (its place in the
 catalogue; bought from the server's showroom, `Buy`); `LINEUP="first,count"` parks that many cars one behind the other on an open,
 flat straight (the spawn is in a village, where walls and slopes block the view);

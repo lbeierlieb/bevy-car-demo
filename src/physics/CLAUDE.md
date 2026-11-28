@@ -56,7 +56,9 @@ catalogue entries, and things like swap subframes are named so they can be price
   dumps (the clutch's capacity × first × final drive ÷ 2) that break them. Hints
   (`help.rs`): "A front/rear drive shaft has broken", "The prop shaft has broken".
   `CarSetup::new` works everything the simulation needs out of them: the engine's and
-  the gearbox's masses sit where the chassis' bay has them, which gives the balance and
+  the gearbox's masses sit where their bay has them (`CarBuild::bay()`: the chassis', or an
+  engine subframe's behind the seats, k-lineup step 6, see "The rear-engine subframe" in
+  `src/catalogue/CLAUDE.md`), which gives the balance and
   the inertia; springs and dampers come from ride frequencies and the weight on each
   axle (`AxleSetup::tune`); brake torque is a share of the stock tires' grip (about
   0.8, so a floored pedal doesn't lock wheels on a dry road) and its balance follows the
@@ -269,6 +271,9 @@ and without traction control; `trace_power_slide` prints one step by step
   sideways and, on the brakes, along. Snap back in caught power slides grew a little
   (Tarn W20 4.6° → 6°, Halden S30 12° → 15°); the Halden W20T without traction control
   now spins with the bot.
+- The mid-engined Tessel K20R (k-lineup step 6, printed last by `power_slides`): without
+  traction control it spins in second, is caught in third (13°, snapping back 11°); with it
+  8.4° and 10.5°, caught.
 - With the bot, mid- and rear-engined cars still spin (plausible), as does the 6.2 V8
   Harrow floored in second, and the 5-litre V8s snap back; the other front-engined cars
   were caught (asserted by `a_power_slide_can_be_caught` until the rear-wheel-drive cars

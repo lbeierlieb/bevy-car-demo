@@ -122,6 +122,10 @@ as built, in order:
    (rescue, a round starting or over, joining) never stalls it; agreed: no hint suggests anything for an empty tank or a wrecked
    engine, for now); `ui::tool_window` is gone; help, README.
 
+Rear-engine conversions (k-lineup step 6): only tuning shops fit an engine subframe or take
+one out (`fitting::convert` moves engine, gearbox and front drive shafts with it); the fitting
+window then lists the rear bay's slots "(in the rear bay)" with the car's.
+
 No scene's window has a "Back to the car" row (removed at the user's wish, 2026-11-27):
 back (Esc, a pad's or wheel's back button) leaves, and the prompt line says so.
 

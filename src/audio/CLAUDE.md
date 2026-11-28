@@ -73,7 +73,9 @@ with a kink), and what's above 1 kHz bypasses the broad resonances (`BRIGHT`, se
 muffling; the stock exhaust counts as ~0.89 muffled): the V8 falls ~4–6 dB per octave of
 orders at 5000 rpm (was ~10). Tried and dropped: steepening in the header as a
 pressure-dependent delay (skipped samples lost the pulse's peak: −2–3 dB in the pull). Tire squeal at half its level, swelling over 0.25 s (scuff first, the tone over it).
-**Inside and outside** (`audio/paths.rs`): outside, the road's reflection of the exhaust
+**Inside and outside** (`audio/paths.rs`; the cabin's nearness to the engine from the
+car's bay, `CabinShape::of_bay`, so an engine subframe's engine behind the seats comes
+through brighter): outside, the road's reflection of the exhaust
 (`ground_delay` from the car's and the camera's places: ~0.6 ms behind our car, sweeping as
 a car passes), scaled so the lows keep their level; from the driver's view (`ChaseCamera::
 driver`) every car sound but the race's trumpet goes through `Cabin` (body transmission

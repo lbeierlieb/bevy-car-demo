@@ -729,3 +729,36 @@ workshop fits another. Saved cars without front shafts get new stock ones
 tuning word now). The fitting window shows "Takes … N·m". Tests:
 `a_workshop_mends_broken_drive_shafts`, `shaft_wear_reads_back_and_old_cars_get_front_shafts`,
 `sim::shafts`.
+
+## The rear-engine subframe (2026-11-28, `docs/k-lineup.md` step 6)
+
+`<chassis>.rear-subframe.engine` ("Rear subframe with an engine bay", 45 kg: frame, mounts,
+firewall, shift cables, coolant lines) for the Vireo, Tessel and Aldine (`REAR_ENGINED` in
+`catalogue/items.rs`; not the Bothy or Merrow): `Does::EngineSubframe(EngineBay)` of
+`Kind::RearSubframe`, optional slots "Engine", "Gearbox", "Drive shafts". Its bay
+(`rear_bay`): "middle, transverse", the front bay's width and height, 0.95 m long, header room
+1.1 (the K20R's long tubes fit: no bake), engine and gearbox as far ahead of the rear axle as
+the factory's are of the front one (the unit moved back as it is). **Where the engine is**:
+`items::engine_subframe` (fitted, even empty), `powertrain` (the subframe if it holds the
+engine, else the car), `rear_engine`; `resolve`, `driveline` (`Drive::Rear` through the
+gearbox's own differential and the subframe's shafts, rated as rear), `drivetrain_misfit`,
+`assemble` (swaps engine and gearbox where they are), `car::driveline_masses` (the subframe's
+tree without engine and gearbox; front drive shafts against the factory's at the front axle),
+`mechanicals` and `fitting::adapter_slot` look there. `CarBuild::rear_bay` (the subframe's def;
+on the wire) and `CarBuild::bay()`; `Chassis::fit_in` checks against any bay. Rules
+(`items::bay_problem`, in `resolve` and first in `Bench::finish`): one engine, the gearbox
+beside it, no front drive shafts or prop shaft with the engine at the rear, no rear bench
+with an engine subframe. `Item::fine` doesn't require the car's Engine, Gearbox and front
+shafts with the engine at the rear. **Fitting** (`fitting::convert`, also in `with_fitted`):
+an engine subframe in place of one without takes the car's engine, gearbox and front drive
+shafts (the real swaps use the front-drive unit's own shafts) and the rear bench comes off;
+the other way they go back. Only tuning shops do it (they sell it and the factory subframes;
+car workshops' lines name exact ids now); engine shops work on the engine in it
+(`fits_into`: Engine in a RearSubframe). The window lists the subframe's slots "(in the rear
+bay)" with the car's, hides the rear bench and the car's empty bay slots, and the ware says
+what moves (warning if refused). Hold: `cargo::grid` closes the bay's length
+(`Grid::close`). Saved cars: nothing to convert; `fill_front_shafts` skips rear-engined ones.
+Protocol 72. Tessel 2.0R converted: 1217 kg, 47.8 % front, 0–100 5.9 s (6.2 stock). Tests:
+`the_hatch_gets_its_engine_behind_the_seats`, `sim::handling::the_mid_engined_hatch_pulls_away`,
+`mechanicals::tests::an_engine_at_the_rear_is_drawn_there`; `fitting::mid_engined(catalogue,
+trim)` (tests) builds one.

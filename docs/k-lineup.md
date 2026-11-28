@@ -350,6 +350,31 @@ items with no limit (or don't exist yet), so steps 4 and 5 can ship apart.
      away), stock cars bit for bit as before (fingerprint compared), the hold smaller,
      drawn at the rear; the power-slide bot on it.
 
+   **Done** (2026-11-28; protocol 72), as planned. Details in `src/catalogue/CLAUDE.md`,
+   "The rear-engine subframe". Measured (`the_hatch_gets_its_engine_behind_the_seats`,
+   `the_mid_engined_hatch_pulls_away`, `power_slides`):
+
+   | | `tessel.2-0r` | mid-engined |
+   |---|---|---|
+   | Mass full | 1208 kg | 1217 kg |
+   | Front | 62.7 % | 47.8 % |
+   | 0–100 | 6.2 s | 5.9 s |
+   | Power slide, 2nd / 3rd, no TC | none (front drive) | spun / 13° caught (snaps back 11°) |
+   | … with TC | none | 8.4° / 10.5°, caught |
+
+   Decided while building: the balance comes out about 48/52, not the 40/60 the real
+   kits are quoted at: the front-drive unit keeps its place ahead of the axle (turned
+   round it would drive backwards), the shell's own mass stays front-heavy (radiator,
+   battery, front structure), and nothing else moves (real builds also move the battery
+   and lighten the front); left as the model says. The rear bench comes out when the
+   subframe goes in (into the trunk if there's room, else held at the shop); the Tessel's
+   shrunken hold rarely has room. `bay_problem` is checked before `Item::fine` in
+   `Bench::finish`, so a refused build says why. Shots: `FITIDS="tessel.rear-subframe.engine"`
+   fits it as a shop does (`OFFLINE=1 TRIM=2,1`, `UNFIT=Hatch CARCAM="-1.4,2.5,-3.4,-1.0"`
+   looks into the bay). Not done: the tank under the bay isn't moved (drawn overlapping
+   the engine's sump a little), traffic never has one, the dyno untried with it by hand
+   (it goes by the drive's shares, so the rear rollers turn).
+
 ## Assumptions (agreed with the user, 2026-11-28)
 
 - Names: Tessel (hatch), Aldine (saloon), Bothy (box). Engine codes K20, K20R, K24, in
